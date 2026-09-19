@@ -10,18 +10,15 @@
 **/secrets.json
 **/firebase-service-account*.json
 
-# ---- .NET
-bin/
-obj/
-*.user
-*.suo
-*.rsuser
-.vs/
-TestResults/
-coverage/
-*.coverage
-*.coveragexml
-BenchmarkDotNet.Artifacts/
+# ---- Java / Maven (backend)
+target/
+!.mvn/wrapper/maven-wrapper.properties
+.mvn/wrapper/maven-wrapper.jar
+.mvn/.develocity/
+dependency-reduced-pom.xml
+*.class
+hs_err_pid*
+replay_pid*
 
 # ---- Node (ai-service, web)
 node_modules/

@@ -8,7 +8,7 @@ CryptoPilot is a decision-support and paper-trading system. It does not execute 
 
 ## Architecture
 
-- **Backend:** modular monolith, ASP.NET Core (REST + SignalR + background workers), Clean Architecture layers
+- **Backend:** modular monolith, Java 21 + Spring Boot 4.1 (REST + WebSocket/STOMP + scheduled jobs), package by module then by layer
 - **AI Service:** Node.js + TypeScript, stateless
 - **Database:** PostgreSQL 16 + TimescaleDB; Redis 7 as cache
 - **Web:** React + TypeScript + Vite
@@ -18,7 +18,7 @@ CryptoPilot is a decision-support and paper-trading system. It does not execute 
 ## Repository layout
 
 ```
-backend/      .NET solution (Domain, Application, Infrastructure, Api, tests)
+backend/      Maven project (one package per module, layers inside each module)
 ai-service/   AI Service
 web/          Web application and admin console
 mobile/       Flutter application
@@ -28,14 +28,16 @@ tools/        Development scripts and test data generators
 
 ## Getting started
 
-Requirements: Docker Desktop, .NET SDK, Node.js LTS, Flutter SDK.
+Requirements: Docker Desktop, JDK 21 (Eclipse Temurin), Node.js LTS, Flutter SDK. Maven is not installed separately — use the wrapper in `backend/`.
 
 ```bash
 cp deploy/.env.example deploy/.env          # set DB_PASSWORD and other local values
 docker compose -f deploy/docker-compose.dev.yml up -d
+
+cd backend && ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
-Database: `localhost:5432`, Redis: `localhost:6379`. Backend, AI service and web app are started from their folders (instructions in each folder).
+Database: `localhost:5432`, Redis: `localhost:6379`, backend: `localhost:8080`. AI service and web app are started from their folders (instructions in each folder).
 
 ## Conventions
 
