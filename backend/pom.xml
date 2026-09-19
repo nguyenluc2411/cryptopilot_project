@@ -22,7 +22,23 @@
 		<spotless-maven-plugin.version>2.46.1</spotless-maven-plugin.version>
 		<palantir-java-format.version>2.78.0</palantir-java-format.version>
 		<jacoco-maven-plugin.version>0.8.13</jacoco-maven-plugin.version>
+		<!-- Spring Modulith is not part of the Spring Boot BOM; 2.1.1 is the line Spring Initializr pairs with Boot 4.1.1. -->
+		<spring-modulith.version>2.1.1</spring-modulith.version>
+		<!-- Kept equal to the ArchUnit version spring-modulith-core pins, so the classpath holds one ArchUnit only. -->
+		<archunit.version>1.4.2</archunit.version>
 	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.modulith</groupId>
+				<artifactId>spring-modulith-bom</artifactId>
+				<version>${spring-modulith.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 
 	<dependencies>
 		<dependency>
@@ -36,6 +52,11 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.modulith</groupId>
+			<artifactId>spring-modulith-starter-core</artifactId>
 		</dependency>
 
 		<dependency>
@@ -57,6 +78,17 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.modulith</groupId>
+			<artifactId>spring-modulith-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit-junit5</artifactId>
+			<version>${archunit.version}</version>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>
