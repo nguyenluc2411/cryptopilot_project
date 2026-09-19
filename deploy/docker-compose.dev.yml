@@ -1,0 +1,40 @@
+# Local development infrastructure. The backend, AI service and web app run from the IDE.
+#   cp deploy/.env.example deploy/.env
+#   docker compose -f deploy/docker-compose.dev.yml up -d
+name: cryptopilot-dev
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: cryptopilot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-cryptopilot}
+      POSTGRES_USER: ${DB_USER:-cryptopilot}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in deploy/.env}
+      TZ: UTC
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: cryptopilot-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
