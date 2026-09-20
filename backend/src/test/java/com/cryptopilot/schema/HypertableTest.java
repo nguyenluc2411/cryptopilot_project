@@ -138,9 +138,13 @@ class HypertableTest {
      * The point of the split, stated as a fact about the schema rather than about a policy run:
      * the table a retention policy would empty no longer holds anything the P/L needs, and the
      * table the P/L reads is not reachable by any policy.
+     *
+     * <p>This is the storage half of BR-37 and nothing more. That a closed position's realized
+     * profit and loss actually includes funding is the rule itself, and it belongs to T-045; what
+     * is proved here is that the numbers it will need cannot be deleted first.
      */
     @Test
-    void noRetentionPolicy_canReachTheSettledFundingRates() {
+    void BR37_settledFundingRates_areNotReachableByAnyRetentionPolicy() {
         Integer reachable = jdbc.sql("""
                         select count(*)
                           from timescaledb_information.jobs j
