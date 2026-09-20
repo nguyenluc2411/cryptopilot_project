@@ -41,6 +41,7 @@ class BaselineSchemaTest {
             "technical_indicator",
             "spot_market_data",
             "futures_market_data",
+            "funding_rate_history",
             "watchlist",
             "alert",
             "notification",
@@ -93,9 +94,9 @@ class BaselineSchemaTest {
     }
 
     @Test
-    void schema_holdsTheThirtyEightBusinessTables() {
+    void schema_holdsTheThirtyNineBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(38);
+        assertThat(BUSINESS_TABLES).hasSize(39);
     }
 
     @Test

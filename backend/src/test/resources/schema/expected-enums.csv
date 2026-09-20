@@ -13,7 +13,6 @@ forum_comment,comment_status,ck_forum_comment_status,PUBLISHED|HIDDEN|DELETED
 forum_post,market_type,ck_forum_post_market_type,SPOT|FUTURES
 forum_post,post_status,ck_forum_post_status,PUBLISHED|HIDDEN|DELETED
 forum_post,post_type,ck_forum_post_type,TEXT|VIDEO
-futures_market_data,snapshot_type,ck_futures_market_data_snapshot_type,PERIODIC|FUNDING_SETTLEMENT
 news_article,sentiment_label,ck_news_article_sentiment,BULLISH|NEUTRAL|BEARISH
 news_crawl_log,crawl_status,ck_news_crawl_log_status,SUCCESS|PARTIAL|FAILED
 news_source,source_type,ck_news_source_type,RSS

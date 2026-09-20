@@ -121,6 +121,10 @@ forum_post,post_type,character varying,,,NO
 forum_post,title,character varying,,,NO
 forum_post,updated_at,timestamp with time zone,,,NO
 forum_post,version,bigint,64,0,NO
+funding_rate_history,funding_rate,numeric,12,8,NO
+funding_rate_history,funding_time,timestamp with time zone,,,NO
+funding_rate_history,mark_price,numeric,28,12,NO
+funding_rate_history,pair_id,uuid,,,NO
 futures_market_data,funding_rate,numeric,12,8,YES
 futures_market_data,index_price,numeric,28,12,YES
 futures_market_data,long_account_ratio,numeric,12,8,YES
@@ -132,7 +136,6 @@ futures_market_data,open_interest_value,numeric,28,8,YES
 futures_market_data,pair_id,uuid,,,NO
 futures_market_data,short_account_ratio,numeric,12,8,YES
 futures_market_data,snapshot_time,timestamp with time zone,,,NO
-futures_market_data,snapshot_type,character varying,,,NO
 leverage_bracket,bracket_no,integer,32,0,NO
 leverage_bracket,maintenance_amount,numeric,28,8,NO
 leverage_bracket,maintenance_margin_rate,numeric,12,8,NO
