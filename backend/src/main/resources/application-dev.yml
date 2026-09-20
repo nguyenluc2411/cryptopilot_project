@@ -1,3 +1,11 @@
+spring:
+  datasource:
+    # Host and database name have a local default; the password never does, so an unset
+    # environment fails at start-up instead of falling back to a value someone could guess.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/cryptopilot}
+    username: ${DB_USER:cryptopilot}
+    password: ${DB_PASSWORD}
+
 logging:
   level:
     com.cryptopilot: DEBUG

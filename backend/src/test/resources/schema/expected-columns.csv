@@ -1,0 +1,444 @@
+table,column,data_type,numeric_precision,numeric_scale,is_nullable
+ai_configuration,config_id,uuid,,,NO
+ai_configuration,created_at,timestamp with time zone,,,NO
+ai_configuration,is_active,boolean,,,NO
+ai_configuration,max_output_tokens,integer,32,0,NO
+ai_configuration,model_name,character varying,,,NO
+ai_configuration,system_prompt,text,,,NO
+ai_configuration,temperature,numeric,3,2,NO
+ai_configuration,updated_at,timestamp with time zone,,,NO
+ai_configuration,updated_by,uuid,,,YES
+ai_configuration,version,bigint,64,0,NO
+ai_conversation,conversation_id,uuid,,,NO
+ai_conversation,conversation_title,character varying,,,YES
+ai_conversation,created_at,timestamp with time zone,,,NO
+ai_conversation,pair_id,uuid,,,YES
+ai_conversation,updated_at,timestamp with time zone,,,NO
+ai_conversation,user_id,uuid,,,NO
+ai_conversation,version,bigint,64,0,NO
+ai_message,content,text,,,NO
+ai_message,context_snapshot,jsonb,,,YES
+ai_message,conversation_id,uuid,,,NO
+ai_message,created_at,timestamp with time zone,,,NO
+ai_message,input_tokens,integer,32,0,YES
+ai_message,message_id,uuid,,,NO
+ai_message,message_status,character varying,,,NO
+ai_message,output_tokens,integer,32,0,YES
+ai_message,sender_role,character varying,,,NO
+ai_message,updated_at,timestamp with time zone,,,NO
+ai_message,version,bigint,64,0,NO
+alert,alert_id,uuid,,,NO
+alert,alert_status,character varying,,,NO
+alert,alert_type,character varying,,,NO
+alert,condition_operator,character varying,,,NO
+alert,cooldown_minutes,integer,32,0,YES
+alert,created_at,timestamp with time zone,,,NO
+alert,expires_at,timestamp with time zone,,,YES
+alert,indicator_name,character varying,,,YES
+alert,last_triggered_at,timestamp with time zone,,,YES
+alert,market_type,character varying,,,NO
+alert,notify_email,boolean,,,NO
+alert,notify_in_app,boolean,,,NO
+alert,notify_push,boolean,,,NO
+alert,threshold_value,numeric,28,12,NO
+alert,timeframe,character varying,,,YES
+alert,trigger_count,integer,32,0,NO
+alert,trigger_mode,character varying,,,NO
+alert,updated_at,timestamp with time zone,,,NO
+alert,user_id,uuid,,,NO
+alert,version,bigint,64,0,NO
+alert,watchlist_id,uuid,,,NO
+audit_log,action_code,character varying,,,NO
+audit_log,audit_id,uuid,,,NO
+audit_log,created_at,timestamp with time zone,,,NO
+audit_log,entity_id,uuid,,,YES
+audit_log,entity_type,character varying,,,YES
+audit_log,ip_address,character varying,,,YES
+audit_log,new_value,jsonb,,,YES
+audit_log,old_value,jsonb,,,YES
+audit_log,updated_at,timestamp with time zone,,,NO
+audit_log,user_id,uuid,,,YES
+audit_log,version,bigint,64,0,NO
+coin,coin_id,uuid,,,NO
+coin,coin_name,character varying,,,NO
+coin,created_at,timestamp with time zone,,,NO
+coin,logo_url,character varying,,,YES
+coin,symbol,character varying,,,NO
+coin,updated_at,timestamp with time zone,,,NO
+coin,version,bigint,64,0,NO
+crypto_pair,base_coin_id,uuid,,,NO
+crypto_pair,created_at,timestamp with time zone,,,NO
+crypto_pair,display_order,integer,32,0,NO
+crypto_pair,futures_min_notional,numeric,28,8,YES
+crypto_pair,futures_step_size,numeric,28,12,YES
+crypto_pair,futures_tick_size,numeric,28,12,YES
+crypto_pair,is_futures_enabled,boolean,,,NO
+crypto_pair,is_spot_enabled,boolean,,,NO
+crypto_pair,max_leverage,integer,32,0,YES
+crypto_pair,pair_id,uuid,,,NO
+crypto_pair,pair_status,character varying,,,NO
+crypto_pair,quote_coin_id,uuid,,,NO
+crypto_pair,spot_min_notional,numeric,28,8,YES
+crypto_pair,spot_step_size,numeric,28,12,YES
+crypto_pair,spot_tick_size,numeric,28,12,YES
+crypto_pair,symbol,character varying,,,NO
+crypto_pair,updated_at,timestamp with time zone,,,NO
+crypto_pair,version,bigint,64,0,NO
+engagement,action_type,character varying,,,NO
+engagement,comment_id,uuid,,,YES
+engagement,created_at,timestamp with time zone,,,NO
+engagement,engagement_id,uuid,,,NO
+engagement,post_id,uuid,,,YES
+engagement,updated_at,timestamp with time zone,,,NO
+engagement,user_id,uuid,,,NO
+engagement,version,bigint,64,0,NO
+event_publication,completion_attempts,integer,32,0,YES
+event_publication,completion_date,timestamp with time zone,,,YES
+event_publication,event_type,text,,,NO
+event_publication,id,uuid,,,NO
+event_publication,last_resubmission_date,timestamp with time zone,,,YES
+event_publication,listener_id,text,,,NO
+event_publication,publication_date,timestamp with time zone,,,NO
+event_publication,serialized_event,text,,,NO
+event_publication,status,text,,,YES
+forum_comment,author_id,uuid,,,NO
+forum_comment,comment_id,uuid,,,NO
+forum_comment,comment_status,character varying,,,NO
+forum_comment,content,text,,,NO
+forum_comment,created_at,timestamp with time zone,,,NO
+forum_comment,parent_comment_id,uuid,,,YES
+forum_comment,post_id,uuid,,,NO
+forum_comment,updated_at,timestamp with time zone,,,NO
+forum_comment,version,bigint,64,0,NO
+forum_post,author_id,uuid,,,NO
+forum_post,content,text,,,NO
+forum_post,created_at,timestamp with time zone,,,NO
+forum_post,is_official,boolean,,,NO
+forum_post,market_type,character varying,,,YES
+forum_post,post_id,uuid,,,NO
+forum_post,post_status,character varying,,,NO
+forum_post,post_type,character varying,,,NO
+forum_post,title,character varying,,,NO
+forum_post,updated_at,timestamp with time zone,,,NO
+forum_post,version,bigint,64,0,NO
+futures_market_data,funding_rate,numeric,12,8,YES
+futures_market_data,index_price,numeric,28,12,YES
+futures_market_data,long_account_ratio,numeric,12,8,YES
+futures_market_data,long_short_ratio,numeric,12,8,YES
+futures_market_data,mark_price,numeric,28,12,YES
+futures_market_data,next_funding_time,timestamp with time zone,,,YES
+futures_market_data,open_interest,numeric,28,12,YES
+futures_market_data,open_interest_value,numeric,28,8,YES
+futures_market_data,pair_id,uuid,,,NO
+futures_market_data,short_account_ratio,numeric,12,8,YES
+futures_market_data,snapshot_time,timestamp with time zone,,,NO
+futures_market_data,snapshot_type,character varying,,,NO
+leverage_bracket,bracket_no,integer,32,0,NO
+leverage_bracket,maintenance_amount,numeric,28,8,NO
+leverage_bracket,maintenance_margin_rate,numeric,12,8,NO
+leverage_bracket,max_leverage,integer,32,0,NO
+leverage_bracket,notional_cap,numeric,28,8,NO
+leverage_bracket,notional_floor,numeric,28,8,NO
+leverage_bracket,pair_id,uuid,,,NO
+leverage_bracket,updated_at,timestamp with time zone,,,NO
+leverage_bracket,updated_by,uuid,,,YES
+news_article,ai_summary,text,,,YES
+news_article,article_id,uuid,,,NO
+news_article,collected_at,timestamp with time zone,,,NO
+news_article,created_at,timestamp with time zone,,,NO
+news_article,excerpt,text,,,YES
+news_article,original_url,character varying,,,NO
+news_article,published_at,timestamp with time zone,,,NO
+news_article,sentiment_label,character varying,,,YES
+news_article,source_id,uuid,,,NO
+news_article,title,character varying,,,NO
+news_article,title_hash,character varying,,,NO
+news_article,updated_at,timestamp with time zone,,,NO
+news_article,url_hash,character varying,,,NO
+news_article,version,bigint,64,0,NO
+news_article_coin,article_id,uuid,,,NO
+news_article_coin,coin_id,uuid,,,NO
+news_article_coin,is_primary,boolean,,,NO
+news_article_tag,article_id,uuid,,,NO
+news_article_tag,tag_id,uuid,,,NO
+news_crawl_log,articles_found,integer,32,0,YES
+news_crawl_log,articles_inserted,integer,32,0,YES
+news_crawl_log,crawl_log_id,uuid,,,NO
+news_crawl_log,crawl_status,character varying,,,NO
+news_crawl_log,created_at,timestamp with time zone,,,NO
+news_crawl_log,error_message,text,,,YES
+news_crawl_log,finished_at,timestamp with time zone,,,YES
+news_crawl_log,source_id,uuid,,,NO
+news_crawl_log,started_at,timestamp with time zone,,,NO
+news_crawl_log,updated_at,timestamp with time zone,,,NO
+news_crawl_log,version,bigint,64,0,NO
+news_source,crawl_interval_minutes,integer,32,0,NO
+news_source,created_at,timestamp with time zone,,,NO
+news_source,feed_url,character varying,,,NO
+news_source,is_active,boolean,,,NO
+news_source,last_crawled_at,timestamp with time zone,,,YES
+news_source,managed_by,uuid,,,YES
+news_source,source_id,uuid,,,NO
+news_source,source_name,character varying,,,NO
+news_source,source_type,character varying,,,NO
+news_source,updated_at,timestamp with time zone,,,NO
+news_source,version,bigint,64,0,NO
+news_tag,created_at,timestamp with time zone,,,NO
+news_tag,tag_id,uuid,,,NO
+news_tag,tag_name,character varying,,,NO
+news_tag,updated_at,timestamp with time zone,,,NO
+news_tag,version,bigint,64,0,NO
+notification,alert_id,uuid,,,YES
+notification,content,text,,,NO
+notification,created_at,timestamp with time zone,,,NO
+notification,is_read,boolean,,,NO
+notification,notification_id,uuid,,,NO
+notification,notification_type,character varying,,,NO
+notification,read_at,timestamp with time zone,,,YES
+notification,reference_id,uuid,,,YES
+notification,reference_type,character varying,,,YES
+notification,sent_via_email,boolean,,,NO
+notification,sent_via_push,boolean,,,NO
+notification,title,character varying,,,NO
+notification,updated_at,timestamp with time zone,,,NO
+notification,user_id,uuid,,,NO
+notification,version,bigint,64,0,NO
+ohlcv,base_volume,numeric,28,12,NO
+ohlcv,close_price,numeric,28,12,NO
+ohlcv,close_time,timestamp with time zone,,,NO
+ohlcv,high_price,numeric,28,12,NO
+ohlcv,low_price,numeric,28,12,NO
+ohlcv,market_type,character varying,,,NO
+ohlcv,open_price,numeric,28,12,NO
+ohlcv,open_time,timestamp with time zone,,,NO
+ohlcv,pair_id,uuid,,,NO
+ohlcv,quote_volume,numeric,28,12,NO
+ohlcv,timeframe,character varying,,,NO
+ohlcv,trade_count,integer,32,0,YES
+post_coin,coin_id,uuid,,,NO
+post_coin,post_id,uuid,,,NO
+post_media,created_at,timestamp with time zone,,,NO
+post_media,duration_seconds,integer,32,0,YES
+post_media,file_size_bytes,bigint,64,0,YES
+post_media,height,integer,32,0,YES
+post_media,media_id,uuid,,,NO
+post_media,media_type,character varying,,,NO
+post_media,media_url,character varying,,,NO
+post_media,post_id,uuid,,,NO
+post_media,processing_status,character varying,,,NO
+post_media,sort_order,integer,32,0,NO
+post_media,storage_public_id,character varying,,,NO
+post_media,thumbnail_url,character varying,,,YES
+post_media,updated_at,timestamp with time zone,,,NO
+post_media,version,bigint,64,0,NO
+post_media,width,integer,32,0,YES
+post_report,created_at,timestamp with time zone,,,NO
+post_report,description,text,,,YES
+post_report,post_id,uuid,,,NO
+post_report,reason,character varying,,,NO
+post_report,report_id,uuid,,,NO
+post_report,report_status,character varying,,,NO
+post_report,reporter_id,uuid,,,NO
+post_report,resolution_action,character varying,,,YES
+post_report,resolved_at,timestamp with time zone,,,YES
+post_report,resolved_by,uuid,,,YES
+post_report,updated_at,timestamp with time zone,,,NO
+post_report,version,bigint,64,0,NO
+spot_market_data,base_volume_24h,numeric,28,12,YES
+spot_market_data,best_ask_price,numeric,28,12,YES
+spot_market_data,best_bid_price,numeric,28,12,YES
+spot_market_data,high_price_24h,numeric,28,12,YES
+spot_market_data,last_price,numeric,28,12,YES
+spot_market_data,low_price_24h,numeric,28,12,YES
+spot_market_data,pair_id,uuid,,,NO
+spot_market_data,price_change_percent_24h,numeric,28,10,YES
+spot_market_data,quote_volume_24h,numeric,28,12,YES
+spot_market_data,snapshot_time,timestamp with time zone,,,NO
+subscription_order,amount,numeric,18,0,NO
+subscription_order,created_at,timestamp with time zone,,,NO
+subscription_order,currency,character varying,,,NO
+subscription_order,expires_at,timestamp with time zone,,,NO
+subscription_order,gateway_response_code,character varying,,,YES
+subscription_order,gateway_transaction_no,character varying,,,YES
+subscription_order,ipn_received_at,timestamp with time zone,,,YES
+subscription_order,order_code,character varying,,,NO
+subscription_order,order_id,uuid,,,NO
+subscription_order,order_status,character varying,,,NO
+subscription_order,package_id,uuid,,,NO
+subscription_order,paid_at,timestamp with time zone,,,YES
+subscription_order,payment_gateway,character varying,,,NO
+subscription_order,updated_at,timestamp with time zone,,,NO
+subscription_order,user_id,uuid,,,NO
+subscription_order,version,bigint,64,0,NO
+subscription_package,ai_daily_quota,integer,32,0,NO
+subscription_package,can_post_video,boolean,,,NO
+subscription_package,created_at,timestamp with time zone,,,NO
+subscription_package,currency,character varying,,,NO
+subscription_package,duration_days,integer,32,0,NO
+subscription_package,is_active,boolean,,,NO
+subscription_package,package_code,character varying,,,NO
+subscription_package,package_id,uuid,,,NO
+subscription_package,package_name,character varying,,,NO
+subscription_package,price_amount,numeric,18,0,NO
+subscription_package,updated_at,timestamp with time zone,,,NO
+subscription_package,version,bigint,64,0,NO
+system_setting,description,character varying,,,YES
+system_setting,setting_key,character varying,,,NO
+system_setting,setting_value,character varying,,,NO
+system_setting,updated_at,timestamp with time zone,,,NO
+system_setting,updated_by,uuid,,,YES
+system_setting,value_type,character varying,,,NO
+technical_indicator,bb_lower,numeric,28,10,YES
+technical_indicator,bb_middle,numeric,28,10,YES
+technical_indicator,bb_upper,numeric,28,10,YES
+technical_indicator,calculated_at,timestamp with time zone,,,NO
+technical_indicator,derivatives_score,numeric,5,2,YES
+technical_indicator,ema_20,numeric,28,10,YES
+technical_indicator,ema_200,numeric,28,10,YES
+technical_indicator,ema_50,numeric,28,10,YES
+technical_indicator,level_score,numeric,5,2,YES
+technical_indicator,macd_histogram,numeric,28,10,YES
+technical_indicator,macd_line,numeric,28,10,YES
+technical_indicator,macd_signal,numeric,28,10,YES
+technical_indicator,market_type,character varying,,,NO
+technical_indicator,momentum_score,numeric,5,2,YES
+technical_indicator,nearest_resistance,numeric,28,10,YES
+technical_indicator,nearest_support,numeric,28,10,YES
+technical_indicator,open_time,timestamp with time zone,,,NO
+technical_indicator,pair_id,uuid,,,NO
+technical_indicator,rsi_14,numeric,28,10,YES
+technical_indicator,score_version,character varying,,,YES
+technical_indicator,setup_score,numeric,5,2,YES
+technical_indicator,sma_20,numeric,28,10,YES
+technical_indicator,timeframe,character varying,,,NO
+technical_indicator,trend_score,numeric,5,2,YES
+technical_indicator,volume_score,numeric,5,2,YES
+technical_indicator,volume_sma_20,numeric,28,10,YES
+trading_journal,chart_image_url,character varying,,,YES
+trading_journal,close_reason,character varying,,,YES
+trading_journal,created_at,timestamp with time zone,,,NO
+trading_journal,direction,character varying,,,NO
+trading_journal,entry_price,numeric,28,12,NO
+trading_journal,entry_time,timestamp with time zone,,,NO
+trading_journal,exit_price,numeric,28,12,YES
+trading_journal,exit_time,timestamp with time zone,,,YES
+trading_journal,fee_amount,numeric,28,8,YES
+trading_journal,funding_fee_amount,numeric,28,8,YES
+trading_journal,journal_id,uuid,,,NO
+trading_journal,lessons_learned,text,,,YES
+trading_journal,leverage,integer,32,0,YES
+trading_journal,market_type,character varying,,,NO
+trading_journal,mistakes,text,,,YES
+trading_journal,pair_id,uuid,,,NO
+trading_journal,plan_id,uuid,,,YES
+trading_journal,quantity,numeric,28,12,NO
+trading_journal,realized_pnl,numeric,28,8,YES
+trading_journal,setup_description,text,,,YES
+trading_journal,source,character varying,,,NO
+trading_journal,stop_loss_price,numeric,28,12,YES
+trading_journal,strategy_id,uuid,,,YES
+trading_journal,take_profit_price,numeric,28,12,YES
+trading_journal,trade_status,character varying,,,NO
+trading_journal,updated_at,timestamp with time zone,,,NO
+trading_journal,user_id,uuid,,,NO
+trading_journal,version,bigint,64,0,NO
+trading_plan,activated_at,timestamp with time zone,,,YES
+trading_plan,capital_amount,numeric,28,8,NO
+trading_plan,created_at,timestamp with time zone,,,NO
+trading_plan,direction,character varying,,,NO
+trading_plan,entry_price,numeric,28,12,YES
+trading_plan,entry_type,character varying,,,NO
+trading_plan,estimated_liquidation_price,numeric,28,12,YES
+trading_plan,expires_at,timestamp with time zone,,,YES
+trading_plan,initial_margin,numeric,28,8,YES
+trading_plan,leverage,integer,32,0,YES
+trading_plan,maintenance_margin_rate_used,numeric,12,8,YES
+trading_plan,margin_mode,character varying,,,YES
+trading_plan,market_type,character varying,,,NO
+trading_plan,notional_value,numeric,28,8,YES
+trading_plan,pair_id,uuid,,,NO
+trading_plan,plan_id,uuid,,,NO
+trading_plan,plan_note,text,,,YES
+trading_plan,plan_status,character varying,,,NO
+trading_plan,position_quantity,numeric,28,12,YES
+trading_plan,reward_amount,numeric,28,8,YES
+trading_plan,risk_amount,numeric,28,8,YES
+trading_plan,risk_percent,numeric,6,3,NO
+trading_plan,risk_reward_ratio,numeric,12,8,YES
+trading_plan,stop_loss_price,numeric,28,12,NO
+trading_plan,take_profit_price,numeric,28,12,NO
+trading_plan,updated_at,timestamp with time zone,,,NO
+trading_plan,user_id,uuid,,,NO
+trading_plan,version,bigint,64,0,NO
+trading_plan_warning,created_at,timestamp with time zone,,,NO
+trading_plan_warning,plan_id,uuid,,,NO
+trading_plan_warning,severity,character varying,,,NO
+trading_plan_warning,updated_at,timestamp with time zone,,,NO
+trading_plan_warning,version,bigint,64,0,NO
+trading_plan_warning,warning_id,uuid,,,NO
+trading_plan_warning,warning_message,character varying,,,NO
+trading_plan_warning,warning_type,character varying,,,NO
+trading_strategy,created_at,timestamp with time zone,,,NO
+trading_strategy,description,text,,,YES
+trading_strategy,strategy_code,character varying,,,NO
+trading_strategy,strategy_id,uuid,,,NO
+trading_strategy,strategy_name,character varying,,,NO
+trading_strategy,updated_at,timestamp with time zone,,,NO
+trading_strategy,version,bigint,64,0,NO
+user_account,account_status,character varying,,,NO
+user_account,created_at,timestamp with time zone,,,NO
+user_account,email,character varying,,,NO
+user_account,email_verified_at,timestamp with time zone,,,YES
+user_account,last_login_at,timestamp with time zone,,,YES
+user_account,password_hash,character varying,,,NO
+user_account,role,character varying,,,NO
+user_account,updated_at,timestamp with time zone,,,NO
+user_account,user_id,uuid,,,NO
+user_account,version,bigint,64,0,NO
+user_device,created_at,timestamp with time zone,,,NO
+user_device,device_id,uuid,,,NO
+user_device,fcm_token,character varying,,,NO
+user_device,is_active,boolean,,,NO
+user_device,last_seen_at,timestamp with time zone,,,YES
+user_device,platform,character varying,,,NO
+user_device,updated_at,timestamp with time zone,,,NO
+user_device,user_id,uuid,,,NO
+user_device,version,bigint,64,0,NO
+user_profile,avatar_url,character varying,,,YES
+user_profile,created_at,timestamp with time zone,,,NO
+user_profile,default_capital,numeric,28,8,YES
+user_profile,default_risk_percent,numeric,6,3,YES
+user_profile,display_name,character varying,,,NO
+user_profile,notify_email,boolean,,,NO
+user_profile,notify_push,boolean,,,NO
+user_profile,trading_style,character varying,,,YES
+user_profile,updated_at,timestamp with time zone,,,NO
+user_profile,user_id,uuid,,,NO
+user_profile,version,bigint,64,0,NO
+user_subscription,created_at,timestamp with time zone,,,NO
+user_subscription,end_at,timestamp with time zone,,,NO
+user_subscription,order_id,uuid,,,NO
+user_subscription,start_at,timestamp with time zone,,,NO
+user_subscription,subscription_id,uuid,,,NO
+user_subscription,subscription_status,character varying,,,NO
+user_subscription,updated_at,timestamp with time zone,,,NO
+user_subscription,version,bigint,64,0,NO
+user_token,created_at,timestamp with time zone,,,NO
+user_token,expires_at,timestamp with time zone,,,NO
+user_token,token_hash,character varying,,,NO
+user_token,token_id,uuid,,,NO
+user_token,token_type,character varying,,,NO
+user_token,updated_at,timestamp with time zone,,,NO
+user_token,used_at,timestamp with time zone,,,YES
+user_token,user_id,uuid,,,NO
+user_token,version,bigint,64,0,NO
+watchlist,added_at,timestamp with time zone,,,NO
+watchlist,created_at,timestamp with time zone,,,NO
+watchlist,label,character varying,,,YES
+watchlist,note,text,,,YES
+watchlist,pair_id,uuid,,,NO
+watchlist,sort_order,integer,32,0,NO
+watchlist,updated_at,timestamp with time zone,,,NO
+watchlist,user_id,uuid,,,NO
+watchlist,version,bigint,64,0,NO
+watchlist,watchlist_id,uuid,,,NO
