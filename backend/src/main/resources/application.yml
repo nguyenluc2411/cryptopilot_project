@@ -4,6 +4,15 @@ spring:
   threads:
     virtual:
       enabled: true
+  jpa:
+    hibernate:
+      # Flyway owns the schema; Hibernate only checks that the entities match it, and refuses to
+      # start when they do not (Q-10). Never `update`, never `create`: a mapping change has to be
+      # written as a migration and reviewed, not applied by the ORM at start-up.
+      ddl-auto: validate
+    # The persistence context ends with the transaction. Leaving it open across the view would let
+    # a controller trigger a lazy load, which the layer rules of the design forbid.
+    open-in-view: false
   flyway:
     # The production migration path, and only it. Sample data lives in classpath:db/demo, which the
     # dev profile adds; nothing here reaches it, so a staging or production database cannot acquire
