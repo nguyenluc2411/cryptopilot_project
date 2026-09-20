@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import java.io.UnsupportedEncodingException;
+import java.sql.SQLException;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
@@ -14,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.MethodParameter;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -105,6 +107,29 @@ class GlobalExceptionHandlerTest {
         assertThat(result).bodyJson().extractingPath("$.traceId").asString().isNotBlank();
     }
 
+    /**
+     * A write the database refused. It is a conflict, not a crash: the rule worked, and the caller
+     * is told so with a 409 rather than a 500 that says the server is broken.
+     *
+     * <p>The constraint name identifies which rule fired, so it belongs in the log and not in the
+     * response — it tells a caller what the tables are called and which column is unique.
+     */
+    @Test
+    void refusedWrite_answers409AndNamesNoConstraintInTheResponse() throws UnsupportedEncodingException {
+        MvcTestResult result = mockMvc.get().uri("/test-errors/duplicate").exchange();
+
+        assertThat(result).hasStatus(HttpStatus.CONFLICT);
+        assertThat(result.getResponse().getContentType()).startsWith(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+        assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("DATA_CONFLICT");
+        assertThat(result).bodyJson().extractingPath("$.messageCode").isEqualTo("MSG43");
+        assertThat(result).bodyJson().extractingPath("$.detail").isEqualTo(GlobalExceptionHandler.CONFLICT_DETAIL);
+        assertThat(result).bodyJson().extractingPath("$.traceId").asString().isNotBlank();
+        assertThat(result.getResponse().getContentAsString())
+                .doesNotContain("uq_user_account_email")
+                .doesNotContain("user_account")
+                .doesNotContain("duplicate key");
+    }
+
     @Test
     void invalidRequestBody_answers400WithOneEntryPerOffendingField() {
         MvcTestResult result = mockMvc.post()
@@ -179,6 +204,14 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/broken")
         void broken() {
             throw new IllegalStateException("connection string postgres://user:secret@db/cryptopilot is invalid");
+        }
+
+        @GetMapping("/duplicate")
+        void duplicate() {
+            throw new DataIntegrityViolationException(
+                    "could not execute statement",
+                    new SQLException(
+                            "ERROR: duplicate key value violates unique constraint \"uq_user_account_email\""));
         }
 
         @PostMapping("/validate")

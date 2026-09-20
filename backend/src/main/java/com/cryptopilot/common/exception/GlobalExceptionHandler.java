@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
@@ -52,6 +53,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     /** Text of an unexpected failure; deliberately says nothing about the cause. */
     static final String UNEXPECTED_DETAIL = "An unexpected error occurred.";
 
+    /** Text of a refused write; names no table and no constraint. */
+    static final String CONFLICT_DETAIL = "The request conflicts with data that already exists.";
+
     /** Message of a field error whose validation constraint declares none. */
     static final String DEFAULT_FIELD_MESSAGE = "is invalid";
 
@@ -62,6 +66,29 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         log.info("Request refused: code={} detail={}", errorCode.code(), exception.getMessage());
         ProblemDetail body = problemDetail(errorCode, exception.getMessage(), traceId());
         return ResponseEntity.status(errorCode.status()).body(body);
+    }
+
+    /**
+     * A write the database refused because it would have duplicated a row, or otherwise broken an
+     * integrity constraint.
+     *
+     * <p>Without this, a lost race — two registrations of the same address arriving together, one
+     * of them committing first — would reach the client as an unhandled exception and a 500, which
+     * says the server is broken when in fact the rule worked. The constraint name goes to the log,
+     * where it identifies which rule fired; the response carries the correlation id and nothing
+     * about the schema, since a constraint name tells a caller what the tables are called.
+     *
+     * <p>A use case that expects a particular collision does not rely on this: it catches the
+     * violation and raises the {@link ErrorCode} whose message SRS 5.3 assigns to that rule. This
+     * handler is what keeps the unanticipated one from looking like a crash.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ProblemDetail> handleDataIntegrityViolation(DataIntegrityViolationException exception) {
+        String reference = CorrelationIdFilter.currentCorrelationId()
+                .orElseGet(() -> UuidV7.next().toString());
+        log.warn("Integrity constraint refused a write, reference {}: {}", reference, mostSpecificMessage(exception));
+        ProblemDetail body = problemDetail(ErrorCode.DATA_CONFLICT, CONFLICT_DETAIL, reference);
+        return ResponseEntity.status(ErrorCode.DATA_CONFLICT.status()).body(body);
     }
 
     /** Anything the application did not anticipate: logged in full, answered with a reference. */
@@ -112,5 +139,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static String traceId() {
         return CorrelationIdFilter.currentCorrelationId().orElse(null);
+    }
+
+    /** The innermost message, which is where the driver puts the name of the constraint. */
+    private static String mostSpecificMessage(Throwable exception) {
+        Throwable cause = exception;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        return cause.getMessage();
     }
 }

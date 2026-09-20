@@ -72,7 +72,21 @@ public enum ErrorCode {
      * MSG07 is the text for both, deliberately: telling the two apart would say whether the link
      * ever existed.
      */
-    TOKEN_INVALID_OR_EXPIRED(HttpStatus.BAD_REQUEST, "MSG07");
+    TOKEN_INVALID_OR_EXPIRED(HttpStatus.BAD_REQUEST, "MSG07"),
+
+    /**
+     * A write lost a race with another one: a unique constraint refused the row because an equal
+     * one was committed first. 409 rather than 500, because nothing is broken — the same request
+     * sent again will be answered properly, by the rule that owns the constraint.
+     *
+     * <p>This is the safety net, not the answer a user should normally see. A use case that knows
+     * which constraint it can collide with catches the violation and raises its own code with the
+     * message SRS 5.3 assigns it; registration will raise MSG04 for a duplicate address. What is
+     * left for this code is the collision nobody anticipated, and SRS 5.3 has no text for that, so
+     * it borrows the reference-code message of MSG43 while the alignment item asking for one is
+     * open.
+     */
+    DATA_CONFLICT(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;
