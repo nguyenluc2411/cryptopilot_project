@@ -64,7 +64,7 @@ class SchemaConstraintTest {
     @Test
     void enumColumn_rejectsAValueOutsideItsList() {
         assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> jdbc.sql("""
-                        insert into app_user (user_id, email, password_hash, role, account_status,
+                        insert into user_account (user_id, email, password_hash, role, account_status,
                                               created_at, updated_at)
                         values (?, ?, 'hash', 'SUPERVISOR', 'ACTIVE', ?, ?)""")
                 .params(UUID.randomUUID(), "wrong-role@cryptopilot.test", NOW, NOW)
@@ -74,7 +74,7 @@ class SchemaConstraintTest {
     @Test
     void enumColumn_acceptsAValueFromItsList() {
         int inserted = jdbc.sql("""
-                        insert into app_user (user_id, email, password_hash, role, account_status,
+                        insert into user_account (user_id, email, password_hash, role, account_status,
                                               created_at, updated_at)
                         values (?, ?, 'hash', 'ADMIN', 'BANNED', ?, ?)""")
                 .params(UUID.randomUUID(), "admin@cryptopilot.test", NOW, NOW)
@@ -285,7 +285,7 @@ class SchemaConstraintTest {
     private UUID insertUser(String email) {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
-                        insert into app_user (user_id, email, password_hash, role, account_status,
+                        insert into user_account (user_id, email, password_hash, role, account_status,
                                               created_at, updated_at)
                         values (?, ?, 'hash', 'TRADER', 'ACTIVE', ?, ?)""").params(id, email, NOW, NOW).update();
         return id;

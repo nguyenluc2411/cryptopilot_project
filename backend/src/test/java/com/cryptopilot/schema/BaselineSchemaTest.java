@@ -31,7 +31,7 @@ class BaselineSchemaTest {
 
     /** The 38 business tables of the logical model, in the order the model lists them. */
     private static final List<String> BUSINESS_TABLES = List.of(
-            "app_user",
+            "user_account",
             "user_profile",
             "user_token",
             "user_device",
@@ -220,7 +220,7 @@ class BaselineSchemaTest {
                 "uq_user_subscription_order",
                 "uq_subscription_order_code",
                 "uq_news_article_url_hash",
-                "uq_app_user_email",
+                "uq_user_account_email",
                 "uq_coin_symbol",
                 "uq_crypto_pair_symbol"
             })
@@ -234,7 +234,7 @@ class BaselineSchemaTest {
                 "uq_engagement_user_post",
                 "uq_engagement_user_comment",
                 "uq_ai_configuration_active",
-                "uq_app_user_email_lower",
+                "uq_user_account_email_lower",
                 "idx_trading_plan_active",
                 "idx_trading_journal_open",
                 "idx_alert_active",

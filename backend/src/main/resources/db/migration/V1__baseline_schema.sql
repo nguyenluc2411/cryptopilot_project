@@ -6,7 +6,7 @@
 -- step instead of half way through these definitions.
 --
 -- Conventions used throughout (SRS 3.1.5):
---   * snake_case, singular table names. USER is reserved in SQL, so the table is app_user.
+--   * snake_case, singular table names. USER is reserved in SQL, so the table is user_account.
 --   * Primary keys are uuid version 7, assigned by the application before the insert. Time series
 --     keep the composite natural key of the logical model, with the time column included.
 --   * Every enumeration is varchar(32) with a CHECK listing its values, so a typo is rejected by
@@ -26,7 +26,7 @@
 -- Identity
 -- =============================================================================================
 
-CREATE TABLE app_user (
+CREATE TABLE user_account (
     user_id           uuid         NOT NULL,
     email             varchar(255) NOT NULL,
     password_hash     varchar(255) NOT NULL,
@@ -36,15 +36,15 @@ CREATE TABLE app_user (
     last_login_at     timestamptz,
     created_at        timestamptz  NOT NULL,
     updated_at        timestamptz  NOT NULL,
-    CONSTRAINT pk_app_user PRIMARY KEY (user_id),
-    CONSTRAINT uq_app_user_email UNIQUE (email),
-    CONSTRAINT ck_app_user_role CHECK (role IN ('TRADER', 'ADMIN')),
-    CONSTRAINT ck_app_user_account_status CHECK (account_status IN ('ACTIVE', 'LOCKED', 'BANNED'))
+    CONSTRAINT pk_user_account PRIMARY KEY (user_id),
+    CONSTRAINT uq_user_account_email UNIQUE (email),
+    CONSTRAINT ck_user_account_role CHECK (role IN ('TRADER', 'ADMIN')),
+    CONSTRAINT ck_user_account_status CHECK (account_status IN ('ACTIVE', 'LOCKED', 'BANNED'))
 );
 
 -- Registration compares addresses case-insensitively, so uniqueness has to hold case-insensitively
 -- too; without this index "Trader@x.com" and "trader@x.com" would be two accounts.
-CREATE UNIQUE INDEX uq_app_user_email_lower ON app_user (lower(email));
+CREATE UNIQUE INDEX uq_user_account_email_lower ON user_account (lower(email));
 
 CREATE TABLE user_profile (
     user_id              uuid          NOT NULL,
@@ -57,7 +57,7 @@ CREATE TABLE user_profile (
     notify_push          boolean       NOT NULL DEFAULT true,
     updated_at           timestamptz   NOT NULL,
     CONSTRAINT pk_user_profile PRIMARY KEY (user_id),
-    CONSTRAINT fk_user_profile_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_user_profile_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     CONSTRAINT ck_user_profile_trading_style
         CHECK (trading_style IS NULL OR trading_style IN ('SCALPING', 'DAY', 'SWING', 'POSITION'))
 );
@@ -72,7 +72,7 @@ CREATE TABLE user_token (
     created_at timestamptz NOT NULL,
     CONSTRAINT pk_user_token PRIMARY KEY (token_id),
     CONSTRAINT uq_user_token_hash UNIQUE (token_hash),
-    CONSTRAINT fk_user_token_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_user_token_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     CONSTRAINT ck_user_token_type
         CHECK (token_type IN ('EMAIL_VERIFICATION', 'PASSWORD_RESET', 'REFRESH'))
 );
@@ -90,7 +90,7 @@ CREATE TABLE user_device (
     last_seen_at timestamptz,
     CONSTRAINT pk_user_device PRIMARY KEY (device_id),
     CONSTRAINT uq_user_device_fcm_token UNIQUE (fcm_token),
-    CONSTRAINT fk_user_device_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_user_device_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     CONSTRAINT ck_user_device_platform CHECK (platform IN ('ANDROID', 'IOS'))
 );
 
@@ -250,7 +250,7 @@ CREATE TABLE leverage_bracket (
     updated_at              timestamptz     NOT NULL,
     CONSTRAINT pk_leverage_bracket PRIMARY KEY (pair_id, bracket_no),
     CONSTRAINT fk_leverage_bracket_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id) ON DELETE CASCADE,
-    CONSTRAINT fk_leverage_bracket_updated_by FOREIGN KEY (updated_by) REFERENCES app_user (user_id)
+    CONSTRAINT fk_leverage_bracket_updated_by FOREIGN KEY (updated_by) REFERENCES user_account (user_id)
 );
 
 CREATE INDEX idx_leverage_bracket_updated_by ON leverage_bracket (updated_by);
@@ -269,7 +269,7 @@ CREATE TABLE watchlist (
     added_at     timestamptz NOT NULL,
     CONSTRAINT pk_watchlist PRIMARY KEY (watchlist_id),
     CONSTRAINT uq_watchlist_user_pair UNIQUE (user_id, pair_id),
-    CONSTRAINT fk_watchlist_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_watchlist_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     CONSTRAINT fk_watchlist_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id)
 );
 
@@ -298,7 +298,7 @@ CREATE TABLE alert (
     created_at         timestamptz     NOT NULL,
     updated_at         timestamptz     NOT NULL,
     CONSTRAINT pk_alert PRIMARY KEY (alert_id),
-    CONSTRAINT fk_alert_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_alert_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     CONSTRAINT fk_alert_watchlist FOREIGN KEY (watchlist_id) REFERENCES watchlist (watchlist_id) ON DELETE CASCADE,
     CONSTRAINT ck_alert_market_type CHECK (market_type IN ('SPOT', 'FUTURES')),
     CONSTRAINT ck_alert_type CHECK (alert_type IN ('PRICE', 'INDICATOR')),
@@ -333,7 +333,7 @@ CREATE TABLE notification (
     read_at           timestamptz,
     created_at        timestamptz  NOT NULL,
     CONSTRAINT pk_notification PRIMARY KEY (notification_id),
-    CONSTRAINT fk_notification_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_notification_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     -- A deleted alert must not take the notification history with it.
     CONSTRAINT fk_notification_alert FOREIGN KEY (alert_id) REFERENCES alert (alert_id) ON DELETE SET NULL,
     CONSTRAINT ck_notification_type
@@ -385,7 +385,7 @@ CREATE TABLE trading_plan (
     created_at                       timestamptz     NOT NULL,
     updated_at                       timestamptz     NOT NULL,
     CONSTRAINT pk_trading_plan PRIMARY KEY (plan_id),
-    CONSTRAINT fk_trading_plan_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_trading_plan_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     CONSTRAINT fk_trading_plan_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id),
     CONSTRAINT ck_trading_plan_market_type CHECK (market_type IN ('SPOT', 'FUTURES')),
     CONSTRAINT ck_trading_plan_direction CHECK (direction IN ('LONG', 'SHORT')),
@@ -461,7 +461,7 @@ CREATE TABLE trading_journal (
     CONSTRAINT pk_trading_journal PRIMARY KEY (journal_id),
     -- One journal record per plan: a plan results in at most one trade.
     CONSTRAINT uq_trading_journal_plan UNIQUE (plan_id),
-    CONSTRAINT fk_trading_journal_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_trading_journal_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     CONSTRAINT fk_trading_journal_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id),
     CONSTRAINT fk_trading_journal_plan FOREIGN KEY (plan_id) REFERENCES trading_plan (plan_id),
     CONSTRAINT fk_trading_journal_strategy FOREIGN KEY (strategy_id) REFERENCES trading_strategy (strategy_id),
@@ -495,7 +495,7 @@ CREATE TABLE ai_conversation (
     created_at         timestamptz  NOT NULL,
     updated_at         timestamptz  NOT NULL,
     CONSTRAINT pk_ai_conversation PRIMARY KEY (conversation_id),
-    CONSTRAINT fk_ai_conversation_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ai_conversation_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     CONSTRAINT fk_ai_conversation_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id)
 );
 
@@ -531,7 +531,7 @@ CREATE TABLE ai_configuration (
     is_active         boolean       NOT NULL DEFAULT false,
     created_at        timestamptz   NOT NULL,
     CONSTRAINT pk_ai_configuration PRIMARY KEY (config_id),
-    CONSTRAINT fk_ai_configuration_updated_by FOREIGN KEY (updated_by) REFERENCES app_user (user_id)
+    CONSTRAINT fk_ai_configuration_updated_by FOREIGN KEY (updated_by) REFERENCES user_account (user_id)
 );
 
 CREATE INDEX idx_ai_configuration_updated_by ON ai_configuration (updated_by);
@@ -575,7 +575,7 @@ CREATE TABLE subscription_order (
     expires_at             timestamptz    NOT NULL,
     CONSTRAINT pk_subscription_order PRIMARY KEY (order_id),
     CONSTRAINT uq_subscription_order_code UNIQUE (order_code),
-    CONSTRAINT fk_subscription_order_user FOREIGN KEY (user_id) REFERENCES app_user (user_id),
+    CONSTRAINT fk_subscription_order_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
     CONSTRAINT fk_subscription_order_package FOREIGN KEY (package_id) REFERENCES subscription_package (package_id),
     CONSTRAINT ck_subscription_order_currency CHECK (currency = 'VND'),
     CONSTRAINT ck_subscription_order_gateway CHECK (payment_gateway IN ('VNPAY', 'MOMO')),
@@ -620,7 +620,7 @@ CREATE TABLE forum_post (
     created_at  timestamptz  NOT NULL,
     updated_at  timestamptz  NOT NULL,
     CONSTRAINT pk_forum_post PRIMARY KEY (post_id),
-    CONSTRAINT fk_forum_post_author FOREIGN KEY (author_id) REFERENCES app_user (user_id),
+    CONSTRAINT fk_forum_post_author FOREIGN KEY (author_id) REFERENCES user_account (user_id),
     CONSTRAINT ck_forum_post_type CHECK (post_type IN ('TEXT', 'VIDEO')),
     CONSTRAINT ck_forum_post_market_type CHECK (market_type IS NULL OR market_type IN ('SPOT', 'FUTURES')),
     CONSTRAINT ck_forum_post_status CHECK (post_status IN ('PUBLISHED', 'HIDDEN', 'DELETED'))
@@ -650,7 +650,7 @@ CREATE TABLE forum_comment (
     updated_at        timestamptz NOT NULL,
     CONSTRAINT pk_forum_comment PRIMARY KEY (comment_id),
     CONSTRAINT fk_forum_comment_post FOREIGN KEY (post_id) REFERENCES forum_post (post_id) ON DELETE CASCADE,
-    CONSTRAINT fk_forum_comment_author FOREIGN KEY (author_id) REFERENCES app_user (user_id),
+    CONSTRAINT fk_forum_comment_author FOREIGN KEY (author_id) REFERENCES user_account (user_id),
     CONSTRAINT fk_forum_comment_parent
         FOREIGN KEY (parent_comment_id) REFERENCES forum_comment (comment_id) ON DELETE CASCADE,
     CONSTRAINT ck_forum_comment_status CHECK (comment_status IN ('PUBLISHED', 'HIDDEN', 'DELETED')),
@@ -669,7 +669,7 @@ CREATE TABLE engagement (
     action_type   varchar(32) NOT NULL,
     created_at    timestamptz NOT NULL,
     CONSTRAINT pk_engagement PRIMARY KEY (engagement_id),
-    CONSTRAINT fk_engagement_user FOREIGN KEY (user_id) REFERENCES app_user (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_engagement_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
     CONSTRAINT fk_engagement_post FOREIGN KEY (post_id) REFERENCES forum_post (post_id) ON DELETE CASCADE,
     CONSTRAINT fk_engagement_comment FOREIGN KEY (comment_id) REFERENCES forum_comment (comment_id) ON DELETE CASCADE,
     CONSTRAINT ck_engagement_action_type CHECK (action_type IN ('LIKE', 'SAVE')),
@@ -726,8 +726,8 @@ CREATE TABLE post_report (
     -- A user reports a post once.
     CONSTRAINT uq_post_report_post_reporter UNIQUE (post_id, reporter_id),
     CONSTRAINT fk_post_report_post FOREIGN KEY (post_id) REFERENCES forum_post (post_id) ON DELETE CASCADE,
-    CONSTRAINT fk_post_report_reporter FOREIGN KEY (reporter_id) REFERENCES app_user (user_id),
-    CONSTRAINT fk_post_report_resolved_by FOREIGN KEY (resolved_by) REFERENCES app_user (user_id),
+    CONSTRAINT fk_post_report_reporter FOREIGN KEY (reporter_id) REFERENCES user_account (user_id),
+    CONSTRAINT fk_post_report_resolved_by FOREIGN KEY (resolved_by) REFERENCES user_account (user_id),
     CONSTRAINT ck_post_report_reason CHECK (reason IN ('SPAM', 'SCAM', 'ABUSE', 'MISLEADING', 'OTHER')),
     CONSTRAINT ck_post_report_status CHECK (report_status IN ('OPEN', 'REVIEWING', 'RESOLVED')),
     CONSTRAINT ck_post_report_resolution_action CHECK (
@@ -759,7 +759,7 @@ CREATE TABLE news_source (
     last_crawled_at         timestamptz,
     CONSTRAINT pk_news_source PRIMARY KEY (source_id),
     CONSTRAINT uq_news_source_feed_url UNIQUE (feed_url),
-    CONSTRAINT fk_news_source_managed_by FOREIGN KEY (managed_by) REFERENCES app_user (user_id),
+    CONSTRAINT fk_news_source_managed_by FOREIGN KEY (managed_by) REFERENCES user_account (user_id),
     CONSTRAINT ck_news_source_type CHECK (source_type IN ('RSS')),
     -- A source is polled at most every fifteen minutes.
     CONSTRAINT ck_news_source_crawl_interval CHECK (crawl_interval_minutes >= 15)
@@ -850,7 +850,7 @@ CREATE TABLE system_setting (
     updated_by    uuid,
     updated_at    timestamptz  NOT NULL,
     CONSTRAINT pk_system_setting PRIMARY KEY (setting_key),
-    CONSTRAINT fk_system_setting_updated_by FOREIGN KEY (updated_by) REFERENCES app_user (user_id),
+    CONSTRAINT fk_system_setting_updated_by FOREIGN KEY (updated_by) REFERENCES user_account (user_id),
     CONSTRAINT ck_system_setting_value_type CHECK (value_type IN ('INT', 'DECIMAL', 'BOOLEAN', 'STRING'))
 );
 
@@ -868,7 +868,7 @@ CREATE TABLE audit_log (
     created_at  timestamptz  NOT NULL,
     CONSTRAINT pk_audit_log PRIMARY KEY (audit_id),
     -- No cascade: deleting a user must never erase the record of what was done.
-    CONSTRAINT fk_audit_log_user FOREIGN KEY (user_id) REFERENCES app_user (user_id)
+    CONSTRAINT fk_audit_log_user FOREIGN KEY (user_id) REFERENCES user_account (user_id)
 );
 
 CREATE INDEX idx_audit_log_user ON audit_log (user_id, created_at DESC);
