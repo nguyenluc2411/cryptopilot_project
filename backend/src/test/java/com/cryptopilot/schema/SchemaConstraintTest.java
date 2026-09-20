@@ -198,19 +198,21 @@ class SchemaConstraintTest {
         UUID commentId = insertComment(postId);
 
         assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> jdbc.sql("""
-                        insert into engagement (engagement_id, user_id, post_id, comment_id, action_type, created_at)
-                        values (?, ?, ?, ?, 'LIKE', ?)""")
-                .params(UUID.randomUUID(), userId, postId, commentId, NOW)
+                        insert into engagement (engagement_id, user_id, post_id, comment_id, action_type,
+                                                created_at, updated_at)
+                        values (?, ?, ?, ?, 'LIKE', ?, ?)""")
+                .params(UUID.randomUUID(), userId, postId, commentId, NOW, NOW)
                 .update());
     }
 
     @Test
     void engagement_rejectsARowWithNoTarget() {
-        assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() ->
-                        jdbc.sql("""
-                        insert into engagement (engagement_id, user_id, post_id, comment_id, action_type, created_at)
-                        values (?, ?, null, null, 'LIKE', ?)""").params(UUID.randomUUID(), userId, NOW).update());
+        assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> jdbc.sql("""
+                        insert into engagement (engagement_id, user_id, post_id, comment_id, action_type,
+                                                created_at, updated_at)
+                        values (?, ?, null, null, 'LIKE', ?, ?)""")
+                .params(UUID.randomUUID(), userId, NOW, NOW)
+                .update());
     }
 
     @Test
@@ -265,19 +267,20 @@ class SchemaConstraintTest {
 
         assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> jdbc.sql("""
                         insert into crypto_pair (pair_id, base_coin_id, quote_coin_id, symbol,
-                                                 pair_status, updated_at)
-                        values (?, ?, ?, 'SOLOSOLO', 'ACTIVE', ?)""")
-                .params(UUID.randomUUID(), coinId, coinId, NOW)
+                                                 pair_status, created_at, updated_at)
+                        values (?, ?, ?, 'SOLOSOLO', 'ACTIVE', ?, ?)""")
+                .params(UUID.randomUUID(), coinId, coinId, NOW, NOW)
                 .update());
     }
 
     @Test
     void BR49_crawlIntervalBelowFifteenMinutes_isRejected() {
         assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> jdbc.sql("""
+                .isThrownBy(
+                        () -> jdbc.sql("""
                         insert into news_source (source_id, source_name, feed_url, source_type,
-                                                 crawl_interval_minutes)
-                        values (?, 'Too eager', 'https://example.test/feed', 'RSS', 5)""").param(UUID.randomUUID()).update());
+                                                 crawl_interval_minutes, created_at, updated_at)
+                        values (?, 'Too eager', 'https://example.test/feed', 'RSS', 5, ?, ?)""").params(UUID.randomUUID(), NOW, NOW).update());
     }
 
     // ---------------------------------------------------------------- helpers
@@ -293,9 +296,9 @@ class SchemaConstraintTest {
 
     private UUID insertCoin(String symbol) {
         UUID id = UUID.randomUUID();
-        jdbc.sql("insert into coin (coin_id, symbol, coin_name, created_at) values (?, ?, ?, ?)")
-                .params(id, symbol, symbol + " coin", NOW)
-                .update();
+        jdbc.sql("""
+                        insert into coin (coin_id, symbol, coin_name, created_at, updated_at)
+                        values (?, ?, ?, ?, ?)""").params(id, symbol, symbol + " coin", NOW, NOW).update();
         return id;
     }
 
@@ -305,16 +308,18 @@ class SchemaConstraintTest {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
                         insert into crypto_pair (pair_id, base_coin_id, quote_coin_id, symbol,
-                                                 is_spot_enabled, is_futures_enabled, pair_status, updated_at)
-                        values (?, ?, ?, ?, true, true, 'ACTIVE', ?)""").params(id, base, quote, symbol, NOW).update();
+                                                 is_spot_enabled, is_futures_enabled, pair_status,
+                                                 created_at, updated_at)
+                        values (?, ?, ?, ?, true, true, 'ACTIVE', ?, ?)""").params(id, base, quote, symbol, NOW, NOW).update();
         return id;
     }
 
     private UUID insertWatchlist() {
         UUID id = UUID.randomUUID();
-        jdbc.sql("insert into watchlist (watchlist_id, user_id, pair_id, added_at) values (?, ?, ?, ?)")
-                .params(id, userId, pairId, NOW)
-                .update();
+        jdbc.sql("""
+                        insert into watchlist (watchlist_id, user_id, pair_id, added_at,
+                                               created_at, updated_at)
+                        values (?, ?, ?, ?, ?, ?)""").params(id, userId, pairId, NOW, NOW, NOW).update();
         return id;
     }
 
@@ -373,22 +378,23 @@ class SchemaConstraintTest {
 
     private void insertLike(UUID postId) {
         jdbc.sql("""
-                        insert into engagement (engagement_id, user_id, post_id, action_type, created_at)
-                        values (?, ?, ?, 'LIKE', ?)""").params(UUID.randomUUID(), userId, postId, NOW).update();
+                        insert into engagement (engagement_id, user_id, post_id, action_type, created_at, updated_at)
+                        values (?, ?, ?, 'LIKE', ?, ?)""").params(UUID.randomUUID(), userId, postId, NOW, NOW).update();
     }
 
     private void insertReport(UUID postId) {
         jdbc.sql("""
-                        insert into post_report (report_id, post_id, reporter_id, reason, report_status, created_at)
-                        values (?, ?, ?, 'SPAM', 'OPEN', ?)""").params(UUID.randomUUID(), postId, userId, NOW).update();
+                        insert into post_report (report_id, post_id, reporter_id, reason, report_status,
+                                                 created_at, updated_at)
+                        values (?, ?, ?, 'SPAM', 'OPEN', ?, ?)""").params(UUID.randomUUID(), postId, userId, NOW, NOW).update();
     }
 
     private UUID insertAiConfiguration(boolean active) {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
                         insert into ai_configuration (config_id, model_name, system_prompt, temperature,
-                                                      max_output_tokens, is_active, created_at)
-                        values (?, 'model', 'prompt', 0.20, 1024, ?, ?)""").params(id, active, NOW).update();
+                                                      max_output_tokens, is_active, created_at, updated_at)
+                        values (?, 'model', 'prompt', 0.20, 1024, ?, ?, ?)""").params(id, active, NOW, NOW).update();
         return id;
     }
 }
