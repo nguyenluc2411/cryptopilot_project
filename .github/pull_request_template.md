@@ -16,7 +16,7 @@ Refs: T-xxx
 - [ ] Unit tests for every referenced business rule, including boundary cases
 - [ ] Integration tests for database or external adapter changes
 - [ ] All tests and architecture tests pass locally; coverage gates hold
-- [ ] No new analyzer warnings; formatting applied
+- [ ] No new compiler warnings; formatting applied (`./mvnw spotless:apply`)
 - [ ] OpenAPI updated for API changes
 - [ ] No secrets, `.env` files or build output committed
 - [ ] Commits follow Conventional Commits
