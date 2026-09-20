@@ -4,6 +4,10 @@ spring:
   threads:
     virtual:
       enabled: true
+  flyway:
+    locations: classpath:db/migration
+    # The schema is written by hand and applied only forwards; dropping it is never a build step.
+    clean-disabled: true
 
 server:
   port: 8080
