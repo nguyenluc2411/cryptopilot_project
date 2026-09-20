@@ -36,7 +36,43 @@ public enum ErrorCode {
      * Nothing in the catalogue matched: an unhandled exception reached the boundary. The response
      * carries a reference code and no technical detail (SRS 4.2.4).
      */
-    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "MSG43");
+    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "MSG43"),
+
+    /**
+     * The account is LOCKED or BANNED, so it cannot sign in (BR-06). 403 rather than 401: the
+     * credentials were not the problem, and MSG10 tells the holder which of the two states applies.
+     */
+    ACCOUNT_NOT_ACTIVE(HttpStatus.FORBIDDEN, "MSG10"),
+
+    /**
+     * The account has not verified its address, so it cannot sign in yet (BR-01). MSG11 carries the
+     * offer to send the verification mail again.
+     */
+    EMAIL_NOT_VERIFIED(HttpStatus.FORBIDDEN, "MSG11"),
+
+    /**
+     * A verification was applied to an account that is already verified. From the holder's side
+     * this is a link that has been used once already, which is what MSG07 says.
+     */
+    EMAIL_ALREADY_VERIFIED(HttpStatus.CONFLICT, "MSG07"),
+
+    /**
+     * An administrator's status change does not exist in the account lifecycle — unlocking an
+     * account that is not locked, or any action on a banned one (BR-05, BR-06).
+     *
+     * <p>SRS section 5.3 has no error text for this. MSG39 is the only message whose context is an
+     * administrator changing an account status, and it is written as a confirmation prompt rather
+     * than a refusal, so it is named here as the nearest existing message while the alignment item
+     * that asks for a proper one is open.
+     */
+    ACCOUNT_STATUS_TRANSITION_INVALID(HttpStatus.CONFLICT, "MSG39"),
+
+    /**
+     * A single-use token was presented after it had been used or after it expired (BR-01, BR-04).
+     * MSG07 is the text for both, deliberately: telling the two apart would say whether the link
+     * ever existed.
+     */
+    TOKEN_INVALID_OR_EXPIRED(HttpStatus.BAD_REQUEST, "MSG07");
 
     private final HttpStatus status;
     private final String messageCode;
