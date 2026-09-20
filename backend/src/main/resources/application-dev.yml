@@ -5,6 +5,11 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/cryptopilot}
     username: ${DB_USER:cryptopilot}
     password: ${DB_PASSWORD}
+  flyway:
+    # Development, and nowhere else, also applies the sample data. The list replaces the one in the
+    # base configuration rather than adding to it, which is why the production path is repeated
+    # here: a developer database is the production schema plus the demo set, in that order.
+    locations: classpath:db/migration,classpath:db/demo
 
 logging:
   level:
