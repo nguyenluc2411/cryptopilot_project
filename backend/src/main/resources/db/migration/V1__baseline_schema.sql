@@ -503,6 +503,12 @@ CREATE TABLE trading_journal (
     CONSTRAINT ck_trading_journal_close_reason
         CHECK (close_reason IS NULL OR close_reason IN ('TAKE_PROFIT', 'STOP_LOSS', 'MANUAL', 'LIQUIDATION')),
     CONSTRAINT ck_trading_journal_trade_status CHECK (trade_status IN ('OPEN', 'CLOSED')),
+    -- "SPOT only LONG": the same rule trading_plan carries. A journal record is reachable without a
+    -- plan (source MANUAL), so the constraint has to sit on this table too, or a spot short could be
+    -- recorded by hand and then counted in the performance statistics.
+    CONSTRAINT ck_trading_journal_spot_is_long CHECK (market_type <> 'SPOT' OR direction = 'LONG'),
+    CONSTRAINT ck_trading_journal_spot_has_no_futures_fields
+        CHECK (market_type <> 'SPOT' OR leverage IS NULL),
     -- "null if MANUAL": a simulated trade always comes from a plan, a manual one never does.
     CONSTRAINT ck_trading_journal_plan_source CHECK (
         (source = 'SIMULATED' AND plan_id IS NOT NULL)

@@ -141,6 +141,28 @@ class SchemaConstraintTest {
                 .isThrownBy(() -> insertPlan("SPOT", "LONG", 10));
     }
 
+    /**
+     * A journal record does not have to come from a plan, so the rule that a spot position is
+     * always long has to sit on this table too. Without it a manual entry could record a spot short
+     * and the performance statistics would count a position that cannot exist.
+     */
+    @Test
+    void BR21_spotShortJournalEntry_isRefused() {
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertManualJournal("SPOT", "SHORT", null));
+    }
+
+    @Test
+    void spotJournalEntry_cannotCarryLeverage() {
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertManualJournal("SPOT", "LONG", 5));
+    }
+
+    @Test
+    void spotJournalEntry_mayBeLongWithoutLeverage() {
+        assertThat(insertManualJournal("SPOT", "LONG", null)).isNotNull();
+    }
+
     @Test
     void futuresPlan_mayBeShortAndLeveraged() {
         assertThat(insertPlan("FUTURES", "SHORT", 10)).isNotNull();
@@ -354,6 +376,18 @@ class SchemaConstraintTest {
                                                      created_at, updated_at)
                         values (?, ?, ?, cast(? as uuid), ?, 'FUTURES', 'LONG', 27123.45, 0.024, ?, 'OPEN', ?, ?)""")
                 .params(id, userId, pairId, planId == null ? null : planId.toString(), source, NOW, NOW, NOW)
+                .update();
+        return id;
+    }
+
+    private UUID insertManualJournal(String marketType, String direction, Integer leverage) {
+        UUID id = UUID.randomUUID();
+        jdbc.sql("""
+                        insert into trading_journal (journal_id, user_id, pair_id, source, market_type,
+                                                     direction, leverage, entry_price, quantity, entry_time,
+                                                     trade_status, created_at, updated_at)
+                        values (?, ?, ?, 'MANUAL', ?, ?, cast(? as integer), 27123.45, 0.024, ?, 'OPEN', ?, ?)""")
+                .params(id, userId, pairId, marketType, direction, leverage, NOW, NOW, NOW)
                 .update();
         return id;
     }
