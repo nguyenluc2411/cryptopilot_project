@@ -26,7 +26,14 @@ import org.springframework.transaction.annotation.Transactional;
  * outlive the test that wrote them. Each test that expects a violation makes the failing statement
  * its last one, because in PostgreSQL a failed statement leaves the transaction unusable.
  *
- * <p>Rule: SRS 3.1.5 and the rules the logical model states in its column comments.
+ * <p>Four of the rules below carry a business rule id in the test name, because the constraint is
+ * the rule: BR-15 (a pair is watched once per user), BR-45 (one like and one save per user per
+ * target), BR-46 (one report per user per post) and BR-49 (a source is polled at most every
+ * fifteen minutes). The database half is what is proved here; the limits, messages and service
+ * behaviour of those rules belong to the tasks that own them.
+ *
+ * <p>Rule: SRS 3.1.5, BR-15, BR-45, BR-46, BR-49, and the rules the logical model states in its
+ * column comments.
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
@@ -87,7 +94,7 @@ class SchemaConstraintTest {
     // ---------------------------------------------------------------- watchlist and alerts
 
     @Test
-    void watchlist_holdsAPairOncePerUser() {
+    void BR15_samePairAddedTwiceByOneUser_isRejected() {
         insertWatchlist();
 
         assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(this::insertWatchlist);
@@ -207,7 +214,7 @@ class SchemaConstraintTest {
     }
 
     @Test
-    void user_likesAPostOnlyOnce() {
+    void BR45_secondLikeOnTheSamePost_isRejected() {
         UUID postId = insertPost();
         insertLike(postId);
 
@@ -215,7 +222,7 @@ class SchemaConstraintTest {
     }
 
     @Test
-    void user_reportsAPostOnlyOnce() {
+    void BR46_secondReportOnTheSamePost_isRejected() {
         UUID postId = insertPost();
         insertReport(postId);
 
@@ -265,7 +272,7 @@ class SchemaConstraintTest {
     }
 
     @Test
-    void newsSource_cannotBePolledMoreOftenThanEveryFifteenMinutes() {
+    void BR49_crawlIntervalBelowFifteenMinutes_isRejected() {
         assertThatExceptionOfType(DataIntegrityViolationException.class)
                 .isThrownBy(() -> jdbc.sql("""
                         insert into news_source (source_id, source_name, feed_url, source_type,
