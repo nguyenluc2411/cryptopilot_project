@@ -305,6 +305,36 @@ class SchemaConstraintTest {
                         values (?, 'Too eager', 'https://example.test/feed', 'RSS', 5, ?, ?)""").params(UUID.randomUUID(), NOW, NOW).update());
     }
 
+    // ---------------------------------------------------------------- deletion of an account
+
+    /**
+     * An account is never removed from the database: BR-05 locks or bans it, so the history it
+     * produced stays readable and attributable. The schema is what makes that true — the foreign
+     * keys of the journal and of the plans refuse the delete instead of following it.
+     */
+    @Test
+    void BR05_deletingAUserWithJournalOrPlans_isRefused() {
+        UUID planId = insertPlan("FUTURES", "LONG", 10);
+        insertJournal("SIMULATED", planId);
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> jdbc.sql("delete from user_account where user_id = ?")
+                        .param(userId)
+                        .update());
+    }
+
+    @Test
+    void deletingAUser_leavesTheAuditTrailAndTheOrdersBehind() {
+        jdbc.sql("""
+                        insert into audit_log (audit_id, user_id, action_code, created_at, updated_at)
+                        values (?, ?, 'USER_LOGIN', ?, ?)""").params(UUID.randomUUID(), userId, NOW, NOW).update();
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> jdbc.sql("delete from user_account where user_id = ?")
+                        .param(userId)
+                        .update());
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private UUID insertUser(String email) {
