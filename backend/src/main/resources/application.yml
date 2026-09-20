@@ -5,9 +5,20 @@ spring:
     virtual:
       enabled: true
   flyway:
+    # The production migration path, and only it. Sample data lives in classpath:db/demo, which the
+    # dev profile adds; nothing here reaches it, so a staging or production database cannot acquire
+    # a demo row by way of a flag that was left in the wrong state.
     locations: classpath:db/migration
     # The schema is written by hand and applied only forwards; dropping it is never a build step.
     clean-disabled: true
+    placeholders:
+      # The bootstrap administrator's password, already hashed, from the environment. No password
+      # and no hash is ever committed. The fallback is not a hash in any format an encoder produces,
+      # so until the environment supplies one the seeded account exists but no password matches it.
+      admin_password_hash: ${ADMIN_PASSWORD_HASH:!ADMIN_PASSWORD_HASH_NOT_SET}
+      # The same, for the demo trader of classpath:db/demo. It is declared here rather than beside
+      # the dev profile so that the placeholder resolves whatever locations are configured.
+      demo_password_hash: ${DEMO_PASSWORD_HASH:!DEMO_PASSWORD_HASH_NOT_SET}
 
 server:
   port: 8080
