@@ -16,9 +16,13 @@
 --   * Numeric precision follows one table: price and quantity numeric(28,12); USDT amounts
 --     numeric(28,8); VND amounts numeric(18,0); rates and ratios numeric(12,8); user-entered
 --     percentages numeric(6,3); computed analytics numeric(28,10); scores numeric(5,2).
---   * Foreign keys cascade only where the child cannot exist without its parent. Everything else
---     keeps the SQL default, so a delete that would orphan a row is refused rather than silently
---     widened.
+--   * Foreign keys cascade only from an aggregate root to rows that are part of it and cannot
+--     exist without it. Everything else keeps the SQL default, so a delete that would orphan a row
+--     is refused rather than silently widened. An account is never hard-deleted — it moves to
+--     LOCKED or BANNED — so no foreign key to user_account cascades except the three rows that are
+--     the account itself: its profile, its tokens and its devices. Trading history, community
+--     content, orders and the audit trail therefore outlive any attempt to delete their author,
+--     which is refused while they exist.
 --   * Every foreign key column carries an index. PostgreSQL does not create one automatically, and
 --     without it every parent delete degrades into a sequential scan of the child table.
 
@@ -269,7 +273,7 @@ CREATE TABLE watchlist (
     added_at     timestamptz NOT NULL,
     CONSTRAINT pk_watchlist PRIMARY KEY (watchlist_id),
     CONSTRAINT uq_watchlist_user_pair UNIQUE (user_id, pair_id),
-    CONSTRAINT fk_watchlist_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_watchlist_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
     CONSTRAINT fk_watchlist_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id)
 );
 
@@ -298,7 +302,7 @@ CREATE TABLE alert (
     created_at         timestamptz     NOT NULL,
     updated_at         timestamptz     NOT NULL,
     CONSTRAINT pk_alert PRIMARY KEY (alert_id),
-    CONSTRAINT fk_alert_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_alert_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
     CONSTRAINT fk_alert_watchlist FOREIGN KEY (watchlist_id) REFERENCES watchlist (watchlist_id) ON DELETE CASCADE,
     CONSTRAINT ck_alert_market_type CHECK (market_type IN ('SPOT', 'FUTURES')),
     CONSTRAINT ck_alert_type CHECK (alert_type IN ('PRICE', 'INDICATOR')),
@@ -333,7 +337,7 @@ CREATE TABLE notification (
     read_at           timestamptz,
     created_at        timestamptz  NOT NULL,
     CONSTRAINT pk_notification PRIMARY KEY (notification_id),
-    CONSTRAINT fk_notification_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_notification_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
     -- A deleted alert must not take the notification history with it.
     CONSTRAINT fk_notification_alert FOREIGN KEY (alert_id) REFERENCES alert (alert_id) ON DELETE SET NULL,
     CONSTRAINT ck_notification_type
@@ -385,7 +389,7 @@ CREATE TABLE trading_plan (
     created_at                       timestamptz     NOT NULL,
     updated_at                       timestamptz     NOT NULL,
     CONSTRAINT pk_trading_plan PRIMARY KEY (plan_id),
-    CONSTRAINT fk_trading_plan_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_trading_plan_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
     CONSTRAINT fk_trading_plan_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id),
     CONSTRAINT ck_trading_plan_market_type CHECK (market_type IN ('SPOT', 'FUTURES')),
     CONSTRAINT ck_trading_plan_direction CHECK (direction IN ('LONG', 'SHORT')),
@@ -461,7 +465,7 @@ CREATE TABLE trading_journal (
     CONSTRAINT pk_trading_journal PRIMARY KEY (journal_id),
     -- One journal record per plan: a plan results in at most one trade.
     CONSTRAINT uq_trading_journal_plan UNIQUE (plan_id),
-    CONSTRAINT fk_trading_journal_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_trading_journal_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
     CONSTRAINT fk_trading_journal_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id),
     CONSTRAINT fk_trading_journal_plan FOREIGN KEY (plan_id) REFERENCES trading_plan (plan_id),
     CONSTRAINT fk_trading_journal_strategy FOREIGN KEY (strategy_id) REFERENCES trading_strategy (strategy_id),
@@ -495,7 +499,7 @@ CREATE TABLE ai_conversation (
     created_at         timestamptz  NOT NULL,
     updated_at         timestamptz  NOT NULL,
     CONSTRAINT pk_ai_conversation PRIMARY KEY (conversation_id),
-    CONSTRAINT fk_ai_conversation_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ai_conversation_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
     CONSTRAINT fk_ai_conversation_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id)
 );
 
@@ -669,7 +673,7 @@ CREATE TABLE engagement (
     action_type   varchar(32) NOT NULL,
     created_at    timestamptz NOT NULL,
     CONSTRAINT pk_engagement PRIMARY KEY (engagement_id),
-    CONSTRAINT fk_engagement_user FOREIGN KEY (user_id) REFERENCES user_account (user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_engagement_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
     CONSTRAINT fk_engagement_post FOREIGN KEY (post_id) REFERENCES forum_post (post_id) ON DELETE CASCADE,
     CONSTRAINT fk_engagement_comment FOREIGN KEY (comment_id) REFERENCES forum_comment (comment_id) ON DELETE CASCADE,
     CONSTRAINT ck_engagement_action_type CHECK (action_type IN ('LIKE', 'SAVE')),
