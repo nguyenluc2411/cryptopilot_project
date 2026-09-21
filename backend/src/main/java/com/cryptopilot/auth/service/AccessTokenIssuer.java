@@ -25,7 +25,8 @@ import org.springframework.stereotype.Component;
  * identifies their account.
  *
  * <p>The role is in the token because authorization has to be decided without a database read on
- * every request, and because it is the claim T-015's policies will read. The cost of putting it here
+ * every request: it is the claim the filter chain authorizes on, by way of
+ * {@link com.cryptopilot.auth.config.AccessTokenAuthenticationConverter}. The cost of putting it here
  * is stated rather than discovered later: a role changed by an administrator does not take effect
  * until the holder's current access token expires, at most fifteen minutes later. BR-06's sessions
  * are revoked by revoking the refresh tokens, which stops the session being renewed; it cannot recall
@@ -46,9 +47,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class AccessTokenIssuer {
 
-    /** The claim T-015's policies read. Named here because this is where it is written. */
-    static final String ROLE_CLAIM = "role";
-
     private final JwtEncoder encoder;
     private final TokenProperties properties;
     private final Clock clock;
@@ -65,7 +63,7 @@ public class AccessTokenIssuer {
      * <p>The algorithm is put in the header explicitly rather than left to the encoder's default, so
      * that the token this issues and the token the decoder accepts are the same kind by construction.
      *
-     * @param role the role the account holds, as the claim T-015 will authorize on
+     * @param role the role the account holds, as the claim the authorization matrix reads
      */
     public IssuedAccessToken issueFor(UUID userId, String role) {
         Instant issuedAt = clock.instant();
@@ -76,7 +74,7 @@ public class AccessTokenIssuer {
                 .issuedAt(issuedAt)
                 .expiresAt(expiresAt)
                 .id(UuidV7.next().toString())
-                .claim(ROLE_CLAIM, role)
+                .claim(JwtConfig.ROLE_CLAIM, role)
                 .build();
         JwsHeader header = JwsHeader.with(JwtConfig.ALGORITHM).build();
         String value = encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();

@@ -74,6 +74,18 @@ public class JwtConfig {
     /** The {@code iss} claim: written by the issuer, required by the decoder, one constant for both. */
     public static final String ISSUER = "cryptopilot";
 
+    /**
+     * The claim naming the role the account holds. Written by
+     * {@link com.cryptopilot.auth.service.AccessTokenIssuer} and read by
+     * {@link AccessTokenAuthenticationConverter}, which is why it lives here rather than at either
+     * end: the two would still compile if they disagreed about the spelling, and every request would
+     * then authenticate with no role at all.
+     *
+     * <p>Not a registered claim of RFC 7519, so it is a private claim by that specification's
+     * section 4.3 - meaningful only inside this application, which is the whole of its audience.
+     */
+    public static final String ROLE_CLAIM = "role";
+
     private final SecretKeySpec key;
     private final Clock clock;
 
