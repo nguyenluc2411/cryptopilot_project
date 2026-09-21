@@ -9,6 +9,8 @@ import java.io.IOException;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import org.slf4j.MDC;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -28,12 +30,25 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * <p>The entry is removed in a {@code finally} block: the thread that served this request serves
  * the next one, and a stale id is worse than no id.
  *
+ * <h2>It runs before the security chain, and has to</h2>
+ *
+ * <p>Registered at the highest precedence, which puts it ahead of Spring Security's chain (order
+ * {@code -100}). Without that it would sit behind it, and a request the chain refuses - every 401
+ * and every 403 - would never reach this filter at all: no id in the logging context, no
+ * {@code traceId} in the problem detail and no {@code X-Correlation-Id} on the response. Those are
+ * exactly the responses somebody asks about afterwards, so they are the ones that most need an id
+ * to look up.
+ *
+ * <p>Nothing here reads the caller's identity, so being ahead of authentication costs nothing: the
+ * id is drawn from a header or generated, and both are available before anybody knows who is asking.
+ *
  * <p>Rule: TECHNICAL_DESIGN sections 1.3 (correlation id in MDC) and 5.1 ({@code traceId}).
  *
  * <p>Reference: Nygard, M. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf, ch. 8
  * (transparency: correlation ids tie the records of one request together).
  */
 @Component
+@Order(Ordered.HIGHEST_PRECEDENCE)
 public class CorrelationIdFilter extends OncePerRequestFilter {
 
     /** Request and response header carrying the id. */
