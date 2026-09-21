@@ -328,14 +328,24 @@ class UserAccountRepositoryTest {
      * {@code findAll()} and {@code count()} to a table that grows with every registration; the
      * interface extends {@code Repository} instead and lists what it needs, so the method a list
      * screen would reach for does not exist to be reached for.
+     *
+     * <p>The list is exact rather than a prohibition on {@code findAll} alone, so that the surface
+     * cannot grow quietly. {@code flush} joined it with the registration use case: an account
+     * assigns its own key, so {@code save} sends no statement and the unique index on the address
+     * would otherwise refuse the row at commit, where the service that turns that refusal into
+     * MSG04 can no longer see it. It decides when a write is sent, never what is read, so the rule
+     * this test exists for is untouched.
      */
     @Test
     void theRepository_offersNoUnboundedReadOfATableThatGrowsWithUsers() {
         assertThat(UserAccountRepository.class.getMethods())
                 .extracting(java.lang.reflect.Method::getName)
-                .containsExactlyInAnyOrder("existsByEmailIgnoringCase", "findByEmailIgnoringCase", "findById", "save");
+                .containsExactlyInAnyOrder(
+                        "existsByEmailIgnoringCase", "findByEmailIgnoringCase", "findById", "save", "flush");
 
         assertThatThrownBy(() -> UserAccountRepository.class.getMethod("findAll"))
+                .isInstanceOf(NoSuchMethodException.class);
+        assertThatThrownBy(() -> UserAccountRepository.class.getMethod("count"))
                 .isInstanceOf(NoSuchMethodException.class);
     }
 

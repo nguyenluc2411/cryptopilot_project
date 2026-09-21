@@ -105,4 +105,25 @@ public interface UserAccountRepository extends Repository<UserAccount, UUID> {
      * <p>Not transactional here on purpose: the caller's transaction is the unit of work.
      */
     UserAccount save(UserAccount account);
+
+    /**
+     * Sends everything written so far to the database, without ending the transaction.
+     *
+     * <p>Registration needs this and would be wrong without it. {@code UserAccount} assigns its own
+     * key, so {@code save} only makes the entity persistent — no statement reaches the database
+     * until the transaction flushes, which by default is at commit. The unique index on
+     * {@code lower(email)} is therefore consulted after the service that wanted to catch its
+     * refusal has already returned, and the duplicate that loses a race would be answered with the
+     * generic conflict instead of MSG04. Flushing where the insert is expected puts the refusal
+     * inside the {@code try} that knows what it means.
+     *
+     * <p>Not transactional here, for the same reason {@code save} is not: the unit of work belongs
+     * to the caller, and this only decides when a statement is sent inside it.
+     *
+     * <p>Rule: SRS UC-01 (MSG04).
+     *
+     * <p>Reference: Bauer, C., King, G. &amp; Gregory, G. (2015). <i>Java Persistence with
+     * Hibernate</i> (2nd ed.). Manning, ch. 10 (flush timing decides when a constraint is checked).
+     */
+    void flush();
 }
