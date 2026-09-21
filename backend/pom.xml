@@ -61,6 +61,15 @@
 			<artifactId>spring-modulith-starter-core</artifactId>
 		</dependency>
 
+		<!-- Spring Security arrives with the first credential the system stores: it publishes the
+		     BCryptPasswordEncoder of TECHNICAL_DESIGN 1.3 and the filter chain that decides which
+		     endpoints are public. Everything not named in that chain is denied, so adding this
+		     closes the application rather than opening it. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+
 		<!-- Spring Data JPA (Hibernate) is the persistence choice of TECHNICAL_DESIGN 1.3. It arrives
 		     with the first entities; the schema stays owned by Flyway, so ddl-auto is validate. -->
 		<dependency>

@@ -283,12 +283,16 @@ class UserTokenRepositoryTest {
                         "findByTokenHash",
                         "findByTokenHashAndTokenType",
                         "findTopByUserIdAndTokenTypeOrderByCreatedAtDesc",
+                        "countIssuedSince",
+                        "invalidateUnused",
                         "save");
 
         assertThat(UserTokenRepository.class.getMethods())
-                .as("every read answers with at most one token")
-                .allSatisfy(
-                        method -> assertThat(method.getReturnType()).isIn(java.util.Optional.class, UserToken.class));
+                .as("a read answers with at most one token; a count answers a number and a bulk update"
+                        + " answers how many rows it touched. Nothing answers a list, so no caller can"
+                        + " read this table whole")
+                .allSatisfy(method ->
+                        assertThat(method.getReturnType()).isIn(java.util.Optional.class, UserToken.class, int.class));
 
         assertThatThrownBy(() -> UserTokenRepository.class.getMethod("findAll"))
                 .isInstanceOf(NoSuchMethodException.class);

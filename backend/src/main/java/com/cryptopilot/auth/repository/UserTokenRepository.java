@@ -2,9 +2,13 @@ package com.cryptopilot.auth.repository;
 
 import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -93,6 +97,53 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
      */
     @Transactional(readOnly = true)
     Optional<UserToken> findTopByUserIdAndTokenTypeOrderByCreatedAtDesc(UUID userId, TokenType tokenType);
+
+    /**
+     * How many tokens of this kind the account was issued since an instant.
+     *
+     * <p>SRS 3.2.2 caps verification resends at five a day, and this is what the cap is counted
+     * with. It answers a number, not rows: the caller wants to know how many, and handing back the
+     * tokens instead would be an unbounded read dressed up as a count.
+     *
+     * <p>Backed by {@code idx_user_token_user_type}; the instant is a filter on the few rows one
+     * account holds of one kind.
+     *
+     * <p>Rule: SRS 3.2.2 (five resends per day).
+     */
+    @Transactional(readOnly = true)
+    @Query("select count(t) from UserToken t"
+            + " where t.userId = :userId and t.tokenType = :tokenType and t.createdAt >= :since")
+    int countIssuedSince(
+            @Param("userId") UUID userId, @Param("tokenType") TokenType tokenType, @Param("since") Instant since);
+
+    /**
+     * Stops every unused token of this kind for this account from working, and answers how many
+     * were stopped.
+     *
+     * <p>SRS 3.2.2: "a new token invalidates previous unused verification tokens". Without this,
+     * every resend would leave another working link behind, and a link the owner has forgotten
+     * about is a link an attacker who reaches an old mailbox can still use.
+     *
+     * <p>Written as one update rather than by loading the rows and calling the entity: there is no
+     * business decision to make per row, the entity's own {@code markUsed} deliberately refuses an
+     * expired token — which is exactly the kind this has to reach — and loading them would be the
+     * unbounded read this interface does not offer.
+     *
+     * <p>It records the supersession in {@code used_at}, because that is the only column the schema
+     * has for "no longer usable". A token that was superseded and one that was clicked are
+     * therefore indistinguishable afterwards; nothing in BR-01 or UC-02 depends on telling them
+     * apart, and an alignment item asks whether anything later will.
+     *
+     * <p>Rule: SRS 3.2.2.
+     *
+     * @return how many tokens stopped working
+     */
+    @Transactional
+    @Modifying(flushAutomatically = true)
+    @Query("update UserToken t set t.usedAt = :now"
+            + " where t.userId = :userId and t.tokenType = :tokenType and t.usedAt is null")
+    int invalidateUnused(
+            @Param("userId") UUID userId, @Param("tokenType") TokenType tokenType, @Param("now") Instant now);
 
     /**
      * Writes a token, inserting it when it is new and updating it otherwise.
