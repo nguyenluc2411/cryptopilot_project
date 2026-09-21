@@ -70,6 +70,23 @@
 			<artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
 
+		<!-- TECHNICAL_DESIGN 1.3 and 5.3 name the OAuth2 Resource Server with JWT and HS256: this is
+		     the half that validates a presented access token and populates the security context.
+		     Nothing about it makes an endpoint reachable — the chain still denies whatever it does
+		     not name — it only gives the chain an authenticated caller to reason about. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+		</dependency>
+		<!-- And the half that issues one. The resource server starter brings Nimbus for verification;
+		     NimbusJwtEncoder, which TECHNICAL_DESIGN 5.3 names for signing, lives in spring-security-oauth2-jose.
+		     Declared explicitly rather than relied on transitively, because the class this project
+		     compiles against must come from a dependency this file states. -->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-oauth2-jose</artifactId>
+		</dependency>
+
 		<!-- Spring Data JPA (Hibernate) is the persistence choice of TECHNICAL_DESIGN 1.3. It arrives
 		     with the first entities; the schema stays owned by Flyway, so ddl-auto is validate. -->
 		<dependency>
@@ -179,6 +196,23 @@
 							<artifactId>lombok</artifactId>
 						</path>
 					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<systemPropertyVariables>
+						<!-- The signing key is a credential: the application declares it with no
+						     fallback, so an environment that supplies none fails at start-up (D-20).
+						     The suite therefore has to supply one, and supplies it here rather than in
+						     a properties file, so that no file in the repository looks like a key and
+						     no test can pass by accidentally reading a committed default. The value is
+						     32 ASCII characters — 256 bits, the minimum HS256 accepts — and opens
+						     nothing: it signs tokens for a database that is thrown away with the container. -->
+						<JWT_SECRET>test-only-signing-key-0123456789ab</JWT_SECRET>
+					</systemPropertyVariables>
 				</configuration>
 			</plugin>
 
