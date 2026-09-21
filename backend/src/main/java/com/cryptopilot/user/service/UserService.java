@@ -3,8 +3,11 @@ package com.cryptopilot.user.service;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.user.LoginCredentials;
 import com.cryptopilot.user.UserApi;
+import com.cryptopilot.user.UserRole;
 import com.cryptopilot.user.UserSummary;
+import com.cryptopilot.user.entity.AccountStatus;
 import com.cryptopilot.user.entity.UserAccount;
 import com.cryptopilot.user.entity.UserProfile;
 import com.cryptopilot.user.repository.UserAccountRepository;
@@ -32,7 +35,21 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>{@link #markEmailVerified} writes {@code user_account}, through the entity's own
  *       transition rather than by assignment, so BR-01's "already verified" case is refused by the
  *       account and not by an {@code if} here.
+ *   <li>{@link #recordLoginAttempt} writes {@code user_account} twice over, in two different
+ *       transactions, and that is the whole difficulty of it — see below.
  * </ul>
+ *
+ * <h2>A sign-in writes on the path that fails</h2>
+ *
+ * <p>Every other write here happens because something succeeded. BR-03's counter is the opposite: it
+ * has to be recorded precisely when the request is refused, and a refusal is an exception, so the
+ * obvious arrangement — increment, then throw, in one transaction — rolls the increment back and the
+ * account is never locked however many passwords are tried. {@link FailedLoginRecorder} exists to
+ * commit that one write in a transaction of its own, and the test that asserts the counter after a
+ * rejected attempt is what keeps it committed.
+ *
+ * <p>The order of the checks decides which message SRS 5.3 assigns, and is stated in
+ * {@link UserApi#recordLoginAttempt}: lockout, then password, then status, then verification.
  *
  * <h2>The duplicate address</h2>
  *
@@ -62,10 +79,12 @@ public class UserService implements UserApi {
 
     private final UserAccountRepository accounts;
     private final UserProfileRepository profiles;
+    private final FailedLoginRecorder failedLogins;
 
-    UserService(UserAccountRepository accounts, UserProfileRepository profiles) {
+    UserService(UserAccountRepository accounts, UserProfileRepository profiles, FailedLoginRecorder failedLogins) {
         this.accounts = accounts;
         this.profiles = profiles;
+        this.failedLogins = failedLogins;
     }
 
     @Override
@@ -93,6 +112,47 @@ public class UserService implements UserApi {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Optional<LoginCredentials> findCredentialsByEmail(String email) {
+        return accounts.findByEmailIgnoringCase(email)
+                .map(account -> new LoginCredentials(account.getId(), account.getPasswordHash()));
+    }
+
+    @Override
+    @Transactional
+    public UserSummary recordLoginAttempt(UUID userId, boolean passwordMatched, Instant at) {
+        UserAccount account =
+                accounts.findById(userId).orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
+
+        if (account.isLockedOutAt(at)) {
+            throw lockedOut(account, at);
+        }
+        if (!passwordMatched) {
+            throw failedLogins
+                    .record(userId, at)
+                    .map(minutes -> new BusinessException(
+                            ErrorCode.LOGIN_TEMPORARILY_LOCKED,
+                            "too many consecutive failed sign-in attempts",
+                            minutes))
+                    .orElseGet(() ->
+                            new BusinessException(ErrorCode.INVALID_CREDENTIALS, UserApi.WRONG_CREDENTIALS_DETAIL));
+        }
+
+        account.recordLogin(at);
+        accounts.save(account);
+        return summaryOf(account);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<UserSummary> findForSessionRenewal(UUID userId) {
+        return accounts.findById(userId)
+                .filter(account -> account.getAccountStatus() == AccountStatus.ACTIVE)
+                .filter(UserAccount::isEmailVerified)
+                .map(UserService::summaryOf);
+    }
+
+    @Override
     @Transactional
     public void markEmailVerified(UUID userId, Instant verifiedAt) {
         UserAccount account =
@@ -113,7 +173,22 @@ public class UserService implements UserApi {
                 cause);
     }
 
+    /**
+     * MSG09, with the minutes still to wait. The account is asked for them rather than the duration
+     * being recomputed here, because the account is what knows when the lockout ends.
+     */
+    private static BusinessException lockedOut(UserAccount account, Instant at) {
+        return new BusinessException(
+                ErrorCode.LOGIN_TEMPORARILY_LOCKED,
+                "the account is serving a temporary lockout",
+                account.lockoutMinutesRemainingAt(at));
+    }
+
     private static UserSummary summaryOf(UserAccount account) {
-        return new UserSummary(account.getId(), account.getEmail(), account.isEmailVerified());
+        return new UserSummary(
+                account.getId(),
+                account.getEmail(),
+                UserRole.valueOf(account.getRole().name()),
+                account.isEmailVerified());
     }
 }
