@@ -29,6 +29,21 @@ spring:
       # the dev profile so that the placeholder resolves whatever locations are configured.
       demo_password_hash: ${DEMO_PASSWORD_HASH:!DEMO_PASSWORD_HASH_NOT_SET}
 
+cryptopilot:
+  auth:
+    token:
+      # SRS 3.2.3 states all three windows. They are declared rather than hard-coded because an
+      # incident that needs every access token in the estate to age out faster is answered by a
+      # restart, not by a release; the values themselves are the SRS values and a test asserts them.
+      access-token-ttl: 15m
+      refresh-token-ttl: 7d
+      remember-me-refresh-token-ttl: 30d
+      # The HS256 signing key, from the environment, with no fallback of any kind (D-20). A default
+      # here would be a key held by every reader of this repository, and a token signed with it would
+      # be a session on any deployment that forgot to override it. An environment that supplies
+      # nothing fails at start-up, which is the only safe way for this particular value to be missing.
+      secret: ${JWT_SECRET}
+
 server:
   port: 8080
 
