@@ -62,4 +62,28 @@ class ErrorCodeTest {
         assertThat(ErrorCode.INTERNAL_ERROR.messageCode()).isEqualTo("MSG43");
         assertThat(ErrorCode.INTERNAL_ERROR.status().value()).isEqualTo(500);
     }
+
+    /**
+     * The two codes the security filter chain returns.
+     *
+     * <p>Worth pinning separately because neither message was chosen, both were settled for. MSG44
+     * is right for a caller who must sign in again and is shared with {@code SESSION_EXPIRED} on
+     * purpose. MSG43 is a borrowed reference-code text, because SRS section 5.3 has no message for a
+     * refused authorization at all; the alignment item asking for one is open, and when it is
+     * answered this assertion is where the new id lands.
+     */
+    @Test
+    void SRS313_theSecurityCodes_carryTheStatusesTheMatrixDependsOn() {
+        assertThat(ErrorCode.AUTHENTICATION_REQUIRED.status().value())
+                .as("no usable credential")
+                .isEqualTo(401);
+        assertThat(ErrorCode.AUTHENTICATION_REQUIRED.messageCode()).isEqualTo("MSG44");
+
+        assertThat(ErrorCode.ACCESS_DENIED.status().value())
+                .as("authenticated, and the role does not reach the endpoint")
+                .isEqualTo(403);
+        assertThat(ErrorCode.ACCESS_DENIED.messageCode())
+                .as("borrowed while SRS 5.3 has no message for a refused authorization")
+                .isEqualTo("MSG43");
+    }
 }

@@ -135,7 +135,46 @@ public enum ErrorCode {
      * it borrows the reference-code message of MSG43 while the alignment item asking for one is
      * open.
      */
-    DATA_CONFLICT(HttpStatus.CONFLICT, "MSG43");
+    DATA_CONFLICT(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The request carried no usable credential, so the caller is not authenticated (SRS 4.2.4).
+     *
+     * <p>Raised by the filter chain rather than by a use case: a missing, malformed, expired or
+     * wrongly signed bearer token all end here, and deliberately as one code. Which of the four
+     * applies is of interest only to whoever is holding the token, and the client's action is the
+     * same in every case - obtain a new session, or send the holder to the sign-in screen.
+     *
+     * <p>MSG44 is the text SRS 3.2.3 assigns an ended session, and it is the right thing to show:
+     * from the holder's side that is exactly what has happened. It is shared with
+     * {@link #SESSION_EXPIRED}, which is the same fact discovered one layer lower - a refresh token
+     * that no longer renews anything. The codes stay separate because they are raised by different
+     * things and a client may want to tell them apart; the text does not, because the person reading
+     * it would not.
+     */
+    AUTHENTICATION_REQUIRED(HttpStatus.UNAUTHORIZED, "MSG44"),
+
+    /**
+     * The caller is authenticated and the role they hold does not reach this endpoint (SRS 3.1.3,
+     * SRS 4.2.4).
+     *
+     * <p>403 rather than 401, and the distinction is the whole point: 401 says the credential was
+     * missing or bad and inviting the caller to present another one is sensible, while 403 says the
+     * credential was fine and presenting it again will not help.
+     *
+     * <p>The response names no role and no requirement. A Trader who probes an administration
+     * endpoint learns that it exists and refuses them, which is unavoidable, and nothing further -
+     * telling them which role would open it is a small piece of the system's shape given away for
+     * no benefit to anyone entitled to be there.
+     *
+     * <p>SRS section 5.3 has no message for a refused authorization. MSG43's reference-code text is
+     * borrowed while the alignment item asking for a proper one is open, the same way
+     * {@link #DATA_CONFLICT} borrows it, and the detail sentence carries the real meaning so that a
+     * client which shows the detail is not made to lie. A correctly built client should not reach
+     * this code at all: the screens a role cannot open are not offered to it, so a 403 here means
+     * either a direct call to the API or a defect.
+     */
+    ACCESS_DENIED(HttpStatus.FORBIDDEN, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;
