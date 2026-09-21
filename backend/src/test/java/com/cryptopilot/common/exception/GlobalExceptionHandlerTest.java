@@ -46,7 +46,9 @@ import org.springframework.web.context.request.ServletWebRequest;
  * <p>The controller below exists only for this test. It is the smallest endpoint that can raise
  * each of the cases the handler distinguishes.
  */
-@WebMvcTest
+// Scoped to the controller below. Once the application grew a real controller, an unscoped slice
+// tried to build it too and failed on a service this test has no business knowing about.
+@WebMvcTest(controllers = GlobalExceptionHandlerTest.ThrowingController.class)
 @Import(GlobalExceptionHandlerTest.ThrowingController.class)
 class GlobalExceptionHandlerTest {
 

@@ -75,6 +75,23 @@ public enum ErrorCode {
     TOKEN_INVALID_OR_EXPIRED(HttpStatus.BAD_REQUEST, "MSG07"),
 
     /**
+     * The address is already registered (SRS UC-01). A conflict rather than a validation error,
+     * because nothing about the request is malformed: it asks for something that already exists.
+     *
+     * <p>The SRS chooses to say so. MSG04 tells a visitor that the address is taken, which does
+     * reveal that an account holds it; the password reset flow of BR-04 is the one that must not
+     * (MSG12), and the two are deliberately different because a registration form that refused to
+     * say would instead fail at the second step and confuse everyone who mistyped.
+     */
+    EMAIL_ALREADY_REGISTERED(HttpStatus.CONFLICT, "MSG04"),
+
+    /**
+     * The password does not satisfy BR-02: 8 to 64 characters, with at least one upper-case letter,
+     * one lower-case letter and one digit.
+     */
+    PASSWORD_POLICY_VIOLATION(HttpStatus.BAD_REQUEST, "MSG03"),
+
+    /**
      * A write lost a race with another one: a unique constraint refused the row because an equal
      * one was committed first. 409 rather than 500, because nothing is broken — the same request
      * sent again will be answered properly, by the rule that owns the constraint.
