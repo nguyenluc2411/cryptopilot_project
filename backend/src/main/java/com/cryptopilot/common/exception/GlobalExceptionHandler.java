@@ -26,7 +26,9 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
  * <p>The shape is the problem detail of RFC 9457, produced by Spring rather than hand-rolled, with
  * three properties added: {@code code}, the stable identifier a client branches on;
  * {@code messageCode}, the SRS message whose text the client displays; and {@code traceId}, the
- * correlation id that ties the response to the log lines of the same request.
+ * correlation id that ties the response to the log lines of the same request. A fourth,
+ * {@code messageArgs}, appears only when the message is a sentence with a hole in it - MSG09's
+ * minutes, MSG10's status - and carries the values in the order the placeholders appear.
  *
  * <p>An unhandled exception is the one case where the response says less than the handler knows.
  * The stack trace and the message go to the log with a reference code; the caller receives that
@@ -49,6 +51,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final String MESSAGE_CODE = "messageCode";
     private static final String TRACE_ID = "traceId";
     private static final String ERRORS = "errors";
+    private static final String MESSAGE_ARGS = "messageArgs";
 
     /** Text of an unexpected failure; deliberately says nothing about the cause. */
     static final String UNEXPECTED_DETAIL = "An unexpected error occurred.";
@@ -65,6 +68,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         ErrorCode errorCode = exception.errorCode();
         log.info("Request refused: code={} detail={}", errorCode.code(), exception.getMessage());
         ProblemDetail body = problemDetail(errorCode, exception.getMessage(), traceId());
+        if (!exception.messageArgs().isEmpty()) {
+            body.setProperty(MESSAGE_ARGS, exception.messageArgs());
+        }
         return ResponseEntity.status(errorCode.status()).body(body);
     }
 

@@ -39,10 +39,42 @@ public enum ErrorCode {
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "MSG43"),
 
     /**
+     * The address or the password was wrong (SRS 3.2.3). One code for both, because MSG08 is one
+     * sentence for both: saying which of the two was wrong turns the endpoint into a way of finding
+     * out which addresses hold accounts.
+     *
+     * <p>401 rather than 400: the request was well formed and the credentials it carried were
+     * refused, which is exactly what the status means.
+     */
+    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "MSG08"),
+
+    /**
+     * Five consecutive failures have locked the account for fifteen minutes (BR-03). MSG09 carries
+     * the minutes still to wait as its one message argument.
+     *
+     * <p>429 rather than 401 or 403: nothing is wrong with the credentials this request carried - the
+     * account is refusing attempts for a while because too many arrived, which is the one situation
+     * 429 describes. It also tells an automated client the right thing, where 401 would invite it to
+     * try again immediately.
+     */
+    LOGIN_TEMPORARILY_LOCKED(HttpStatus.TOO_MANY_REQUESTS, "MSG09"),
+
+    /**
      * The account is LOCKED or BANNED, so it cannot sign in (BR-06). 403 rather than 401: the
-     * credentials were not the problem, and MSG10 tells the holder which of the two states applies.
+     * credentials were not the problem, and MSG10 tells the holder which of the two states applies -
+     * as its one message argument, because the sentence names the state.
      */
     ACCOUNT_NOT_ACTIVE(HttpStatus.FORBIDDEN, "MSG10"),
+
+    /**
+     * The refresh token presented was unknown, already used, expired, or belongs to a family that has
+     * been revoked (SRS 3.2.3, TECHNICAL_DESIGN 7.15). One code and one message for all four, and
+     * deliberately: from the holder's side the session is over either way, and telling a caller which
+     * of the four applies tells whoever is holding a copied token how far they got.
+     *
+     * <p>MSG44 is the text SRS 3.2.3 assigns an expired session.
+     */
+    SESSION_EXPIRED(HttpStatus.UNAUTHORIZED, "MSG44"),
 
     /**
      * The account has not verified its address, so it cannot sign in yet (BR-01). MSG11 carries the
