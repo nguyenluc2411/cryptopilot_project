@@ -1,17 +1,20 @@
 package com.cryptopilot.user.entity;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * The account lifecycle, exercised without a database because none of it needs one: the rules are
@@ -28,9 +31,15 @@ import org.junit.jupiter.params.provider.EnumSource;
  * cannot be demoted or banned (BR-58) needs a count of the other accounts, so it belongs to the user
  * administration task. BR-06 is covered for the half that is a property of the account — a LOCKED or
  * BANNED account cannot log in — while the other half, that the change revokes the sessions, is a
- * write to the token table of another module and belongs to T-012. BR-01 is covered only as the
- * account's side of verification; the 24-hour window and the single-use link are the token's, and
- * live in {@code UserTokenTest}.
+ * write to the token table of another module and is proved in {@code AuthServiceTest}. BR-01 is
+ * covered only as the account's side of verification; the 24-hour window and the single-use link are
+ * the token's, and live in {@code UserTokenTest}.
+ *
+ * <p>BR-03 is covered here in full, clause by clause, because every one of its clauses is about the
+ * state of one account: the count, the fifth failure exactly, the fifteen minutes, both sides of the
+ * boundary, and what a success does to the counter. What is <em>not</em> here is that the counter
+ * survives the request that rejected the sign-in, which is a property of a transaction and is proved
+ * against the database in {@code UserServiceTest}.
  */
 class UserAccountTest {
 
@@ -216,6 +225,193 @@ class UserAccountTest {
 
         assertThat(account).isEqualTo(sameRow).hasSameHashCodeAs(sameRow);
         assertThat(account).isNotEqualTo(activeVerifiedAccount());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // The failed-attempt lockout (BR-03)
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void BR03_aNewAccount_hasCountedNoFailuresAndIsNotLockedOut() {
+        UserAccount account = activeVerifiedAccount();
+
+        assertThat(account.getFailedLoginCount()).isZero();
+        assertThat(account.getLockedUntil()).isNull();
+        assertThat(account.isLockedOutAt(NOW)).isFalse();
+    }
+
+    /**
+     * The count rises by one per failure and the account stays usable until the fifth. Four is the
+     * interesting number here: the clause says five, so four must not lock.
+     */
+    @ParameterizedTest(name = "{0} consecutive failures leave the account usable")
+    @ValueSource(ints = {1, 2, 3, 4})
+    void BR03_fewerThanFiveConsecutiveFailures_doNotLockTheAccount(int failures) {
+        UserAccount account = activeVerifiedAccount();
+
+        for (int i = 0; i < failures; i++) {
+            assertThat(account.recordFailedLogin(NOW))
+                    .as("failure %d did not reach the limit", i + 1)
+                    .isFalse();
+        }
+
+        assertThat(account.getFailedLoginCount()).isEqualTo(failures);
+        assertThat(account.isLockedOutAt(NOW)).isFalse();
+        assertThat(account.getLockedUntil()).isNull();
+    }
+
+    @Test
+    void BR03_theFifthConsecutiveFailure_locksTheAccountForFifteenMinutes() {
+        UserAccount account = activeVerifiedAccount();
+
+        for (int i = 0; i < 4; i++) {
+            account.recordFailedLogin(NOW);
+        }
+        boolean lockedByTheFifth = account.recordFailedLogin(NOW);
+
+        assertThat(lockedByTheFifth).isTrue();
+        assertThat(account.getFailedLoginCount()).isEqualTo(5);
+        assertThat(account.getLockedUntil()).isEqualTo(NOW.plus(Duration.ofMinutes(15)));
+        assertThat(account.isLockedOutAt(NOW)).isTrue();
+    }
+
+    /**
+     * The two numbers BR-03 states, asserted as the constants they are declared as and not only
+     * through what they cause. A behavioural test alone keeps passing when the threshold is changed
+     * and the loop above is changed with it.
+     */
+    @Test
+    void BR03_theThresholdAndTheWindow_areTheValuesTheRuleStates() {
+        assertThat(UserAccount.MAX_CONSECUTIVE_FAILED_LOGINS)
+                .as("SRS 3.2.3: after 5 consecutive failed login attempts")
+                .isEqualTo(5);
+        assertThat(UserAccount.LOCKOUT_DURATION)
+                .as("SRS 3.2.3: the account cannot log in for 15 minutes")
+                .isEqualTo(Duration.ofMinutes(15));
+    }
+
+    /** The end instant is outside the lockout: locked for fifteen minutes is not locked at fifteen. */
+    @Test
+    void BR03_theLockoutBoundary_isExclusiveAtItsEndInstant() {
+        UserAccount account = lockedOutAt(NOW);
+        Instant endsAt = NOW.plus(Duration.ofMinutes(15));
+
+        assertThat(account.isLockedOutAt(endsAt.minusMillis(1)))
+                .as("one millisecond before the end, still locked")
+                .isTrue();
+        assertThat(account.isLockedOutAt(endsAt))
+                .as("at the end instant itself, no longer locked")
+                .isFalse();
+        assertThat(account.isLockedOutAt(endsAt.plusMillis(1))).isFalse();
+    }
+
+    /** And nothing has to run for it to end. The columns are tidied by the next attempt, not by a job. */
+    @Test
+    void BR03_aLockoutEnds_withoutAnyoneUnlockingTheAccount() {
+        UserAccount account = lockedOutAt(NOW);
+        Instant afterwards = NOW.plus(Duration.ofMinutes(15));
+
+        assertThat(account.getAccountStatus())
+                .as("a BR-03 lockout is not the LOCKED status an administrator sets")
+                .isEqualTo(AccountStatus.ACTIVE);
+        assertThat(account.isLockedOutAt(afterwards)).isFalse();
+        assertThatCode(() -> account.recordLogin(afterwards)).doesNotThrowAnyException();
+    }
+
+    /** A sign-in during the lockout is refused even when the password was right (MSG09). */
+    @Test
+    void BR03_signingInDuringTheLockout_isRefusedWithTheMinutesStillToWait() {
+        UserAccount account = lockedOutAt(NOW);
+
+        assertThatExceptionOfType(BusinessException.class)
+                .isThrownBy(() -> account.recordLogin(NOW.plus(Duration.ofMinutes(5))))
+                .satisfies(refusal -> {
+                    assertThat(refusal.errorCode()).isEqualTo(ErrorCode.LOGIN_TEMPORARILY_LOCKED);
+                    assertThat(refusal.messageArgs())
+                            .as("MSG09 names the minutes still to wait")
+                            .containsExactly("10");
+                });
+    }
+
+    /**
+     * MSG09's minutes round up, because the message is an instruction: told to wait 0 minutes with
+     * 30 seconds left, the holder tries again too early and is refused again.
+     */
+    @ParameterizedTest(name = "{0} seconds remaining is reported as {1} minutes")
+    @CsvSource({"900,15", "841,15", "840,14", "61,2", "60,1", "59,1", "1,1"})
+    void BR03_theMinutesMsg09Names_areRoundedUp(long secondsRemaining, long expectedMinutes) {
+        UserAccount account = lockedOutAt(NOW);
+        Instant at = NOW.plus(Duration.ofMinutes(15)).minusSeconds(secondsRemaining);
+
+        assertThat(account.lockoutMinutesRemainingAt(at)).isEqualTo(expectedMinutes);
+    }
+
+    @Test
+    void BR03_askingForTheMinutesOfAnAccountThatIsNotLockedOut_isRefused() {
+        assertThatThrownBy(() -> activeVerifiedAccount().lockoutMinutesRemainingAt(NOW))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not locked out");
+    }
+
+    /** "A successful login resets the counter", and drops the lockout instant with it. */
+    @Test
+    void BR03_aSuccessfulSignIn_resetsTheCounter() {
+        UserAccount account = activeVerifiedAccount();
+        account.recordFailedLogin(NOW);
+        account.recordFailedLogin(NOW);
+
+        account.recordLogin(NOW);
+
+        assertThat(account.getFailedLoginCount()).isZero();
+        assertThat(account.getLockedUntil()).isNull();
+        assertThat(account.getLastLoginAt()).isEqualTo(NOW);
+    }
+
+    /**
+     * After a lockout has been served, the run of failures it ended is over: the next mistake counts
+     * as the first, not the sixth. Carrying the count forward would make one mistyped password
+     * re-lock the account for another quarter of an hour, which would make BR-03's own word
+     * "consecutive" untrue — recorded as an alignment item, because the SRS does not say either way.
+     */
+    @Test
+    void BR03_afterALockoutIsServed_theNextFailureCountsAsTheFirst() {
+        UserAccount account = lockedOutAt(NOW);
+        Instant afterwards = NOW.plus(Duration.ofMinutes(15));
+
+        boolean lockedAgain = account.recordFailedLogin(afterwards);
+
+        assertThat(lockedAgain).isFalse();
+        assertThat(account.getFailedLoginCount()).isEqualTo(1);
+        assertThat(account.getLockedUntil()).isNull();
+    }
+
+    /** A failure during the lockout is not counted twice over: the lock is still the lock. */
+    @Test
+    void BR03_aSecondRunOfFiveFailures_locksTheAccountAgain() {
+        UserAccount account = lockedOutAt(NOW);
+        Instant afterwards = NOW.plus(Duration.ofMinutes(15));
+
+        for (int i = 0; i < 4; i++) {
+            assertThat(account.recordFailedLogin(afterwards)).isFalse();
+        }
+
+        assertThat(account.recordFailedLogin(afterwards)).isTrue();
+        assertThat(account.getLockedUntil()).isEqualTo(afterwards.plus(Duration.ofMinutes(15)));
+    }
+
+    @Test
+    void BR03_recordingAFailureWithoutAnInstant_isRefused() {
+        assertThatThrownBy(() -> activeVerifiedAccount().recordFailedLogin(null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    /** An account that has just served five failures, with the clock at the moment of the fifth. */
+    private static UserAccount lockedOutAt(Instant at) {
+        UserAccount account = activeVerifiedAccount();
+        for (int i = 0; i < 5; i++) {
+            account.recordFailedLogin(at);
+        }
+        return account;
     }
 
     private static UserAccount activeVerifiedAccount() {

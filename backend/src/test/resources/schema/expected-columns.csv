@@ -392,7 +392,9 @@ user_account,account_status,character varying,,,NO
 user_account,created_at,timestamp with time zone,,,NO
 user_account,email,character varying,,,NO
 user_account,email_verified_at,timestamp with time zone,,,YES
+user_account,failed_login_count,integer,32,0,NO
 user_account,last_login_at,timestamp with time zone,,,YES
+user_account,locked_until,timestamp with time zone,,,YES
 user_account,password_hash,character varying,,,NO
 user_account,role,character varying,,,NO
 user_account,updated_at,timestamp with time zone,,,NO
@@ -428,6 +430,7 @@ user_subscription,updated_at,timestamp with time zone,,,NO
 user_subscription,version,bigint,64,0,NO
 user_token,created_at,timestamp with time zone,,,NO
 user_token,expires_at,timestamp with time zone,,,NO
+user_token,token_family_id,uuid,,,YES
 user_token,token_hash,character varying,,,NO
 user_token,token_id,uuid,,,NO
 user_token,token_type,character varying,,,NO
