@@ -31,15 +31,18 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * The two endpoints of UC-01 and UC-02 over HTTP: the status each answers, the SRS message code it
- * names, and what never appears in a response body.
+ * The endpoints of UC-01, UC-02, UC-03 and UC-05 over HTTP: the status each answers, the SRS message
+ * code it names, and what never appears in a response body.
  *
  * <p>Every message code of section 5.3 that this task owns is asserted on the path that produces
  * it, because a code is what the web client selects a sentence by — the backend never sends the
- * sentence itself, so a wrong code is a wrong message with nothing else to catch it.
+ * sentence itself, so a wrong code is a wrong message with nothing else to catch it. Two of those
+ * sentences have a hole in them, MSG09's minutes and MSG10's status, and the value that fills it is
+ * asserted too: a message code alone would leave the client with "Please try again after {minutes}
+ * minutes" and nothing to put in it.
  *
- * <p>Rule: SRS UC-01, UC-02, sections 3.2.1, 3.2.2 and 5.3; messages MSG01, MSG02, MSG03, MSG04,
- * MSG05, MSG06, MSG07.
+ * <p>Rule: SRS UC-01, UC-02, UC-03, UC-05, sections 3.2.1, 3.2.2, 3.2.3 and 5.3; messages MSG01,
+ * MSG02, MSG03, MSG04, MSG05, MSG06, MSG07, MSG08, MSG09, MSG10, MSG11, MSG44.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -55,6 +58,12 @@ class AuthControllerTest {
     private static final String VERIFY = "/api/v1/auth/verify-email";
 
     private static final String RESEND = "/api/v1/auth/resend-verification";
+
+    private static final String LOGIN = "/api/v1/auth/login";
+
+    private static final String REFRESH = "/api/v1/auth/refresh";
+
+    private static final String LOGOUT = "/api/v1/auth/logout";
 
     @Autowired
     private MockMvc mvc;
@@ -235,6 +244,230 @@ class AuthControllerTest {
         assertThat(forAnAccountThatExists)
                 .as("an endpoint that answers differently is an endpoint that tests addresses")
                 .isEqualTo(forAnAddressNobodyHas);
+    }
+
+    // ------------------------------------------------------------------- UC-03 and UC-05
+
+    /** SRS 3.2.3: a sign-in answers 200 with both tokens, their expiries and the role to route on. */
+    @Test
+    void UC03_aValidSignIn_answersOkWithBothTokensAndTheRole() throws Exception {
+        registerAndVerify("signin");
+
+        mvc.perform(post(LOGIN).contentType(MediaType.APPLICATION_JSON).content(loginOf("signin", "Abcdefg1", false)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty())
+                .andExpect(jsonPath("$.accessTokenExpiresAt").value("2026-09-21T10:15:00Z"))
+                .andExpect(jsonPath("$.refreshTokenExpiresAt").value("2026-09-28T10:00:00Z"))
+                .andExpect(jsonPath("$.role").value("TRADER"));
+    }
+
+    /** And nothing about the account beyond the role: a sign-in response is not a profile. */
+    @Test
+    void UC03_theSignInResponse_carriesNeitherThePasswordNorTheAddress() throws Exception {
+        registerAndVerify("quiet-signin");
+
+        String body = mvc.perform(post(LOGIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginOf("quiet-signin", "Abcdefg1", false)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(body).doesNotContain("Abcdefg1").doesNotContain(TEST_DOMAIN).doesNotContain("userId");
+    }
+
+    /** MSG08 with 401: the credentials were refused, and the body says which field was wrong nowhere. */
+    @Test
+    void MSG08_aWrongPassword_answersUnauthorisedWithMsg08() throws Exception {
+        registerAndVerify("bad-password");
+
+        mvc.perform(post(LOGIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginOf("bad-password", "Abcdefg2", false)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.messageCode").value("MSG08"))
+                .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
+    }
+
+    /** The same body for an address nobody registered, which is what keeps MSG08 one message. */
+    @Test
+    void MSG08_anUnknownAddressAndAWrongPassword_areAnsweredIdentically() throws Exception {
+        registerAndVerify("known-address");
+
+        String forAKnownAddress = loginRefusalFor(loginOf("known-address", "Abcdefg2", false));
+        String forAnUnknownAddress = loginRefusalFor(loginOf("no-such-address", "Abcdefg2", false));
+
+        assertThat(forAKnownAddress)
+                .as("a sign-in that answered differently would be a way to test addresses")
+                .isEqualTo(forAnUnknownAddress);
+    }
+
+    /** MSG09 with 429, and the minutes the sentence needs (BR-03). */
+    @Test
+    void MSG09_theFifthConsecutiveFailure_answersTooManyRequestsWithTheMinutesToWait() throws Exception {
+        registerAndVerify("locked-out");
+
+        for (int attempt = 1; attempt <= 4; attempt++) {
+            mvc.perform(post(LOGIN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(loginOf("locked-out", "Abcdefg2", false)))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        mvc.perform(post(LOGIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginOf("locked-out", "Abcdefg2", false)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.messageCode").value("MSG09"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("15"));
+    }
+
+    /** MSG10 with 403, naming the state the sentence has a hole for (BR-06). */
+    @Test
+    void MSG10_aBannedAccount_answersForbiddenWithTheStatusInTheMessage() throws Exception {
+        registerAndVerify("banned");
+        sql.sql("update user_account set account_status = 'BANNED' where lower(email) = ?")
+                .param("banned" + TEST_DOMAIN)
+                .update();
+
+        mvc.perform(post(LOGIN).contentType(MediaType.APPLICATION_JSON).content(loginOf("banned", "Abcdefg1", false)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.messageCode").value("MSG10"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("BANNED"));
+    }
+
+    /** MSG11 with 403 for an address that was never verified (BR-01). */
+    @Test
+    void MSG11_anUnverifiedAccount_answersForbiddenWithMsg11() throws Exception {
+        mvc.perform(post(REGISTER).contentType(MediaType.APPLICATION_JSON).content(registrationOf("not-verified")))
+                .andExpect(status().isCreated());
+
+        mvc.perform(post(LOGIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginOf("not-verified", "Abcdefg1", false)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.messageCode").value("MSG11"));
+    }
+
+    /** SRS 3.2.3: Remember me is thirty days on the refresh token and changes nothing else. */
+    @Test
+    void UC03_rememberMe_lengthensOnlyTheRefreshToken() throws Exception {
+        registerAndVerify("remembered");
+
+        mvc.perform(post(LOGIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginOf("remembered", "Abcdefg1", true)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessTokenExpiresAt").value("2026-09-21T10:15:00Z"))
+                .andExpect(jsonPath("$.refreshTokenExpiresAt").value("2026-10-21T10:00:00Z"));
+    }
+
+    /** Renewing answers the same shape as a sign-in, with a token that is not the one presented. */
+    @Test
+    void UC03_refreshing_answersOkWithANewPair() throws Exception {
+        registerAndVerify("renew");
+        String refreshToken = signIn("renew");
+
+        mvc.perform(post(REFRESH).contentType(MediaType.APPLICATION_JSON).content(refreshBodyOf(refreshToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty())
+                .andExpect(jsonPath("$.refreshToken").value(org.hamcrest.Matchers.not(refreshToken)))
+                .andExpect(jsonPath("$.role").value("TRADER"));
+    }
+
+    /** MSG44 with 401 for a token that is not a live session, whatever the reason (SRS 3.2.3). */
+    @Test
+    void MSG44_presentingARetiredRefreshToken_answersUnauthorisedWithMsg44() throws Exception {
+        registerAndVerify("replayed");
+        String refreshToken = signIn("replayed");
+        mvc.perform(post(REFRESH).contentType(MediaType.APPLICATION_JSON).content(refreshBodyOf(refreshToken)))
+                .andExpect(status().isOk());
+
+        mvc.perform(post(REFRESH).contentType(MediaType.APPLICATION_JSON).content(refreshBodyOf(refreshToken)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.messageCode").value("MSG44"))
+                .andExpect(jsonPath("$.code").value("SESSION_EXPIRED"));
+    }
+
+    /** UC-05: logging out answers 204 with no body, and the session really is over. */
+    @Test
+    void UC05_loggingOut_answersNoContentAndEndsTheSession() throws Exception {
+        registerAndVerify("signout");
+        String refreshToken = signIn("signout");
+
+        mvc.perform(post(LOGOUT).contentType(MediaType.APPLICATION_JSON).content(refreshBodyOf(refreshToken)))
+                .andExpect(status().isNoContent())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                        .string(""));
+
+        mvc.perform(post(REFRESH).contentType(MediaType.APPLICATION_JSON).content(refreshBodyOf(refreshToken)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.messageCode").value("MSG44"));
+    }
+
+    /** And it answers the same for a token nobody was ever issued, so it cannot be used to test them. */
+    @Test
+    void UC05_loggingOutWithATokenThatWasNeverIssued_answersNoContentToo() throws Exception {
+        mvc.perform(post(LOGOUT)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(refreshBodyOf("not-a-token-anybody-was-given")))
+                .andExpect(status().isNoContent());
+    }
+
+    /** An empty body is a validation failure, and MSG01, before anything looks at a credential. */
+    @Test
+    void MSG01_aSignInWithNoCredentials_answersBadRequest() throws Exception {
+        mvc.perform(post(LOGIN).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG01"))
+                .andExpect(jsonPath("$.errors.email").value("MSG01"))
+                .andExpect(jsonPath("$.errors.password").value("MSG01"));
+    }
+
+    // ------------------------------------------------------------------- Helpers
+
+    private void registerAndVerify(String localPart) throws Exception {
+        mvc.perform(post(REGISTER).contentType(MediaType.APPLICATION_JSON).content(registrationOf(localPart)))
+                .andExpect(status().isCreated());
+        mvc.perform(post(VERIFY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(tokenBodyOf(issuedLinks.only().token())))
+                .andExpect(status().isOk());
+        issuedLinks.clear();
+    }
+
+    /** Signs in and answers the refresh token that was issued. */
+    private String signIn(String localPart) throws Exception {
+        String body = mvc.perform(post(LOGIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginOf(localPart, "Abcdefg1", false)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return com.jayway.jsonpath.JsonPath.read(body, "$.refreshToken");
+    }
+
+    /** The body of a refused sign-in, with the correlation id removed so two can be compared. */
+    private String loginRefusalFor(String requestBody) throws Exception {
+        return mvc.perform(post(LOGIN).contentType(MediaType.APPLICATION_JSON).content(requestBody))
+                .andExpect(status().isUnauthorized())
+                .andReturn()
+                .getResponse()
+                .getContentAsString()
+                .replaceAll("\"traceId\":\"[^\"]*\"", "");
+    }
+
+    private static String loginOf(String localPart, String password, boolean rememberMe) {
+        return "{\"email\": \"" + localPart + TEST_DOMAIN + "\","
+                + " \"password\": \"" + password + "\","
+                + " \"rememberMe\": " + rememberMe + "}";
+    }
+
+    private static String refreshBodyOf(String refreshToken) {
+        return "{\"refreshToken\": \"" + refreshToken + "\"}";
     }
 
     private String resendResponseFor(String email) throws Exception {
