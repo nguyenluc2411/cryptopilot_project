@@ -22,8 +22,12 @@ import org.junit.jupiter.params.provider.ValueSource;
  * computed: the registration and password reset tasks. What is proved here is that whatever instant
  * arrives is honoured, that the boundary is exclusive, and that a used token is refused. The reuse
  * of a refresh token also revokes the rest of its family (TECHNICAL_DESIGN 7.15); detecting the
- * reuse is the rejection below, acting on it belongs to T-012, and the family column does not exist
- * yet (A-10).
+ * reuse is the rejection below, and acting on it is the service's, so it is proved in
+ * {@code AuthServiceTest}.
+ *
+ * <p>The family itself is proved here, because it is a property of the row: a refresh token has one
+ * and no other kind may, which is why the two factory methods are separate and why each refuses the
+ * other's job.
  */
 class UserTokenTest {
 
@@ -34,10 +38,47 @@ class UserTokenTest {
     /** A SHA-256 digest in lower-case hexadecimal, which is what the column is sized for. */
     private static final String DIGEST = "a".repeat(64);
 
+    /** The family every refresh token in this class belongs to. */
+    private static final UUID FAMILY = UUID.fromString("019b76da-a800-7000-8000-0000000000f1");
+
+    // -------------------------------------------------------------- the family (TECHNICAL_DESIGN 7.15)
+
+    @Test
+    void TD715_aRefreshToken_carriesTheFamilyItWasIssuedInto() {
+        UserToken token = UserToken.issueRefresh(ACCOUNT, DIGEST, EXPIRES, FAMILY);
+
+        assertThat(token.getTokenType()).isEqualTo(TokenType.REFRESH);
+        assertThat(token.getTokenFamilyId()).isEqualTo(FAMILY);
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = TokenType.class,
+            names = {"EMAIL_VERIFICATION", "PASSWORD_RESET"})
+    void TD715_aTokenThatIsNotRotated_carriesNoFamily(TokenType type) {
+        assertThat(UserToken.issue(ACCOUNT, type, DIGEST, EXPIRES).getTokenFamilyId())
+                .as("a link that is issued once has no successors, so a family would mean nothing")
+                .isNull();
+    }
+
+    /**
+     * Neither factory can do the other's job, which is what keeps the database's own version of this
+     * rule from ever being offered a row to refuse.
+     */
+    @Test
+    void TD715_neitherFactory_canBuildTheOtherKind() {
+        assertThatThrownBy(() -> UserToken.issue(ACCOUNT, TokenType.REFRESH, DIGEST, EXPIRES))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("belongs to a family");
+        assertThatThrownBy(() -> UserToken.issueRefresh(ACCOUNT, DIGEST, EXPIRES, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("tokenFamilyId");
+    }
+
     @ParameterizedTest
     @EnumSource(TokenType.class)
     void BR01_aFreshToken_isUsableUntilItsExpiryInstant(TokenType type) {
-        UserToken token = UserToken.issue(ACCOUNT, type, DIGEST, EXPIRES);
+        UserToken token = tokenOf(type, DIGEST);
 
         assertThat(token.isUsableAt(ISSUED)).isTrue();
         assertThat(token.isUsableAt(EXPIRES.minusMillis(1))).isTrue();
@@ -76,7 +117,7 @@ class UserTokenTest {
     @ParameterizedTest
     @EnumSource(TokenType.class)
     void BR01_usingATokenASecondTime_isRefused(TokenType type) {
-        UserToken token = UserToken.issue(ACCOUNT, type, DIGEST, EXPIRES);
+        UserToken token = tokenOf(type, DIGEST);
         token.markUsed(ISSUED.plusSeconds(60));
 
         assertThatExceptionOfType(BusinessException.class)
@@ -101,18 +142,28 @@ class UserTokenTest {
                 ""
             })
     void aTokenHashThatIsNotASha256Digest_isRefused(String notADigest) {
-        assertThatThrownBy(() -> UserToken.issue(ACCOUNT, TokenType.REFRESH, notADigest, EXPIRES))
+        assertThatThrownBy(() -> UserToken.issueRefresh(ACCOUNT, notADigest, EXPIRES, FAMILY))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("never the token itself");
     }
 
     @Test
     void aTokenWithoutAnAccount_aTypeOrAnExpiry_isRefused() {
-        assertThatThrownBy(() -> UserToken.issue(null, TokenType.REFRESH, DIGEST, EXPIRES))
+        assertThatThrownBy(() -> UserToken.issue(null, TokenType.EMAIL_VERIFICATION, DIGEST, EXPIRES))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> UserToken.issue(ACCOUNT, null, DIGEST, EXPIRES))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> UserToken.issue(ACCOUNT, TokenType.REFRESH, DIGEST, null))
+        assertThatThrownBy(() -> UserToken.issue(ACCOUNT, TokenType.EMAIL_VERIFICATION, DIGEST, null))
                 .isInstanceOf(NullPointerException.class);
+    }
+
+    /**
+     * Whichever kind the case asks for, built through the factory that kind has. The two are separate
+     * methods on purpose, so a test that covers all three kinds has to say which is which.
+     */
+    private static UserToken tokenOf(TokenType type, String digest) {
+        return type == TokenType.REFRESH
+                ? UserToken.issueRefresh(ACCOUNT, digest, EXPIRES, FAMILY)
+                : UserToken.issue(ACCOUNT, type, digest, EXPIRES);
     }
 }

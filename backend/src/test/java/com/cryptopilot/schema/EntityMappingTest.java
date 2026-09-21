@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
+import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.entity.AccountStatus;
 import com.cryptopilot.user.entity.DevicePlatform;
@@ -388,7 +389,7 @@ class EntityMappingTest {
     @EnumSource(TokenType.class)
     void everyTokenType_isAValueTheColumnAccepts(TokenType type) {
         UserAccount account = persistedAccount(type + "@enum.invalid");
-        UserToken token = UserToken.issue(account.getId(), type, digestFor(type), FIXED_NOW.plusSeconds(600));
+        UserToken token = tokenOf(account.getId(), type, digestFor(type), FIXED_NOW.plusSeconds(600));
         UUID id = token.getId();
 
         assertThat(writeAndReread(token, UserToken.class, id).getTokenType()).isEqualTo(type);
@@ -431,7 +432,7 @@ class EntityMappingTest {
         UUID id = account.getId();
         em.persist(UserProfile.createFor(id, "Cascade"));
         em.persist(UserDevice.register(id, "fcm-cascade", DevicePlatform.IOS));
-        em.persist(UserToken.issue(id, TokenType.REFRESH, "c".repeat(64), FIXED_NOW.plusSeconds(600)));
+        em.persist(tokenOf(id, TokenType.REFRESH, "c".repeat(64), FIXED_NOW.plusSeconds(600)));
         em.flush();
 
         em.remove(account);
@@ -587,6 +588,18 @@ class EntityMappingTest {
 
     private Statistics statistics() {
         return em.getEntityManagerFactory().unwrap(SessionFactory.class).getStatistics();
+    }
+
+    /**
+     * A token of the kind asked for, built through the factory that kind has. A refresh token
+     * belongs to a family and the other two may not have one — {@code ck_user_token_family} says so
+     * in the database — so a test that built every kind the same way would be refused by the
+     * constraint rather than by the mapping it is here to check.
+     */
+    private static UserToken tokenOf(UUID userId, TokenType type, String digest, Instant expiresAt) {
+        return type == TokenType.REFRESH
+                ? UserToken.issueRefresh(userId, digest, expiresAt, UuidV7.next())
+                : UserToken.issue(userId, type, digest, expiresAt);
     }
 
     private static String digestFor(TokenType type) {

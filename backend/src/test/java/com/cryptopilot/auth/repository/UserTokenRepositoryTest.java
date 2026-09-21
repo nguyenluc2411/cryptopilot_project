@@ -274,6 +274,13 @@ class UserTokenRepositoryTest {
      * that grows with every sign-in and every reset request. Both are asserted over the interface
      * rather than left to review: the first is what keeps a token out of a query log, the second is
      * what keeps a list screen from being written against a million rows.
+     *
+     * <p>The list is exact, so the surface cannot grow quietly. {@code revokeFamily} joined it with
+     * the refresh rotation that needs it: reuse detection has to stop every token of a family in one
+     * statement, and the alternative — load them and call the entity on each — is both the unbounded
+     * read this interface does not offer and unable to reach an expired-but-unused sibling, because
+     * {@code markUsed} refuses an expired token. It takes a family identifier and answers a count, so
+     * neither rule this test exists for is touched.
      */
     @Test
     void theRepository_offersOnlyBoundedLookupsAndNamesEveryParameterADigest() {
@@ -285,6 +292,7 @@ class UserTokenRepositoryTest {
                         "findTopByUserIdAndTokenTypeOrderByCreatedAtDesc",
                         "countIssuedSince",
                         "invalidateUnused",
+                        "revokeFamily",
                         "save");
 
         assertThat(UserTokenRepository.class.getMethods())
@@ -298,9 +306,63 @@ class UserTokenRepositoryTest {
                 .isInstanceOf(NoSuchMethodException.class);
     }
 
+    /**
+     * TECHNICAL_DESIGN 7.15: one statement stops every unused token of a family, and nothing outside
+     * it. The expired sibling is the case that matters — it is unused, so it could still be revived
+     * by a clock change or a migration, and {@code markUsed} would have refused to touch it.
+     */
+    @Test
+    void TD715_revokingAFamily_stopsItsUnusedTokensAndLeavesOtherFamiliesAlone() {
+        UUID account = persistedAccount("family@cryptopilot.invalid");
+        UUID otherFamily = UUID.fromString("019b76da-a800-7000-8000-0000000000f2");
+        UserToken retired = persistedToken(account, TokenType.REFRESH, digest('5'), EXPIRES, FAMILY);
+        retired.markUsed(ISSUED.plusSeconds(1));
+        UserToken current = persistedToken(account, TokenType.REFRESH, digest('6'), EXPIRES, FAMILY);
+        UserToken expiredSibling = persistedToken(account, TokenType.REFRESH, digest('7'), ISSUED, FAMILY);
+        UserToken elsewhere = persistedToken(account, TokenType.REFRESH, digest('8'), EXPIRES, otherFamily);
+        em.flush();
+        em.clear();
+
+        int revoked = tokens.revokeFamily(FAMILY, ISSUED.plusSeconds(60));
+        em.clear();
+
+        assertThat(revoked)
+                .as("the two unused tokens of the family; the one already used is not counted again")
+                .isEqualTo(2);
+        assertThat(usedAtOf(current)).isEqualTo(ISSUED.plusSeconds(60));
+        assertThat(usedAtOf(expiredSibling))
+                .as("an unused token that had expired is stopped too, which markUsed would have refused")
+                .isEqualTo(ISSUED.plusSeconds(60));
+        assertThat(usedAtOf(retired)).as("already spent, and not restamped").isEqualTo(ISSUED.plusSeconds(1));
+        assertThat(usedAtOf(elsewhere))
+                .as("another sign-in of the same account is another family and is untouched")
+                .isNull();
+    }
+
+    @Test
+    void TD715_revokingAFamilyThatHasNothingUnused_changesNothing() {
+        UUID account = persistedAccount("empty-family@cryptopilot.invalid");
+        persistedToken(account, TokenType.REFRESH, digest('9'), EXPIRES, FAMILY);
+        em.clear();
+
+        assertThat(tokens.revokeFamily(UUID.fromString("019b76da-a800-7000-8000-0000000000f9"), ISSUED))
+                .isZero();
+    }
+
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
+
+    private Instant usedAtOf(UserToken token) {
+        return jdbc.sql("select used_at from user_token where token_id = ?")
+                .param(token.getId())
+                .query(Instant.class)
+                .optional()
+                .orElse(null);
+    }
+
+    /** The family the refresh tokens of this class belong to unless a case names another. */
+    private static final UUID FAMILY = UUID.fromString("019b76da-a800-7000-8000-0000000000f1");
 
     /** A SHA-256 digest in lower-case hexadecimal, distinguished only by the character it repeats. */
     private static String digest(char marker) {
@@ -315,7 +377,19 @@ class UserTokenRepositoryTest {
     }
 
     private UserToken persistedToken(UUID account, TokenType type, String tokenDigest, Instant expiresAt) {
-        UserToken token = tokens.save(UserToken.issue(account, type, tokenDigest, expiresAt));
+        return persistedToken(account, type, tokenDigest, expiresAt, FAMILY);
+    }
+
+    /**
+     * A token of any kind, built through the factory that kind has: a refresh token belongs to a
+     * family and the other two may not have one, which is a check constraint as well as a rule, so a
+     * test that ignored it would be refused by the database rather than by the mapping.
+     */
+    private UserToken persistedToken(UUID account, TokenType type, String tokenDigest, Instant expiresAt, UUID family) {
+        UserToken token = tokens.save(
+                type == TokenType.REFRESH
+                        ? UserToken.issueRefresh(account, tokenDigest, expiresAt, family)
+                        : UserToken.issue(account, type, tokenDigest, expiresAt));
         em.flush();
         return token;
     }

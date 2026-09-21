@@ -28,9 +28,9 @@ import org.springframework.transaction.annotation.Transactional;
  * <h2>What is deliberately not here</h2>
  *
  * <p>No {@code findAll}, no {@code deleteAll}: this table grows with every sign-in and every reset
- * request, and an unbounded read of it has no legitimate caller. The retention sweep of NSF-17 and
- * the family revocation of BR-06 both write in bulk, and both belong to the tasks that own those
- * rules, with the queries and the indexes their access pattern needs.
+ * request, and an unbounded read of it has no legitimate caller. The retention sweep of NSF-17 still
+ * belongs to the task that owns it; the family revocation arrived with the rotation that needs it and
+ * is {@link #revokeFamily}, written as one bulk update over the index its access pattern needs.
  *
  * <p>Nothing filters on expiry either. Whether a token may still be used is
  * {@link UserToken#isUsableAt(java.time.Instant)}, decided against the injected clock by the caller
@@ -144,6 +144,33 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
             + " where t.userId = :userId and t.tokenType = :tokenType and t.usedAt is null")
     int invalidateUnused(
             @Param("userId") UUID userId, @Param("tokenType") TokenType tokenType, @Param("now") Instant now);
+
+    /**
+     * Stops every unused token of one family from working, and answers how many were stopped.
+     *
+     * <p>This is the reaction to a replayed refresh token (TECHNICAL_DESIGN 7.15). Rotation retires a
+     * token the moment it is redeemed, so the only way a retired one is presented is that somebody
+     * kept a copy — and there is no way to tell whether the copy is in the legitimate client's hands
+     * or somebody else's. Every token descended from that sign-in is therefore stopped, which ends
+     * both sessions and forces a fresh sign-in with a password.
+     *
+     * <p>Backed by {@code idx_user_token_family}. One statement, because the revocation runs exactly
+     * when an attacker may be holding a working token and the window between noticing and acting is
+     * the window they have.
+     *
+     * <p>Written as an update rather than by loading the rows: there is no decision to make per row,
+     * {@code markUsed} deliberately refuses an expired token -- which is a kind this has to reach, so
+     * that an expired-but-unused sibling cannot be revived -- and loading them would be the unbounded
+     * read this interface does not offer.
+     *
+     * <p>Rule: TECHNICAL_DESIGN 7.15; BR-06.
+     *
+     * @return how many tokens stopped working
+     */
+    @Transactional
+    @Modifying(flushAutomatically = true)
+    @Query("update UserToken t set t.usedAt = :now where t.tokenFamilyId = :familyId and t.usedAt is null")
+    int revokeFamily(@Param("familyId") UUID familyId, @Param("now") Instant now);
 
     /**
      * Writes a token, inserting it when it is new and updating it otherwise.

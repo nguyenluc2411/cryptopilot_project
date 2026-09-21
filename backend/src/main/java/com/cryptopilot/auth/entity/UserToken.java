@@ -45,6 +45,16 @@ import java.util.regex.Pattern;
  * presented after use is the reuse that revokes the family (TECHNICAL_DESIGN 7.15) — detecting it
  * is this method's rejection, acting on it is the service's.
  *
+ * <h2>The family</h2>
+ *
+ * <p>A refresh token belongs to a family and every other kind belongs to none. The family names the
+ * chain of successors one sign-in produces: rotation retires a token and issues its replacement
+ * under the same {@code token_family_id}, so presenting a retired value identifies not just one bad
+ * token but every token descended from that sign-in, and all of them are revoked together. A
+ * verification link and a reset link are issued once and have no successor, so for them the column
+ * does not apply rather than being empty — {@code ck_user_token_family} says exactly that, and the
+ * two factory methods below are shaped so that neither kind can be built the wrong way round.
+ *
  * <p>Rule: BR-01, BR-04; TECHNICAL_DESIGN sections 5.3 and 7.15.
  *
  * <p>Reference: Evans, E. (2003). <i>Domain-Driven Design</i>. Addison-Wesley, ch. 5 and 6.
@@ -75,14 +85,18 @@ public class UserToken extends BaseEntity {
     @Column(name = "used_at")
     private Instant usedAt;
 
+    @Column(name = "token_family_id", updatable = false)
+    private UUID tokenFamilyId;
+
     /** For JPA only. */
     protected UserToken() {}
 
-    private UserToken(UUID userId, TokenType tokenType, String tokenHash, Instant expiresAt) {
+    private UserToken(UUID userId, TokenType tokenType, String tokenHash, Instant expiresAt, UUID tokenFamilyId) {
         this.userId = Objects.requireNonNull(userId, "userId must not be null");
         this.tokenType = Objects.requireNonNull(tokenType, "tokenType must not be null");
         this.tokenHash = requireDigest(tokenHash);
         this.expiresAt = Objects.requireNonNull(expiresAt, "expiresAt must not be null");
+        this.tokenFamilyId = tokenFamilyId;
     }
 
     /**
@@ -95,7 +109,32 @@ public class UserToken extends BaseEntity {
      *     clock and the window the rule gives this kind of token (BR-01, BR-04).
      */
     public static UserToken issue(UUID userId, TokenType tokenType, String tokenHash, Instant expiresAt) {
-        return new UserToken(userId, tokenType, tokenHash, expiresAt);
+        if (tokenType == TokenType.REFRESH) {
+            throw new IllegalArgumentException("a refresh token belongs to a family; use issueRefresh");
+        }
+        return new UserToken(userId, tokenType, tokenHash, expiresAt, null);
+    }
+
+    /**
+     * Records a refresh token that has just been issued, as part of a family.
+     *
+     * <p>Separate from {@link #issue} rather than an extra parameter on it, so that neither kind can
+     * be built the wrong way round: a caller cannot forget the family of a refresh token, and cannot
+     * give one to a link that has no successors. {@code ck_user_token_family} states the same rule
+     * in the database, and this is what keeps the application from ever presenting it a row to refuse.
+     *
+     * <p>Rule: TECHNICAL_DESIGN 7.15.
+     *
+     * @param tokenFamilyId the family this token belongs to: a fresh identifier for the first token
+     *     of a sign-in, and the retired token's own family for every successor after that
+     */
+    public static UserToken issueRefresh(UUID userId, String tokenHash, Instant expiresAt, UUID tokenFamilyId) {
+        return new UserToken(
+                userId,
+                TokenType.REFRESH,
+                tokenHash,
+                expiresAt,
+                Objects.requireNonNull(tokenFamilyId, "tokenFamilyId must not be null"));
     }
 
     /**
@@ -147,6 +186,14 @@ public class UserToken extends BaseEntity {
     /** When the token was used, or {@code null} while it has not been. */
     public Instant getUsedAt() {
         return usedAt;
+    }
+
+    /**
+     * The family of successors this token belongs to, or {@code null} for a kind of token that has
+     * none (TECHNICAL_DESIGN 7.15).
+     */
+    public UUID getTokenFamilyId() {
+        return tokenFamilyId;
     }
 
     private static String requireDigest(String tokenHash) {
