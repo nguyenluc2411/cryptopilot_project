@@ -47,9 +47,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    private static final String CODE = "code";
-    private static final String MESSAGE_CODE = "messageCode";
-    private static final String TRACE_ID = "traceId";
     private static final String ERRORS = "errors";
     private static final String MESSAGE_ARGS = "messageArgs";
 
@@ -127,15 +124,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return handleExceptionInternal(exception, body, headers, status, request);
     }
 
+    /**
+     * The shared shape. It is built in {@link ProblemDetails} rather than here because a request the
+     * security filter chain refuses never reaches this advice, and the body it gets instead has to be
+     * the same one.
+     */
     private static ProblemDetail problemDetail(ErrorCode errorCode, String detail, String traceId) {
-        ProblemDetail body = ProblemDetail.forStatusAndDetail(errorCode.status(), detail);
-        body.setTitle(errorCode.status().getReasonPhrase());
-        body.setProperty(CODE, errorCode.code());
-        body.setProperty(MESSAGE_CODE, errorCode.messageCode());
-        if (traceId != null) {
-            body.setProperty(TRACE_ID, traceId);
-        }
-        return body;
+        return ProblemDetails.of(errorCode, detail, traceId);
     }
 
     private static String messageOf(ObjectError error) {
