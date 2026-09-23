@@ -432,6 +432,52 @@ class UserAccountTest {
         return account;
     }
 
+    // ------------------------------------------------------------------ A-30
+
+    /**
+     * A-30: wrong current passwords on the Security tab are counted against BR-03's threshold, and the
+     * fifth in a row is the one that answers {@code true} — the fourth does not.
+     */
+    @Test
+    void A30_theFifthWrongCurrentPasswordInARow_reachesTheThreshold() {
+        UserAccount account = UserAccount.register("trader@example.invalid", "hash");
+
+        for (int attempt = 1; attempt < 5; attempt++) {
+            assertThat(account.recordFailedPasswordChange())
+                    .as("attempt %d", attempt)
+                    .isFalse();
+        }
+        assertThat(account.recordFailedPasswordChange()).isTrue();
+        assertThat(account.getFailedPasswordChangeCount())
+                .as("the count starts again")
+                .isZero();
+    }
+
+    /** It is a separate count: the sign-in counter and the lockout of BR-03 are untouched. */
+    @Test
+    void A30_wrongCurrentPasswords_neverTouchTheSignInLockout() {
+        UserAccount account = UserAccount.register("trader@example.invalid", "hash");
+
+        for (int attempt = 0; attempt < 5; attempt++) {
+            account.recordFailedPasswordChange();
+        }
+
+        assertThat(account.getFailedLoginCount()).isZero();
+        assertThat(account.getLockedUntil()).isNull();
+    }
+
+    /** A new password, however it was set, makes the earlier guesses moot and resets the count. */
+    @Test
+    void A30_changingThePassword_resetsTheCount() {
+        UserAccount account = UserAccount.register("trader@example.invalid", "hash");
+        account.recordFailedPasswordChange();
+        account.recordFailedPasswordChange();
+
+        account.changePassword("new-hash");
+
+        assertThat(account.getFailedPasswordChangeCount()).isZero();
+    }
+
     private static Consumer<UserAccount> actionOf(String action) {
         return switch (action) {
             case "lock" -> UserAccount::lock;

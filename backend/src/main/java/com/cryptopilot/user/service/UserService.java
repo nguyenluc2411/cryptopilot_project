@@ -181,6 +181,19 @@ public class UserService implements UserApi {
         accounts.save(account);
     }
 
+    /** An account that has vanished counts nothing and reaches no threshold. */
+    @Override
+    @Transactional
+    public boolean recordFailedPasswordChange(UUID userId) {
+        return accounts.findById(userId)
+                .map(account -> {
+                    boolean reached = account.recordFailedPasswordChange();
+                    accounts.save(account);
+                    return reached;
+                })
+                .orElse(false);
+    }
+
     /**
      * Delegates to {@link DeviceService}, which owns the device rows; this class is only the module's
      * published face. It joins the caller's transaction, so the device and the refresh tokens of a

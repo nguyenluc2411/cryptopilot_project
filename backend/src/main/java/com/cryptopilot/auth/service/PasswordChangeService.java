@@ -41,9 +41,11 @@ import org.springframework.transaction.annotation.Transactional;
  *       enough to set a password, because a session can be left open on a borrowed laptop.
  * </ol>
  *
- * <p>A wrong current password does <em>not</em> count towards BR-03's lockout. BR-03 is about signing
- * in, and this caller already has; whether it should is recorded as an alignment item rather than
- * decided here (A-30).
+ * <p>A wrong current password does <em>not</em> count towards BR-03's lockout — BR-03 is about signing
+ * in, and this caller already has — but it is counted, against the same threshold, by
+ * {@link WrongCurrentPasswordRecorder}. The fifth in a row ends every session of the account, the
+ * caller's included, and the answer to that request is still MSG08 (D-35); the next request is the one
+ * refused. A successful change resets the count (A-30, resolved).
  *
  * <h2>The other sessions</h2>
  *
@@ -75,6 +77,7 @@ public class PasswordChangeService {
     private final UserApi users;
     private final UserTokenRepository tokens;
     private final LiveSessions liveSessions;
+    private final WrongCurrentPasswordRecorder wrongCurrentPasswords;
     private final PasswordEncoder passwordEncoder;
     private final Clock clock;
 
@@ -93,6 +96,7 @@ public class PasswordChangeService {
         LoginCredentials credentials = users.findCredentialsById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
         if (!passwordEncoder.matches(currentPassword, credentials.passwordHash())) {
+            wrongCurrentPasswords.record(userId, clock.instant());
             throw new BusinessException(ErrorCode.CURRENT_PASSWORD_INCORRECT, "the current password offered is wrong");
         }
 

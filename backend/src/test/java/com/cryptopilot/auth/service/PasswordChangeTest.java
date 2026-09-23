@@ -191,8 +191,9 @@ class PasswordChangeTest {
     }
 
     /**
-     * A wrong current password is not a failed sign-in, so it does not move BR-03's counter — the
-     * reading A-30 records. Pinned so that a change of mind is a visible edit rather than a drift.
+     * A wrong current password is not a failed sign-in, so it does not move BR-03's counter or lock the
+     * sign-in (A-30, resolved). It is counted separately, and what the fifth does is proved in
+     * {@code WrongCurrentPasswordTest}; here the sign-in simply still works afterwards.
      */
     @Test
     void BR03_aWrongCurrentPassword_doesNotCountTowardsTheLockout() {

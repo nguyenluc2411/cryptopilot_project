@@ -165,6 +165,19 @@ public interface UserApi {
     void changePassword(UUID userId, String newPasswordHash);
 
     /**
+     * Counts one wrong current password offered on the Security tab and answers whether it reached the
+     * threshold (SRS 3.2.5; A-30). The sign-in counter of BR-03 is not touched.
+     *
+     * <p>Joins the caller's transaction. The caller is refusing the request, so it opens one of its own
+     * that the refusal does not roll back, and ends the account's sessions inside the same one when this
+     * answers {@code true}: the count going back to zero and the sessions ending commit together or not
+     * at all.
+     *
+     * @return {@code true} when this attempt reached the threshold; the count has started again
+     */
+    boolean recordFailedPasswordChange(UUID userId);
+
+    /**
      * Stops push notifications to the installation holding this messaging token, when it belongs to
      * this account; does nothing otherwise (SRS 3.2.5: the device token is deactivated on logout).
      *
