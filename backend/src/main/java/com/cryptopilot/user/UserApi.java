@@ -153,4 +153,14 @@ public interface UserApi {
      *     when no such account exists
      */
     void changePassword(UUID userId, String newPasswordHash);
+
+    /**
+     * Stops push notifications to the installation holding this messaging token, when it belongs to
+     * this account; does nothing otherwise (SRS 3.2.5: the device token is deactivated on logout).
+     *
+     * <p>{@code auth} calls it while ending a session, because a sign-out is where it learns whose
+     * session it was and the device rows are this module's table. It never reports what it found: a
+     * sign-out answers the same whatever the token it was given turned out to be, and so does this.
+     */
+    void deactivateDevice(UUID userId, String fcmToken);
 }

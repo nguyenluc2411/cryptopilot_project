@@ -551,7 +551,7 @@ class LoginAndSessionTest {
         IssuedSession first = authService.login("logout" + TEST_DOMAIN, PASSWORD, false);
         IssuedSession second = authService.refresh(first.refreshToken());
 
-        authService.logout(second.refreshToken());
+        authService.logout(second.refreshToken(), null);
 
         assertThat(usedAtOf(second.refreshToken())).isEqualTo(NOW);
         assertThat(refusalOfRefresh(second.refreshToken()).errorCode()).isEqualTo(ErrorCode.SESSION_EXPIRED);
@@ -564,7 +564,7 @@ class LoginAndSessionTest {
         IssuedSession phone = authService.login("logout-one" + TEST_DOMAIN, PASSWORD, false);
         IssuedSession laptop = authService.login("logout-one" + TEST_DOMAIN, PASSWORD, false);
 
-        authService.logout(phone.refreshToken());
+        authService.logout(phone.refreshToken(), null);
 
         assertThatCode(() -> authService.refresh(laptop.refreshToken())).doesNotThrowAnyException();
     }
@@ -572,7 +572,7 @@ class LoginAndSessionTest {
     /** It answers the same for a token that was never valid, so it cannot be used to test tokens. */
     @Test
     void UC05_loggingOutWithATokenThatWasNeverIssued_isAccepted() {
-        assertThatCode(() -> authService.logout(refreshTokens.newToken())).doesNotThrowAnyException();
+        assertThatCode(() -> authService.logout(refreshTokens.newToken(), null)).doesNotThrowAnyException();
     }
 
     /**
@@ -586,7 +586,7 @@ class LoginAndSessionTest {
         verifiedAccount("logout-access");
         IssuedSession session = authService.login("logout-access" + TEST_DOMAIN, PASSWORD, false);
 
-        authService.logout(session.refreshToken());
+        authService.logout(session.refreshToken(), null);
 
         assertThatCode(() -> jwtDecoder.decode(session.accessToken()))
                 .as("logging out cannot recall an access token already issued")

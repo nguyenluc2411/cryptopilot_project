@@ -83,6 +83,7 @@ public class UserService implements UserApi {
     private final UserAccountRepository accounts;
     private final UserProfileRepository profiles;
     private final FailedLoginRecorder failedLogins;
+    private final DeviceService devices;
 
     @Override
     @Transactional
@@ -171,6 +172,17 @@ public class UserService implements UserApi {
                 accounts.findById(userId).orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
         account.changePassword(newPasswordHash);
         accounts.save(account);
+    }
+
+    /**
+     * Delegates to {@link DeviceService}, which owns the device rows; this class is only the module's
+     * published face. It joins the caller's transaction, so the device and the refresh tokens of a
+     * sign-out commit together.
+     */
+    @Override
+    @Transactional
+    public void deactivateDevice(UUID userId, String fcmToken) {
+        devices.deactivateByToken(userId, fcmToken);
     }
 
     /**

@@ -2,6 +2,7 @@ package com.cryptopilot.auth.controller;
 
 import com.cryptopilot.auth.dto.ForgotPasswordRequest;
 import com.cryptopilot.auth.dto.LoginRequest;
+import com.cryptopilot.auth.dto.LogoutRequest;
 import com.cryptopilot.auth.dto.RefreshRequest;
 import com.cryptopilot.auth.dto.RegisterRequest;
 import com.cryptopilot.auth.dto.ResendVerificationRequest;
@@ -148,8 +149,8 @@ public class AuthController {
 
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void logout(@Valid @RequestBody RefreshRequest request) {
-        authService.logout(request.refreshToken());
+    public void logout(@Valid @RequestBody LogoutRequest request) {
+        authService.logout(request.refreshToken(), request.fcmToken());
     }
 
     /**

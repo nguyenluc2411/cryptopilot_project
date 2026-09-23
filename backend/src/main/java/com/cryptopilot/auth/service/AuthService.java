@@ -385,14 +385,22 @@ public class AuthService {
      * <p>Answers the same whether the token was valid, already used, or never existed. A logout that
      * reported "that token was not valid" would be a way to test refresh tokens, and the caller has
      * nothing to do differently either way — the session is over.
+     *
+     * <p>When the mobile application names its messaging token, that installation stops receiving push
+     * notifications in the same transaction (SRS 3.2.5). The account is the one the refresh token
+     * belongs to, never one the request names, so a sign-out can silence only its own account's
+     * device; a token the account does not hold is ignored as silently as an unknown refresh token.
      */
     @Transactional
-    public void logout(String presentedToken) {
+    public void logout(String presentedToken, String fcmToken) {
         Instant now = clock.instant();
         tokens.findByTokenHashAndTokenType(tokenFactory.digestOf(presentedToken), TokenType.REFRESH)
                 .ifPresent(token -> {
                     int revoked = familyRevoker.revoke(token.getTokenFamilyId(), now);
                     log.info("Closed a session for account {}: revoked {} tokens", token.getUserId(), revoked);
+                    if (fcmToken != null && !fcmToken.isBlank()) {
+                        users.deactivateDevice(token.getUserId(), fcmToken);
+                    }
                 });
     }
 
