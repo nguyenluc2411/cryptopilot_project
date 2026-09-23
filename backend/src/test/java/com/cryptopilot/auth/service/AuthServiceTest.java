@@ -76,7 +76,7 @@ class AuthServiceTest {
     private PasswordEncoder passwordEncoder;
 
     @Autowired
-    private VerificationTokenFactory tokenFactory;
+    private SecureTokenFactory tokenFactory;
 
     @Autowired
     private JdbcClient sql;

@@ -4,6 +4,7 @@ import com.cryptopilot.auth.PasswordPolicy;
 import com.cryptopilot.auth.config.TokenProperties;
 import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
+import com.cryptopilot.auth.event.PasswordResetTokenIssued;
 import com.cryptopilot.auth.event.VerificationTokenIssued;
 import com.cryptopilot.auth.repository.UserTokenRepository;
 import com.cryptopilot.common.exception.BusinessException;
@@ -121,6 +122,15 @@ public class AuthService {
      */
     static final Duration VERIFICATION_TOKEN_LIFETIME = Duration.ofHours(24);
 
+    /**
+     * BR-04: a password reset link is valid for 30 minutes. Beside the rule for the same reason
+     * BR-01's twenty-four hours are: the rule states the number and never calls it configurable, so
+     * it is not something an administrator may change from {@code system_setting}. It is far shorter
+     * than a verification link because of what presenting it does - one proves an address, the other
+     * sets a password.
+     */
+    static final Duration PASSWORD_RESET_TOKEN_LIFETIME = Duration.ofMinutes(30);
+
     /** SRS 3.2.2: a verification mail may be resent once per 60 seconds. */
     static final Duration RESEND_MINIMUM_INTERVAL = Duration.ofSeconds(60);
 
@@ -142,8 +152,7 @@ public class AuthService {
 
     private final UserApi users;
     private final UserTokenRepository tokens;
-    private final VerificationTokenFactory tokenFactory;
-    private final RefreshTokenFactory refreshTokenFactory;
+    private final SecureTokenFactory tokenFactory;
     private final FamilyRevoker familyRevoker;
     private final AccessTokenIssuer accessTokens;
     private final TokenProperties tokenProperties;
@@ -169,8 +178,7 @@ public class AuthService {
     AuthService(
             UserApi users,
             UserTokenRepository tokens,
-            VerificationTokenFactory tokenFactory,
-            RefreshTokenFactory refreshTokenFactory,
+            SecureTokenFactory tokenFactory,
             FamilyRevoker familyRevoker,
             AccessTokenIssuer accessTokens,
             TokenProperties tokenProperties,
@@ -180,14 +188,13 @@ public class AuthService {
         this.users = users;
         this.tokens = tokens;
         this.tokenFactory = tokenFactory;
-        this.refreshTokenFactory = refreshTokenFactory;
         this.familyRevoker = familyRevoker;
         this.accessTokens = accessTokens;
         this.tokenProperties = tokenProperties;
         this.passwordEncoder = passwordEncoder;
         this.events = events;
         this.clock = clock;
-        this.hashOfNothing = passwordEncoder.encode(refreshTokenFactory.newToken());
+        this.hashOfNothing = passwordEncoder.encode(tokenFactory.newToken());
     }
 
     /**
@@ -331,8 +338,7 @@ public class AuthService {
     @Transactional
     public IssuedSession refresh(String presentedToken) {
         Instant now = clock.instant();
-        UserToken token = tokens.findByTokenHashAndTokenType(
-                        refreshTokenFactory.digestOf(presentedToken), TokenType.REFRESH)
+        UserToken token = tokens.findByTokenHashAndTokenType(tokenFactory.digestOf(presentedToken), TokenType.REFRESH)
                 .orElseThrow(() -> sessionExpired("no refresh token matches the presented value"));
 
         if (token.getUsedAt() != null) {
@@ -376,11 +382,98 @@ public class AuthService {
     @Transactional
     public void logout(String presentedToken) {
         Instant now = clock.instant();
-        tokens.findByTokenHashAndTokenType(refreshTokenFactory.digestOf(presentedToken), TokenType.REFRESH)
+        tokens.findByTokenHashAndTokenType(tokenFactory.digestOf(presentedToken), TokenType.REFRESH)
                 .ifPresent(token -> {
                     int revoked = familyRevoker.revoke(token.getTokenFamilyId(), now);
                     log.info("Closed a session for account {}: revoked {} tokens", token.getUserId(), revoked);
                 });
+    }
+
+    // ------------------------------------------------------------------- UC-04
+
+    /**
+     * Creates a password reset link and announces it, for the address on SCR-05 (SRS UC-04, section
+     * 3.2.4).
+     *
+     * <p>Answers nothing, and that is the whole design of it. SRS 3.2.4 says the system "always shows
+     * MSG12", so an address nobody registered, an address whose account has never verified itself and
+     * an address that is about to receive a link are three situations this method cannot be used to
+     * tell apart. It returns {@code void} rather than a flag for that reason: there is no result for
+     * a caller to leak.
+     *
+     * <p>Only a verified account gets a link, which SRS 3.2.4 states. An unverified address has not
+     * been shown to belong to the person asking, so mailing a password-setting link to it would let
+     * anyone who registered somebody else's address later take the account.
+     *
+     * <p>Status is not checked. A locked or banned account may hold a reset link and may spend it,
+     * and still cannot sign in (BR-06). Refusing here would make the response depend on the account's
+     * state, which is the question MSG12 exists to refuse.
+     *
+     * <p>The previous unused links are invalidated first. BR-04 makes each link single-use but says
+     * nothing about a second request, and without this every request would leave another working link
+     * behind in a mailbox - the same failure SRS 3.2.2 names for verification links, with a worse
+     * consequence, so the same treatment.
+     */
+    @Transactional
+    public void requestPasswordReset(String email) {
+        Optional<UserSummary> found = users.findByEmail(email);
+        if (found.isEmpty() || !found.get().emailVerified()) {
+            log.info("Password reset requested for an address that cannot receive one");
+            return;
+        }
+        UserSummary account = found.get();
+        Instant now = clock.instant();
+
+        tokens.invalidateUnused(account.userId(), TokenType.PASSWORD_RESET, now);
+
+        String rawToken = tokenFactory.newToken();
+        Instant expiresAt = now.plus(PASSWORD_RESET_TOKEN_LIFETIME);
+        tokens.save(UserToken.issue(
+                account.userId(), TokenType.PASSWORD_RESET, tokenFactory.digestOf(rawToken), expiresAt));
+        events.publishEvent(new PasswordResetTokenIssued(account.userId(), account.email(), rawToken, expiresAt));
+        log.info("Issued a password reset link for account {}", account.userId());
+    }
+
+    /**
+     * Spends a reset link and sets the new password, ending every session of the account (SRS UC-04,
+     * BR-04).
+     *
+     * <p>Three writes in one transaction, and the transaction is the point. The link is marked used,
+     * the hash is replaced and every refresh token of the account is revoked; a crash between the
+     * second and the third would leave the old password gone and the old sessions alive, which is
+     * exactly the outcome BR-04's second sentence exists to prevent.
+     *
+     * <p>The password is checked before any of it. BR-02 is applied by {@link PasswordPolicy} rather
+     * than only by the request record, so that a new entry point cannot forget it, and it runs first
+     * so a request that was never going to succeed spends no link.
+     *
+     * <p>The lookup is by digest <em>and</em> kind, so a verification link cannot set a password.
+     * Unknown, already used and expired all answer MSG07 and are indistinguishable on purpose. The
+     * entity decides "used" and "expired"; this method supplies the instant.
+     *
+     * <p>Every refresh token is revoked, not one family: BR-04 says "all refresh tokens of the
+     * account", and somebody resetting a password is frequently doing it because another session is
+     * one they did not open. {@code invalidateUnused} over {@code REFRESH} is that bulk write -
+     * revocation and expiry are the same column, which is what makes one statement enough.
+     *
+     * @throws BusinessException {@code PASSWORD_POLICY_VIOLATION} (MSG03) or
+     *     {@code TOKEN_INVALID_OR_EXPIRED} (MSG07)
+     */
+    @Transactional
+    public void resetPassword(String presentedToken, String rawPassword) {
+        PasswordPolicy.requireCompliant(rawPassword);
+        Instant now = clock.instant();
+
+        UserToken token = tokens.findByTokenHashAndTokenType(
+                        tokenFactory.digestOf(presentedToken), TokenType.PASSWORD_RESET)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.TOKEN_INVALID_OR_EXPIRED, "no password reset token matches the presented value"));
+
+        token.markUsed(now);
+        tokens.save(token);
+        users.changePassword(token.getUserId(), passwordEncoder.encode(rawPassword));
+        int revoked = tokens.invalidateUnused(token.getUserId(), TokenType.REFRESH, now);
+        log.info("Reset the password of account {}: revoked {} sessions", token.getUserId(), revoked);
     }
 
     /**
@@ -391,10 +484,10 @@ public class AuthService {
      * value that has been spent and no replacement.
      */
     private IssuedSession issueSession(UserSummary account, UUID family, Duration refreshWindow, Instant now) {
-        String refreshToken = refreshTokenFactory.newToken();
+        String refreshToken = tokenFactory.newToken();
         Instant refreshExpiresAt = now.plus(refreshWindow);
         tokens.save(UserToken.issueRefresh(
-                account.userId(), refreshTokenFactory.digestOf(refreshToken), refreshExpiresAt, family));
+                account.userId(), tokenFactory.digestOf(refreshToken), refreshExpiresAt, family));
 
         AccessTokenIssuer.IssuedAccessToken access =
                 accessTokens.issueFor(account.userId(), account.role().name());

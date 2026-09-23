@@ -70,7 +70,7 @@ class LoginAndSessionTest {
     private UserTokenRepository tokens;
 
     @Autowired
-    private RefreshTokenFactory refreshTokens;
+    private SecureTokenFactory refreshTokens;
 
     @Autowired
     private TokenProperties tokenProperties;
