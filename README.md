@@ -31,13 +31,44 @@ tools/        Development scripts and test data generators
 Requirements: Docker Desktop, JDK 21 (Eclipse Temurin), Node.js LTS, Flutter SDK. Maven is not installed separately — use the wrapper in `backend/`.
 
 ```bash
-cp deploy/.env.example deploy/.env          # set DB_PASSWORD and other local values
+cp deploy/.env.example deploy/.env
 docker compose -f deploy/docker-compose.dev.yml up -d
+```
 
+Then fill in `deploy/.env`. Two keys are not optional:
+
+- `DB_PASSWORD` — the password the compose file gives the database container.
+- `JWT_SECRET` — at least 32 characters. The backend declares it with **no fallback**, so it refuses
+  to start without one rather than starting with a key every reader of this repository holds.
+
+`ADMIN_PASSWORD_HASH` and `DEMO_PASSWORD_HASH` are optional but usually wanted: leave them empty and
+the seeded administrator and demo trader exist with no password that opens them. No credential is
+committed, so these are the only way in.
+
+Starting the backend:
+
+```bash
+# Windows
+.\deploy\run-backend.ps1
+
+# macOS / Linux
+set -a && . ./deploy/.env && set +a
 cd backend && ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
+The backend reads the OS environment, and nothing reads `deploy/.env` on its behalf — only docker
+compose reads that file by itself. The script loads it and checks the two required keys before
+starting. On Windows it also matters that the password hashes are full of `$`, which PowerShell
+expands inside double quotes and silently turns into an empty string.
+
 Database: `localhost:5432`, Redis: `localhost:6379`, backend: `localhost:8080`. AI service and web app are started from their folders (instructions in each folder).
+
+Running the tests needs Docker (Testcontainers starts its own database) and a `JWT_SECRET`, which
+the build supplies for the test run:
+
+```bash
+cd backend && ./mvnw clean verify
+```
 
 ## Conventions
 
