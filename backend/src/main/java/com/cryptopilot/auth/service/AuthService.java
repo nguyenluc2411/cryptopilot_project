@@ -251,6 +251,13 @@ public class AuthService {
      * <p>SRS 3.2.2 caps this at once per 60 seconds and five a day, and requires a new link to
      * invalidate the previous unused ones — otherwise every resend would leave another working link
      * behind in a mailbox.
+     *
+     * <p>What is identical is the <em>answer</em>, not the time it takes to give it, and here there are
+     * three tiers rather than two: an unknown or already verified address returns after one query, a
+     * throttled one after the throttle check, and only the third writes and publishes. That leaks not
+     * just whether an address holds an unverified account but whether it has asked recently. {@link
+     * #login} equalises this kind of difference deliberately; this path does not. A-29, with the same
+     * fix and the same reason for not reaching for a constant delay.
      */
     @Transactional
     public void resendVerification(String email) {
