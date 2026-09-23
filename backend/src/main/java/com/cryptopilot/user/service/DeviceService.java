@@ -1,13 +1,12 @@
 package com.cryptopilot.user.service;
 
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.user.dto.DeviceResponse;
 import com.cryptopilot.user.dto.RegisterDeviceRequest;
 import com.cryptopilot.user.entity.UserDevice;
 import com.cryptopilot.user.repository.UserDeviceRepository;
 import java.time.Clock;
-import java.time.Instant;
-import java.util.Optional;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -23,23 +22,16 @@ import org.springframework.transaction.annotation.Transactional;
  * <h2>One token, one row</h2>
  *
  * <p>The messaging token is unique across all accounts ({@code uq_user_device_fcm_token}), because it
- * addresses one installation and an installation can only be signed in as one account at a time. So a
- * registration is decided by who holds the token now:
+ * addresses one installation and an installation can only be signed in as one account at a time. A
+ * registration is one upsert on that index ({@link UserDeviceRepository#register}): a token nobody
+ * holds becomes a new row; a token the caller holds is the same row, active again and seen now; a
+ * token another account holds becomes a new device of the caller's — the phone has changed hands, and
+ * the previous account keeps no row that would send its notifications to it.
  *
- * <ul>
- *   <li>nobody — a new row, active;
- *   <li>this account — the same row, active again and seen now, so an installation that signs out and
- *       back in is recognised rather than duplicated, which is what {@link UserDevice#deactivate()}
- *       keeps the row for;
- *   <li>another account — the phone has changed hands, or a second person signed in on it. The old
- *       row is removed and a new one written for the caller. Keeping it and moving it would give the
- *       previous account's device history to somebody else, and leaving it would send the previous
- *       account's notifications to the new person's phone.
- * </ul>
- *
- * <p>The last case deletes and inserts the same token in one transaction, and Hibernate orders
- * inserts before deletes, so the delete is flushed first or the unique index would refuse the
- * insert.
+ * <p>One statement rather than a read and then a write, because two registrations of the same token
+ * can arrive together — a phone that signs in twice, two accounts on one phone. Read-then-write lets
+ * both see nothing and both insert, or both see the old row and both delete it; the upsert lets the
+ * index serialise them, and exactly one row holds the token afterwards.
  *
  * <h2>Deactivation belongs to the owner</h2>
  *
@@ -71,21 +63,9 @@ public class DeviceService {
      */
     @Transactional
     public DeviceResponse register(UUID userId, RegisterDeviceRequest request) {
-        Instant now = clock.instant();
-        String fcmToken = request.fcmToken();
-        Optional<UserDevice> existing = devices.findByFcmToken(fcmToken);
-
-        UserDevice device;
-        if (existing.isPresent() && existing.get().getUserId().equals(userId)) {
-            device = existing.get();
-            device.reactivateWith(fcmToken);
-        } else {
-            existing.ifPresent(this::removePreviousOwnersRow);
-            device = UserDevice.register(userId, fcmToken, request.platform());
-        }
-        device.markSeen(now);
-        devices.save(device);
-        return responseOf(device);
+        UUID deviceId = devices.register(
+                UuidV7.next(), userId, request.fcmToken(), request.platform().name(), clock.instant());
+        return new DeviceResponse(deviceId, request.platform(), true);
     }
 
     /**
@@ -119,15 +99,5 @@ public class DeviceService {
                     devices.save(device);
                     log.info("Deactivated device {} of account {} on sign-out", device.getId(), userId);
                 });
-    }
-
-    private void removePreviousOwnersRow(UserDevice previous) {
-        log.info("Device token moved from account {} to another account", previous.getUserId());
-        devices.delete(previous);
-        devices.flush();
-    }
-
-    private static DeviceResponse responseOf(UserDevice device) {
-        return new DeviceResponse(device.getId(), device.getPlatform(), device.isActive());
     }
 }
