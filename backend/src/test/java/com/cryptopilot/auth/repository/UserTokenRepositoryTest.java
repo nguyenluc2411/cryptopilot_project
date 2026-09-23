@@ -280,7 +280,8 @@ class UserTokenRepositoryTest {
      * statement, and the alternative — load them and call the entity on each — is both the unbounded
      * read this interface does not offer and unable to reach an expired-but-unused sibling, because
      * {@code markUsed} refuses an expired token. It takes a family identifier and answers a count, so
-     * neither rule this test exists for is touched.
+     * neither rule this test exists for is touched. {@code revokeOtherSessions} joined it with the
+     * password change of SRS 3.2.5 on the same terms: an account and a family in, a count out.
      */
     @Test
     void theRepository_offersOnlyBoundedLookupsAndNamesEveryParameterADigest() {
@@ -293,6 +294,7 @@ class UserTokenRepositoryTest {
                         "countIssuedSince",
                         "invalidateUnused",
                         "revokeFamily",
+                        "revokeOtherSessions",
                         "save");
 
         assertThat(UserTokenRepository.class.getMethods())
@@ -337,6 +339,37 @@ class UserTokenRepositoryTest {
         assertThat(usedAtOf(elsewhere))
                 .as("another sign-in of the same account is another family and is untouched")
                 .isNull();
+    }
+
+    /**
+     * SRS 3.2.5: a password change ends every <em>other</em> session. Every unused refresh token of the
+     * account outside the kept family stops — expired ones too, for the reason revoking a family gives
+     * — while the kept family, the account's other kinds of token and another account's sessions are
+     * untouched.
+     */
+    @Test
+    void UC07_revokingOtherSessions_keepsOneFamilyAndStopsTheRest() {
+        UUID account = persistedAccount("other-sessions@cryptopilot.invalid");
+        UUID stranger = persistedAccount("stranger@cryptopilot.invalid");
+        UUID otherFamily = UUID.fromString("019b76da-a800-7000-8000-0000000000f3");
+        UUID expiredFamily = UUID.fromString("019b76da-a800-7000-8000-0000000000f4");
+        UserToken kept = persistedToken(account, TokenType.REFRESH, digest('a'), EXPIRES, FAMILY);
+        UserToken other = persistedToken(account, TokenType.REFRESH, digest('b'), EXPIRES, otherFamily);
+        UserToken expiredOther = persistedToken(account, TokenType.REFRESH, digest('c'), ISSUED, expiredFamily);
+        UserToken resetLink = persistedToken(account, TokenType.PASSWORD_RESET, digest('d'), EXPIRES);
+        UserToken strangers = persistedToken(stranger, TokenType.REFRESH, digest('e'), EXPIRES, otherFamily);
+        em.flush();
+        em.clear();
+
+        int revoked = tokens.revokeOtherSessions(account, FAMILY, ISSUED.plusSeconds(60));
+        em.clear();
+
+        assertThat(revoked).isEqualTo(2);
+        assertThat(usedAtOf(other)).isEqualTo(ISSUED.plusSeconds(60));
+        assertThat(usedAtOf(expiredOther)).isEqualTo(ISSUED.plusSeconds(60));
+        assertThat(usedAtOf(kept)).as("the caller's own session").isNull();
+        assertThat(usedAtOf(resetLink)).as("not a session").isNull();
+        assertThat(usedAtOf(strangers)).as("another account").isNull();
     }
 
     @Test

@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
  *
  * <h2>What is in it, and what is deliberately not</h2>
  *
- * <p>Subject, role, issuer, issued-at, expiry, and a token identifier. Nothing else. An access token
+ * <p>Subject, role, session, issuer, issued-at, expiry, and a token identifier. Nothing else. An access token
  * is a bearer credential — whoever holds it is the caller — and it is readable by anyone who holds
  * it, because a signature proves a payload was not altered and does nothing to hide it. So no
  * address, no display name, no subscription state, nothing about the person beyond the key that
@@ -61,8 +61,11 @@ public class AccessTokenIssuer {
      * that the token this issues and the token the decoder accepts are the same kind by construction.
      *
      * @param role the role the account holds, as the claim the authorization matrix reads
+     * @param sessionId the family of the refresh token issued beside this one, so that a request can
+     *     say which session it belongs to (SRS 3.2.5: a password change revokes the <em>other</em>
+     *     sessions)
      */
-    public IssuedAccessToken issueFor(UUID userId, String role) {
+    public IssuedAccessToken issueFor(UUID userId, String role, UUID sessionId) {
         Instant issuedAt = clock.instant();
         Instant expiresAt = issuedAt.plus(properties.accessTokenTtl());
         JwtClaimsSet claims = JwtClaimsSet.builder()
@@ -72,6 +75,7 @@ public class AccessTokenIssuer {
                 .expiresAt(expiresAt)
                 .id(UuidV7.next().toString())
                 .claim(JwtConfig.ROLE_CLAIM, role)
+                .claim(JwtConfig.SESSION_CLAIM, sessionId.toString())
                 .build();
         JwsHeader header = JwsHeader.with(JwtConfig.ALGORITHM).build();
         String value = encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();

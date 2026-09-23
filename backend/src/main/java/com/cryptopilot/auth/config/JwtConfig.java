@@ -86,6 +86,17 @@ public class JwtConfig {
      */
     public static final String ROLE_CLAIM = "role";
 
+    /**
+     * The claim naming the session an access token was issued within: the family of the refresh
+     * token issued beside it (TECHNICAL_DESIGN 7.15). Read when a password change must end every
+     * session <em>other</em> than the caller's own (SRS 3.2.5), which is otherwise unanswerable from
+     * an access token.
+     *
+     * <p>{@code sid} is the name OpenID Connect gives a session identifier, borrowed for the same
+     * meaning; it identifies a sign-in, not a person, and grants nothing on its own.
+     */
+    public static final String SESSION_CLAIM = "sid";
+
     private final SecretKeySpec key;
     private final Clock clock;
 

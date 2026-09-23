@@ -173,6 +173,28 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
     int revokeFamily(@Param("familyId") UUID familyId, @Param("now") Instant now);
 
     /**
+     * Stops every unused refresh token of an account from working except those of one family, and
+     * answers how many were stopped.
+     *
+     * <p>SRS 3.2.5: a password change from the Security tab revokes all <em>other</em> sessions. The
+     * family kept is the caller's own, named by the access token it presented, so the person who
+     * changed the password stays signed in on the device they did it from and nowhere else.
+     *
+     * <p>An update rather than a load, for the reasons {@link #invalidateUnused} gives.
+     *
+     * <p>Rule: SRS 3.2.5, UC-07.
+     *
+     * @return how many tokens stopped working
+     */
+    @Transactional
+    @Modifying(flushAutomatically = true)
+    @Query("update UserToken t set t.usedAt = :now"
+            + " where t.userId = :userId and t.tokenType = com.cryptopilot.auth.entity.TokenType.REFRESH"
+            + " and t.usedAt is null and t.tokenFamilyId <> :keptFamilyId")
+    int revokeOtherSessions(
+            @Param("userId") UUID userId, @Param("keptFamilyId") UUID keptFamilyId, @Param("now") Instant now);
+
+    /**
      * Writes a token, inserting it when it is new and updating it otherwise.
      *
      * <p>Not transactional here: consuming a token and verifying the address it belongs to have to

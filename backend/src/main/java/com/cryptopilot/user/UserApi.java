@@ -85,6 +85,16 @@ public interface UserApi {
     Optional<LoginCredentials> findCredentialsByEmail(String email);
 
     /**
+     * The key and stored hash of an account that is already signed in, or empty when no such account
+     * exists (SRS 3.2.5, UC-07).
+     *
+     * <p>The Security tab asks for the current password before it sets a new one, and the caller is
+     * identified by the key in the access token rather than by an address. The comparison is the
+     * caller's for the same reason it is at sign-in: the encoder is configured in {@code auth}.
+     */
+    Optional<LoginCredentials> findCredentialsById(UUID userId);
+
+    /**
      * Applies BR-03, BR-06 and BR-01 to one sign-in attempt whose password has already been checked,
      * and records what happened (SRS 3.2.3, UC-03).
      *

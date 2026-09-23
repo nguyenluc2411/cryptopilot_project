@@ -117,6 +117,13 @@ public class UserService implements UserApi {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Optional<LoginCredentials> findCredentialsById(UUID userId) {
+        return accounts.findById(userId)
+                .map(account -> new LoginCredentials(account.getId(), account.getPasswordHash()));
+    }
+
+    @Override
     @Transactional
     public UserSummary recordLoginAttempt(UUID userId, boolean passwordMatched, Instant at) {
         UserAccount account =

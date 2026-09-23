@@ -514,7 +514,7 @@ public class AuthService {
                 account.userId(), tokenFactory.digestOf(refreshToken), refreshExpiresAt, family));
 
         AccessTokenIssuer.IssuedAccessToken access =
-                accessTokens.issueFor(account.userId(), account.role().name());
+                accessTokens.issueFor(account.userId(), account.role().name(), family);
         return new IssuedSession(
                 access.value(), access.expiresAt(), refreshToken, refreshExpiresAt, account.role(), account.userId());
     }
