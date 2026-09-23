@@ -1,5 +1,6 @@
 package com.cryptopilot.auth.service;
 
+import com.cryptopilot.auth.PasswordPolicy;
 import com.cryptopilot.auth.config.TokenProperties;
 import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;

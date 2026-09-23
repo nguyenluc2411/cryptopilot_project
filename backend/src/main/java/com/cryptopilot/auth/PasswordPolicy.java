@@ -1,4 +1,4 @@
-package com.cryptopilot.auth.service;
+package com.cryptopilot.auth;
 
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
@@ -12,6 +12,11 @@ import com.cryptopilot.common.exception.ErrorCode;
  * convenience: a request record is one entry point, while every path that sets a password —
  * registration now, the password reset of BR-04 later, an administrator setting one by hand — goes
  * through a service, and a rule enforced only at the edge is a rule the next entry point forgets.
+ *
+ * <p>It sits in the module's root package rather than beside the service that calls it, because the
+ * request record has to read {@link #PATTERN} and a request record may not depend on a service. The
+ * rule is above both layers: it is what the module says a password is, and the two of them are
+ * where it is applied.
  *
  * <p>Nothing here logs, echoes or returns the password. The rejection says which rule failed and
  * never what was offered, because an exception message travels into logs that are read by people
@@ -33,8 +38,14 @@ public final class PasswordPolicy {
      * BR-02 as one expression, for the request record to declare. Three lookaheads for the three
      * required character classes, then the length bound; {@code .} excludes a line terminator,
      * which no password should contain anyway.
+     *
+     * <p>The bound is built from the two constants above rather than written out again, so that
+     * changing BR-02's length cannot leave the expression and {@link #requireCompliant}
+     * disagreeing. Every operand is a constant expression, which is what lets an annotation
+     * declare this.
      */
-    public static final String PATTERN = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,64}$";
+    public static final String PATTERN =
+            "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{" + MINIMUM_LENGTH + "," + MAXIMUM_LENGTH + "}$";
 
     private PasswordPolicy() {}
 
