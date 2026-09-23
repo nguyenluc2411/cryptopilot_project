@@ -7,6 +7,8 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.access.AccessDeniedException;
@@ -56,6 +58,7 @@ import tools.jackson.databind.ObjectMapper;
  * HTTP APIs</i>.
  */
 @Component
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class SecurityProblemDetailHandler implements AuthenticationEntryPoint, AccessDeniedHandler {
 
     /** Text of a 401. Says that a credential is needed, and nothing about the one that was sent. */
@@ -67,10 +70,6 @@ public class SecurityProblemDetailHandler implements AuthenticationEntryPoint, A
     private final AuthenticationEntryPoint challenge = new BearerTokenAuthenticationEntryPoint();
     private final AccessDeniedHandler refusal = new BearerTokenAccessDeniedHandler();
     private final ObjectMapper objectMapper;
-
-    SecurityProblemDetailHandler(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-    }
 
     /** No usable credential was presented (SRS 4.2.4). */
     @Override

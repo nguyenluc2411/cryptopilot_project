@@ -15,6 +15,8 @@ import com.cryptopilot.user.repository.UserProfileRepository;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -75,17 +77,12 @@ import org.springframework.transaction.annotation.Transactional;
  * application service coordinates; the rules stay on the entities).
  */
 @Service
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class UserService implements UserApi {
 
     private final UserAccountRepository accounts;
     private final UserProfileRepository profiles;
     private final FailedLoginRecorder failedLogins;
-
-    UserService(UserAccountRepository accounts, UserProfileRepository profiles, FailedLoginRecorder failedLogins) {
-        this.accounts = accounts;
-        this.profiles = profiles;
-        this.failedLogins = failedLogins;
-    }
 
     @Override
     @Transactional

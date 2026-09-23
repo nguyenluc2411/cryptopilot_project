@@ -3,6 +3,8 @@ package com.cryptopilot.auth.service;
 import com.cryptopilot.auth.repository.UserTokenRepository;
 import java.time.Instant;
 import java.util.UUID;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,13 +36,10 @@ import org.springframework.transaction.annotation.Transactional;
  * chain).
  */
 @Component
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 class FamilyRevoker {
 
     private final UserTokenRepository tokens;
-
-    FamilyRevoker(UserTokenRepository tokens) {
-        this.tokens = tokens;
-    }
 
     /**
      * Stops every unused token of the family and commits it, whatever the caller does next.

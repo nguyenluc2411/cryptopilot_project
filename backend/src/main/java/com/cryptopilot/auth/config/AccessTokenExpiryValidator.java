@@ -2,6 +2,8 @@ package com.cryptopilot.auth.config;
 
 import java.time.Clock;
 import java.time.Instant;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
@@ -35,6 +37,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
  * <p>Reference: Sheffer, Y., Hardt, D. &amp; Jones, M. (2020). RFC 8725, <i>JSON Web Token Best
  * Current Practices</i>, section 3.8 (always validate the expiry).
  */
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 class AccessTokenExpiryValidator implements OAuth2TokenValidator<Jwt> {
 
     /** The error code RFC 6750 uses for a token a resource server will not accept. */
@@ -45,10 +48,6 @@ class AccessTokenExpiryValidator implements OAuth2TokenValidator<Jwt> {
             new OAuth2Error("invalid_token", "the access token carries no expiry", null);
 
     private final Clock clock;
-
-    AccessTokenExpiryValidator(Clock clock) {
-        this.clock = clock;
-    }
 
     @Override
     public OAuth2TokenValidatorResult validate(Jwt token) {

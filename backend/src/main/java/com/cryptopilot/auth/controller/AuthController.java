@@ -10,6 +10,8 @@ import com.cryptopilot.auth.dto.VerifyEmailRequest;
 import com.cryptopilot.auth.service.AuthService;
 import com.cryptopilot.auth.service.IssuedSession;
 import jakarta.validation.Valid;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -41,13 +43,10 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/v1/auth")
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class AuthController {
 
     private final AuthService authService;
-
-    AuthController(AuthService authService) {
-        this.authService = authService;
-    }
 
     /**
      * Registers an account and sends a verification link (SRS UC-01).

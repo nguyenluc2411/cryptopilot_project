@@ -3,6 +3,8 @@ package com.cryptopilot.common.entity;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import java.time.Clock;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
@@ -26,13 +28,10 @@ import org.springframework.stereotype.Component;
  * call).
  */
 @Component
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class AuditInstantListener {
 
     private final Clock clock;
-
-    AuditInstantListener(Clock clock) {
-        this.clock = clock;
-    }
 
     @PrePersist
     void onPersist(BaseEntity entity) {

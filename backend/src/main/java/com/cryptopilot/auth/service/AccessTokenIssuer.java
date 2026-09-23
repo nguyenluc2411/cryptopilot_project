@@ -6,6 +6,8 @@ import com.cryptopilot.common.util.UuidV7;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
@@ -45,17 +47,12 @@ import org.springframework.stereotype.Component;
  * section 3.8 (always set and validate an expiry).
  */
 @Component
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class AccessTokenIssuer {
 
     private final JwtEncoder encoder;
     private final TokenProperties properties;
     private final Clock clock;
-
-    AccessTokenIssuer(JwtEncoder encoder, TokenProperties properties, Clock clock) {
-        this.encoder = encoder;
-        this.properties = properties;
-        this.clock = clock;
-    }
 
     /**
      * A signed access token for this account, valid for the configured window from now.

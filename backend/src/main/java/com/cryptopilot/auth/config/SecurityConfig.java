@@ -1,6 +1,8 @@
 package com.cryptopilot.auth.config;
 
 import com.cryptopilot.user.UserRole;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -124,6 +126,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * control is enforced on a trusted server and fails closed).
  */
 @Configuration
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class SecurityConfig {
 
     /** The cost factor of TECHNICAL_DESIGN 1.3; it is written into every hash this bean produces. */
@@ -196,12 +199,6 @@ public class SecurityConfig {
 
     private final AccessTokenAuthenticationConverter accessTokenConverter;
     private final SecurityProblemDetailHandler problemDetails;
-
-    SecurityConfig(
-            AccessTokenAuthenticationConverter accessTokenConverter, SecurityProblemDetailHandler problemDetails) {
-        this.accessTokenConverter = accessTokenConverter;
-        this.problemDetails = problemDetails;
-    }
 
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http) throws Exception {

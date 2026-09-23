@@ -4,6 +4,8 @@ import com.cryptopilot.user.repository.UserAccountRepository;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,13 +41,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 5.2.2 (the count of consecutive failures is state the verifier keeps).
  */
 @Component
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 class FailedLoginRecorder {
 
     private final UserAccountRepository accounts;
-
-    FailedLoginRecorder(UserAccountRepository accounts) {
-        this.accounts = accounts;
-    }
 
     /**
      * Records one rejected attempt against this account and commits it.
