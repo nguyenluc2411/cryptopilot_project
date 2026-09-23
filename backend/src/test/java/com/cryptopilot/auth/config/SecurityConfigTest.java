@@ -106,7 +106,9 @@ class SecurityConfigTest {
                 "/api/v1/auth/resend-verification",
                 "/api/v1/auth/login",
                 "/api/v1/auth/refresh",
-                "/api/v1/auth/logout"
+                "/api/v1/auth/logout",
+                "/api/v1/auth/forgot-password",
+                "/api/v1/auth/reset-password"
             })
     void UC01_thePublicAuthEndpoints_areReachableUnauthenticated(String path) throws Exception {
         mvc.perform(post(path).contentType(MediaType.APPLICATION_JSON).content("{}"))
@@ -116,13 +118,16 @@ class SecurityConfigTest {
     /**
      * And they are the only ones named, so the declared list cannot quietly grow.
      *
-     * <p>It grew by three here, deliberately and one path at a time: signing in, renewing a session
-     * and signing out are each reached by a caller who has no usable access token, and each is written
-     * out rather than covered by a wildcard over {@code /api/v1/auth/**} — a wildcard would also open
-     * whatever this controller is given next, including the password change that must not be open.
+     * <p>It grew by three in T-012, deliberately and one path at a time: signing in, renewing a
+     * session and signing out are each reached by a caller who has no usable access token. It grows
+     * by two more here, for the same reason — somebody who has forgotten a password has no session
+     * by definition. Each is written out rather than covered by a wildcard over
+     * {@code /api/v1/auth/**}: a wildcard would also open whatever this controller is given next,
+     * including the password change of UC-07, which must stay behind a session because it asks for
+     * the current password rather than for a link.
      */
     @Test
-    void UC03_thePublicEndpoints_areTheDeclaredSix() {
+    void UC04_thePublicEndpoints_areTheDeclaredEight() {
         assertThat(SecurityConfig.PUBLIC_AUTH_ENDPOINTS)
                 .containsExactly(
                         "/api/v1/auth/register",
@@ -130,7 +135,9 @@ class SecurityConfigTest {
                         "/api/v1/auth/resend-verification",
                         "/api/v1/auth/login",
                         "/api/v1/auth/refresh",
-                        "/api/v1/auth/logout");
+                        "/api/v1/auth/logout",
+                        "/api/v1/auth/forgot-password",
+                        "/api/v1/auth/reset-password");
     }
 
     /**

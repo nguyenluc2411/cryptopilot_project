@@ -1,10 +1,12 @@
 package com.cryptopilot.auth.controller;
 
+import com.cryptopilot.auth.dto.ForgotPasswordRequest;
 import com.cryptopilot.auth.dto.LoginRequest;
 import com.cryptopilot.auth.dto.MessageResponse;
 import com.cryptopilot.auth.dto.RefreshRequest;
 import com.cryptopilot.auth.dto.RegisterRequest;
 import com.cryptopilot.auth.dto.ResendVerificationRequest;
+import com.cryptopilot.auth.dto.ResetPasswordRequest;
 import com.cryptopilot.auth.dto.SessionResponse;
 import com.cryptopilot.auth.dto.VerifyEmailRequest;
 import com.cryptopilot.auth.service.AuthService;
@@ -120,6 +122,30 @@ public class AuthController {
      * A logout that reported which of those it was would be a way to test refresh tokens, and the
      * caller has nothing to do differently either way.
      */
+    /**
+     * SCR-05. Answers MSG12 whether or not the address holds an account, which SRS 3.2.4 requires
+     * verbatim: any other answer would turn this into a way of asking who has registered.
+     *
+     * <p>202 rather than 200, and for the same reason the resend endpoint uses it: what was accepted
+     * is the request, and whether anything is mailed depends on facts the caller is not told.
+     */
+    @PostMapping("/forgot-password")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public MessageResponse forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        authService.requestPasswordReset(request.email());
+        return new MessageResponse("MSG12");
+    }
+
+    /**
+     * SCR-06. MSG13 on success, after which SRS 3.2.4 sends the person back to SCR-04 to sign in
+     * again - which they have to, because the reset revoked every session (BR-04).
+     */
+    @PostMapping("/reset-password")
+    public MessageResponse resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        authService.resetPassword(request.token(), request.newPassword());
+        return new MessageResponse("MSG13");
+    }
+
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void logout(@Valid @RequestBody RefreshRequest request) {

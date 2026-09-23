@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.cryptopilot.auth.event.PasswordResetTokenIssued;
 import com.cryptopilot.auth.event.VerificationTokenIssued;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -65,6 +66,10 @@ class AuthControllerTest {
 
     private static final String LOGOUT = "/api/v1/auth/logout";
 
+    private static final String FORGOT_PASSWORD = "/api/v1/auth/forgot-password";
+
+    private static final String RESET_PASSWORD = "/api/v1/auth/reset-password";
+
     @Autowired
     private MockMvc mvc;
 
@@ -77,10 +82,14 @@ class AuthControllerTest {
     @Autowired
     private IssuedLinks issuedLinks;
 
+    @Autowired
+    private IssuedResetLinks issuedResetLinks;
+
     @BeforeEach
     void resetTheClockAndTheMailbox() {
         clock.set(NOW);
         issuedLinks.clear();
+        issuedResetLinks.clear();
     }
 
     @AfterEach
@@ -426,6 +435,120 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.errors.password").value("MSG01"));
     }
 
+    // ------------------------------------------------------------------- UC-04
+
+    /**
+     * SRS 3.2.4: SCR-05 is answered with MSG12. 202 rather than 200, because what was accepted is
+     * the request - whether anything is mailed depends on facts the caller is not told.
+     */
+    @Test
+    void UC04_askingForAResetLink_answers202WithMsg12() throws Exception {
+        registerAndVerify("forgot");
+
+        mvc.perform(post(FORGOT_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(emailBodyOf("forgot")))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.messageCode").value("MSG12"));
+    }
+
+    /**
+     * The rule the screen exists for, asserted the only way that means anything: three addresses
+     * that differ in exactly what the caller must not learn - one verified, one registered but never
+     * verified, one nobody has - and three identical responses.
+     */
+    @Test
+    void UC04_theResetRequest_answersIdenticallyWhateverTheAddressIs() throws Exception {
+        registerAndVerify("verified-one");
+        mvc.perform(post(REGISTER).contentType(MediaType.APPLICATION_JSON).content(registrationOf("unverified-one")))
+                .andExpect(status().isCreated());
+
+        String forAVerifiedAccount = forgotPasswordResponseFor("verified-one" + TEST_DOMAIN);
+        String forAnUnverifiedAccount = forgotPasswordResponseFor("unverified-one" + TEST_DOMAIN);
+        String forAnAddressNobodyHas = forgotPasswordResponseFor("nobody-has-this" + TEST_DOMAIN);
+
+        assertThat(forAVerifiedAccount)
+                .as("an endpoint that answers differently is an endpoint that tests addresses")
+                .isEqualTo(forAnUnverifiedAccount)
+                .isEqualTo(forAnAddressNobodyHas);
+    }
+
+    /** SRS 3.2.4: a successful reset answers MSG13, and the new password is the one that signs in. */
+    @Test
+    void UC04_spendingTheLink_answersMsg13AndTheNewPasswordSignsIn() throws Exception {
+        registerAndVerify("resetting");
+        mvc.perform(post(FORGOT_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(emailBodyOf("resetting")))
+                .andExpect(status().isAccepted());
+
+        mvc.perform(post(RESET_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(resetBodyOf(issuedResetLinks.only().token(), "Zyxwvu9Q", "Zyxwvu9Q")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messageCode").value("MSG13"));
+
+        mvc.perform(post(LOGIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginOf("resetting", "Zyxwvu9Q", false)))
+                .andExpect(status().isOk());
+    }
+
+    /** BR-04 over HTTP: the same link twice, and the second attempt is MSG07. */
+    @Test
+    void BR04_aResetLinkUsedTwice_answersMsg07TheSecondTime() throws Exception {
+        registerAndVerify("reset-twice");
+        mvc.perform(post(FORGOT_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(emailBodyOf("reset-twice")))
+                .andExpect(status().isAccepted());
+        String link = issuedResetLinks.only().token();
+
+        mvc.perform(post(RESET_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(resetBodyOf(link, "Zyxwvu9Q", "Zyxwvu9Q")))
+                .andExpect(status().isOk());
+        mvc.perform(post(RESET_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(resetBodyOf(link, "Qwerty9Z", "Qwerty9Z")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG07"));
+    }
+
+    /** An invalid or unknown link answers MSG07, exactly as a verification link does. */
+    @Test
+    void UC04_anUnknownResetLink_answersMsg07() throws Exception {
+        mvc.perform(post(RESET_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(resetBodyOf("never-issued", "Zyxwvu9Q", "Zyxwvu9Q")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG07"));
+    }
+
+    /**
+     * BR-02 on SCR-06, reported under the field the client draws it next to. That per-field entry is
+     * the whole reason the rule is declared on the record as well as enforced in the service.
+     */
+    @Test
+    void BR02_aResetWithAWeakPassword_answersMsg03UnderTheField() throws Exception {
+        mvc.perform(post(RESET_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(resetBodyOf("any-link", "short", "short")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG01"))
+                .andExpect(jsonPath("$.errors.newPassword").value("MSG03"));
+    }
+
+    /** SRS 3.2.4 asks SCR-06 for a confirmation, and a mismatch never reaches the service. */
+    @Test
+    void BR02_aResetWhoseConfirmationDiffers_isRefusedBeforeTheLinkIsSpent() throws Exception {
+        mvc.perform(post(RESET_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(resetBodyOf("any-link", "Zyxwvu9Q", "Zyxwvu9R")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.confirmPasswordMatching").value("MSG03"));
+    }
+
     // ------------------------------------------------------------------- Helpers
 
     private void registerAndVerify(String localPart) throws Exception {
@@ -491,6 +614,28 @@ class AuthControllerTest {
         return "{\"token\": \"" + token + "\"}";
     }
 
+    private static String emailBodyOf(String localPart) {
+        return "{\"email\": \"" + localPart + TEST_DOMAIN + "\"}";
+    }
+
+    private static String resetBodyOf(String token, String newPassword, String confirmPassword) {
+        return "{\"token\": \"" + token + "\","
+                + " \"newPassword\": \"" + newPassword + "\","
+                + " \"confirmPassword\": \"" + confirmPassword + "\"}";
+    }
+
+    /** The body of a reset request, with the correlation id removed so two can be compared. */
+    private String forgotPasswordResponseFor(String email) throws Exception {
+        return mvc.perform(post(FORGOT_PASSWORD)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\": \"" + email + "\"}"))
+                .andExpect(status().isAccepted())
+                .andReturn()
+                .getResponse()
+                .getContentAsString()
+                .replaceAll("\"traceId\":\"[^\"]*\"", "");
+    }
+
     private long countOfAccounts(String email) {
         return sql.sql("select count(*) from user_account where lower(email) = lower(:email)")
                 .param("email", email)
@@ -517,6 +662,11 @@ class AuthControllerTest {
         IssuedLinks issuedLinks() {
             return new IssuedLinks();
         }
+
+        @Bean
+        IssuedResetLinks issuedResetLinks() {
+            return new IssuedResetLinks();
+        }
     }
 
     /** Whatever links were announced, in the order they were announced. */
@@ -534,6 +684,26 @@ class AuthControllerTest {
         }
 
         VerificationTokenIssued only() {
+            assertThat(received).hasSize(1);
+            return received.get(0);
+        }
+
+        void clear() {
+            received.clear();
+        }
+    }
+
+    /** The same, for the reset links of UC-04. */
+    static class IssuedResetLinks {
+
+        private final List<PasswordResetTokenIssued> received = new CopyOnWriteArrayList<>();
+
+        @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+        void on(PasswordResetTokenIssued issued) {
+            received.add(issued);
+        }
+
+        PasswordResetTokenIssued only() {
             assertThat(received).hasSize(1);
             return received.get(0);
         }
