@@ -2,7 +2,6 @@ package com.cryptopilot.auth.controller;
 
 import com.cryptopilot.auth.dto.ForgotPasswordRequest;
 import com.cryptopilot.auth.dto.LoginRequest;
-import com.cryptopilot.auth.dto.MessageResponse;
 import com.cryptopilot.auth.dto.RefreshRequest;
 import com.cryptopilot.auth.dto.RegisterRequest;
 import com.cryptopilot.auth.dto.ResendVerificationRequest;
@@ -11,6 +10,7 @@ import com.cryptopilot.auth.dto.SessionResponse;
 import com.cryptopilot.auth.dto.VerifyEmailRequest;
 import com.cryptopilot.auth.service.AuthService;
 import com.cryptopilot.auth.service.IssuedSession;
+import com.cryptopilot.common.web.MessageResponse;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
