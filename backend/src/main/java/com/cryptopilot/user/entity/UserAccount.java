@@ -12,6 +12,7 @@ import jakarta.persistence.Table;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import lombok.Getter;
 
 /**
  * An account: the identity a person signs in with, and the lifecycle an administrator moves it
@@ -70,6 +71,7 @@ import java.util.Objects;
  * <p>Reference: Vernon, V. (2013). <i>Implementing Domain-Driven Design</i>. Addison-Wesley, ch. 10
  * (keep aggregates small; reference other aggregates by identity).
  */
+@Getter
 @Entity
 @Table(name = "user_account")
 @AttributeOverride(name = "id", column = @Column(name = "user_id", nullable = false, updatable = false))
@@ -86,29 +88,40 @@ public class UserAccount extends BaseEntity {
     /** BR-03: and it cannot log in for fifteen minutes once that happens. */
     static final Duration LOCKOUT_DURATION = Duration.ofMinutes(15);
 
+    /** The address the account signs in with. Unique, and unique case-insensitively (BR-01). */
     @Column(name = "email", nullable = false, length = 255)
     private String email;
 
+    /** The encoded password. Never a password, and never encoded here. */
     @Column(name = "password_hash", nullable = false, length = 255)
     private String passwordHash;
 
+    /** The one role this account holds (BR-05). */
     @Enumerated(EnumType.STRING)
     @Column(name = "role", nullable = false, length = 32)
     private Role role;
 
+    /** Where the account stands in its lifecycle (BR-05, BR-06). */
     @Enumerated(EnumType.STRING)
     @Column(name = "account_status", nullable = false, length = 32)
     private AccountStatus accountStatus;
 
+    /** When the address was verified, or {@code null} while it has not been (BR-01). */
     @Column(name = "email_verified_at")
     private Instant emailVerifiedAt;
 
+    /** When the account last signed in, or {@code null} if it never has. */
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
+    /** How many sign-in attempts have been rejected in a row (BR-03). */
     @Column(name = "failed_login_count", nullable = false)
     private int failedLoginCount;
 
+    /**
+     * When the failed-attempt lockout ends, or {@code null} when the account has never been locked
+     * out. A value in the past is a lockout that has already been served (BR-03).
+     */
     @Column(name = "locked_until")
     private Instant lockedUntil;
 
@@ -323,49 +336,6 @@ public class UserAccount extends BaseEntity {
      */
     public void changeRole(Role newRole) {
         this.role = Objects.requireNonNull(newRole, "newRole must not be null");
-    }
-
-    /** The address the account signs in with. Unique, and unique case-insensitively (BR-01). */
-    public String getEmail() {
-        return email;
-    }
-
-    /** The encoded password. Never a password, and never encoded here. */
-    public String getPasswordHash() {
-        return passwordHash;
-    }
-
-    /** The one role this account holds (BR-05). */
-    public Role getRole() {
-        return role;
-    }
-
-    /** Where the account stands in its lifecycle (BR-05, BR-06). */
-    public AccountStatus getAccountStatus() {
-        return accountStatus;
-    }
-
-    /** When the address was verified, or {@code null} while it has not been (BR-01). */
-    public Instant getEmailVerifiedAt() {
-        return emailVerifiedAt;
-    }
-
-    /** When the account last signed in, or {@code null} if it never has. */
-    public Instant getLastLoginAt() {
-        return lastLoginAt;
-    }
-
-    /** How many sign-in attempts have been rejected in a row (BR-03). */
-    public int getFailedLoginCount() {
-        return failedLoginCount;
-    }
-
-    /**
-     * When the failed-attempt lockout ends, or {@code null} when the account has never been locked
-     * out. A value in the past is a lockout that has already been served (BR-03).
-     */
-    public Instant getLockedUntil() {
-        return lockedUntil;
     }
 
     /** Whether the address has been verified, which BR-01 requires before a sign-in. */

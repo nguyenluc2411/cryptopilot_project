@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import lombok.Getter;
 
 /**
  * One issued token: an email verification link, a password reset link, or a refresh token. Each is
@@ -61,6 +62,7 @@ import java.util.regex.Pattern;
  * <p>Reference: Vernon, V. (2013). <i>Implementing Domain-Driven Design</i>. Addison-Wesley, ch. 10
  * (reference other aggregates by identity).
  */
+@Getter
 @Entity
 @Table(name = "user_token")
 @AttributeOverride(name = "id", column = @Column(name = "token_id", nullable = false, updatable = false))
@@ -69,22 +71,32 @@ public class UserToken extends BaseEntity {
     /** A SHA-256 digest in lower-case hexadecimal, which is exactly what the column holds. */
     private static final Pattern SHA_256_HEX = Pattern.compile("[0-9a-f]{64}");
 
+    /** The account this token was issued to. */
     @Column(name = "user_id", nullable = false, updatable = false)
     private UUID userId;
 
+    /** What presenting this token achieves. */
     @Enumerated(EnumType.STRING)
     @Column(name = "token_type", nullable = false, updatable = false, length = 32)
     private TokenType tokenType;
 
+    /** The SHA-256 digest of the issued value. Never the value. */
     @Column(name = "token_hash", nullable = false, updatable = false, length = 64)
     private String tokenHash;
 
+    /** When the token stops being usable (BR-01, BR-04). */
     @Column(name = "expires_at", nullable = false, updatable = false)
     private Instant expiresAt;
 
+    /** When the token was used, or {@code null} while it has not been. */
     @Column(name = "used_at")
     private Instant usedAt;
 
+    /**
+     * The family of successors this token belongs to, or {@code null} for a kind of token that has
+     * none. Exactly the refresh tokens carry one, which {@code ck_user_token_family} states in the
+     * schema and the two factory methods below make unbuildable the wrong way round.
+     */
     @Column(name = "token_family_id", updatable = false)
     private UUID tokenFamilyId;
 
@@ -161,39 +173,6 @@ public class UserToken extends BaseEntity {
     public boolean isUsableAt(Instant now) {
         Objects.requireNonNull(now, "now must not be null");
         return usedAt == null && now.isBefore(expiresAt);
-    }
-
-    /** The account this token was issued to. */
-    public UUID getUserId() {
-        return userId;
-    }
-
-    /** What presenting this token achieves. */
-    public TokenType getTokenType() {
-        return tokenType;
-    }
-
-    /** The SHA-256 digest of the issued value. Never the value. */
-    public String getTokenHash() {
-        return tokenHash;
-    }
-
-    /** When the token stops being usable (BR-01, BR-04). */
-    public Instant getExpiresAt() {
-        return expiresAt;
-    }
-
-    /** When the token was used, or {@code null} while it has not been. */
-    public Instant getUsedAt() {
-        return usedAt;
-    }
-
-    /**
-     * The family of successors this token belongs to, or {@code null} for a kind of token that has
-     * none (TECHNICAL_DESIGN 7.15).
-     */
-    public UUID getTokenFamilyId() {
-        return tokenFamilyId;
     }
 
     private static String requireDigest(String tokenHash) {

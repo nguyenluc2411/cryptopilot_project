@@ -10,6 +10,7 @@ import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
+import lombok.Getter;
 
 /**
  * A mobile installation that can receive push notifications for one account.
@@ -32,24 +33,30 @@ import java.util.UUID;
  * <p>Reference: Vernon, V. (2013). <i>Implementing Domain-Driven Design</i>. Addison-Wesley, ch. 10
  * (reference another aggregate by identity; keep the aggregate small).
  */
+@Getter
 @Entity
 @Table(name = "user_device")
 @AttributeOverride(name = "id", column = @Column(name = "device_id", nullable = false, updatable = false))
 public class UserDevice extends BaseEntity {
 
+    /** The account this installation belongs to. */
     @Column(name = "user_id", nullable = false, updatable = false)
     private UUID userId;
 
+    /** The messaging token a push message is addressed to. Unique across all accounts. */
     @Column(name = "fcm_token", nullable = false, length = 512)
     private String fcmToken;
 
+    /** Which platform the installation runs, which decides how the message is delivered. */
     @Enumerated(EnumType.STRING)
     @Column(name = "platform", nullable = false, length = 32)
     private DevicePlatform platform;
 
+    /** Whether push messages are still sent to this installation. */
     @Column(name = "is_active", nullable = false)
     private boolean active = true;
 
+    /** When the installation was last seen, or {@code null} if it has not been since registering. */
     @Column(name = "last_seen_at")
     private Instant lastSeenAt;
 
@@ -93,31 +100,6 @@ public class UserDevice extends BaseEntity {
     /** Records that the installation was seen, which is how a stale device is later recognised. */
     public void markSeen(Instant at) {
         this.lastSeenAt = Objects.requireNonNull(at, "at must not be null");
-    }
-
-    /** The account this installation belongs to. */
-    public UUID getUserId() {
-        return userId;
-    }
-
-    /** The messaging token a push message is addressed to. Unique across all accounts. */
-    public String getFcmToken() {
-        return fcmToken;
-    }
-
-    /** Which platform the installation runs, which decides how the message is delivered. */
-    public DevicePlatform getPlatform() {
-        return platform;
-    }
-
-    /** Whether push messages are still sent to this installation. */
-    public boolean isActive() {
-        return active;
-    }
-
-    /** When the installation was last seen, or {@code null} if it has not been since registering. */
-    public Instant getLastSeenAt() {
-        return lastSeenAt;
     }
 
     private static String requireText(String value) {

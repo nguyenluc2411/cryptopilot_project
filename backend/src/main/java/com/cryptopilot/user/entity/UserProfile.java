@@ -9,6 +9,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.util.UUID;
+import lombok.Getter;
 
 /**
  * The part of an account a person edits: display name, avatar, the figures a new trading plan
@@ -33,30 +34,38 @@ import java.util.UUID;
  * <p>Reference: Vernon, V. (2013). <i>Implementing Domain-Driven Design</i>. Addison-Wesley, ch. 10
  * (an aggregate is a consistency boundary; a part of one has no identity outside its root).
  */
+@Getter
 @Entity
 @Table(name = "user_profile")
 @AttributeOverride(name = "id", column = @Column(name = "user_id", nullable = false, updatable = false))
 public class UserProfile extends BaseEntity {
 
+    /** The name shown wherever this account appears to others. */
     @Column(name = "display_name", nullable = false, length = 50)
     private String displayName;
 
+    /** Where the avatar image is stored, or {@code null} if none was uploaded. */
     @Column(name = "avatar_url", length = 500)
     private String avatarUrl;
 
+    /** The capital a new plan starts from, or {@code null} if the profile says nothing. */
     @Column(name = "default_capital", precision = 28, scale = 8)
     private BigDecimal defaultCapital;
 
+    /** The risk percentage a new plan starts from, or {@code null} if the profile says nothing. */
     @Column(name = "default_risk_percent", precision = 6, scale = 3)
     private BigDecimal defaultRiskPercent;
 
+    /** How long this account usually holds a position, or {@code null} if it has not said. */
     @Enumerated(EnumType.STRING)
     @Column(name = "trading_style", length = 32)
     private TradingStyle tradingStyle;
 
+    /** Whether notifications also go out by mail. */
     @Column(name = "notify_email", nullable = false)
     private boolean notifyEmail = true;
 
+    /** Whether notifications also go out as a push message to the registered devices. */
     @Column(name = "notify_push", nullable = false)
     private boolean notifyPush = true;
 
@@ -107,41 +116,6 @@ public class UserProfile extends BaseEntity {
     public void updateNotificationPreferences(boolean email, boolean push) {
         this.notifyEmail = email;
         this.notifyPush = push;
-    }
-
-    /** The name shown wherever this account appears to others. */
-    public String getDisplayName() {
-        return displayName;
-    }
-
-    /** Where the avatar image is stored, or {@code null} if none was uploaded. */
-    public String getAvatarUrl() {
-        return avatarUrl;
-    }
-
-    /** The capital a new plan starts from, or {@code null} if the profile says nothing. */
-    public BigDecimal getDefaultCapital() {
-        return defaultCapital;
-    }
-
-    /** The risk percentage a new plan starts from, or {@code null} if the profile says nothing. */
-    public BigDecimal getDefaultRiskPercent() {
-        return defaultRiskPercent;
-    }
-
-    /** How long this account usually holds a position, or {@code null} if it has not said. */
-    public TradingStyle getTradingStyle() {
-        return tradingStyle;
-    }
-
-    /** Whether notifications also go out by mail. */
-    public boolean isNotifyEmail() {
-        return notifyEmail;
-    }
-
-    /** Whether notifications also go out as a push message to the registered devices. */
-    public boolean isNotifyPush() {
-        return notifyPush;
     }
 
     private static String requireText(String value) {

@@ -9,6 +9,7 @@ import jakarta.persistence.Version;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
+import lombok.Getter;
 import org.springframework.data.domain.Persistable;
 
 /**
@@ -48,20 +49,25 @@ import org.springframework.data.domain.Persistable;
  * <p>Reference: Evans, E. (2003). <i>Domain-Driven Design</i>. Addison-Wesley, ch. 5 (an entity is
  * defined by its identity, not by its attributes).
  */
+@Getter
 @MappedSuperclass
 @EntityListeners(AuditInstantListener.class)
 public abstract class BaseEntity implements Persistable<UUID> {
 
+    /** The primary key, assigned when the object is created and never changed afterwards. */
     @Id
     @Column(name = "id", nullable = false, updatable = false)
     private UUID id = UuidV7.next();
 
+    /** When the row was first written, or {@code null} while the entity is still unsaved. */
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    /** When the row was last written, or {@code null} while the entity is still unsaved. */
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    /** The optimistic locking version; zero until the row has been written. */
     @Version
     @Column(name = "version", nullable = false)
     private long version;
@@ -78,12 +84,6 @@ public abstract class BaseEntity implements Persistable<UUID> {
         this.id = Objects.requireNonNull(id, "id must not be null");
     }
 
-    /** The primary key, assigned when the object is created and never changed afterwards. */
-    @Override
-    public UUID getId() {
-        return id;
-    }
-
     /**
      * Whether this entity has never been written. True until the insert callback stamps the
      * creation instant, and false for anything read back from the database, so a repository inserts
@@ -92,21 +92,6 @@ public abstract class BaseEntity implements Persistable<UUID> {
     @Override
     public boolean isNew() {
         return createdAt == null;
-    }
-
-    /** When the row was first written, or {@code null} while the entity is still unsaved. */
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    /** When the row was last written, or {@code null} while the entity is still unsaved. */
-    public Instant getUpdatedAt() {
-        return updatedAt;
-    }
-
-    /** The optimistic locking version; zero until the row has been written. */
-    public long getVersion() {
-        return version;
     }
 
     /**
