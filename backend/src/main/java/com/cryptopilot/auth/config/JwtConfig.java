@@ -1,5 +1,6 @@
 package com.cryptopilot.auth.config;
 
+import com.cryptopilot.auth.service.LiveSessions;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -88,9 +89,9 @@ public class JwtConfig {
 
     /**
      * The claim naming the session an access token was issued within: the family of the refresh
-     * token issued beside it (TECHNICAL_DESIGN 7.15). Read when a password change must end every
-     * session <em>other</em> than the caller's own (SRS 3.2.5), which is otherwise unanswerable from
-     * an access token.
+     * token issued beside it (TECHNICAL_DESIGN 7.15). Read on every request, to refuse a token whose
+     * session has ended ({@link SessionLivenessValidator}), and when a password change must end every
+     * session <em>other</em> than the caller's own (SRS 3.2.5).
      *
      * <p>{@code sid} is the name OpenID Connect gives a session identifier, borrowed for the same
      * meaning; it identifies a sign-in, not a person, and grants nothing on its own.
@@ -99,10 +100,12 @@ public class JwtConfig {
 
     private final SecretKeySpec key;
     private final Clock clock;
+    private final LiveSessions liveSessions;
 
-    JwtConfig(TokenProperties properties, Clock clock) {
+    JwtConfig(TokenProperties properties, Clock clock, LiveSessions liveSessions) {
         this.key = new SecretKeySpec(properties.secret().getBytes(StandardCharsets.UTF_8), ALGORITHM.getName());
         this.clock = clock;
+        this.liveSessions = liveSessions;
     }
 
     /** Signs an access token. */
@@ -113,14 +116,17 @@ public class JwtConfig {
 
     /**
      * Verifies a presented access token: the signature, with this key and this algorithm only; the
-     * expiry, exactly and against the injected clock; and the issuer.
+     * expiry, exactly and against the injected clock; the issuer; and, last and only for a token that
+     * passed the rest, that the session it names has not ended (D-33).
      */
     @Bean
     JwtDecoder jwtDecoder() {
         NimbusJwtDecoder decoder =
                 NimbusJwtDecoder.withSecretKey(key).macAlgorithm(ALGORITHM).build();
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<Jwt>(
-                new AccessTokenExpiryValidator(clock), new JwtIssuerValidator(ISSUER)));
+                new AccessTokenExpiryValidator(clock),
+                new JwtIssuerValidator(ISSUER),
+                new SessionLivenessValidator(liveSessions)));
         return decoder;
     }
 }

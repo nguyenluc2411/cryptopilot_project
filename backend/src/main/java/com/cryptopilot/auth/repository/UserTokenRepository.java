@@ -195,6 +195,23 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
             @Param("userId") UUID userId, @Param("keptFamilyId") UUID keptFamilyId, @Param("now") Instant now);
 
     /**
+     * How many unused refresh tokens a session still holds — at most one while it is alive, because
+     * rotation retires each token as it issues the next — and zero once it has ended: signed out,
+     * revoked by reuse detection, by a password reset or by a password change.
+     *
+     * <p>This is the question every request with an access token asks through the session cache
+     * ({@code LiveSessions}), so it is a count by the family index and nothing more. The account is
+     * part of the condition as well as the family, so a token whose {@code sid} names somebody else's
+     * session is refused rather than admitted.
+     *
+     * <p>Rule: SRS 3.2.3, 3.2.5; BR-04, BR-06; TECHNICAL_DESIGN 7.15.
+     */
+    @Transactional(readOnly = true)
+    @Query("select count(t) from UserToken t where t.tokenFamilyId = :familyId and t.userId = :userId"
+            + " and t.tokenType = com.cryptopilot.auth.entity.TokenType.REFRESH and t.usedAt is null")
+    int countUnusedInSession(@Param("familyId") UUID familyId, @Param("userId") UUID userId);
+
+    /**
      * Writes a token, inserting it when it is new and updating it otherwise.
      *
      * <p>Not transactional here: consuming a token and verifying the address it belongs to have to

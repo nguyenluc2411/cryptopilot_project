@@ -576,25 +576,21 @@ class LoginAndSessionTest {
     }
 
     /**
-     * SRS 3.2.3 says logging out revokes the refresh token, and says nothing about the access token —
-     * because nothing can. It is verified by its signature and its expiry and is never looked up, so
-     * it keeps working for the rest of its fifteen minutes. Asserted rather than left implied, so that
-     * the guarantee this endpoint does and does not give is written down somewhere executable.
+     * Logging out ends the access token too, at once rather than at its expiry. It names its session in
+     * the {@code sid} claim, and the decoder refuses a token whose session holds no unused refresh
+     * token (D-33). Before that claim this test asserted the opposite — that the token lived on for its
+     * fifteen minutes — and it was rewritten when that stopped being true.
      */
     @Test
-    void UC05_theAccessToken_staysValidUntilItExpires() {
+    void UC05_theAccessToken_isRefusedOnceItsSessionEnds() {
         verifiedAccount("logout-access");
         IssuedSession session = authService.login("logout-access" + TEST_DOMAIN, PASSWORD, false);
+        assertThatCode(() -> jwtDecoder.decode(session.accessToken())).doesNotThrowAnyException();
 
         authService.logout(session.refreshToken(), null);
 
-        assertThatCode(() -> jwtDecoder.decode(session.accessToken()))
-                .as("logging out cannot recall an access token already issued")
-                .doesNotThrowAnyException();
-
-        clock.set(NOW.plus(Duration.ofMinutes(15)));
         assertThatExceptionOfType(JwtException.class)
-                .as("what ends it is its own expiry")
+                .as("the session is over, so is the access token issued within it")
                 .isThrownBy(() -> jwtDecoder.decode(session.accessToken()));
     }
 

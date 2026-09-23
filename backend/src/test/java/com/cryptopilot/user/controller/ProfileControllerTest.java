@@ -277,18 +277,19 @@ class ProfileControllerTest {
 
     /**
      * An access token that outlived its account — the row was removed after it was issued — reads
-     * nothing and is answered 404, not a server error.
+     * nothing. Its session went with the account's tokens, so the token itself is refused with 401 and
+     * MSG44 before the profile is ever looked up (D-33), and never reaches a server error.
      */
     @Test
-    void UC06_aTokenWhoseAccountIsGone_isNotFound() throws Exception {
+    void UC06_aTokenWhoseAccountIsGone_isRefused() throws Exception {
         String token = signedInTrader("gone");
         sql.sql("delete from user_account where email = ?")
                 .param("gone" + TEST_DOMAIN)
                 .update();
 
         mvc.perform(get(PROFILE).header(HttpHeaders.AUTHORIZATION, token))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.messageCode").value("MSG41"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.messageCode").value("MSG44"));
     }
 
     private static String profileBody(String displayName, String capital, String risk, String style) {

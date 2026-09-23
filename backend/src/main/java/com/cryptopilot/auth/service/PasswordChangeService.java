@@ -74,6 +74,7 @@ public class PasswordChangeService {
 
     private final UserApi users;
     private final UserTokenRepository tokens;
+    private final LiveSessions liveSessions;
     private final PasswordEncoder passwordEncoder;
     private final Clock clock;
 
@@ -100,6 +101,7 @@ public class PasswordChangeService {
         int revoked = currentSession == null
                 ? tokens.invalidateUnused(userId, TokenType.REFRESH, now)
                 : tokens.revokeOtherSessions(userId, currentSession, now);
+        liveSessions.evictAccountAfterCommit(userId);
         log.info("Changed the password of account {}: revoked {} other sessions", userId, revoked);
     }
 }

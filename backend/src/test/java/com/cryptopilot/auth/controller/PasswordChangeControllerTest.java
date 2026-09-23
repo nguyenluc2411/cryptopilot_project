@@ -1,13 +1,17 @@
 package com.cryptopilot.auth.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.jayway.jsonpath.JsonPath;
+import java.time.Instant;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +21,10 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -46,6 +54,9 @@ class PasswordChangeControllerTest {
 
     @Autowired
     private JdbcClient sql;
+
+    @Autowired
+    private JwtEncoder jwtEncoder;
 
     @AfterEach
     void removeWhatTheTestWrote() {
@@ -148,6 +159,30 @@ class PasswordChangeControllerTest {
                 .andExpect(jsonPath("$.messageCode").value("MSG14"));
     }
 
+    /**
+     * A token issued before the {@code sid} claim existed names no session, so the change cannot keep
+     * one: it still succeeds with MSG14, and every session of the account ends, the stronger reading of
+     * SRS 3.2.5 (D-33).
+     */
+    @Test
+    void UC07_aTokenWithoutASessionClaim_changesThePasswordAndEndsEverySession() throws Exception {
+        String session = signedIn("no-sid");
+        UUID account = sql.sql("select user_id from user_account where email = ?")
+                .param("no-sid" + TEST_DOMAIN)
+                .query(UUID.class)
+                .single();
+
+        mvc.perform(put(CHANGE)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenWithoutSid(account))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(changeBody(PASSWORD, NEW_PASSWORD, NEW_PASSWORD)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messageCode").value("MSG14"));
+
+        mvc.perform(get("/api/v1/me/profile").header(HttpHeaders.AUTHORIZATION, session))
+                .andExpect(status().isUnauthorized());
+    }
+
     /** The response carries no password, in either direction. */
     @Test
     void UC07_theResponse_carriesNoPassword() throws Exception {
@@ -162,6 +197,21 @@ class PasswordChangeControllerTest {
                 .getContentAsString();
 
         assertThat(body).doesNotContain(PASSWORD).doesNotContain(NEW_PASSWORD);
+    }
+
+    private String tokenWithoutSid(UUID account) {
+        Instant now = Instant.now();
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer(JwtConfig.ISSUER)
+                .subject(account.toString())
+                .issuedAt(now)
+                .expiresAt(now.plusSeconds(900))
+                .claim(JwtConfig.ROLE_CLAIM, "TRADER")
+                .build();
+        return jwtEncoder
+                .encode(JwtEncoderParameters.from(
+                        JwsHeader.with(JwtConfig.ALGORITHM).build(), claims))
+                .getTokenValue();
     }
 
     private static String changeBody(String current, String next, String confirmation) {

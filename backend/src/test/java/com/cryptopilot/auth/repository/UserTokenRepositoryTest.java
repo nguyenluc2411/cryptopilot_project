@@ -281,7 +281,8 @@ class UserTokenRepositoryTest {
      * read this interface does not offer and unable to reach an expired-but-unused sibling, because
      * {@code markUsed} refuses an expired token. It takes a family identifier and answers a count, so
      * neither rule this test exists for is touched. {@code revokeOtherSessions} joined it with the
-     * password change of SRS 3.2.5 on the same terms: an account and a family in, a count out.
+     * password change of SRS 3.2.5 on the same terms: an account and a family in, a count out; and
+     * {@code countUnusedInSession}, the liveness question every access token asks (D-33), is a count.
      */
     @Test
     void theRepository_offersOnlyBoundedLookupsAndNamesEveryParameterADigest() {
@@ -292,6 +293,7 @@ class UserTokenRepositoryTest {
                         "findByTokenHashAndTokenType",
                         "findTopByUserIdAndTokenTypeOrderByCreatedAtDesc",
                         "countIssuedSince",
+                        "countUnusedInSession",
                         "invalidateUnused",
                         "revokeFamily",
                         "revokeOtherSessions",
