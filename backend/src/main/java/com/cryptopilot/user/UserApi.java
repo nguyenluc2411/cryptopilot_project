@@ -134,4 +134,23 @@ public interface UserApi {
      *     {@code RESOURCE_NOT_FOUND} when no such account exists
      */
     void markEmailVerified(UUID userId, Instant verifiedAt);
+
+    /**
+     * Replaces the password of an account with an already encoded one (BR-04).
+     *
+     * <p>The hash is the caller's, because the encoder is configured in {@code auth} and an account
+     * has no business knowing which one. This module owns the column and therefore owns the write;
+     * {@code auth} decides that a reset link was valid and what the new password is, and asks here.
+     *
+     * <p>Every status is accepted. A locked or banned account cannot sign in whatever its password
+     * is (BR-06), so refusing here would only tell the holder of a reset link something the reset
+     * endpoint is built not to say.
+     *
+     * <p>Revoking the sessions of the account is <em>not</em> part of this. BR-04 requires it, but
+     * the tokens are the {@code auth} module's table and the caller does it in the same transaction.
+     *
+     * @throws com.cryptopilot.common.exception.BusinessException with {@code RESOURCE_NOT_FOUND}
+     *     when no such account exists
+     */
+    void changePassword(UUID userId, String newPasswordHash);
 }

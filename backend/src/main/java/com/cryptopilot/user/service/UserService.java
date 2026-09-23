@@ -159,6 +159,21 @@ public class UserService implements UserApi {
     }
 
     /**
+     * BR-04's write half. The rule's other half - that the reset revokes every session - is the
+     * caller's, because the tokens are another module's table, and the two happen in one transaction
+     * that the caller opens: a reset that committed the password and lost the revocation would leave
+     * the old sessions alive, which is the one outcome BR-04 exists to prevent.
+     */
+    @Override
+    @Transactional
+    public void changePassword(UUID userId, String newPasswordHash) {
+        UserAccount account =
+                accounts.findById(userId).orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
+        account.changePassword(newPasswordHash);
+        accounts.save(account);
+    }
+
+    /**
      * The same answer whichever way the duplicate was noticed, so that the winner and the loser of
      * a race are told the same thing. The address is not repeated in the detail: it is the caller's
      * own input, the log already carries the request, and a message is not the place to echo one.

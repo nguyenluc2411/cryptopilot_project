@@ -325,6 +325,34 @@ public class UserAccount extends BaseEntity {
     }
 
     /**
+     * Replaces the stored password hash, for a reset from an emailed link (BR-04) and later for a
+     * change from the Security tab (UC-07).
+     *
+     * <p>Legal from every status, which is a decision rather than an oversight. A locked or banned
+     * account still may not sign in - BR-06 says so and {@link #recordLogin} enforces it - so letting
+     * one replace a password it cannot use costs nothing, while refusing would tell the holder of a
+     * reset link what state the account is in. The reset endpoint answers the same whatever happens,
+     * and this method is what lets it.
+     *
+     * <p>What it deliberately does not touch is the BR-03 lockout. That rule says five consecutive
+     * failures and that a successful <em>login</em> resets the counter; a reset is not a login, and
+     * clearing the counter here would turn the reset endpoint into a way to shorten a lockout without
+     * knowing the password. The lockout ends when its fifteen minutes end, as it always does.
+     *
+     * <p>The password arrives already hashed, exactly as it does at registration. This class never
+     * sees a password and never encodes one.
+     *
+     * <p>Rule: BR-04.
+     *
+     * <p>Reference: Grassi, P. A., Garcia, M. E. &amp; Fenton, J. L. (2017). NIST SP 800-63B,
+     * <i>Digital Identity Guidelines</i>, section 5.1.1.2 (a memorized secret is stored only as a
+     * salted hash; the verifier replaces it without ever holding the secret).
+     */
+    public void changePassword(String newPasswordHash) {
+        this.passwordHash = requireText(newPasswordHash, "newPasswordHash");
+    }
+
+    /**
      * Assigns the role. Every account holds exactly one, so this replaces it rather than adding to
      * it (BR-05).
      *
