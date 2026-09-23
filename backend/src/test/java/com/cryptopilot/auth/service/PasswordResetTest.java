@@ -162,17 +162,19 @@ class PasswordResetTest {
     }
 
     /**
-     * The non-enumeration rule, which is the whole reason SCR-05 exists in this shape. An address
-     * nobody registered, an address that was never verified and an address that is about to receive
-     * a link are three different situations, and the endpoint behaves identically in all three: it
-     * returns nothing, and it throws nothing.
+     * No address is ever refused, whatever it turns out to be. The method is {@code void} precisely
+     * so that no caller has a value it could leak, and a refusal would be a value: an exception for
+     * an unknown address would answer the question MSG12 exists to refuse.
      *
-     * <p>Asserting "returns nothing" is the point rather than a weakness of the test. The method is
-     * {@code void} precisely so that no caller has a value it could leak, and a refusal would be a
-     * value: an exception for an unknown address would answer the question MSG12 exists to refuse.
+     * <p>What this does <em>not</em> prove is that the three are indistinguishable, and the name says
+     * so. Equality of the response body is asserted over HTTP by
+     * {@code AuthControllerTest.UC04_theResetRequest_answersIdenticallyWhateverTheAddressIs}, and
+     * equality of the response <em>time</em> is not asserted anywhere, because it is not true: a
+     * verified address costs an update, an insert and an event that the other two do not. That is
+     * A-29, and it is deliberately an open item rather than a silent gap.
      */
     @Test
-    void UC04_anUnknownAddress_isIndistinguishableFromAVerifiedOne() {
+    void UC04_noAddressIsEverRefused_whateverItTurnsOutToBe() {
         verifiedAccount("exists");
 
         assertThatCode(() -> authService.requestPasswordReset("exists" + TEST_DOMAIN))

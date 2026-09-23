@@ -409,6 +409,15 @@ public class AuthService {
      * and still cannot sign in (BR-06). Refusing here would make the response depend on the account's
      * state, which is the question MSG12 exists to refuse.
      *
+     * <p>What is identical is the <em>answer</em>, not the time it takes to give it: an address that
+     * gets a link costs an update, an insert and an event that an unknown one does not, so the three
+     * cases are still distinguishable by how long the request runs. {@link #login} equalises exactly
+     * this, with a bcrypt verification against a hash of nothing, so the standard is the one this
+     * class already sets elsewhere and this path does not meet. Recorded as A-29 rather than fixed
+     * here, because the honest fix is not a sleep - a constant delay is a new guess at a number and
+     * leaks under statistics anyway - but moving the work off the request, which is the mail module's
+     * seam and does not exist yet.
+     *
      * <p>The previous unused links are invalidated first. BR-04 makes each link single-use but says
      * nothing about a second request, and without this every request would leave another working link
      * behind in a mailbox - the same failure SRS 3.2.2 names for verification links, with a worse
