@@ -80,7 +80,8 @@ class StreamCandleServiceTest {
                         50,
                         new CandleBackfillProperties.Depth(
                                 Duration.ofDays(1), Duration.ofDays(2), Duration.ofDays(5), Duration.ofDays(10)),
-                        new CandleBackfillProperties.PageSize(1000, 500)),
+                        new CandleBackfillProperties.PageSize(1000, 500),
+                        Duration.ofDays(7)),
                 transactions,
                 clock);
         service = new StreamCandleService(pairs, candles, backfill, transactions, events::add, clock);

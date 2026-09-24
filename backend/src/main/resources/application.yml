@@ -97,6 +97,8 @@ cryptopilot:
       page-size:
         spot: 1000
         futures: 500
+      # A-33: at start-up, holes inside the stored series of the last 7 days are found and filled.
+      gap-scan-window: 7d
     stream:
       # NSF-03: the public market streams of the enabled pairs. Off here, on in the dev and prod profiles, so a
       # test context never connects to the exchange. Hosts verified 2026-09-24 (TECHNICAL_DESIGN 7.1.1): futures

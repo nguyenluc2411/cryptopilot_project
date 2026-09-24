@@ -426,11 +426,96 @@ class CandleBackfillServiceTest {
                 .isThrownBy(() -> service(50, 20, depths()).fillGap(gap(btc, MarketType.SPOT, "2h", NOW, NOW)));
     }
 
+    /** A-33: a hole in the middle of a stored series is found, as the gap between its neighbours. */
+    @Test
+    void A33_aHoleInsideAStoredSeries_isFound() {
+        UUID btc = pair("BTCUSDT", "TRADING", "TRADING");
+        CandleBackfillService service = service(50, 20, depths());
+        service.backfill(MarketType.SPOT);
+        service.backfill(MarketType.FUTURES);
+        deleteOpenedBetween(btc, "1h", "2026-09-23T10:00:00Z", "2026-09-23T12:00:00Z");
+        deleteOpenedBetween(btc, "15m", "2026-09-24T02:15:00Z", "2026-09-24T02:15:00Z");
+
+        assertThat(service.storedGaps())
+                .containsExactlyInAnyOrder(
+                        new GapDetected(
+                                btc,
+                                "BTCUSDT",
+                                MarketType.SPOT,
+                                "1h",
+                                Instant.parse("2026-09-23T10:00:00Z"),
+                                Instant.parse("2026-09-23T12:00:00Z")),
+                        new GapDetected(
+                                btc,
+                                "BTCUSDT",
+                                MarketType.SPOT,
+                                "15m",
+                                Instant.parse("2026-09-24T02:15:00Z"),
+                                Instant.parse("2026-09-24T02:15:00Z")));
+    }
+
+    /** A-33: complete series report nothing. */
+    @Test
+    void A33_aCleanSeries_reportsNothing() {
+        pair("BTCUSDT", "TRADING", null);
+        CandleBackfillService service = service(50, 20, depths());
+        service.backfill(MarketType.SPOT);
+
+        assertThat(service.storedGaps()).isEmpty();
+    }
+
+    /**
+     * A-33: only holes inside the window are reported — one wholly before it is not, one that starts just
+     * before its edge is — and only for pairs the backfill targets (D-42).
+     */
+    @Test
+    void A33_theScan_keepsToItsWindowAndToTradingPairs() {
+        UUID btc = pair("BTCUSDT", "TRADING", null);
+        UUID eth = pair("ETHUSDT", "TRADING", null);
+        CandleBackfillService service = service(50, 20, longDepths());
+        service.backfill(MarketType.SPOT);
+        deleteOpenedBetween(btc, "1d", "2026-09-10T00:00:00Z", "2026-09-10T00:00:00Z");
+        deleteOpenedBetween(btc, "4h", "2026-09-17T08:00:00Z", "2026-09-17T12:00:00Z");
+        deleteOpenedBetween(eth, "1h", "2026-09-23T10:00:00Z", "2026-09-23T10:00:00Z");
+        sql.sql("update crypto_pair set spot_exchange_status = 'NOT_TRADING' where pair_id = ?")
+                .param(eth)
+                .update();
+
+        assertThat(service.storedGaps())
+                .singleElement()
+                .isEqualTo(new GapDetected(
+                        btc,
+                        "BTCUSDT",
+                        MarketType.SPOT,
+                        "4h",
+                        Instant.parse("2026-09-17T08:00:00Z"),
+                        Instant.parse("2026-09-17T12:00:00Z")));
+    }
+
     /** D-41: an empty series starts its depth back from now. */
     @Test
     void NSF02_seriesStart_isTheDepthBackFromNow() {
         assertThat(service(50, 20, depths()).seriesStart(MarketInterval.FOUR_HOURS, NOW))
                 .isEqualTo(NOW.minus(Duration.ofDays(5)));
+    }
+
+    /** Depths long enough for a 7-day scan window to have history on both sides of its edge. */
+    private static CandleBackfillProperties.Depth longDepths() {
+        return new CandleBackfillProperties.Depth(
+                Duration.ofDays(1), Duration.ofDays(2), Duration.ofDays(10), Duration.ofDays(20));
+    }
+
+    private void deleteOpenedBetween(UUID pair, String timeframe, String first, String last) {
+        int deleted = sql.sql("""
+                        delete from ohlcv where pair_id = ? and market_type = 'SPOT' and timeframe = ?
+                           and open_time between ? and ?""")
+                .params(
+                        pair,
+                        timeframe,
+                        java.sql.Timestamp.from(Instant.parse(first)),
+                        java.sql.Timestamp.from(Instant.parse(last)))
+                .update();
+        assertThat(deleted).as("the hole was stored before").isPositive();
     }
 
     private static GapDetected gap(UUID pair, MarketType market, String timeframe, Instant from, Instant to) {
@@ -444,7 +529,8 @@ class CandleBackfillServiceTest {
                 ZoneOffset.UTC,
                 50,
                 depth,
-                new CandleBackfillProperties.PageSize(spotPage, futuresPage));
+                new CandleBackfillProperties.PageSize(spotPage, futuresPage),
+                Duration.ofDays(7));
         return new CandleBackfillService(client, pairs, candles, properties, transactions, clock);
     }
 

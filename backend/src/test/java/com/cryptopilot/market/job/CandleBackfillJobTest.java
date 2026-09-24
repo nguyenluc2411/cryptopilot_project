@@ -249,6 +249,44 @@ class CandleBackfillJobTest {
         assertThat(scheduled).extracting(Scheduled::at).last().isEqualTo(NOW.plusSeconds(30));
     }
 
+    /**
+     * A-33: a hole left inside a series before a restart — its gap was only in the memory of the process that
+     * stopped — is found by the next process's start-up scan and filled.
+     */
+    @Test
+    void A33_aHoleLeftBeforeARestart_isFoundAndFilledAfterIt() {
+        job(true).run(MarketType.SPOT);
+        long complete = storedRows();
+        sql.sql("delete from ohlcv where timeframe = '1h' and open_time between ? and ?")
+                .params(
+                        Timestamp.from(Instant.parse("2026-09-23T03:00:00Z")),
+                        Timestamp.from(Instant.parse("2026-09-23T07:00:00Z")))
+                .update();
+        CandleBackfillJob restarted = job(true);
+
+        restarted.start();
+
+        assertThat(restarted.queuedGaps(MarketType.SPOT)).singleElement().satisfies(gap -> {
+            assertThat(gap.timeframe()).isEqualTo("1h");
+            assertThat(gap.from()).isEqualTo(Instant.parse("2026-09-23T03:00:00Z"));
+            assertThat(gap.to()).isEqualTo(Instant.parse("2026-09-23T07:00:00Z"));
+        });
+        assertThat(scheduled).extracting(Scheduled::at).contains(NOW);
+        assertThat(restarted.run(MarketType.SPOT)).isEqualTo(Outcome.COMPLETED);
+        assertThat(storedRows()).isEqualTo(complete);
+        assertThat(restarted.queuedGaps(MarketType.SPOT)).isEmpty();
+    }
+
+    /** A-33: after a clean shutdown nothing is queued; a failing scan is contained. */
+    @Test
+    void A33_aCleanStart_queuesNothing_andAFailingScanIsContained() {
+        job(true).run(MarketType.SPOT);
+
+        assertThat(job(true).scanForStoredGaps()).isZero();
+        assertThat(new CandleBackfillJob(null, recordingScheduler(), properties(true), clock).scanForStoredGaps())
+                .isZero();
+    }
+
     /** A connection back after a loss: that market is brought up to date at once. */
     @Test
     void NSF03_aReconnectedStream_triggersThatMarketsBackfill() {
@@ -268,6 +306,10 @@ class CandleBackfillJobTest {
 
         assertThat(scheduled).isEmpty();
         assertThat(job.queuedGaps(MarketType.SPOT)).isEmpty();
+    }
+
+    private long storedRows() {
+        return sql.sql("select count(*) from ohlcv").query(Long.class).single();
     }
 
     private GapDetected gap(Instant from, Instant to) {
@@ -294,7 +336,8 @@ class CandleBackfillJobTest {
                 50,
                 new CandleBackfillProperties.Depth(
                         Duration.ofDays(1), Duration.ofDays(2), Duration.ofDays(5), Duration.ofDays(10)),
-                new CandleBackfillProperties.PageSize(50, 20));
+                new CandleBackfillProperties.PageSize(50, 20),
+                Duration.ofDays(7));
     }
 
     private record Scheduled(Runnable task, Instant at, Trigger trigger) {}

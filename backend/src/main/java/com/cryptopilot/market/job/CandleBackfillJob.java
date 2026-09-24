@@ -55,8 +55,9 @@ import org.springframework.stereotype.Component;
  * <p>One continuation is pending per market at most; a newer one replaces it. Continuing is always a task
  * handed to the {@link TaskScheduler}; the thread is never held. One instance, no distributed lock (D-39).
  *
- * <p>Queued gaps live in memory. One lost with a restart is not lost for good: the stream compares its first
- * closed candle of each series with the stored ones and reports whatever is missing after the latest again.
+ * <p>Queued gaps live in memory. One lost with a restart is not lost for good: at start-up the stored series of
+ * the recent window ({@code gapScanWindow}, 7 days) are scanned for holes, and each is queued again; a hole behind
+ * the latest candle is also reported by the stream's first closed candle of the series.
  *
  * <p>Rule: NSF-02, NSF-03; TECHNICAL_DESIGN 7.1.2 (the caller contract), 7.1 step 4, and 10; D-41, D-42; A-33.
  */
@@ -102,10 +103,29 @@ public class CandleBackfillJob {
             return;
         }
         scheduler.schedule(this::runAll, new CronTrigger(properties.cron(), properties.zone()));
+        scanForStoredGaps();
         log.info(
                 "NSF-02 scheduled on '{}' ({}), and after each symbol synchronisation",
                 properties.cron(),
                 properties.zone());
+    }
+
+    /**
+     * Queues the holes found inside the stored series of the recent window and runs each affected market now, so
+     * a gap reported before a restart — the queue lives in memory — is found again and filled (A-33).
+     *
+     * @return how many gaps were queued
+     */
+    public int scanForStoredGaps() {
+        try {
+            List<GapDetected> found = backfill.storedGaps();
+            found.forEach(this::onGapDetected);
+            log.info("NSF-02 start-up scan: {} holes inside the stored series queued", found.size());
+            return found.size();
+        } catch (RuntimeException failure) {
+            log.error("NSF-02 start-up gap scan failed; the stream and the hourly runs still find new gaps", failure);
+            return 0;
+        }
     }
 
     /** A market's statuses are current: backfill it now, on the scheduler rather than on the sync's thread. */

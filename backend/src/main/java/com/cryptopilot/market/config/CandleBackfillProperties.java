@@ -28,6 +28,7 @@ import org.springframework.validation.annotation.Validated;
  * @param budgetSharePercent the share of a venue's per-minute weight the backfill may use before it pauses
  * @param depth how far back a series with no candle starts
  * @param pageSize candles requested per call, per venue
+ * @param gapScanWindow how far back the start-up scan looks for holes inside the stored series (A-33)
  */
 @Validated
 @ConfigurationProperties("cryptopilot.market.backfill")
@@ -37,7 +38,8 @@ public record CandleBackfillProperties(
         @NotNull @DefaultValue("UTC") ZoneId zone,
         @Min(1) @Max(80) @DefaultValue("50") int budgetSharePercent,
         @NotNull @Valid @DefaultValue Depth depth,
-        @NotNull @Valid @DefaultValue PageSize pageSize) {
+        @NotNull @Valid @DefaultValue PageSize pageSize,
+        @NotNull @DefaultValue("7d") Duration gapScanWindow) {
 
     /**
      * How far back each stored timeframe starts (BR-08: 15m, 1h, 4h, 1d).

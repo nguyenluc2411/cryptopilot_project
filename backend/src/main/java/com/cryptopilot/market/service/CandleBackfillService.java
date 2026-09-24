@@ -12,12 +12,15 @@ import com.cryptopilot.market.entity.ExchangeStatus;
 import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
+import com.cryptopilot.market.repository.StoredGap;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -208,6 +211,41 @@ public class CandleBackfillService {
                     refusal);
             return new GapFill(0, Optional.empty(), Optional.empty());
         }
+    }
+
+    /**
+     * The holes inside the stored series of the last {@code gapScanWindow}, as gaps for {@link #fillGap}, for the
+     * pairs this backfill targets (D-42). Run at start-up, it finds again whatever a gap reported before a restart
+     * left unfilled — the queue of reported gaps lives in memory — and anything else missing inside a series.
+     *
+     * <p>A hole the exchange itself has (a maintenance window) is found at every start-up and costs one request
+     * that returns nothing.
+     *
+     * <p>Rule: NSF-02, NSF-03 (gap detection); A-33.
+     */
+    public List<GapDetected> storedGaps() {
+        Instant since = clock.instant().minus(properties.gapScanWindow());
+        Map<UUID, CryptoPair> targets = new HashMap<>();
+        for (CryptoPair pair : pairs.findAllForSync()) {
+            targets.put(pair.getId(), pair);
+        }
+        List<GapDetected> gaps = new ArrayList<>();
+        for (StoredGap hole : candles.gapsSince(since)) {
+            CryptoPair pair = targets.get(hole.pairId());
+            if (pair == null || pair.exchangeStatus(hole.market()) != ExchangeStatus.TRADING) {
+                continue;
+            }
+            Duration length =
+                    MarketInterval.fromCode(hole.timeframe()).orElseThrow().duration();
+            gaps.add(new GapDetected(
+                    pair.getId(),
+                    pair.getSymbol(),
+                    hole.market(),
+                    hole.timeframe(),
+                    hole.lastBefore().plus(length),
+                    hole.firstAfter().minus(length)));
+        }
+        return gaps;
     }
 
     /**

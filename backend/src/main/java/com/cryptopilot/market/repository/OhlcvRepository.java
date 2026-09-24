@@ -56,6 +56,46 @@ public class OhlcvRepository {
     }
 
     /**
+     * The holes inside the stored series: every pair of consecutive stored candles, among those opened at or
+     * after {@code since}, that are further apart than one timeframe. One row per hole, with the open times of the
+     * candles either side of it.
+     *
+     * <p>{@code lag(open_time)} over each series, compared with the timeframe's length. The previous candle is
+     * looked up to one day before {@code since} (the longest timeframe), so a hole that starts just before the
+     * window is found too. Reads only the recent chunks of the hypertable.
+     *
+     * <p>Rule: NSF-02, NSF-03 (gap detection); A-33.
+     *
+     * <p>Reference: PostgreSQL Global Development Group. <i>PostgreSQL 16 Documentation</i>, §3.5 "Window
+     * Functions" and §9.22 ({@code lag}).
+     */
+    public List<StoredGap> gapsSince(Instant since) {
+        return sql.sql("""
+                        select pair_id, market_type, timeframe, previous_open, open_time
+                          from (select pair_id, market_type, timeframe, open_time,
+                                       lag(open_time) over (partition by pair_id, market_type, timeframe
+                                                            order by open_time) as previous_open
+                                  from ohlcv
+                                 where open_time >= cast(? as timestamptz) - interval '1 day') series
+                         where open_time >= ?
+                           and previous_open is not null
+                           and open_time - previous_open > case timeframe
+                                   when '15m' then interval '15 minutes'
+                                   when '1h' then interval '1 hour'
+                                   when '4h' then interval '4 hours'
+                                   else interval '1 day' end
+                         order by pair_id, market_type, timeframe, open_time""")
+                .params(Timestamp.from(since), Timestamp.from(since))
+                .query((row, n) -> new StoredGap(
+                        row.getObject("pair_id", UUID.class),
+                        MarketType.valueOf(row.getString("market_type")),
+                        row.getString("timeframe"),
+                        row.getTimestamp("previous_open").toInstant(),
+                        row.getTimestamp("open_time").toInstant()))
+                .list();
+    }
+
+    /**
      * Inserts closed candles of one series in one batch, skipping any already stored, and answers how many
      * were new. Not transactional here; the caller's transaction covers the page.
      */
