@@ -20,3 +20,19 @@ cryptopilot:
     sync:
       # NSF-01 runs in this profile: at start-up and on the schedule of application.yml.
       enabled: true
+      # The demo pairs (Q-05), created INACTIVE by NSF-01 the first time each market lists them; an
+      # administrator activates them. Each is spelled the same on Spot and USD-M futures (Q-14).
+      seed-symbols:
+        - BTCUSDT
+        - ETHUSDT
+        - BNBUSDT
+        - SOLUSDT
+        - XRPUSDT
+        - DOGEUSDT
+        - ADAUSDT
+        - AVAXUSDT
+        - LINKUSDT
+        - LTCUSDT
+        - BCHUSDT
+        - UNIUSDT
+        - ARBUSDT
