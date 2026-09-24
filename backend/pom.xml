@@ -28,6 +28,8 @@
 		<archunit.version>1.4.2</archunit.version>
 		<!-- Java has no built-in UUID v7 generator; ADR-009 names this one. Not part of the Spring Boot BOM. -->
 		<java-uuid-generator.version>5.2.0</java-uuid-generator.version>
+		<!-- The JUnit tags the default test run leaves out; see the Surefire configuration. -->
+		<surefire.excludedGroups>live</surefire.excludedGroups>
 	</properties>
 
 	<dependencyManagement>
@@ -213,6 +215,10 @@
 						     nothing: it signs tokens for a database that is thrown away with the container. -->
 						<JWT_SECRET>test-only-signing-key-0123456789ab</JWT_SECRET>
 					</systemPropertyVariables>
+					<!-- Tests tagged "live" call the real exchange. They never run in the default build:
+					     a CI runner may be geo-blocked (HTTP 451) and a live market is not deterministic.
+					     Run them on purpose with: ./mvnw test -Dgroups=live -Dsurefire.excludedGroups=none -->
+					<excludedGroups>${surefire.excludedGroups}</excludedGroups>
 				</configuration>
 			</plugin>
 
