@@ -41,6 +41,7 @@ public final class StubStreamServer implements AutoCloseable {
     private final List<Connection> connections = new CopyOnWriteArrayList<>();
     private final List<String> paths = new CopyOnWriteArrayList<>();
     private final AtomicInteger refusals = new AtomicInteger();
+    private final AtomicInteger closesOnOpen = new AtomicInteger();
     private final Thread acceptor;
 
     public StubStreamServer() throws IOException {
@@ -56,6 +57,11 @@ public final class StubStreamServer implements AutoCloseable {
     /** Answers the next {@code count} handshakes with 503 instead of upgrading. */
     public void refuseNext(int count) {
         refusals.set(count);
+    }
+
+    /** Upgrades the next {@code count} handshakes and closes each at once, before the client can use it. */
+    public void closeNextOnOpen(int count) {
+        closesOnOpen.set(count);
     }
 
     /** Every handshake's request target, in order, refused ones included. */
@@ -141,6 +147,9 @@ public final class StubStreamServer implements AutoCloseable {
             out.flush();
             Connection connection = new Connection(socket, in, out);
             connections.add(connection);
+            if (closesOnOpen.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
+                connection.closeWith(1001);
+            }
             connection.read();
         } catch (IOException | NoSuchAlgorithmException | RuntimeException ended) {
             closeQuietly(socket);

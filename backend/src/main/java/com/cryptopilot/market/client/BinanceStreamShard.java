@@ -80,6 +80,7 @@ public final class BinanceStreamShard implements AutoCloseable {
     private final Listener listener;
 
     private WebSocket current;
+    private Frames currentFrames;
     private boolean closed;
     private boolean lostSinceLastOpen;
     private int attempts;
@@ -171,19 +172,20 @@ public final class BinanceStreamShard implements AutoCloseable {
     }
 
     private void connect(boolean renewing) {
+        Frames frames = new Frames();
         http.newWebSocketBuilder()
                 .connectTimeout(connectTimeout)
-                .buildAsync(uri, new Frames())
+                .buildAsync(uri, frames)
                 .whenComplete((socket, failure) -> {
                     if (failure != null) {
                         failed(renewing, failure);
                     } else {
-                        opened(socket, renewing);
+                        opened(socket, frames, renewing);
                     }
                 });
     }
 
-    private void opened(WebSocket socket, boolean renewing) {
+    private void opened(WebSocket socket, Frames frames, boolean renewing) {
         WebSocket previous;
         boolean afterLoss;
         synchronized (this) {
@@ -191,8 +193,14 @@ public final class BinanceStreamShard implements AutoCloseable {
                 socket.abort();
                 return;
             }
+            if (frames.ended) {
+                // The exchange closed it before the handshake's completion reached us: a loss like any other.
+                failed(renewing, new IllegalStateException("closed as soon as it opened"));
+                return;
+            }
             previous = current;
             current = socket;
+            currentFrames = frames;
             attempts = 0;
             afterLoss = lostSinceLastOpen && !renewing;
             lostSinceLastOpen = false;
@@ -223,9 +231,13 @@ public final class BinanceStreamShard implements AutoCloseable {
         }
     }
 
-    /** A connection ended without being asked to. An old one replaced by a renewal is let go silently. */
-    private void lost(WebSocket socket, String why) {
+    /**
+     * A connection ended without being asked to. An old one replaced by a renewal is let go silently; one that
+     * ends before {@link #opened} has registered it is caught there, by its {@link Frames#ended} flag.
+     */
+    private void lost(WebSocket socket, Frames frames, String why) {
         synchronized (this) {
+            frames.ended = true;
             if (closed || socket != current) {
                 return;
             }
@@ -240,15 +252,17 @@ public final class BinanceStreamShard implements AutoCloseable {
 
     private void checkIdle() {
         WebSocket silent;
+        Frames silentFrames;
         synchronized (this) {
             Instant last = lastMessageAt;
             if (closed || current == null || last == null || !clock.instant().isAfter(last.plus(idleTimeout))) {
                 return;
             }
             silent = current;
+            silentFrames = currentFrames;
         }
         silent.abort();
-        lost(silent, "silent for more than " + idleTimeout);
+        lost(silent, silentFrames, "silent for more than " + idleTimeout);
     }
 
     private static void cancel(ScheduledFuture<?> future) {
@@ -265,6 +279,9 @@ public final class BinanceStreamShard implements AutoCloseable {
     private final class Frames implements WebSocket.Listener {
 
         private final StringBuilder text = new StringBuilder();
+
+        /** Set, under the shard's lock, once the connection has closed or failed. */
+        private boolean ended;
 
         @Override
         public CompletionStage<?> onText(WebSocket socket, CharSequence data, boolean last) {
@@ -285,13 +302,13 @@ public final class BinanceStreamShard implements AutoCloseable {
 
         @Override
         public CompletionStage<?> onClose(WebSocket socket, int statusCode, String reason) {
-            lost(socket, "closed by the exchange, " + statusCode + (reason.isEmpty() ? "" : " " + reason));
+            lost(socket, this, "closed by the exchange, " + statusCode + (reason.isEmpty() ? "" : " " + reason));
             return null;
         }
 
         @Override
         public void onError(WebSocket socket, Throwable error) {
-            lost(socket, error.toString());
+            lost(socket, this, error.toString());
         }
     }
 }

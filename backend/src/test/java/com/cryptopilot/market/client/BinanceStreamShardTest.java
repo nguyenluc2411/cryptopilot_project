@@ -159,6 +159,23 @@ class BinanceStreamShardTest {
         assertThat(openings).containsExactly(false, true);
     }
 
+    /**
+     * A connection the exchange closes the instant it opens — possibly before the client has registered it — is
+     * still a loss: the shard reconnects rather than keeping a dead connection.
+     */
+    @Test
+    void NSF03_aConnectionClosedAsItOpens_isStillReconnected() {
+        server.closeNextOnOpen(1);
+        shard = started();
+
+        Connection second = server.awaitConnection(2);
+        await(() -> !openings.isEmpty() && openings.getLast(), "an opening after the loss");
+
+        await(shard::isConnected, "the replacement connection");
+        second.send(StreamFrames.markPrice("BTCUSDT", AT));
+        await(() -> messages.size() == 1, "a message on the replacement");
+    }
+
     /** Refused handshakes are retried with the back-off until one succeeds. */
     @Test
     void NSF03_refusedHandshakes_areRetriedUntilOneSucceeds() {
