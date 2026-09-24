@@ -21,7 +21,8 @@ cryptopilot:
       # NSF-01 runs in this profile: at start-up and on the schedule of application.yml.
       enabled: true
       # The demo pairs (Q-05), created INACTIVE by NSF-01 the first time each market lists them; an
-      # administrator activates them. Each is spelled the same on Spot and USD-M futures (Q-14).
+      # administrator activates them (here Q-16 does, see demo below). Each is spelled the same on Spot and
+      # USD-M futures (Q-14).
       seed-symbols:
         - BTCUSDT
         - ETHUSDT
@@ -43,3 +44,7 @@ cryptopilot:
     stream:
       # NSF-03 runs in this profile: the streams of the pairs an administrator enabled (BR-07).
       enabled: true
+    demo:
+      # Q-16, dev only: activate the seed symbols above on every market where the exchange trades them, once
+      # after the first symbol synchronisation, so NSF-03 has pairs to stream. Never set in prod (BR-07).
+      activate-seed-symbols: true
