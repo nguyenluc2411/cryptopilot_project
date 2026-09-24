@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.function.Function;
 
 /**
  * A local HTTP server standing in for the exchange, so that no test ever calls Binance: a CI runner may
@@ -52,6 +53,7 @@ public final class StubExchange implements AutoCloseable {
 
     private final HttpServer server;
     private final Map<String, Deque<Answer>> answers = new ConcurrentHashMap<>();
+    private final Map<String, Function<URI, Answer>> responders = new ConcurrentHashMap<>();
     private final List<URI> requests = new CopyOnWriteArrayList<>();
 
     public StubExchange() throws IOException {
@@ -59,7 +61,11 @@ public final class StubExchange implements AutoCloseable {
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/", exchange -> {
             requests.add(exchange.getRequestURI());
-            Answer answer = next(exchange.getRequestURI().getPath());
+            Function<URI, Answer> responder =
+                    responders.get(exchange.getRequestURI().getPath());
+            Answer answer = responder != null
+                    ? responder.apply(exchange.getRequestURI())
+                    : next(exchange.getRequestURI().getPath());
             try {
                 Thread.sleep(answer.delay());
             } catch (InterruptedException interrupted) {
@@ -84,7 +90,15 @@ public final class StubExchange implements AutoCloseable {
 
     /** Queues answers for a path; the last one repeats once the others are used. */
     public StubExchange on(String path, Answer... inOrder) {
+        responders.remove(path);
         answers.put(path, new ArrayDeque<>(List.of(inOrder)));
+        return this;
+    }
+
+    /** Answers a path from the request itself — its query string — instead of from a queue. */
+    public StubExchange respond(String path, Function<URI, Answer> responder) {
+        answers.remove(path);
+        responders.put(path, responder);
         return this;
     }
 

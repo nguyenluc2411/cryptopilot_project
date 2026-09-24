@@ -158,6 +158,22 @@ public class BinanceRestClient implements AutoCloseable {
                 get(BinanceVenue.USD_M_FUTURES, "/futures/data/globalLongShortAccountRatio", query));
     }
 
+    /**
+     * The request weight this IP has used on a venue in the current minute, as the exchange last reported
+     * it; zero before the first response of the minute. The budget is shared by every caller of this client,
+     * so a caller that must leave room for others — the candle backfill (T-020) — paces itself on this.
+     */
+    public int usedWeightThisMinute(BinanceVenue venue) {
+        return gates.get(Objects.requireNonNull(venue, "venue must not be null"))
+                .usedWeightThisMinute();
+    }
+
+    /** The documented weight budget per minute of a venue (TECHNICAL_DESIGN 7.1.1). */
+    public int weightPerMinute(BinanceVenue venue) {
+        return gates.get(Objects.requireNonNull(venue, "venue must not be null"))
+                .requestWeightPerMinute();
+    }
+
     /** Releases the HTTP client's connections when the application stops. */
     @Override
     public void close() {

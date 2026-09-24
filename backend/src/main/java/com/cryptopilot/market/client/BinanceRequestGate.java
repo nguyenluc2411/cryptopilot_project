@@ -47,6 +47,9 @@ final class BinanceRequestGate {
     private final Clock clock;
     private final BinanceBanStore bans;
 
+    private final int requestWeightPerMinute;
+    private int lastUsedWeight;
+    private Instant lastUsedWeightMinute = Instant.MIN;
     private boolean recordedBanLoaded;
     private Instant closedUntil = Instant.MIN;
     private BinanceClientException.Kind closedFor;
@@ -62,6 +65,7 @@ final class BinanceRequestGate {
             Clock clock,
             BinanceBanStore bans) {
         this.venue = venue;
+        this.requestWeightPerMinute = requestWeightPerMinute;
         this.weightPauseThreshold = Math.max(1, requestWeightPerMinute * weightPausePercent / 100);
         this.failureThreshold = failureThreshold;
         this.openDuration = openDuration;
@@ -89,6 +93,8 @@ final class BinanceRequestGate {
 
     /** Records the weight a response reported; at the threshold, closes the gate for the rest of the minute. */
     synchronized void recordUsedWeight(int usedWeight) {
+        this.lastUsedWeight = usedWeight;
+        this.lastUsedWeightMinute = clock.instant().truncatedTo(ChronoUnit.MINUTES);
         if (usedWeight >= weightPauseThreshold) {
             Instant nextMinute = clock.instant().truncatedTo(ChronoUnit.MINUTES).plus(Duration.ofMinutes(1));
             log.warn(
@@ -166,6 +172,19 @@ final class BinanceRequestGate {
             log.warn("{} failed {} calls in a row; circuit open until {}", venue, consecutiveFailures, until);
             closeUntil(until, BinanceClientException.Kind.CIRCUIT_OPEN);
         }
+    }
+
+    /**
+     * The weight this IP has used in the current minute, as the last response of this minute reported it;
+     * zero when no response has arrived this minute, because the exchange's window restarts every minute.
+     */
+    synchronized int usedWeightThisMinute() {
+        return lastUsedWeightMinute.equals(clock.instant().truncatedTo(ChronoUnit.MINUTES)) ? lastUsedWeight : 0;
+    }
+
+    /** The venue's documented weight budget per minute (TECHNICAL_DESIGN 7.1.1). */
+    int requestWeightPerMinute() {
+        return requestWeightPerMinute;
     }
 
     private void closeUntil(Instant until, BinanceClientException.Kind kind) {
