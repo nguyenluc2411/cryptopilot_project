@@ -1,5 +1,8 @@
 package com.cryptopilot.market.client;
 
+import java.time.Duration;
+import java.util.Optional;
+
 /**
  * The candle and statistics intervals the system asks the exchange for.
  *
@@ -39,5 +42,27 @@ public enum MarketInterval {
     /** The interval as the exchange spells it in a query string. */
     public String code() {
         return code;
+    }
+
+    /** The length of one candle; every interval here is a fixed number of seconds in UTC (BR-08). */
+    public Duration duration() {
+        return switch (this) {
+            case ONE_MINUTE -> Duration.ofMinutes(1);
+            case FIVE_MINUTES -> Duration.ofMinutes(5);
+            case FIFTEEN_MINUTES -> Duration.ofMinutes(15);
+            case ONE_HOUR -> Duration.ofHours(1);
+            case FOUR_HOURS -> Duration.ofHours(4);
+            case ONE_DAY -> Duration.ofDays(1);
+        };
+    }
+
+    /** The interval the exchange spells this way, e.g. {@code 15m}, or empty for one this system never asks for. */
+    public static Optional<MarketInterval> fromCode(String code) {
+        for (MarketInterval interval : values()) {
+            if (interval.code.equals(code)) {
+                return Optional.of(interval);
+            }
+        }
+        return Optional.empty();
     }
 }

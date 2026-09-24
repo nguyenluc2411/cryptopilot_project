@@ -192,7 +192,7 @@ final class BinanceResponseParser {
     }
 
     /** A decimal the exchange sent as a string, read without passing through a double. */
-    private static BigDecimal decimal(JsonNode node) {
+    static BigDecimal decimal(JsonNode node) {
         return new BigDecimal(node.stringValue());
     }
 
@@ -201,14 +201,14 @@ final class BinanceResponseParser {
     }
 
     /** A count the exchange sends as a JSON integer, such as the number of trades of a candle. */
-    private static long count(JsonNode integer) {
+    static long count(JsonNode integer) {
         if (!integer.isIntegralNumber()) {
             throw new IllegalArgumentException("expected an integer, found " + integer);
         }
         return integer.longValue();
     }
 
-    private static Instant instant(JsonNode epochMillis) {
+    static Instant instant(JsonNode epochMillis) {
         if (!epochMillis.isIntegralNumber()) {
             throw new IllegalArgumentException("expected epoch milliseconds, found " + epochMillis);
         }
