@@ -48,6 +48,17 @@ public interface CryptoPairRepository extends Repository<CryptoPair, UUID> {
         return market == MarketType.SPOT ? findEnabledOnSpot() : findEnabledOnFutures();
     }
 
+    /**
+     * Every pair, by symbol — the universe NSF-01 reconciles against the exchange once a day.
+     *
+     * <p>A deliberate unbounded read, the only one here (D-23 keeps them out by default). It is safe because
+     * the table does not grow with users or time: it holds the pairs an administrator registered, 30 to 50
+     * for the demo (Q-05), and the synchronisation never inserts the exchange's whole list.
+     */
+    @Transactional(readOnly = true)
+    @Query("select p from CryptoPair p order by p.symbol")
+    List<CryptoPair> findAllForSync();
+
     /** Writes a pair. Not transactional here; the unit of work is the calling service's. */
     CryptoPair save(CryptoPair pair);
 
