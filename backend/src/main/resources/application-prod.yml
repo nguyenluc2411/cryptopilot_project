@@ -30,3 +30,7 @@ cryptopilot:
         - BCHUSDT
         - UNIUSDT
         - ARBUSDT
+    backfill:
+      # NSF-02 runs in this profile: after each symbol synchronisation and on the hourly schedule of
+      # application.yml, within half of each venue's weight budget.
+      enabled: true

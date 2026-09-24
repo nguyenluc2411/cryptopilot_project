@@ -79,6 +79,24 @@ cryptopilot:
       # Symbols the synchronisation may create (INACTIVE) if missing. Empty until the demo pair list (Q-05)
       # is decided; until then only pairs an administrator registered are updated.
       seed-symbols: []
+    backfill:
+      # NSF-02: after each symbol synchronisation and hourly, one minute past the hour. Off here, on in the
+      # dev and prod profiles, for the reason sync is (a test context never calls the exchange).
+      enabled: false
+      cron: "0 1 * * * *"
+      zone: UTC
+      # At most this share of a venue's per-minute weight; NSF-01 and the other jobs keep the rest.
+      budget-share-percent: 50
+      # D-41: how far back a series with no candle starts (BR-08 stores 15m, 1h, 4h, 1d only).
+      depth:
+        fifteen-minutes: 60d
+        one-hour: 180d
+        four-hours: 730d
+        one-day: 1000d
+      # The cheapest page per candle at the weights measured 2026-09-24 (TECHNICAL_DESIGN 7.1.1).
+      page-size:
+        spot: 1000
+        futures: 500
 
 server:
   port: 8080
