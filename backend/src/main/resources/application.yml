@@ -43,6 +43,33 @@ cryptopilot:
       # be a session on any deployment that forgot to override it. An environment that supplies
       # nothing fails at start-up, which is the only safe way for this particular value to be missing.
       secret: ${JWT_SECRET}
+  market:
+    binance:
+      # The public market data API only (BR-09): no key, no account, no order endpoint. Hosts and
+      # per-minute REQUEST_WEIGHT budgets are the documented values, verified 2026-09-24 and recorded
+      # with their sources in TECHNICAL_DESIGN 7.1.1. The client reads the used weight from every
+      # response and stops for the rest of the minute at weight-pause-percent of the budget.
+      spot:
+        base-url: https://api.binance.com
+        request-weight-per-minute: 6000
+      futures:
+        base-url: https://fapi.binance.com
+        request-weight-per-minute: 2400
+      connect-timeout: 5s
+      read-timeout: 10s
+      weight-pause-percent: 80
+      # When a 429 or 418 carries no Retry-After. The documented bans start at two minutes.
+      default-retry-after: 2m
+      retry:
+        # Transient failures only (5xx, timeouts, refused connections), never a 4xx.
+        max-retries: 2
+        initial-delay: 500ms
+        multiplier: 2.0
+        max-delay: 5s
+        jitter: 200ms
+      circuit-breaker:
+        failure-threshold: 5
+        open-duration: 30s
 
 server:
   port: 8080
