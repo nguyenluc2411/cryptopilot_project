@@ -119,6 +119,13 @@ public class UserAccount extends BaseEntity {
     private int failedLoginCount;
 
     /**
+     * How many wrong current passwords the Security tab has been given in a row (SRS 3.2.5; A-30).
+     * Separate from {@link #failedLoginCount}, because it is not a failed sign-in and must not lock one.
+     */
+    @Column(name = "failed_password_change_count", nullable = false)
+    private int failedPasswordChangeCount;
+
+    /**
      * When the failed-attempt lockout ends, or {@code null} when the account has never been locked
      * out. A value in the past is a lockout that has already been served (BR-03).
      */
@@ -342,7 +349,10 @@ public class UserAccount extends BaseEntity {
      * <p>The password arrives already hashed, exactly as it does at registration. This class never
      * sees a password and never encodes one.
      *
-     * <p>Rule: BR-04.
+     * <p>It does reset the count of wrong current passwords ({@link #recordFailedPasswordChange}): a new
+     * password makes every earlier guess at the old one moot, whichever way it was set.
+     *
+     * <p>Rule: BR-04; SRS 3.2.5.
      *
      * <p>Reference: Grassi, P. A., Garcia, M. E. &amp; Fenton, J. L. (2017). NIST SP 800-63B,
      * <i>Digital Identity Guidelines</i>, section 5.1.1.2 (a memorized secret is stored only as a
@@ -350,6 +360,38 @@ public class UserAccount extends BaseEntity {
      */
     public void changePassword(String newPasswordHash) {
         this.passwordHash = requireText(newPasswordHash, "newPasswordHash");
+        this.failedPasswordChangeCount = 0;
+    }
+
+    /**
+     * Counts one wrong current password offered on the Security tab, and answers whether it was the
+     * fifth in a row — the threshold BR-03 uses for sign-ins, applied to the other place a password is
+     * guessed (A-30). The count starts again when it answers {@code true}, because what the caller
+     * does then is end every session of the account: the guessing stops with the session it came
+     * from, and a fresh sign-in starts a fresh count.
+     *
+     * <p>It does not touch the sign-in counter or {@link #lockedUntil}. The person guessing already
+     * holds a session, very possibly a stolen one; locking the sign-in would lock out the owner, who is
+     * the one person who knows the password. A successful change resets the count, through
+     * {@link #changePassword}.
+     *
+     * <p>Rule: SRS 3.2.5, UC-07; BR-03 (the threshold); A-30.
+     *
+     * <p>Reference: Grassi, P. A., Garcia, M. E. &amp; Fenton, J. L. (2017). NIST SP 800-63B,
+     * <i>Digital Identity Guidelines</i>, section 5.2.2 (limit consecutive failed attempts on a single
+     * account).
+     * <p>Reference: OWASP Application Security Verification Standard 4.0.3, requirement V2.2.1
+     * (anti-automation controls against credential guessing).
+     *
+     * @return {@code true} when this was the attempt that reached the threshold
+     */
+    public boolean recordFailedPasswordChange() {
+        this.failedPasswordChangeCount++;
+        if (failedPasswordChangeCount < MAX_CONSECUTIVE_FAILED_LOGINS) {
+            return false;
+        }
+        this.failedPasswordChangeCount = 0;
+        return true;
     }
 
     /**

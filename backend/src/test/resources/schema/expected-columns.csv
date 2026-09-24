@@ -393,6 +393,7 @@ user_account,created_at,timestamp with time zone,,,NO
 user_account,email,character varying,,,NO
 user_account,email_verified_at,timestamp with time zone,,,YES
 user_account,failed_login_count,integer,32,0,NO
+user_account,failed_password_change_count,integer,32,0,NO
 user_account,last_login_at,timestamp with time zone,,,YES
 user_account,locked_until,timestamp with time zone,,,YES
 user_account,password_hash,character varying,,,NO

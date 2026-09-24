@@ -23,12 +23,12 @@ import lombok.Getter;
  * twice would only create a second way to load a row that is already identified.
  *
  * <p>The two default figures are {@link BigDecimal}, never a floating-point type, because they are
- * money and a percentage (ADR-008). They are also nullable and unvalidated here: BR-30 bounds the
- * capital and the risk percentage of a <em>plan</em>, and it is the plan that must refuse a figure
- * outside them. A profile default is a starting point for a form, and a profile that has never
- * said anything is simply empty.
+ * money and a percentage (ADR-008). They are also nullable and unvalidated here. SRS 3.2.5 holds the
+ * Profile tab to BR-30's ranges, and the request record that tab sends is where they are refused;
+ * the plan refuses them again on its own inputs, because a plan is not obliged to start from the
+ * profile. A profile that has never said anything is simply empty.
  *
- * <p>Rule: BR-30 (why the ranges are not checked here); ADR-008; TECHNICAL_DESIGN sections 5.4 and
+ * <p>Rule: BR-30 (checked by the request, not here); ADR-008; TECHNICAL_DESIGN sections 5.4 and
  * 6; SRS UC-06.
  *
  * <p>Reference: Vernon, V. (2013). <i>Implementing Domain-Driven Design</i>. Addison-Wesley, ch. 10

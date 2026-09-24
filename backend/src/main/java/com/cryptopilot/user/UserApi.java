@@ -85,6 +85,16 @@ public interface UserApi {
     Optional<LoginCredentials> findCredentialsByEmail(String email);
 
     /**
+     * The key and stored hash of an account that is already signed in, or empty when no such account
+     * exists (SRS 3.2.5, UC-07).
+     *
+     * <p>The Security tab asks for the current password before it sets a new one, and the caller is
+     * identified by the key in the access token rather than by an address. The comparison is the
+     * caller's for the same reason it is at sign-in: the encoder is configured in {@code auth}.
+     */
+    Optional<LoginCredentials> findCredentialsById(UUID userId);
+
+    /**
      * Applies BR-03, BR-06 and BR-01 to one sign-in attempt whose password has already been checked,
      * and records what happened (SRS 3.2.3, UC-03).
      *
@@ -153,4 +163,27 @@ public interface UserApi {
      *     when no such account exists
      */
     void changePassword(UUID userId, String newPasswordHash);
+
+    /**
+     * Counts one wrong current password offered on the Security tab and answers whether it reached the
+     * threshold (SRS 3.2.5; A-30). The sign-in counter of BR-03 is not touched.
+     *
+     * <p>Joins the caller's transaction. The caller is refusing the request, so it opens one of its own
+     * that the refusal does not roll back, and ends the account's sessions inside the same one when this
+     * answers {@code true}: the count going back to zero and the sessions ending commit together or not
+     * at all.
+     *
+     * @return {@code true} when this attempt reached the threshold; the count has started again
+     */
+    boolean recordFailedPasswordChange(UUID userId);
+
+    /**
+     * Stops push notifications to the installation holding this messaging token, when it belongs to
+     * this account; does nothing otherwise (SRS 3.2.5: the device token is deactivated on logout).
+     *
+     * <p>{@code auth} calls it while ending a session, because a sign-out is where it learns whose
+     * session it was and the device rows are this module's table. It never reports what it found: a
+     * sign-out answers the same whatever the token it was given turned out to be, and so does this.
+     */
+    void deactivateDevice(UUID userId, String fcmToken);
 }

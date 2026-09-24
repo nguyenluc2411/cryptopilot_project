@@ -154,6 +154,7 @@ public class AuthService {
     private final UserTokenRepository tokens;
     private final SecureTokenFactory tokenFactory;
     private final FamilyRevoker familyRevoker;
+    private final LiveSessions liveSessions;
     private final AccessTokenIssuer accessTokens;
     private final TokenProperties tokenProperties;
     private final PasswordEncoder passwordEncoder;
@@ -180,6 +181,7 @@ public class AuthService {
             UserTokenRepository tokens,
             SecureTokenFactory tokenFactory,
             FamilyRevoker familyRevoker,
+            LiveSessions liveSessions,
             AccessTokenIssuer accessTokens,
             TokenProperties tokenProperties,
             PasswordEncoder passwordEncoder,
@@ -189,6 +191,7 @@ public class AuthService {
         this.tokens = tokens;
         this.tokenFactory = tokenFactory;
         this.familyRevoker = familyRevoker;
+        this.liveSessions = liveSessions;
         this.accessTokens = accessTokens;
         this.tokenProperties = tokenProperties;
         this.passwordEncoder = passwordEncoder;
@@ -349,7 +352,7 @@ public class AuthService {
                 .orElseThrow(() -> sessionExpired("no refresh token matches the presented value"));
 
         if (token.getUsedAt() != null) {
-            int revoked = familyRevoker.revoke(token.getTokenFamilyId(), now);
+            int revoked = familyRevoker.revoke(token.getUserId(), token.getTokenFamilyId(), now);
             log.warn(
                     "Refresh token reuse detected for account {}: revoked {} tokens of family {}",
                     token.getUserId(),
@@ -376,23 +379,30 @@ public class AuthService {
      * from this sign-in can open a new session. Logging out of one device therefore ends that device's
      * session and no other, because each sign-in starts a family of its own.
      *
-     * <p><strong>Access tokens are not revoked, and cannot be.</strong> An access token is verified by
-     * its signature and its expiry and is never looked up, which is what makes it cheap; the price is
-     * that one already issued keeps working until it expires, at most fifteen minutes after this call.
-     * What logging out guarantees is that no <em>new</em> access token can be obtained. A client that
-     * wants the rest of that window closed discards its access token, which this API cannot do for it.
+     * <p><strong>The access token dies with the session.</strong> It names its session in the
+     * {@code sid} claim, and once the family holds no unused refresh token the resource server refuses
+     * it on the next request rather than at its expiry (D-33, {@link LiveSessions}). Only a token
+     * issued before the claim existed outlives the session, for at most the fifteen minutes it had.
      *
      * <p>Answers the same whether the token was valid, already used, or never existed. A logout that
      * reported "that token was not valid" would be a way to test refresh tokens, and the caller has
      * nothing to do differently either way — the session is over.
+     *
+     * <p>When the mobile application names its messaging token, that installation stops receiving push
+     * notifications in the same transaction (SRS 3.2.5). The account is the one the refresh token
+     * belongs to, never one the request names, so a sign-out can silence only its own account's
+     * device; a token the account does not hold is ignored as silently as an unknown refresh token.
      */
     @Transactional
-    public void logout(String presentedToken) {
+    public void logout(String presentedToken, String fcmToken) {
         Instant now = clock.instant();
         tokens.findByTokenHashAndTokenType(tokenFactory.digestOf(presentedToken), TokenType.REFRESH)
                 .ifPresent(token -> {
-                    int revoked = familyRevoker.revoke(token.getTokenFamilyId(), now);
+                    int revoked = familyRevoker.revoke(token.getUserId(), token.getTokenFamilyId(), now);
                     log.info("Closed a session for account {}: revoked {} tokens", token.getUserId(), revoked);
+                    if (fcmToken != null && !fcmToken.isBlank()) {
+                        users.deactivateDevice(token.getUserId(), fcmToken);
+                    }
                 });
     }
 
@@ -489,6 +499,7 @@ public class AuthService {
         tokens.save(token);
         users.changePassword(token.getUserId(), passwordEncoder.encode(rawPassword));
         int revoked = tokens.invalidateUnused(token.getUserId(), TokenType.REFRESH, now);
+        liveSessions.evictAccountAfterCommit(token.getUserId());
         log.info("Reset the password of account {}: revoked {} sessions", token.getUserId(), revoked);
     }
 
@@ -506,7 +517,7 @@ public class AuthService {
                 account.userId(), tokenFactory.digestOf(refreshToken), refreshExpiresAt, family));
 
         AccessTokenIssuer.IssuedAccessToken access =
-                accessTokens.issueFor(account.userId(), account.role().name());
+                accessTokens.issueFor(account.userId(), account.role().name(), family);
         return new IssuedSession(
                 access.value(), access.expiresAt(), refreshToken, refreshExpiresAt, account.role(), account.userId());
     }

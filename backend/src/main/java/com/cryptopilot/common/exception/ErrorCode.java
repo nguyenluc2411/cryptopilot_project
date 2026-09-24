@@ -138,6 +138,17 @@ public enum ErrorCode {
     DATA_CONFLICT(HttpStatus.CONFLICT, "MSG43"),
 
     /**
+     * The current password offered on the Security tab is wrong (SRS 3.2.5, UC-07). MSG08 is the
+     * message SRS 3.2.5 assigns it.
+     *
+     * <p>A code of its own rather than {@link #INVALID_CREDENTIALS}, because the status must differ:
+     * that one is 401, and a 401 on a request that carried a valid access token tells a client its
+     * session is over, which would send somebody who mistyped their password back to the sign-in
+     * screen. This caller is authenticated; what was wrong was a field of the form, so 400.
+     */
+    CURRENT_PASSWORD_INCORRECT(HttpStatus.BAD_REQUEST, "MSG08"),
+
+    /**
      * The request carried no usable credential, so the caller is not authenticated (SRS 4.2.4).
      *
      * <p>Raised by the filter chain rather than by a use case: a missing, malformed, expired or

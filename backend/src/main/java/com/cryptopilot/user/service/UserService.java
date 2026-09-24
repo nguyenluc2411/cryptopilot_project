@@ -83,6 +83,7 @@ public class UserService implements UserApi {
     private final UserAccountRepository accounts;
     private final UserProfileRepository profiles;
     private final FailedLoginRecorder failedLogins;
+    private final DeviceService devices;
 
     @Override
     @Transactional
@@ -112,6 +113,13 @@ public class UserService implements UserApi {
     @Transactional(readOnly = true)
     public Optional<LoginCredentials> findCredentialsByEmail(String email) {
         return accounts.findByEmailIgnoringCase(email)
+                .map(account -> new LoginCredentials(account.getId(), account.getPasswordHash()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<LoginCredentials> findCredentialsById(UUID userId) {
+        return accounts.findById(userId)
                 .map(account -> new LoginCredentials(account.getId(), account.getPasswordHash()));
     }
 
@@ -171,6 +179,30 @@ public class UserService implements UserApi {
                 accounts.findById(userId).orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
         account.changePassword(newPasswordHash);
         accounts.save(account);
+    }
+
+    /** An account that has vanished counts nothing and reaches no threshold. */
+    @Override
+    @Transactional
+    public boolean recordFailedPasswordChange(UUID userId) {
+        return accounts.findById(userId)
+                .map(account -> {
+                    boolean reached = account.recordFailedPasswordChange();
+                    accounts.save(account);
+                    return reached;
+                })
+                .orElse(false);
+    }
+
+    /**
+     * Delegates to {@link DeviceService}, which owns the device rows; this class is only the module's
+     * published face. It joins the caller's transaction, so the device and the refresh tokens of a
+     * sign-out commit together.
+     */
+    @Override
+    @Transactional
+    public void deactivateDevice(UUID userId, String fcmToken) {
+        devices.deactivateByToken(userId, fcmToken);
     }
 
     /**

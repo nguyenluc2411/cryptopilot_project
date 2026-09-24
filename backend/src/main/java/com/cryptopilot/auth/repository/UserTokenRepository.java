@@ -173,6 +173,45 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
     int revokeFamily(@Param("familyId") UUID familyId, @Param("now") Instant now);
 
     /**
+     * Stops every unused refresh token of an account from working except those of one family, and
+     * answers how many were stopped.
+     *
+     * <p>SRS 3.2.5: a password change from the Security tab revokes all <em>other</em> sessions. The
+     * family kept is the caller's own, named by the access token it presented, so the person who
+     * changed the password stays signed in on the device they did it from and nowhere else.
+     *
+     * <p>An update rather than a load, for the reasons {@link #invalidateUnused} gives.
+     *
+     * <p>Rule: SRS 3.2.5, UC-07.
+     *
+     * @return how many tokens stopped working
+     */
+    @Transactional
+    @Modifying(flushAutomatically = true)
+    @Query("update UserToken t set t.usedAt = :now"
+            + " where t.userId = :userId and t.tokenType = com.cryptopilot.auth.entity.TokenType.REFRESH"
+            + " and t.usedAt is null and t.tokenFamilyId <> :keptFamilyId")
+    int revokeOtherSessions(
+            @Param("userId") UUID userId, @Param("keptFamilyId") UUID keptFamilyId, @Param("now") Instant now);
+
+    /**
+     * How many unused refresh tokens a session still holds — at most one while it is alive, because
+     * rotation retires each token as it issues the next — and zero once it has ended: signed out,
+     * revoked by reuse detection, by a password reset or by a password change.
+     *
+     * <p>This is the question every request with an access token asks through the session cache
+     * ({@code LiveSessions}), so it is a count by the family index and nothing more. The account is
+     * part of the condition as well as the family, so a token whose {@code sid} names somebody else's
+     * session is refused rather than admitted.
+     *
+     * <p>Rule: SRS 3.2.3, 3.2.5; BR-04, BR-06; TECHNICAL_DESIGN 7.15.
+     */
+    @Transactional(readOnly = true)
+    @Query("select count(t) from UserToken t where t.tokenFamilyId = :familyId and t.userId = :userId"
+            + " and t.tokenType = com.cryptopilot.auth.entity.TokenType.REFRESH and t.usedAt is null")
+    int countUnusedInSession(@Param("familyId") UUID familyId, @Param("userId") UUID userId);
+
+    /**
      * Writes a token, inserting it when it is new and updating it otherwise.
      *
      * <p>Not transactional here: consuming a token and verifying the address it belongs to have to

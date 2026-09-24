@@ -40,6 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 class FamilyRevoker {
 
     private final UserTokenRepository tokens;
+    private final LiveSessions liveSessions;
 
     /**
      * Stops every unused token of the family and commits it, whatever the caller does next.
@@ -47,7 +48,9 @@ class FamilyRevoker {
      * @return how many tokens stopped working
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    int revoke(UUID tokenFamilyId, Instant now) {
-        return tokens.revokeFamily(tokenFamilyId, now);
+    int revoke(UUID userId, UUID tokenFamilyId, Instant now) {
+        int revoked = tokens.revokeFamily(tokenFamilyId, now);
+        liveSessions.evictAccountAfterCommit(userId);
+        return revoked;
     }
 }
