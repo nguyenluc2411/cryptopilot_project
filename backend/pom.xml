@@ -277,12 +277,21 @@
 						<configuration>
 							<rules>
 								<rule>
+									<!-- Raised from the 70 % minimum of SRS 4.2.5 to just below where the suite stands
+									     (99 % line, 95 % branch at T-019), so that a change which drops coverage
+									     noticeably fails the build. This is the interim "coverage drop" gate of
+									     T-009 until a gate relative to the previous build exists. -->
 									<element>BUNDLE</element>
 									<limits>
 										<limit>
 											<counter>LINE</counter>
 											<value>COVEREDRATIO</value>
-											<minimum>0.70</minimum>
+											<minimum>0.95</minimum>
+										</limit>
+										<limit>
+											<counter>BRANCH</counter>
+											<value>COVEREDRATIO</value>
+											<minimum>0.90</minimum>
 										</limit>
 									</limits>
 								</rule>

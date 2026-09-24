@@ -10,6 +10,7 @@ import com.cryptopilot.market.client.StubExchange;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.SymbolSyncProperties;
 import com.cryptopilot.market.entity.ExchangeStatus;
+import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.SymbolSyncJob.Outcome;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.service.ExchangeInfoFixtures;
@@ -70,6 +71,8 @@ class SymbolSyncJobTest {
 
     private final List<Boolean> cancelled = new ArrayList<>();
 
+    private final List<Object> published = new ArrayList<>();
+
     private StubExchange exchange;
 
     private BinanceRestClient client;
@@ -99,6 +102,9 @@ class SymbolSyncJobTest {
     void NSF01_aSuccessfulRun_isSynced() {
         assertThat(job(true).run(MarketType.SPOT)).isEqualTo(Outcome.SYNCED);
         assertThat(scheduled).isEmpty();
+        assertThat(published)
+                .as("NSF-02 learns that the statuses are current")
+                .containsExactly(new SymbolsSynchronised(MarketType.SPOT));
     }
 
     /** RATE_LIMITED: the run ends and one run is scheduled at the exchange's Retry-After. */
@@ -184,7 +190,7 @@ class SymbolSyncJobTest {
     /** An unexpected failure is logged and waits for the next run; it does not escape into the scheduler. */
     @Test
     void NSF01_anUnexpectedFailure_waitsForTheNextRun() {
-        SymbolSyncJob broken = new SymbolSyncJob(null, recordingScheduler(), properties(true), clock);
+        SymbolSyncJob broken = new SymbolSyncJob(null, recordingScheduler(), properties(true), clock, published::add);
 
         assertThat(broken.run(MarketType.SPOT)).isEqualTo(Outcome.WAIT_FOR_NEXT_RUN);
     }
@@ -213,7 +219,11 @@ class SymbolSyncJobTest {
     private SymbolSyncJob job(boolean enabled) {
         SymbolSyncProperties properties = properties(enabled);
         return new SymbolSyncJob(
-                new SymbolSyncService(client, writer, properties, clock), recordingScheduler(), properties, clock);
+                new SymbolSyncService(client, writer, properties, clock),
+                recordingScheduler(),
+                properties,
+                clock,
+                published::add);
     }
 
     private static SymbolSyncProperties properties(boolean enabled) {

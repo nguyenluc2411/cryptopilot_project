@@ -3,6 +3,7 @@ package com.cryptopilot.market.job;
 import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.SymbolSyncProperties;
+import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.service.SymbolSyncService;
 import com.cryptopilot.market.service.SyncReport;
 import java.time.Clock;
@@ -14,6 +15,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
@@ -72,6 +74,7 @@ public class SymbolSyncJob {
     private final TaskScheduler scheduler;
     private final SymbolSyncProperties properties;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
     private final Map<MarketType, ScheduledFuture<?>> pendingRetries = new EnumMap<>(MarketType.class);
 
     /**
@@ -81,11 +84,16 @@ public class SymbolSyncJob {
     private final ReentrantLock running = new ReentrantLock();
 
     public SymbolSyncJob(
-            SymbolSyncService sync, TaskScheduler scheduler, SymbolSyncProperties properties, Clock clock) {
+            SymbolSyncService sync,
+            TaskScheduler scheduler,
+            SymbolSyncProperties properties,
+            Clock clock,
+            ApplicationEventPublisher events) {
         this.sync = sync;
         this.scheduler = scheduler;
         this.properties = properties;
         this.clock = clock;
+        this.events = events;
     }
 
     /**
@@ -116,6 +124,7 @@ public class SymbolSyncJob {
         try {
             SyncReport report = sync.sync(market);
             log.info("NSF-01 {} synchronised: {} pairs", market, report.reconciled());
+            events.publishEvent(new SymbolsSynchronised(market));
             return Outcome.SYNCED;
         } catch (BinanceClientException refusal) {
             return onRefusal(market, refusal);

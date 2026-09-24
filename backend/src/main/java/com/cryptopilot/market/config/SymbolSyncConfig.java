@@ -5,8 +5,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * Turns on Spring's task scheduler, which the NSF-01 job schedules itself on, and binds
- * {@code cryptopilot.market.sync}.
+ * Turns on Spring's task scheduler, which the NSF-01 and NSF-02 jobs schedule themselves on, and binds
+ * {@code cryptopilot.market.sync} and {@code cryptopilot.market.backfill}.
  *
  * <p>Plain Spring scheduling, no Quartz and no distributed lock: the backend runs as one instance
  * (TECHNICAL_DESIGN 1.3 — ShedLock only if a second instance is ever added), the same assumption the
@@ -17,5 +17,5 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  */
 @Configuration
 @EnableScheduling
-@EnableConfigurationProperties(SymbolSyncProperties.class)
+@EnableConfigurationProperties({SymbolSyncProperties.class, CandleBackfillProperties.class})
 public class SymbolSyncConfig {}
