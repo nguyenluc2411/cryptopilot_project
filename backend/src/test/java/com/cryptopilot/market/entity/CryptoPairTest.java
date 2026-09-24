@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -94,6 +95,36 @@ class CryptoPairTest {
         assertThatNullPointerException().isThrownBy(() -> pair.applyFilters(MarketType.SPOT, null));
         assertThatNullPointerException().isThrownBy(() -> pair.filters(null));
         assertThatNullPointerException().isThrownBy(() -> pair.isEnabledOn(null));
+    }
+
+    /** Q-15: each market keeps its own normalized status and the exchange's text; a new pair has neither. */
+    @Test
+    void Q15_eachMarket_keepsItsOwnExchangeStatus() {
+        CryptoPair pair = CryptoPair.register(BTC, USDT, "BTCUSDT");
+        assertThat(pair.exchangeStatus(MarketType.SPOT)).isNull();
+        assertThat(pair.getLastSyncedAt()).isNull();
+
+        pair.recordExchangeStatus(MarketType.SPOT, ExchangeStatus.NOT_TRADING, "BREAK");
+        pair.recordExchangeStatus(MarketType.FUTURES, ExchangeStatus.DELISTED, null);
+        pair.markSynced(Instant.parse("2026-09-24T00:05:00Z"));
+
+        assertThat(pair.exchangeStatus(MarketType.SPOT)).isEqualTo(ExchangeStatus.NOT_TRADING);
+        assertThat(pair.exchangeStatusRaw(MarketType.SPOT)).isEqualTo("BREAK");
+        assertThat(pair.exchangeStatus(MarketType.FUTURES)).isEqualTo(ExchangeStatus.DELISTED);
+        assertThat(pair.exchangeStatusRaw(MarketType.FUTURES)).isNull();
+        assertThat(pair.getLastSyncedAt()).isEqualTo(Instant.parse("2026-09-24T00:05:00Z"));
+    }
+
+    @Test
+    void Q15_missingArguments_areRefused() {
+        CryptoPair pair = CryptoPair.register(BTC, USDT, "BTCUSDT");
+
+        assertThatNullPointerException().isThrownBy(() -> pair.recordExchangeStatus(MarketType.SPOT, null, "TRADING"));
+        assertThatNullPointerException()
+                .isThrownBy(() -> pair.recordExchangeStatus(null, ExchangeStatus.TRADING, "TRADING"));
+        assertThatNullPointerException().isThrownBy(() -> pair.exchangeStatus(null));
+        assertThatNullPointerException().isThrownBy(() -> pair.exchangeStatusRaw(null));
+        assertThatNullPointerException().isThrownBy(() -> pair.markSynced(null));
     }
 
     /** A coin arriving from the exchange is named after its symbol until an administrator names it. */

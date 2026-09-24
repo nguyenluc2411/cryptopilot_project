@@ -423,7 +423,14 @@ class BinanceRestClientTest {
             assertThat(exchange.hits(SPOT_KLINES)).isEqualTo(3);
         }
 
-        /** A response slower than the read timeout is a timeout, retried like a 5xx and then UNAVAILABLE. */
+        /**
+         * A response slower than the read timeout is a timeout, retried like a 5xx and then UNAVAILABLE.
+         *
+         * <p>The client gives up on each attempt after 100 ms whether or not the stand-in has started
+         * handling it, and under a loaded build the stand-in can record the third request after the refusal
+         * has already been returned. So the count is awaited for up to five seconds rather than read at once:
+         * it must still reach exactly three, and never four.
+         */
         @Test
         void NSF02_aResponseSlowerThanTheReadTimeout_timesOut() throws Exception {
             client.close();
@@ -434,6 +441,10 @@ class BinanceRestClientTest {
                     () -> client.klines(BinanceVenue.SPOT, "BTCUSDT", MarketInterval.ONE_MINUTE, null, null, 1));
 
             assertThat(slow.kind()).isEqualTo(BinanceClientException.Kind.UNAVAILABLE);
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (exchange.hits(SPOT_KLINES) < 3 && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
             assertThat(exchange.hits(SPOT_KLINES)).isEqualTo(3);
         }
 

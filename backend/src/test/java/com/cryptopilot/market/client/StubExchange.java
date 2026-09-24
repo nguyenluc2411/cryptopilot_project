@@ -26,26 +26,26 @@ import java.util.concurrent.Executors;
  * order; the last one repeats, so "always 500" is one answer and "500, 500, then 200" is three.
  * Every request's path and query is recorded, so a test can assert what was asked and how often.
  */
-final class StubExchange implements AutoCloseable {
+public final class StubExchange implements AutoCloseable {
 
     /** One canned answer. */
-    record Answer(int status, Map<String, String> headers, String body, Duration delay) {
+    public record Answer(int status, Map<String, String> headers, String body, Duration delay) {
 
-        static Answer ok(String body) {
+        public static Answer ok(String body) {
             return new Answer(200, Map.of(), body, Duration.ZERO);
         }
 
-        static Answer status(int status) {
+        public static Answer status(int status) {
             return new Answer(status, Map.of(), "{\"code\":-1,\"msg\":\"stub\"}", Duration.ZERO);
         }
 
-        Answer withHeader(String name, String value) {
+        public Answer withHeader(String name, String value) {
             Map<String, String> all = new HashMap<>(headers);
             all.put(name, value);
             return new Answer(status, Map.copyOf(all), body, delay);
         }
 
-        Answer after(Duration wait) {
+        public Answer after(Duration wait) {
             return new Answer(status, headers, body, wait);
         }
     }
@@ -54,7 +54,7 @@ final class StubExchange implements AutoCloseable {
     private final Map<String, Deque<Answer>> answers = new ConcurrentHashMap<>();
     private final List<URI> requests = new CopyOnWriteArrayList<>();
 
-    StubExchange() throws IOException {
+    public StubExchange() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/", exchange -> {
@@ -83,22 +83,22 @@ final class StubExchange implements AutoCloseable {
     }
 
     /** Queues answers for a path; the last one repeats once the others are used. */
-    StubExchange on(String path, Answer... inOrder) {
+    public StubExchange on(String path, Answer... inOrder) {
         answers.put(path, new ArrayDeque<>(List.of(inOrder)));
         return this;
     }
 
-    URI baseUrl() {
+    public URI baseUrl() {
         return URI.create("http://127.0.0.1:" + server.getAddress().getPort());
     }
 
     /** How many requests reached this path. */
-    long hits(String path) {
+    public long hits(String path) {
         return requests.stream().filter(uri -> uri.getPath().equals(path)).count();
     }
 
     /** Every request, in the order received. */
-    List<URI> requests() {
+    public List<URI> requests() {
         return new ArrayList<>(requests);
     }
 

@@ -10,6 +10,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -106,6 +107,28 @@ public class CryptoPair extends BaseEntity {
     @Column(name = "display_order", nullable = false)
     private int displayOrder;
 
+    /** The exchange's Spot trading status, normalized, or {@code null} if never listed on Spot (Q-15). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "spot_exchange_status", length = 32)
+    private ExchangeStatus spotExchangeStatus;
+
+    /** Binance's Spot status text exactly as sent, or {@code null}; stored, never interpreted. */
+    @Column(name = "spot_exchange_status_raw")
+    private String spotExchangeStatusRaw;
+
+    /** The exchange's futures trading status, normalized, or {@code null} if never listed on futures. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "futures_exchange_status", length = 32)
+    private ExchangeStatus futuresExchangeStatus;
+
+    /** Binance's futures status text exactly as sent, or {@code null}; stored, never interpreted. */
+    @Column(name = "futures_exchange_status_raw")
+    private String futuresExchangeStatusRaw;
+
+    /** When NSF-01 last reached this pair, or {@code null} before the first synchronisation. */
+    @Column(name = "last_synced_at")
+    private Instant lastSyncedAt;
+
     /** For JPA only. */
     protected CryptoPair() {}
 
@@ -178,6 +201,48 @@ public class CryptoPair extends BaseEntity {
                     case FUTURES -> futuresEnabled;
                 };
         return pairStatus == PairStatus.ACTIVE && marketSwitch;
+    }
+
+    /** The exchange's status of one market, or {@code null} when the pair has never been listed on it. */
+    public ExchangeStatus exchangeStatus(MarketType market) {
+        return switch (Objects.requireNonNull(market, "market must not be null")) {
+            case SPOT -> spotExchangeStatus;
+            case FUTURES -> futuresExchangeStatus;
+        };
+    }
+
+    /** Binance's own status text of one market, or {@code null}. */
+    public String exchangeStatusRaw(MarketType market) {
+        return switch (Objects.requireNonNull(market, "market must not be null")) {
+            case SPOT -> spotExchangeStatusRaw;
+            case FUTURES -> futuresExchangeStatusRaw;
+        };
+    }
+
+    /**
+     * Records what the exchange says about one market: the normalized status and Binance's own text beside
+     * it, or {@code null} text when the market no longer appears at all (DELISTED). The other market is left
+     * as it was.
+     *
+     * <p>Rule: NSF-01; Q-15.
+     */
+    public void recordExchangeStatus(MarketType market, ExchangeStatus status, String rawStatus) {
+        Objects.requireNonNull(status, "status must not be null");
+        switch (Objects.requireNonNull(market, "market must not be null")) {
+            case SPOT -> {
+                this.spotExchangeStatus = status;
+                this.spotExchangeStatusRaw = rawStatus;
+            }
+            case FUTURES -> {
+                this.futuresExchangeStatus = status;
+                this.futuresExchangeStatusRaw = rawStatus;
+            }
+        }
+    }
+
+    /** Records that NSF-01 reached this pair at this instant, from the injected clock. */
+    public void markSynced(Instant at) {
+        this.lastSyncedAt = Objects.requireNonNull(at, "at must not be null");
     }
 
     private static Optional<PairFilters> filtersOf(BigDecimal tick, BigDecimal step, BigDecimal minNotional) {

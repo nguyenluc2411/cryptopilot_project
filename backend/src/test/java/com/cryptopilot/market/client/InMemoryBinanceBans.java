@@ -10,7 +10,7 @@ import java.util.Optional;
  * matters in production, and its survival across a restart, is proved against PostgreSQL in
  * {@code BinanceBanPersistenceTest}.
  */
-final class InMemoryBinanceBans implements BinanceBanStore {
+public final class InMemoryBinanceBans implements BinanceBanStore {
 
     private final Map<BinanceVenue, Instant> bans = new EnumMap<>(BinanceVenue.class);
 

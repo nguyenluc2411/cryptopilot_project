@@ -73,15 +73,20 @@ coin,version,bigint,64,0,NO
 crypto_pair,base_coin_id,uuid,,,NO
 crypto_pair,created_at,timestamp with time zone,,,NO
 crypto_pair,display_order,integer,32,0,NO
+crypto_pair,futures_exchange_status,character varying,,,YES
+crypto_pair,futures_exchange_status_raw,text,,,YES
 crypto_pair,futures_min_notional,numeric,28,8,YES
 crypto_pair,futures_step_size,numeric,28,12,YES
 crypto_pair,futures_tick_size,numeric,28,12,YES
 crypto_pair,is_futures_enabled,boolean,,,NO
 crypto_pair,is_spot_enabled,boolean,,,NO
+crypto_pair,last_synced_at,timestamp with time zone,,,YES
 crypto_pair,max_leverage,integer,32,0,YES
 crypto_pair,pair_id,uuid,,,NO
 crypto_pair,pair_status,character varying,,,NO
 crypto_pair,quote_coin_id,uuid,,,NO
+crypto_pair,spot_exchange_status,character varying,,,YES
+crypto_pair,spot_exchange_status_raw,text,,,YES
 crypto_pair,spot_min_notional,numeric,28,8,YES
 crypto_pair,spot_step_size,numeric,28,12,YES
 crypto_pair,spot_tick_size,numeric,28,12,YES
