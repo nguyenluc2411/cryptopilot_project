@@ -97,6 +97,30 @@ cryptopilot:
       page-size:
         spot: 1000
         futures: 500
+    stream:
+      # NSF-03: the public market streams of the enabled pairs. Off here, on in the dev and prod profiles, so a
+      # test context never connects to the exchange. Hosts verified 2026-09-24 (TECHNICAL_DESIGN 7.1.1): futures
+      # klines and mark prices are served under the /market route only; the unrouted host sends them no more.
+      enabled: false
+      spot-url: wss://stream.binance.com:9443
+      futures-url: wss://fstream.binance.com/market
+      # TECHNICAL_DESIGN 7.1 step 1; the exchange allows 1024 per connection.
+      max-streams-per-connection: 100
+      connect-timeout: 10s
+      # NSF-03: exponential back-off from 1 s up to 60 s, each wait shortened at random by up to 20 %.
+      reconnect:
+        initial: 1s
+        max: 60s
+        jitter-percent: 20
+      # Renewed before the exchange ends a connection at 24 hours.
+      renew-after: 23h
+      # Every connection carries a once-a-second ticker or mark price; a minute of silence is a dead connection.
+      idle-timeout: 60s
+      refresh-interval: 5m
+      snapshot-interval: 60s
+      snapshot-max-age: 2m
+      partitions: 4
+      queue-capacity: 10000
 
 server:
   port: 8080

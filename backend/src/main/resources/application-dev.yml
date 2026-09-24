@@ -40,3 +40,6 @@ cryptopilot:
       # NSF-02 runs in this profile: after each symbol synchronisation and on the hourly schedule of
       # application.yml, within half of each venue's weight budget.
       enabled: true
+    stream:
+      # NSF-03 runs in this profile: the streams of the pairs an administrator enabled (BR-07).
+      enabled: true
