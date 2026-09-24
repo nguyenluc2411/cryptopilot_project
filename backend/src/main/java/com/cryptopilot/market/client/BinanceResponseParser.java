@@ -1,6 +1,7 @@
 package com.cryptopilot.market.client;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +24,8 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>The string-only rule is for decimals and nothing else. The fields the documentation sends as JSON
  * numbers are read as numbers and must be integral: the kline open and close times and trade count
  * (array positions 0, 6 and 8), {@code nextFundingTime} and {@code time} of the premium index,
- * {@code fundingTime}, {@code time} of open interest and {@code timestamp} of the long/short ratio. Numeric
+ * {@code fundingTime}, {@code time} of open interest, {@code timestamp} of the open interest history and
+ * of the long/short ratio, and {@code fundingIntervalHours} of the funding settings. Numeric
  * fields the system does not read — {@code serverTime}, {@code baseAssetPrecision}, {@code maxNumOrders}
  * and the like — are not looked at at all, whatever their type (TECHNICAL_DESIGN 7.1.1 cites the pages).
  *
@@ -130,6 +132,40 @@ final class BinanceResponseParser {
                         instant(ratio.required("timestamp"))));
             }
             return ratios;
+        });
+    }
+
+    /** {@code openInterestHist}: one entry per period. */
+    List<OpenInterestStatistic> openInterestStatistics(String body) {
+        return parse(BinanceVenue.USD_M_FUTURES, body, root -> {
+            List<OpenInterestStatistic> statistics = new ArrayList<>();
+            for (JsonNode statistic : array(root)) {
+                statistics.add(new OpenInterestStatistic(
+                        statistic.required("symbol").stringValue(),
+                        decimal(statistic.required("sumOpenInterest")),
+                        decimal(statistic.required("sumOpenInterestValue")),
+                        instant(statistic.required("timestamp"))));
+            }
+            return statistics;
+        });
+    }
+
+    /** {@code fundingInfo}: one entry per adjusted symbol; the interval is a whole number of hours, above zero. */
+    List<FundingInfo> fundingInfo(String body) {
+        return parse(BinanceVenue.USD_M_FUTURES, body, root -> {
+            List<FundingInfo> settings = new ArrayList<>();
+            for (JsonNode info : array(root)) {
+                long hours = count(info.required("fundingIntervalHours"));
+                if (hours < 1) {
+                    throw new IllegalArgumentException("fundingIntervalHours must be positive, found " + hours);
+                }
+                settings.add(new FundingInfo(
+                        info.required("symbol").stringValue(),
+                        Duration.ofHours(hours),
+                        decimal(info.required("adjustedFundingRateCap")),
+                        decimal(info.required("adjustedFundingRateFloor"))));
+            }
+            return settings;
         });
     }
 
