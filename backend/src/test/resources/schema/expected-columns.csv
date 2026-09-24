@@ -59,6 +59,10 @@ audit_log,old_value,jsonb,,,YES
 audit_log,updated_at,timestamp with time zone,,,NO
 audit_log,user_id,uuid,,,YES
 audit_log,version,bigint,64,0,NO
+binance_ban,banned_until,timestamp with time zone,,,NO
+binance_ban,market_type,character varying,,,NO
+binance_ban,reason,character varying,,,NO
+binance_ban,updated_at,timestamp with time zone,,,NO
 coin,coin_id,uuid,,,NO
 coin,coin_name,character varying,,,NO
 coin,created_at,timestamp with time zone,,,NO
