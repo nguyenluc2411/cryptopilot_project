@@ -1,0 +1,79 @@
+# Continuous integration of the backend: every pull request into develop or main, and every push to
+# develop, builds the backend and runs the whole suite exactly as the team does locally —
+#
+#     ./mvnw -B verify
+#
+# which compiles with warnings as errors, checks formatting (Spotless), runs the unit, architecture
+# and integration tests (Testcontainers on the runner's own Docker) and enforces the JaCoCo coverage
+# gate. A red build means the change does not integrate; the job name "build-and-test" is stable so it
+# can be made a required status check on develop and main.
+#
+# Deliberately not here yet (the rest of T-009): building and pushing the container image, deploying,
+# and a gate that compares coverage with the previous build rather than with a fixed minimum. None of
+# it needs a secret today, and none is configured.
+#
+# Tests tagged "live" call the real exchange and stay excluded, as in every local build: the Surefire
+# configuration excludes them, and a CI runner may be geo-blocked (HTTP 451) anyway.
+#
+# Reference: Humble, J. & Farley, D. (2010). Continuous Delivery. Addison-Wesley, ch. 3 ("Continuous
+# Integration": build and test every change on a clean machine, keep the build green, and treat a
+# broken build as the first thing to fix).
+
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A newer push to the same pull request makes the older run pointless; a run on develop is kept,
+  # because it records whether develop itself is green.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-test:
+    name: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 (Temurin) with the Maven cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+
+      - name: Build and run the full suite with the coverage gate
+        run: ./mvnw -B -ntp verify
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: backend/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload the coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: backend/target/site/jacoco/
+          if-no-files-found: ignore
+          retention-days: 14

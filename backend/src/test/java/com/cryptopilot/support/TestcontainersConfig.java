@@ -29,10 +29,23 @@ public class TestcontainersConfig {
     private static final DockerImageName TIMESCALE_IMAGE =
             DockerImageName.parse("timescale/timescaledb:2.30.1-pg16").asCompatibleSubstituteFor("postgres");
 
+    /**
+     * Connections the test database accepts, set explicitly rather than left to the image.
+     *
+     * <p>The TimescaleDB image tunes {@code max_connections} to the machine it starts on, so the limit
+     * differs between a developer's laptop and a CI runner. The suite keeps one Spring context per
+     * distinct test configuration alive at a time, each with its own connection pool of ten, and ten
+     * such contexts reached the runner's limit ("too many clients already") while passing locally. A
+     * fixed limit makes the suite behave the same everywhere; it is a test-only setting and changes
+     * nothing about the application or any other environment.
+     */
+    private static final int MAX_CONNECTIONS = 300;
+
     private static final PostgreSQLContainer TIMESCALE = new PostgreSQLContainer(TIMESCALE_IMAGE)
             .withDatabaseName("cryptopilot")
             .withUsername("cryptopilot")
-            .withPassword("cryptopilot");
+            .withPassword("cryptopilot")
+            .withCommand("postgres", "-c", "max_connections=" + MAX_CONNECTIONS);
 
     @Bean
     @ServiceConnection

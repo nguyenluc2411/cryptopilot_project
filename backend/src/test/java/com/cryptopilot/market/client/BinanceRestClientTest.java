@@ -424,12 +424,13 @@ class BinanceRestClientTest {
         }
 
         /**
-         * A response slower than the read timeout is a timeout, retried like a 5xx and then UNAVAILABLE.
+         * A response slower than the read timeout is a timeout, retried like a 5xx and then UNAVAILABLE —
+         * after exactly three attempts, one plus the two configured retries.
          *
-         * <p>The client gives up on each attempt after 100 ms whether or not the stand-in has started
-         * handling it, and under a loaded build the stand-in can record the third request after the refusal
-         * has already been returned. So the count is awaited for up to five seconds rather than read at once:
-         * it must still reach exactly three, and never four.
+         * <p>The attempts are counted by the client, which reports them in the refusal, not by the stand-in
+         * server: an attempt the client abandons before the server has even read it never reaches the
+         * server's handler, which happened on a two-CPU CI runner. The server can therefore only confirm
+         * that it never saw more than three.
          */
         @Test
         void NSF02_aResponseSlowerThanTheReadTimeout_timesOut() throws Exception {
@@ -441,11 +442,8 @@ class BinanceRestClientTest {
                     () -> client.klines(BinanceVenue.SPOT, "BTCUSDT", MarketInterval.ONE_MINUTE, null, null, 1));
 
             assertThat(slow.kind()).isEqualTo(BinanceClientException.Kind.UNAVAILABLE);
-            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-            while (exchange.hits(SPOT_KLINES) < 3 && System.nanoTime() < deadline) {
-                Thread.sleep(20);
-            }
-            assertThat(exchange.hits(SPOT_KLINES)).isEqualTo(3);
+            assertThat(slow.getMessage()).endsWith("failed after 3 attempts");
+            assertThat(exchange.hits(SPOT_KLINES)).isBetween(1L, 3L);
         }
 
         /** A host that refuses the connection is UNAVAILABLE, not an unhandled error. */
