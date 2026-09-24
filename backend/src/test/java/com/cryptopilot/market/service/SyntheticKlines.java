@@ -11,10 +11,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * An exchange's klines endpoint in miniature: answers {@code symbol}, {@code interval}, {@code startTime} and
- * {@code limit} as Binance does — candles aligned to the interval from the epoch, oldest first, starting at the
- * first candle at or after {@code startTime} (or at the listing, if later), at most {@code limit}, and ending
- * with the candle that is still forming at {@code now}.
+ * An exchange's klines endpoint in miniature: answers {@code symbol}, {@code interval}, {@code startTime},
+ * {@code endTime} and {@code limit} as Binance does — candles aligned to the interval from the epoch, oldest
+ * first, starting at the first candle at or after {@code startTime} (or at the listing, if later), at most
+ * {@code limit}, and ending with the last one opened at or before {@code endTime} when given, else with the
+ * candle that is still forming at {@code now}.
  *
  * <p>Every candle carries the same prices: an open of {@code 0.00000001} and a close of
  * {@code 123456.12345678}, so a test can check that the smallest and the longest decimals the exchange sends
@@ -67,12 +68,15 @@ public final class SyntheticKlines {
         long step = interval.toMillis();
         long start = Long.parseLong(query.get("startTime"));
         int limit = Integer.parseInt(query.get("limit"));
+        long end = query.containsKey("endTime")
+                ? Math.min(Long.parseLong(query.get("endTime")), now.toEpochMilli())
+                : now.toEpochMilli();
         long listed = listedAt.getOrDefault(symbol, Instant.EPOCH).toEpochMilli();
         long first = Math.max(ceilTo(start, step), ceilTo(listed, step));
 
         StringBuilder body = new StringBuilder("[");
         int count = 0;
-        for (long open = first; open <= now.toEpochMilli() && count < limit; open += step, count++) {
+        for (long open = first; open <= end && count < limit; open += step, count++) {
             if (count > 0) {
                 body.append(',');
             }

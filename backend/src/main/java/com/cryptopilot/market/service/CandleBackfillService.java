@@ -9,15 +9,20 @@ import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.entity.ExchangeStatus;
+import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
+import com.cryptopilot.market.repository.StoredGap;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -119,7 +124,15 @@ public class CandleBackfillService {
             for (MarketInterval timeframe : TIMEFRAMES) {
                 String series = market + " " + pair.getSymbol() + " " + timeframe.code();
                 try {
-                    SeriesResult result = backfillSeries(pair, market, venue, timeframe, now);
+                    SeriesResult result = backfillSeries(
+                            pair.getId(),
+                            pair.getSymbol(),
+                            market,
+                            venue,
+                            timeframe,
+                            resumePoint(pair, market, timeframe, now),
+                            null,
+                            now);
                     inserted += result.inserted();
                     if (result.pausedUntil().isPresent()) {
                         log.info(
@@ -147,11 +160,123 @@ public class CandleBackfillService {
         return new BackfillRun(market, completed, inserted, Optional.empty(), defects);
     }
 
-    private SeriesResult backfillSeries(
-            CryptoPair pair, MarketType market, BinanceVenue venue, MarketInterval timeframe, Instant now) {
-        Instant from = candles.latestOpenTime(pair.getId(), market, timeframe.code())
+    /**
+     * Fills one gap NSF-03 detected: the candles opened from {@code gap.from()} to {@code gap.to()}, and no later
+     * one — the stream is storing those. Paged, paced and written exactly as a series is, so a gap costs what its
+     * candles cost and is safe to repeat.
+     *
+     * <p>A gap the exchange rejects, or answers with a body that cannot be read, is a defect: logged and dropped,
+     * because asking again would get the same answer. Every other refusal propagates to the job, which keeps the
+     * gap and continues it at {@code retryAt} or with the next run.
+     *
+     * <p>Rule: NSF-02, NSF-03 (any detected gap triggers NSF-02); BR-08; TECHNICAL_DESIGN 7.1 steps 4 and 5; A-33.
+     *
+     * @throws BinanceClientException for a refusal other than {@code REJECTED} and {@code MALFORMED}
+     */
+    public GapFill fillGap(GapDetected gap) {
+        Instant now = clock.instant();
+        MarketInterval timeframe = MarketInterval.fromCode(gap.timeframe())
+                .orElseThrow(() -> new IllegalArgumentException("not a stored timeframe: " + gap.timeframe()));
+        try {
+            SeriesResult result = backfillSeries(
+                    gap.pairId(),
+                    gap.symbol(),
+                    gap.market(),
+                    venueOf(gap.market()),
+                    timeframe,
+                    gap.from(),
+                    gap.to(),
+                    now);
+            if (result.pausedUntil().isEmpty()) {
+                return new GapFill(result.inserted(), Optional.empty(), Optional.empty());
+            }
+            GapDetected rest = result.lastStored()
+                    .map(last -> gap.startingAt(last.plus(timeframe.duration())))
+                    .orElse(gap);
+            return new GapFill(result.inserted(), Optional.of(rest), result.pausedUntil());
+        } catch (BinanceClientException refusal) {
+            if (refusal.kind() != BinanceClientException.Kind.REJECTED
+                    && refusal.kind() != BinanceClientException.Kind.MALFORMED) {
+                throw refusal;
+            }
+            log.error(
+                    "NSF-02 gap {} {} {} {} -> {} dropped as a defect: {} — {}",
+                    gap.market(),
+                    gap.symbol(),
+                    gap.timeframe(),
+                    gap.from(),
+                    gap.to(),
+                    refusal.kind(),
+                    refusal.getMessage(),
+                    refusal);
+            return new GapFill(0, Optional.empty(), Optional.empty());
+        }
+    }
+
+    /**
+     * The holes inside the stored series of the last {@code gapScanWindow}, as gaps for {@link #fillGap}, for the
+     * pairs this backfill targets (D-42). Run at start-up, it finds again whatever a gap reported before a restart
+     * left unfilled — the queue of reported gaps lives in memory — and anything else missing inside a series.
+     *
+     * <p>A hole the exchange itself has (a maintenance window) is found at every start-up and costs one request
+     * that returns nothing.
+     *
+     * <p>Rule: NSF-02, NSF-03 (gap detection); A-33.
+     */
+    public List<GapDetected> storedGaps() {
+        Instant since = clock.instant().minus(properties.gapScanWindow());
+        Map<UUID, CryptoPair> targets = new HashMap<>();
+        for (CryptoPair pair : pairs.findAllForSync()) {
+            targets.put(pair.getId(), pair);
+        }
+        List<GapDetected> gaps = new ArrayList<>();
+        for (StoredGap hole : candles.gapsSince(since)) {
+            CryptoPair pair = targets.get(hole.pairId());
+            if (pair == null || pair.exchangeStatus(hole.market()) != ExchangeStatus.TRADING) {
+                continue;
+            }
+            Duration length =
+                    MarketInterval.fromCode(hole.timeframe()).orElseThrow().duration();
+            gaps.add(new GapDetected(
+                    pair.getId(),
+                    pair.getSymbol(),
+                    hole.market(),
+                    hole.timeframe(),
+                    hole.lastBefore().plus(length),
+                    hole.firstAfter().minus(length)));
+        }
+        return gaps;
+    }
+
+    /**
+     * Where a series with no stored candle starts: the configured depth of its timeframe back from now (D-41).
+     * NSF-03 uses it when the stream reaches a series before the backfill has.
+     */
+    public Instant seriesStart(MarketInterval timeframe, Instant now) {
+        return now.minus(depthOf(timeframe));
+    }
+
+    private Instant resumePoint(CryptoPair pair, MarketType market, MarketInterval timeframe, Instant now) {
+        return candles.latestOpenTime(pair.getId(), market, timeframe.code())
                 .map(latest -> latest.plusMillis(1))
-                .orElseGet(() -> now.minus(depthOf(timeframe)));
+                .orElseGet(() -> seriesStart(timeframe, now));
+    }
+
+    /**
+     * Fetches and stores the closed candles of one series opened from {@code from}, up to {@code lastOpen}
+     * inclusive when given, else up to now.
+     */
+    private SeriesResult backfillSeries(
+            UUID pairId,
+            String symbol,
+            MarketType market,
+            BinanceVenue venue,
+            MarketInterval timeframe,
+            Instant from,
+            Instant lastOpen,
+            Instant now) {
+        Instant endTime =
+                lastOpen == null ? null : lastOpen.plus(timeframe.duration()).minusMillis(1);
         int pageSize = market == MarketType.SPOT
                 ? properties.pageSize().spot()
                 : properties.pageSize().futures();
@@ -161,22 +286,24 @@ public class CandleBackfillService {
         while (true) {
             Optional<Instant> pause = budgetPause(venue);
             if (pause.isPresent()) {
-                logProgress(market, pair, timeframe, from, lastStored, inserted);
-                return new SeriesResult(inserted, pause);
+                logProgress(market, symbol, timeframe, from, lastStored, inserted);
+                return new SeriesResult(inserted, pause, Optional.ofNullable(lastStored));
             }
-            List<Kline> page = exchange.klines(venue, pair.getSymbol(), timeframe, cursor, null, pageSize);
-            List<Kline> closed =
-                    page.stream().filter(kline -> kline.isClosedAt(now)).toList();
+            List<Kline> page = exchange.klines(venue, symbol, timeframe, cursor, endTime, pageSize);
+            List<Kline> closed = page.stream()
+                    .filter(kline -> kline.isClosedAt(now))
+                    .filter(kline -> lastOpen == null || !kline.openTime().isAfter(lastOpen))
+                    .toList();
             Integer written =
-                    transaction.execute(status -> candles.insertAll(pair.getId(), market, timeframe.code(), closed));
+                    transaction.execute(status -> candles.insertAll(pairId, market, timeframe.code(), closed));
             inserted += written == null ? 0 : written;
             if (!closed.isEmpty()) {
                 lastStored = closed.getLast().openTime();
                 cursor = lastStored.plusMillis(1);
             }
             if (page.size() < pageSize || closed.size() < page.size()) {
-                logProgress(market, pair, timeframe, from, lastStored, inserted);
-                return new SeriesResult(inserted, Optional.empty());
+                logProgress(market, symbol, timeframe, from, lastStored, inserted);
+                return new SeriesResult(inserted, Optional.empty(), Optional.ofNullable(lastStored));
             }
         }
     }
@@ -201,11 +328,11 @@ public class CandleBackfillService {
     }
 
     private static void logProgress(
-            MarketType market, CryptoPair pair, MarketInterval timeframe, Instant from, Instant to, int inserted) {
+            MarketType market, String symbol, MarketInterval timeframe, Instant from, Instant to, int inserted) {
         log.info(
                 "NSF-02 {} {} {}: {} -> {}, {} rows inserted",
                 market,
-                pair.getSymbol(),
+                symbol,
                 timeframe.code(),
                 from,
                 to == null ? "(nothing new)" : to,
@@ -216,6 +343,6 @@ public class CandleBackfillService {
         return market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
     }
 
-    /** One series: how many candles were new, and when to continue if the budget stopped it. */
-    private record SeriesResult(int inserted, Optional<Instant> pausedUntil) {}
+    /** One series: how many candles were new, when to continue if the budget stopped it, the last stored. */
+    private record SeriesResult(int inserted, Optional<Instant> pausedUntil, Optional<Instant> lastStored) {}
 }

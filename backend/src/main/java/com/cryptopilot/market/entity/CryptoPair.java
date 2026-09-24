@@ -203,6 +203,20 @@ public class CryptoPair extends BaseEntity {
         return pairStatus == PairStatus.ACTIVE && marketSwitch;
     }
 
+    /**
+     * Makes this pair available on one market: the pair becomes ACTIVE and the market's switch is turned on;
+     * the other market is left as it was. Enabling a market already enabled changes nothing.
+     *
+     * <p>Rule: BR-07 (only enabled pairs and markets are shown and collected); Q-16.
+     */
+    public void enable(MarketType market) {
+        switch (Objects.requireNonNull(market, "market must not be null")) {
+            case SPOT -> this.spotEnabled = true;
+            case FUTURES -> this.futuresEnabled = true;
+        }
+        this.pairStatus = PairStatus.ACTIVE;
+    }
+
     /** The exchange's status of one market, or {@code null} when the pair has never been listed on it. */
     public ExchangeStatus exchangeStatus(MarketType market) {
         return switch (Objects.requireNonNull(market, "market must not be null")) {

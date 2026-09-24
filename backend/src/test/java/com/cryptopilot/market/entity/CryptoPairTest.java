@@ -47,6 +47,21 @@ class CryptoPairTest {
     }
 
     /** One symbol, two markets: each keeps its own filters, and applying one leaves the other untouched. */
+    /** BR-07: enabling a market activates the pair on it and leaves the other market off; repeating changes nothing. */
+    @Test
+    void BR07_enablingAMarket_activatesThePairOnThatMarketOnly() {
+        CryptoPair pair = CryptoPair.register(BTC, USDT, "BTCUSDT");
+
+        pair.enable(MarketType.FUTURES);
+        pair.enable(MarketType.FUTURES);
+
+        assertThat(pair.isEnabledOn(MarketType.FUTURES)).isTrue();
+        assertThat(pair.isEnabledOn(MarketType.SPOT)).isFalse();
+        pair.enable(MarketType.SPOT);
+        assertThat(pair.isEnabledOn(MarketType.SPOT)).isTrue();
+        assertThatNullPointerException().isThrownBy(() -> pair.enable(null));
+    }
+
     @Test
     void NSF01_eachMarket_keepsItsOwnFilters() {
         CryptoPair pair = CryptoPair.register(BTC, USDT, "BTCUSDT");

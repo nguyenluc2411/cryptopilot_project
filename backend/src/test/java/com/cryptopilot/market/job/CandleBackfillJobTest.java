@@ -9,6 +9,8 @@ import com.cryptopilot.market.client.InMemoryBinanceBans;
 import com.cryptopilot.market.client.StubExchange;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.CandleBackfillProperties;
+import com.cryptopilot.market.event.GapDetected;
+import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.CandleBackfillJob.Outcome;
 import com.cryptopilot.market.repository.CryptoPairRepository;
@@ -19,6 +21,7 @@ import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.lang.reflect.Proxy;
 import java.net.URI;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -192,6 +195,130 @@ class CandleBackfillJobTest {
         assertThat(scheduled).isEmpty();
     }
 
+    /** NSF-03 reports a gap: it is queued, its market is run now, and the gap is filled before the catch-up. */
+    @Test
+    void NSF03_aDetectedGap_isQueuedAndFilledByTheNextRun() {
+        CandleBackfillJob job = job(true);
+        GapDetected gap = gap(Instant.parse("2026-09-23T00:00:00Z"), Instant.parse("2026-09-23T05:00:00Z"));
+
+        job.onGapDetected(gap);
+
+        assertThat(job.queuedGaps(MarketType.SPOT)).containsExactly(gap);
+        assertThat(scheduled).singleElement().satisfies(task -> assertThat(task.at())
+                .isEqualTo(NOW));
+        assertThat(job.run(MarketType.SPOT)).isEqualTo(Outcome.COMPLETED);
+        assertThat(job.queuedGaps(MarketType.SPOT)).isEmpty();
+        assertThat(sql.sql("select count(*) from ohlcv where timeframe = '1h' and open_time between ? and ?")
+                        .params(
+                                Timestamp.from(Instant.parse("2026-09-23T00:00:00Z")),
+                                Timestamp.from(Instant.parse("2026-09-23T05:00:00Z")))
+                        .query(Long.class)
+                        .single())
+                .isEqualTo(6);
+        assertThat(exchange.requests().getFirst().getQuery()).contains("endTime=");
+    }
+
+    /** Stopped by the weight share inside a gap: what is left stays queued, and the run continues next minute. */
+    @Test
+    void NSF03_aGapStoppedAtTheWeightShare_staysQueuedShortened() {
+        exchangeKlines.usedWeight(3000);
+        CandleBackfillJob job = job(true);
+        job.onGapDetected(gap(Instant.parse("2026-09-01T00:00:00Z"), Instant.parse("2026-09-23T00:00:00Z")));
+
+        assertThat(job.run(MarketType.SPOT)).isEqualTo(Outcome.CONTINUATION_SCHEDULED);
+
+        assertThat(job.queuedGaps(MarketType.SPOT)).singleElement().satisfies(rest -> {
+            assertThat(rest.from())
+                    .isEqualTo(Instant.parse("2026-09-01T00:00:00Z").plus(Duration.ofHours(50)));
+            assertThat(rest.to()).isEqualTo(Instant.parse("2026-09-23T00:00:00Z"));
+        });
+        assertThat(scheduled).extracting(Scheduled::at).last().isEqualTo(Instant.parse("2026-09-24T10:08:00Z"));
+    }
+
+    /** Refused by the exchange: the gap is kept whole and the run continues at retryAt. */
+    @Test
+    void NSF03_aRefusedGap_isKept() {
+        exchange.on(KLINES, Answer.status(429).withHeader("Retry-After", "30"));
+        CandleBackfillJob job = job(true);
+        GapDetected gap = gap(Instant.parse("2026-09-23T00:00:00Z"), Instant.parse("2026-09-23T05:00:00Z"));
+        job.onGapDetected(gap);
+
+        assertThat(job.run(MarketType.SPOT)).isEqualTo(Outcome.CONTINUATION_SCHEDULED);
+
+        assertThat(job.queuedGaps(MarketType.SPOT)).containsExactly(gap);
+        assertThat(scheduled).extracting(Scheduled::at).last().isEqualTo(NOW.plusSeconds(30));
+    }
+
+    /**
+     * A-33: a hole left inside a series before a restart — its gap was only in the memory of the process that
+     * stopped — is found by the next process's start-up scan and filled.
+     */
+    @Test
+    void A33_aHoleLeftBeforeARestart_isFoundAndFilledAfterIt() {
+        job(true).run(MarketType.SPOT);
+        long complete = storedRows();
+        sql.sql("delete from ohlcv where timeframe = '1h' and open_time between ? and ?")
+                .params(
+                        Timestamp.from(Instant.parse("2026-09-23T03:00:00Z")),
+                        Timestamp.from(Instant.parse("2026-09-23T07:00:00Z")))
+                .update();
+        CandleBackfillJob restarted = job(true);
+
+        restarted.start();
+
+        assertThat(restarted.queuedGaps(MarketType.SPOT)).singleElement().satisfies(gap -> {
+            assertThat(gap.timeframe()).isEqualTo("1h");
+            assertThat(gap.from()).isEqualTo(Instant.parse("2026-09-23T03:00:00Z"));
+            assertThat(gap.to()).isEqualTo(Instant.parse("2026-09-23T07:00:00Z"));
+        });
+        assertThat(scheduled).extracting(Scheduled::at).contains(NOW);
+        assertThat(restarted.run(MarketType.SPOT)).isEqualTo(Outcome.COMPLETED);
+        assertThat(storedRows()).isEqualTo(complete);
+        assertThat(restarted.queuedGaps(MarketType.SPOT)).isEmpty();
+    }
+
+    /** A-33: after a clean shutdown nothing is queued; a failing scan is contained. */
+    @Test
+    void A33_aCleanStart_queuesNothing_andAFailingScanIsContained() {
+        job(true).run(MarketType.SPOT);
+
+        assertThat(job(true).scanForStoredGaps()).isZero();
+        assertThat(new CandleBackfillJob(null, recordingScheduler(), properties(true), clock).scanForStoredGaps())
+                .isZero();
+    }
+
+    /** A connection back after a loss: that market is brought up to date at once. */
+    @Test
+    void NSF03_aReconnectedStream_triggersThatMarketsBackfill() {
+        job(true).onStreamReconnected(new MarketStreamReconnected(MarketType.FUTURES));
+
+        assertThat(scheduled).singleElement().satisfies(task -> assertThat(task.at())
+                .isEqualTo(NOW));
+    }
+
+    /** Disabled, the stream's signals are ignored. */
+    @Test
+    void NSF03_aDisabledJob_ignoresGapsAndReconnections() {
+        CandleBackfillJob job = job(false);
+
+        job.onGapDetected(gap(NOW, NOW));
+        job.onStreamReconnected(new MarketStreamReconnected(MarketType.SPOT));
+
+        assertThat(scheduled).isEmpty();
+        assertThat(job.queuedGaps(MarketType.SPOT)).isEmpty();
+    }
+
+    private long storedRows() {
+        return sql.sql("select count(*) from ohlcv").query(Long.class).single();
+    }
+
+    private GapDetected gap(Instant from, Instant to) {
+        UUID pair = sql.sql("select pair_id from crypto_pair where symbol = 'BTCUSDT'")
+                .query(UUID.class)
+                .single();
+        return new GapDetected(pair, "BTCUSDT", MarketType.SPOT, "1h", from, to);
+    }
+
     private CandleBackfillJob job(boolean enabled) {
         CandleBackfillProperties properties = properties(enabled);
         return new CandleBackfillJob(
@@ -209,7 +336,8 @@ class CandleBackfillJobTest {
                 50,
                 new CandleBackfillProperties.Depth(
                         Duration.ofDays(1), Duration.ofDays(2), Duration.ofDays(5), Duration.ofDays(10)),
-                new CandleBackfillProperties.PageSize(50, 20));
+                new CandleBackfillProperties.PageSize(50, 20),
+                Duration.ofDays(7));
     }
 
     private record Scheduled(Runnable task, Instant at, Trigger trigger) {}

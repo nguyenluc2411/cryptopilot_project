@@ -3,13 +3,20 @@ package com.cryptopilot.market.job;
 import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.CandleBackfillProperties;
+import com.cryptopilot.market.event.GapDetected;
+import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.service.BackfillRun;
 import com.cryptopilot.market.service.CandleBackfillService;
+import com.cryptopilot.market.service.GapFill;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
@@ -25,6 +32,16 @@ import org.springframework.stereotype.Component;
  * run at start-up works from statuses the exchange has just confirmed — and then hourly, one minute past the
  * hour, when only the candles that closed since need fetching.
  *
+ * <h2>Triggered by the stream (NSF-03)</h2>
+ *
+ * <ul>
+ *   <li>{@link GapDetected} — the gap is queued for its market and a run is started now. A run fills the queued
+ *       gaps first, then brings every series up to date. A gap the weight share or a refusal interrupts stays
+ *       queued, shortened to what is left.
+ *   <li>{@link MarketStreamReconnected} — a run of that market is started now, so the candles that closed while
+ *       the connection was down are stored within minutes (SRS 4.2: within 10 minutes of reconnection).
+ * </ul>
+ *
  * <h2>Outcomes</h2>
  *
  * <ul>
@@ -38,7 +55,11 @@ import org.springframework.stereotype.Component;
  * <p>One continuation is pending per market at most; a newer one replaces it. Continuing is always a task
  * handed to the {@link TaskScheduler}; the thread is never held. One instance, no distributed lock (D-39).
  *
- * <p>Rule: NSF-02; TECHNICAL_DESIGN 7.1.2 (the caller contract) and 10; D-41, D-42.
+ * <p>Queued gaps live in memory. One lost with a restart is not lost for good: at start-up the stored series of
+ * the recent window ({@code gapScanWindow}, 7 days) are scanned for holes, and each is queued again; a hole behind
+ * the latest candle is also reported by the stream's first closed candle of the series.
+ *
+ * <p>Rule: NSF-02, NSF-03; TECHNICAL_DESIGN 7.1.2 (the caller contract), 7.1 step 4, and 10; D-41, D-42; A-33.
  */
 @Component
 public class CandleBackfillJob {
@@ -63,6 +84,7 @@ public class CandleBackfillJob {
     private final CandleBackfillProperties properties;
     private final Clock clock;
     private final Map<MarketType, ScheduledFuture<?>> pending = new EnumMap<>(MarketType.class);
+    private final Map<MarketType, Deque<GapDetected>> gaps = new EnumMap<>(MarketType.class);
     private final ReentrantLock running = new ReentrantLock();
 
     public CandleBackfillJob(
@@ -81,10 +103,29 @@ public class CandleBackfillJob {
             return;
         }
         scheduler.schedule(this::runAll, new CronTrigger(properties.cron(), properties.zone()));
+        scanForStoredGaps();
         log.info(
                 "NSF-02 scheduled on '{}' ({}), and after each symbol synchronisation",
                 properties.cron(),
                 properties.zone());
+    }
+
+    /**
+     * Queues the holes found inside the stored series of the recent window and runs each affected market now, so
+     * a gap reported before a restart — the queue lives in memory — is found again and filled (A-33).
+     *
+     * @return how many gaps were queued
+     */
+    public int scanForStoredGaps() {
+        try {
+            List<GapDetected> found = backfill.storedGaps();
+            found.forEach(this::onGapDetected);
+            log.info("NSF-02 start-up scan: {} holes inside the stored series queued", found.size());
+            return found.size();
+        } catch (RuntimeException failure) {
+            log.error("NSF-02 start-up gap scan failed; the stream and the hourly runs still find new gaps", failure);
+            return 0;
+        }
     }
 
     /** A market's statuses are current: backfill it now, on the scheduler rather than on the sync's thread. */
@@ -92,6 +133,33 @@ public class CandleBackfillJob {
     public void onSymbolsSynchronised(SymbolsSynchronised event) {
         if (properties.enabled()) {
             continueAt(event.market(), clock.instant());
+        }
+    }
+
+    /** The stream found candles missing: queue the gap and run its market now. */
+    @EventListener
+    public void onGapDetected(GapDetected gap) {
+        if (!properties.enabled()) {
+            return;
+        }
+        synchronized (gaps) {
+            gaps.computeIfAbsent(gap.market(), market -> new ArrayDeque<>()).addLast(gap);
+        }
+        continueAt(gap.market(), clock.instant());
+    }
+
+    /** A stream connection came back after a loss: bring the market up to date now. */
+    @EventListener
+    public void onStreamReconnected(MarketStreamReconnected event) {
+        if (properties.enabled()) {
+            continueAt(event.market(), clock.instant());
+        }
+    }
+
+    /** The gaps waiting to be filled for a market, oldest first. */
+    public List<GapDetected> queuedGaps(MarketType market) {
+        synchronized (gaps) {
+            return List.copyOf(gaps.getOrDefault(market, new ArrayDeque<>()));
         }
     }
 
@@ -106,6 +174,11 @@ public class CandleBackfillJob {
     public Outcome run(MarketType market) {
         running.lock();
         try {
+            Optional<Instant> gapPause = fillGaps(market);
+            if (gapPause.isPresent()) {
+                continueAt(market, gapPause.get());
+                return Outcome.CONTINUATION_SCHEDULED;
+            }
             BackfillRun result = backfill.backfill(market);
             if (result.paused()) {
                 continueAt(market, result.pausedUntil().orElseThrow());
@@ -135,6 +208,36 @@ public class CandleBackfillJob {
             return Outcome.WAIT_FOR_NEXT_RUN;
         } finally {
             running.unlock();
+        }
+    }
+
+    /** Fills the market's queued gaps in order; the instant to continue at when the weight share stopped one. */
+    private Optional<Instant> fillGaps(MarketType market) {
+        while (true) {
+            GapDetected gap;
+            synchronized (gaps) {
+                gap = gaps.getOrDefault(market, new ArrayDeque<>()).peekFirst();
+            }
+            if (gap == null) {
+                return Optional.empty();
+            }
+            GapFill fill = backfill.fillGap(gap);
+            synchronized (gaps) {
+                Deque<GapDetected> queue = gaps.get(market);
+                queue.removeFirst();
+                fill.remaining().ifPresent(queue::addFirst);
+            }
+            if (fill.pausedUntil().isPresent()) {
+                return fill.pausedUntil();
+            }
+            log.info(
+                    "NSF-02 {} gap {} {} {} -> {} filled, {} rows",
+                    market,
+                    gap.symbol(),
+                    gap.timeframe(),
+                    gap.from(),
+                    gap.to(),
+                    fill.rowsInserted());
         }
     }
 
