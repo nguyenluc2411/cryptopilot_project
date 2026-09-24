@@ -151,7 +151,9 @@ class BinanceStreamShardTest {
     @Test
     void NSF03_aCloseFromTheExchange_isFollowedByANewConnection() {
         shard = started();
-        server.awaitConnection(1).closeWith(1001);
+        Connection first = server.awaitConnection(1);
+        await(shard::isConnected, "the first connection");
+        first.closeWith(1001);
 
         server.awaitConnection(2);
         await(() -> openings.size() == 2, "the second opening");

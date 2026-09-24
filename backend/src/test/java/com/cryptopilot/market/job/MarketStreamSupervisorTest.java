@@ -206,6 +206,7 @@ class MarketStreamSupervisorTest {
         supervisor = supervisor(true, 100);
         supervisor.start();
         Connection first = server.awaitConnection(1);
+        await(() -> supervisor.shards(MarketType.SPOT).getFirst().isConnected(), "the first connection");
         first.send(StreamFrames.ticker("BTCUSDT", AT));
         await(() -> latest.ticker(btc).isPresent(), "a price");
 
