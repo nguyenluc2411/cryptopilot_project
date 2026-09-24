@@ -14,11 +14,18 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * <h2>Decimals never pass through a double</h2>
  *
- * <p>The exchange sends every price, quantity and rate as a JSON <em>string</em>, precisely so that a
- * client can keep every digit. Each one is read with {@code stringValue()} — which refuses a node that
- * is not a string — and handed to {@code new BigDecimal(String)}. A JSON number in a decimal field is a
- * malformed response, not something to coerce: coercing it would read it through a {@code double} and
- * lose exactly what the string was there to keep (ADR-008).
+ * <p>The exchange sends every price, quantity, rate, ratio and open interest as a JSON <em>string</em>,
+ * precisely so that a client can keep every digit. Each one is read with {@code stringValue()} — which
+ * refuses a node that is not a string — and handed to {@code new BigDecimal(String)}. A JSON number in a
+ * decimal field is a malformed response, not something to coerce: coercing it would read it through a
+ * {@code double} and lose exactly what the string was there to keep (ADR-008).
+ *
+ * <p>The string-only rule is for decimals and nothing else. The fields the documentation sends as JSON
+ * numbers are read as numbers and must be integral: the kline open and close times and trade count
+ * (array positions 0, 6 and 8), {@code nextFundingTime} and {@code time} of the premium index,
+ * {@code fundingTime}, {@code time} of open interest and {@code timestamp} of the long/short ratio. Numeric
+ * fields the system does not read — {@code serverTime}, {@code baseAssetPrecision}, {@code maxNumOrders}
+ * and the like — are not looked at at all, whatever their type (TECHNICAL_DESIGN 7.1.1 cites the pages).
  *
  * <h2>A response is read whole or refused</h2>
  *
@@ -64,7 +71,7 @@ final class BinanceResponseParser {
                         decimal(row.required(4)),
                         decimal(row.required(5)),
                         decimal(row.required(7)),
-                        row.required(8).longValue()));
+                        count(row.required(8))));
             }
             return klines;
         });
@@ -191,6 +198,14 @@ final class BinanceResponseParser {
 
     private static BigDecimal optionalDecimal(JsonNode node) {
         return node == null || node.isNull() || node.stringValue().isEmpty() ? null : decimal(node);
+    }
+
+    /** A count the exchange sends as a JSON integer, such as the number of trades of a candle. */
+    private static long count(JsonNode integer) {
+        if (!integer.isIntegralNumber()) {
+            throw new IllegalArgumentException("expected an integer, found " + integer);
+        }
+        return integer.longValue();
     }
 
     private static Instant instant(JsonNode epochMillis) {

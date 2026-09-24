@@ -587,6 +587,93 @@ class BinanceRestClientTest {
                     .isEqualTo(BinanceClientException.Kind.MALFORMED);
         }
 
+        /**
+         * The string-only rule is for decimals only. The fields the documentation sends as numbers — times,
+         * the trade count — are accepted as numbers, and numeric fields the client does not read (precisions,
+         * order limits, booleans) are ignored whatever their type.
+         */
+        @Test
+        void TD54_documentedNumericFields_areAcceptedAsNumbers() {
+            exchange.on(SPOT_EXCHANGE_INFO, Answer.ok("""
+                {"serverTime":1727172030000,"symbols":[{"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC",
+                  "baseAssetPrecision":8,"quoteAsset":"USDT","quotePrecision":8,"isSpotTradingAllowed":true,
+                  "filters":[{"filterType":"PRICE_FILTER","tickSize":"0.01"},
+                             {"filterType":"MAX_NUM_ORDERS","maxNumOrders":200}]}]}"""));
+            exchange.on(SPOT_KLINES, Answer.ok(KLINES_BODY));
+
+            assertThat(client.spotExchangeInfo().get(0).tickSize()).isEqualTo(new BigDecimal("0.01"));
+            assertThat(client.klines(BinanceVenue.SPOT, "BTCUSDT", MarketInterval.ONE_MINUTE, null, null, 1)
+                            .get(0)
+                            .tradeCount())
+                    .isEqualTo(1234);
+        }
+
+        /** A documented integer that is not one — a trade count with a fraction, or sent as text — is MALFORMED. */
+        @ParameterizedTest(name = "trade count {0}")
+        @ValueSource(strings = {"12.5", "\"1234\""})
+        void TD54_aTradeCountThatIsNotAnInteger_isMalformed(String tradeCount) {
+            exchange.on(
+                    SPOT_KLINES,
+                    Answer.ok("[[1727172000000,\"1\",\"1\",\"1\",\"1\",\"1\",1727172059999,\"1\"," + tradeCount
+                            + ",\"0\",\"0\",\"0\"]]"));
+
+            assertThat(refusalOf(() -> client.klines(
+                                    BinanceVenue.SPOT, "BTCUSDT", MarketInterval.ONE_MINUTE, null, null, 1))
+                            .kind())
+                    .isEqualTo(BinanceClientException.Kind.MALFORMED);
+        }
+
+        /**
+         * MALFORMED is not an outage: however many unreadable bodies arrive, the circuit never opens,
+         * because the exchange answered each time. Only 5xx, timeouts and refused connections count.
+         */
+        @Test
+        void TD712_malformedBodies_neverOpenTheCircuit() {
+            exchange.on(SPOT_EXCHANGE_INFO, Answer.ok("not json"));
+
+            for (int call = 0; call < 5; call++) {
+                assertThat(refusalOf(() -> client.spotExchangeInfo()).kind())
+                        .isEqualTo(BinanceClientException.Kind.MALFORMED);
+            }
+
+            assertThat(exchange.hits(SPOT_EXCHANGE_INFO))
+                    .as("every call reached the exchange")
+                    .isEqualTo(5);
+        }
+
+        /**
+         * An answered request — even a malformed or rejected one — proves the host is up, so it ends a run of
+         * failures: failure, malformed, failure is two runs of one, and the circuit (threshold two) stays shut.
+         */
+        @Test
+        void TD712_anAnsweredRequest_endsARunOfFailures() {
+            exchange.on(
+                    SPOT_KLINES,
+                    Answer.status(500),
+                    Answer.status(500),
+                    Answer.status(500),
+                    Answer.ok("not json"),
+                    Answer.status(500),
+                    Answer.status(500),
+                    Answer.status(500),
+                    Answer.ok(KLINES_BODY));
+
+            for (BinanceClientException.Kind expected : new BinanceClientException.Kind[] {
+                BinanceClientException.Kind.UNAVAILABLE,
+                BinanceClientException.Kind.MALFORMED,
+                BinanceClientException.Kind.UNAVAILABLE
+            }) {
+                assertThat(refusalOf(() -> client.klines(
+                                        BinanceVenue.SPOT, "BTCUSDT", MarketInterval.ONE_MINUTE, null, null, 1))
+                                .kind())
+                        .isEqualTo(expected);
+            }
+
+            assertThat(client.klines(BinanceVenue.SPOT, "BTCUSDT", MarketInterval.ONE_MINUTE, null, null, 1))
+                    .as("not CIRCUIT_OPEN")
+                    .hasSize(1);
+        }
+
         /** Arguments the exchange would refuse are refused before a request is made. */
         @Test
         void TD712_invalidArguments_areRefusedBeforeAnyRequest() {
