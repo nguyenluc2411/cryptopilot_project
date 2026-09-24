@@ -17,7 +17,10 @@ import org.slf4j.LoggerFactory;
  *       minute. At the configured share of the budget the gate closes until the next minute begins, so
  *       the client stops before the exchange has to say 429 (TECHNICAL_DESIGN 7.1 step 5).
  *   <li><b>A 429 or a 418.</b> The exchange's own {@code Retry-After} decides how long. A 418 is a ban
- *       for having ignored earlier 429s, so it is logged at ERROR: it needs a person, not a retry.
+ *       for having ignored earlier 429s, so it is logged at ERROR: it needs a person, not a retry. The ban
+ *       is also written to the {@link BinanceBanStore} before the refusal is returned, and read back the
+ *       first time the gate is used after a start, so a restart does not forget it and call again — the
+ *       repeat that makes the next ban longer. A 429 stays in memory: it lasts seconds.
  *   <li><b>The circuit breaker.</b> A run of calls that failed on the exchange's side — 5xx, timeouts,
  *       refused connections, each after its retries — opens the gate for a fixed time; then one call
  *       is let through, and its outcome closes the breaker or opens it again.
@@ -42,7 +45,9 @@ final class BinanceRequestGate {
     private final int failureThreshold;
     private final Duration openDuration;
     private final Clock clock;
+    private final BinanceBanStore bans;
 
+    private boolean recordedBanLoaded;
     private Instant closedUntil = Instant.MIN;
     private BinanceClientException.Kind closedFor;
     private int consecutiveFailures;
@@ -54,12 +59,14 @@ final class BinanceRequestGate {
             int weightPausePercent,
             int failureThreshold,
             Duration openDuration,
-            Clock clock) {
+            Clock clock,
+            BinanceBanStore bans) {
         this.venue = venue;
         this.weightPauseThreshold = Math.max(1, requestWeightPerMinute * weightPausePercent / 100);
         this.failureThreshold = failureThreshold;
         this.openDuration = openDuration;
         this.clock = clock;
+        this.bans = bans;
     }
 
     /**
@@ -67,6 +74,7 @@ final class BinanceRequestGate {
      * breaker's open time has passed, exactly one call is let through until its outcome is known.
      */
     synchronized void admit() {
+        loadRecordedBanOnce();
         Instant now = clock.instant();
         if (now.isBefore(closedUntil)) {
             throw refusal(closedFor, "closed until " + closedUntil, closedUntil);
@@ -101,12 +109,41 @@ final class BinanceRequestGate {
         return until;
     }
 
-    /** A 418: this IP is banned. Logged at ERROR, the alert level, because it needs a person. */
-    synchronized Instant banned(Duration retryAfter) {
+    /**
+     * A 418: this IP is banned. Logged at ERROR, the alert level, because it needs a person, and written
+     * to the store so that a restart does not forget it. A store that cannot be written does not stop the
+     * refusal: the ban still holds in memory, and the failure is logged beside the alert.
+     */
+    synchronized Instant banned(Duration retryAfter, String reason) {
         Instant until = clock.instant().plus(retryAfter);
         log.error("ALERT {} answered 418: this IP is banned until {}; every call is stopped until then", venue, until);
         closeUntil(until, BinanceClientException.Kind.BANNED);
+        try {
+            bans.recordBan(venue, until, reason);
+        } catch (RuntimeException notRecorded) {
+            log.error(
+                    "ALERT {} ban until {} could not be recorded and will not survive a restart",
+                    venue,
+                    until,
+                    notRecorded);
+        }
         return until;
+    }
+
+    /**
+     * Reads the ban recorded before this process started, once. A ban that has already ended is ignored.
+     * A store that cannot be read fails the call and is asked again next time, rather than letting the
+     * first call after a restart go out blind.
+     */
+    private void loadRecordedBanOnce() {
+        if (recordedBanLoaded) {
+            return;
+        }
+        bans.bannedUntil(venue).filter(until -> until.isAfter(clock.instant())).ifPresent(until -> {
+            log.warn("{} is still banned until {} from before this start; no call until then", venue, until);
+            closeUntil(until, BinanceClientException.Kind.BANNED);
+        });
+        recordedBanLoaded = true;
     }
 
     /** A call that got an answer from the exchange: the breaker closes and the failure run ends. */

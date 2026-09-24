@@ -42,6 +42,8 @@ class BinanceRestClientTest {
 
     private final MutableTestClock clock = new MutableTestClock(NOW);
 
+    private final InMemoryBinanceBans bans = new InMemoryBinanceBans();
+
     private StubExchange exchange;
 
     private BinanceRestClient client;
@@ -629,7 +631,8 @@ class BinanceRestClientTest {
                                 2, Duration.ofMillis(1), 1.0, Duration.ofMillis(1), Duration.ZERO),
                         new BinanceClientProperties.CircuitBreaker(2, Duration.ofSeconds(30))),
                 clock,
-                JsonMapper.builder().build());
+                JsonMapper.builder().build(),
+                bans);
     }
 
     private static BinanceClientException refusalOf(Runnable call) {

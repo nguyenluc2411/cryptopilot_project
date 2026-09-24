@@ -7,6 +7,7 @@ alert,condition_operator,ck_alert_condition_operator,CROSS_ABOVE|CROSS_BELOW|GRE
 alert,market_type,ck_alert_market_type,SPOT|FUTURES
 alert,timeframe,ck_alert_timeframe,15m|1h|4h|1d
 alert,trigger_mode,ck_alert_trigger_mode,ONCE|ONCE_PER_BAR|EVERY_TIME
+binance_ban,market_type,ck_binance_ban_market_type,SPOT|FUTURES
 crypto_pair,pair_status,ck_crypto_pair_status,ACTIVE|INACTIVE
 engagement,action_type,ck_engagement_action_type,LIKE|SAVE
 forum_comment,comment_status,ck_forum_comment_status,PUBLISHED|HIDDEN|DELETED

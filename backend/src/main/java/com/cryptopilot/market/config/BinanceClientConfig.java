@@ -1,5 +1,6 @@
 package com.cryptopilot.market.config;
 
+import com.cryptopilot.market.client.BinanceBanStore;
 import com.cryptopilot.market.client.BinanceClientProperties;
 import com.cryptopilot.market.client.BinanceRestClient;
 import java.time.Clock;
@@ -10,6 +11,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Publishes the one Binance REST client, built from {@code cryptopilot.market.binance}.
+ *
+ * <p>The ban store is the database one ({@code PersistentBinanceBans}), so an IP ban survives a restart.
  *
  * <p>Nothing is called at start-up: the client opens no connection until a job asks it for data, so an
  * application started where the exchange is unreachable still starts, and the failure belongs to the job
@@ -23,7 +26,8 @@ public class BinanceClientConfig {
 
     /** The client, closed with the application context. */
     @Bean(destroyMethod = "close")
-    BinanceRestClient binanceRestClient(BinanceClientProperties properties, Clock clock, JsonMapper json) {
-        return new BinanceRestClient(properties, clock, json);
+    BinanceRestClient binanceRestClient(
+            BinanceClientProperties properties, Clock clock, JsonMapper json, BinanceBanStore bans) {
+        return new BinanceRestClient(properties, clock, json, bans);
     }
 }

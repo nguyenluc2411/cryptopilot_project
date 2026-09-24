@@ -63,15 +63,15 @@ public class BinanceRestClient implements AutoCloseable {
     private final BinanceResponseParser parser;
     private final Duration defaultRetryAfter;
 
-    public BinanceRestClient(BinanceClientProperties properties, Clock clock, JsonMapper json) {
+    public BinanceRestClient(BinanceClientProperties properties, Clock clock, JsonMapper json, BinanceBanStore bans) {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(properties.connectTimeout())
                 .build();
         JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
         requestFactory.setReadTimeout(properties.readTimeout());
 
-        register(BinanceVenue.SPOT, properties.spot(), properties, requestFactory, clock);
-        register(BinanceVenue.USD_M_FUTURES, properties.futures(), properties, requestFactory, clock);
+        register(BinanceVenue.SPOT, properties.spot(), properties, requestFactory, clock, bans);
+        register(BinanceVenue.USD_M_FUTURES, properties.futures(), properties, requestFactory, clock, bans);
 
         BinanceClientProperties.Retry retryProperties = properties.retry();
         this.retry = new RetryTemplate(RetryPolicy.builder()
@@ -222,7 +222,7 @@ public class BinanceRestClient implements AutoCloseable {
                         throw refusal(BinanceClientException.Kind.RATE_LIMITED, venue, path, status, until);
                     }
                     if (status == 418) {
-                        Instant until = gate.banned(retryAfter(response.getHeaders()));
+                        Instant until = gate.banned(retryAfter(response.getHeaders()), "HTTP 418 from " + path);
                         throw refusal(BinanceClientException.Kind.BANNED, venue, path, status, until);
                     }
                     throw refusal(BinanceClientException.Kind.REJECTED, venue, path, status, null);
@@ -234,7 +234,8 @@ public class BinanceRestClient implements AutoCloseable {
             BinanceClientProperties.Venue venueProperties,
             BinanceClientProperties properties,
             JdkClientHttpRequestFactory requestFactory,
-            Clock clock) {
+            Clock clock,
+            BinanceBanStore bans) {
         venues.put(
                 venue,
                 RestClient.builder()
@@ -249,7 +250,8 @@ public class BinanceRestClient implements AutoCloseable {
                         properties.weightPausePercent(),
                         properties.circuitBreaker().failureThreshold(),
                         properties.circuitBreaker().openDuration(),
-                        clock));
+                        clock,
+                        bans));
     }
 
     private static void recordUsedWeight(BinanceRequestGate gate, HttpHeaders headers) {

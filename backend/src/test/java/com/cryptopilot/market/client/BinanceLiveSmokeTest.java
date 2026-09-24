@@ -41,7 +41,8 @@ class BinanceLiveSmokeTest {
                             1, Duration.ofMillis(500), 2.0, Duration.ofSeconds(2), Duration.ZERO),
                     new BinanceClientProperties.CircuitBreaker(5, Duration.ofSeconds(30))),
             Clock.systemUTC(),
-            JsonMapper.builder().build());
+            JsonMapper.builder().build(),
+            new InMemoryBinanceBans());
 
     @AfterEach
     void close() {
