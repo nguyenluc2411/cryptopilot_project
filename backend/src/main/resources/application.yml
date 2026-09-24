@@ -99,6 +99,22 @@ cryptopilot:
         futures: 500
       # A-33: at start-up, holes inside the stored series of the last 7 days are found and filled.
       gap-scan-window: 7d
+    futures-metrics:
+      # NSF-04: every 5 minutes, 90 s after the 5-minute instant, the funding settlements and then the open
+      # interest and long/short account ratio of the pairs NSF-03 streams. Off here, on in the dev and prod
+      # profiles, so a test context never calls the exchange. Limits verified 2026-09-25 (TECHNICAL_DESIGN 7.1.1).
+      enabled: false
+      cron: "30 1/5 * * * *"
+      zone: UTC
+      # BR-10: the exchange keeps the latest month of history; a pair with nothing stored starts this far back.
+      depth: 30d
+      # The exchange's maximum per call.
+      page-size: 500
+      # The history endpoints allow 1000 calls per 5 minutes per IP; a run stops here and the next continues.
+      max-requests-per-run: 400
+      settlement-depth: 30d
+      # An older streamed next funding time is read from premiumIndex instead (BR-11).
+      mark-price-max-age: 2m
     stream:
       # NSF-03: the public market streams of the enabled pairs. Off here, on in the dev and prod profiles, so a
       # test context never connects to the exchange. Hosts verified 2026-09-24 (TECHNICAL_DESIGN 7.1.1): futures
