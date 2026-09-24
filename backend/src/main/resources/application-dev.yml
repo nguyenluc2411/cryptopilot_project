@@ -14,3 +14,9 @@ spring:
 logging:
   level:
     com.cryptopilot: DEBUG
+
+cryptopilot:
+  market:
+    sync:
+      # NSF-01 runs in this profile: at start-up and on the schedule of application.yml.
+      enabled: true

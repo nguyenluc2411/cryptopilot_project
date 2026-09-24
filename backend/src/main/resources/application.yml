@@ -70,6 +70,15 @@ cryptopilot:
       circuit-breaker:
         failure-threshold: 5
         open-duration: 30s
+    sync:
+      # NSF-01: at start-up and daily at 00:05 UTC. Off here and on in the dev and prod profiles, so that a
+      # test context, which runs without a profile, never schedules a call to the real exchange.
+      enabled: false
+      cron: "0 5 0 * * *"
+      zone: UTC
+      # Symbols the synchronisation may create (INACTIVE) if missing. Empty until the demo pair list (Q-05)
+      # is decided; until then only pairs an administrator registered are updated.
+      seed-symbols: []
 
 server:
   port: 8080
