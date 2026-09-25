@@ -1,8 +1,13 @@
 package com.cryptopilot.user.controller;
 
+import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.user.dto.request.RegisterDeviceRequest;
 import com.cryptopilot.user.dto.response.DeviceResponse;
 import com.cryptopilot.user.service.DeviceService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -29,6 +34,8 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>Rule: SRS UC-08, sections 3.2.5 and 4.2.4; message MSG01; TECHNICAL_DESIGN section 8.
  */
+@Tag(name = "Devices", description = "Push notification devices of the signed-in Trader.")
+@SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequestMapping("/api/v1/me/devices")
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -37,6 +44,10 @@ public class DeviceController {
     private final DeviceService devices;
 
     /** Registers this installation for push notifications, or brings its row back. */
+    @Operation(summary = "Register or refresh a device token")
+    @ApiResponse(responseCode = "201", description = "Device registered")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public DeviceResponse register(
@@ -48,6 +59,10 @@ public class DeviceController {
      * Stops push notifications to one of the caller's installations. 204 whether it was active or
      * already inactive; 404 when the key names no device of the caller's.
      */
+    @Operation(summary = "Deactivate a device")
+    @ApiResponse(responseCode = "204", description = "Device deactivated")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such device of this account")
     @DeleteMapping("/{deviceId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deactivate(@AuthenticationPrincipal Jwt caller, @PathVariable UUID deviceId) {

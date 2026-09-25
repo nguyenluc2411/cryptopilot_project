@@ -2,6 +2,7 @@ package com.cryptopilot.market.repository;
 
 import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.Kline;
+import com.cryptopilot.market.model.StoredCandle;
 import com.cryptopilot.market.model.StoredGap;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -45,6 +46,45 @@ public class OhlcvRepository {
 
     private final JdbcClient sql;
     private final JdbcTemplate jdbc;
+
+    /**
+     * The latest stored candles of a series opened in {@code [from, to)}, at most {@code limit}, oldest first (UC-09).
+     * Every stored candle is closed (BR-08), so nothing here is still forming. Newest first in SQL, so the limit keeps
+     * the most recent ones and the primary key is scanned backwards; reversed before it is returned.
+     *
+     * @param from the earliest open time wanted, or {@code null} for no lower bound
+     * @param to the open time the candles must be before
+     */
+    public List<StoredCandle> closedCandles(
+            UUID pairId, MarketType market, String timeframe, Instant from, Instant to, int limit) {
+        List<StoredCandle> newestFirst = sql.sql("""
+                        select open_time, close_time, open_price, high_price, low_price, close_price, base_volume,
+                               quote_volume, trade_count
+                          from ohlcv
+                         where pair_id = ? and market_type = ? and timeframe = ?
+                           and open_time >= ? and open_time < ?
+                         order by open_time desc
+                         limit ?""")
+                .params(
+                        pairId,
+                        market.name(),
+                        timeframe,
+                        Timestamp.from(from == null ? Instant.EPOCH : from),
+                        Timestamp.from(to),
+                        limit)
+                .query((row, index) -> new StoredCandle(
+                        row.getTimestamp("open_time").toInstant(),
+                        row.getTimestamp("close_time").toInstant(),
+                        row.getBigDecimal("open_price"),
+                        row.getBigDecimal("high_price"),
+                        row.getBigDecimal("low_price"),
+                        row.getBigDecimal("close_price"),
+                        row.getBigDecimal("base_volume"),
+                        row.getBigDecimal("quote_volume"),
+                        row.getObject("trade_count", Integer.class)))
+                .list();
+        return newestFirst.reversed();
+    }
 
     /** The open time of the latest stored candle of a series, or empty when the series has none. */
     public Optional<Instant> latestOpenTime(UUID pairId, MarketType market, String timeframe) {

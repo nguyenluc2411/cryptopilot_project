@@ -28,6 +28,9 @@
 		<archunit.version>1.4.2</archunit.version>
 		<!-- Java has no built-in UUID v7 generator; ADR-009 names this one. Not part of the Spring Boot BOM. -->
 		<java-uuid-generator.version>5.2.0</java-uuid-generator.version>
+		<!-- TD 1.3 names springdoc-openapi on the line compatible with Spring Boot 4: 3.x. 3.1.1 is the latest release
+		     (2026-09-25) and is itself built on spring-boot-starter-parent 4.1.0. Not part of the Spring Boot BOM. -->
+		<springdoc-openapi.version>3.1.1</springdoc-openapi.version>
 		<!-- The JUnit tags the default test run leaves out; see the Surefire configuration. -->
 		<surefire.excludedGroups>live</surefire.excludedGroups>
 	</properties>
@@ -124,6 +127,12 @@
 			<groupId>com.fasterxml.uuid</groupId>
 			<artifactId>java-uuid-generator</artifactId>
 			<version>${java-uuid-generator.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>${springdoc-openapi.version}</version>
 		</dependency>
 
 		<dependency>

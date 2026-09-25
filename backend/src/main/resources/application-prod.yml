@@ -40,3 +40,10 @@ cryptopilot:
     futures-metrics:
       # NSF-04 runs in this profile: the futures metrics and funding settlements of the streamed pairs.
       enabled: true
+
+springdoc:
+  # TECHNICAL_DESIGN 8: no API document and no Swagger UI in production.
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
