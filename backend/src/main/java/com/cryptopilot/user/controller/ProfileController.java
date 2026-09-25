@@ -1,10 +1,15 @@
 package com.cryptopilot.user.controller;
 
+import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.MessageResponse;
 import com.cryptopilot.user.dto.request.NotificationPreferencesRequest;
 import com.cryptopilot.user.dto.request.UpdateProfileRequest;
 import com.cryptopilot.user.dto.response.ProfileResponse;
 import com.cryptopilot.user.service.ProfileService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -31,6 +36,8 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Rule: SRS UC-06, UC-08, sections 3.1.3, 3.2.5 and 4.2.4; messages MSG01, MSG14, MSG15;
  * TECHNICAL_DESIGN section 8.
  */
+@Tag(name = "Profile", description = "The Profile and Notifications tabs of SCR-07 (UC-06, UC-08). Trader.")
+@SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequestMapping("/api/v1/me")
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -39,12 +46,19 @@ public class ProfileController {
     private final ProfileService profiles;
 
     /** What the Profile and Notifications tabs show. */
+    @Operation(summary = "Read the profile and notification switches (UC-06)")
+    @ApiResponse(responseCode = "200", description = "The profile")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @GetMapping("/profile")
     public ProfileResponse profile(@AuthenticationPrincipal Jwt caller) {
         return profiles.profileOf(accountOf(caller));
     }
 
     /** Saves the Profile tab: display name and the trading defaults (UC-06). */
+    @Operation(summary = "Save the profile (UC-06)")
+    @ApiResponse(responseCode = "200", description = "MSG14: saved")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @PutMapping("/profile")
     public MessageResponse updateProfile(
             @AuthenticationPrincipal Jwt caller, @Valid @RequestBody UpdateProfileRequest request) {
@@ -53,6 +67,10 @@ public class ProfileController {
     }
 
     /** Saves the Notifications tab: the mail and push switches (UC-08). */
+    @Operation(summary = "Save the notification switches (UC-08)")
+    @ApiResponse(responseCode = "200", description = "MSG14: saved")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @PutMapping("/notification-preferences")
     public MessageResponse updateNotificationPreferences(
             @AuthenticationPrincipal Jwt caller, @Valid @RequestBody NotificationPreferencesRequest request) {

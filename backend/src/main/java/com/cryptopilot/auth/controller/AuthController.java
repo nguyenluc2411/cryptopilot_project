@@ -12,6 +12,9 @@ import com.cryptopilot.auth.dto.response.SessionResponse;
 import com.cryptopilot.auth.model.IssuedSession;
 import com.cryptopilot.auth.service.AuthService;
 import com.cryptopilot.common.web.MessageResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +47,9 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Rule: SRS UC-01, UC-02, UC-03, UC-05, sections 3.2.1, 3.2.2 and 3.2.3; messages MSG05, MSG06;
  * TECHNICAL_DESIGN sections 3.1, 5.3 and 8.
  */
+@Tag(
+        name = "Auth",
+        description = "Registration, verification, sign-in, sessions and password reset (UC-01 to UC-05). Public.")
 @RestController
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -57,6 +63,12 @@ public class AuthController {
      * <p>201, because a request that succeeds has created an account. MSG05 is what the client
      * shows; it names the address, which the client already has.
      */
+    @Operation(summary = "Register a Trader account (UC-01)")
+    @ApiResponse(responseCode = "201", description = "Account created; a verification mail is sent")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01 or MSG03: invalid body, or the password breaks the policy (BR-02)")
+    @ApiResponse(responseCode = "409", description = "MSG04: the address is registered")
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
     public MessageResponse register(@Valid @RequestBody RegisterRequest request) {
@@ -70,6 +82,9 @@ public class AuthController {
      * <p>The token is in the body rather than the path, because a value in a URL is written to
      * every access log between the browser and the server.
      */
+    @Operation(summary = "Verify an address from the mailed link (UC-02)")
+    @ApiResponse(responseCode = "200", description = "Address verified")
+    @ApiResponse(responseCode = "400", description = "MSG01 or MSG07: invalid, used or expired link")
     @PostMapping("/verify-email")
     public MessageResponse verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
         authService.verifyEmail(request.token());
@@ -84,6 +99,9 @@ public class AuthController {
      * addresses, so this one accepts the request and says only that it was accepted — whether a
      * mail follows depends on things the caller is not told.
      */
+    @Operation(summary = "Send the verification link again (UC-02)")
+    @ApiResponse(responseCode = "202", description = "Accepted; the same answer whatever the address holds")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
     @PostMapping("/resend-verification")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public MessageResponse resendVerification(@Valid @RequestBody ResendVerificationRequest request) {
@@ -98,6 +116,12 @@ public class AuthController {
      * location to give. A refusal carries the message SRS 5.3 assigns — MSG08, MSG09, MSG10 or
      * MSG11 — and the status its {@code ErrorCode} names.
      */
+    @Operation(summary = "Sign in and open a session (UC-03)")
+    @ApiResponse(responseCode = "200", description = "Session opened")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(responseCode = "401", description = "MSG08: wrong address or password")
+    @ApiResponse(responseCode = "403", description = "MSG10 or MSG11: account not active or not verified")
+    @ApiResponse(responseCode = "429", description = "MSG09: locked for 15 minutes after 5 failures (BR-03)")
     @PostMapping("/login")
     public SessionResponse login(@Valid @RequestBody LoginRequest request) {
         return sessionResponse(authService.login(request.email(), request.password(), request.rememberMe()));
@@ -111,6 +135,10 @@ public class AuthController {
      * indistinguishable from an attacker replaying a copy, and is answered MSG44 with its whole family
      * revoked.
      */
+    @Operation(summary = "Rotate the refresh token (UC-05)")
+    @ApiResponse(responseCode = "200", description = "New token pair")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(responseCode = "401", description = "MSG44: the refresh token is not a live session")
     @PostMapping("/refresh")
     public SessionResponse refresh(@Valid @RequestBody RefreshRequest request) {
         return sessionResponse(authService.refresh(request.refreshToken()));
@@ -130,6 +158,9 @@ public class AuthController {
      * <p>202 rather than 200, and for the same reason the resend endpoint uses it: what was accepted
      * is the request, and whether anything is mailed depends on facts the caller is not told.
      */
+    @Operation(summary = "Request a password reset link (UC-04)")
+    @ApiResponse(responseCode = "202", description = "Accepted; the same answer whatever the address holds")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
     @PostMapping("/forgot-password")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public MessageResponse forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
@@ -141,12 +172,20 @@ public class AuthController {
      * SCR-06. MSG13 on success, after which SRS 3.2.4 sends the person back to SCR-04 to sign in
      * again - which they have to, because the reset revoked every session (BR-04).
      */
+    @Operation(summary = "Set a new password from the reset link (UC-04)")
+    @ApiResponse(responseCode = "200", description = "Password replaced; sessions revoked (BR-04)")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01, MSG03 or MSG07: invalid body, weak password, or invalid link")
     @PostMapping("/reset-password")
     public MessageResponse resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
         authService.resetPassword(request.token(), request.newPassword());
         return new MessageResponse("MSG13");
     }
 
+    @Operation(summary = "End the session (UC-05)")
+    @ApiResponse(responseCode = "204", description = "Session ended")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void logout(@Valid @RequestBody LogoutRequest request) {

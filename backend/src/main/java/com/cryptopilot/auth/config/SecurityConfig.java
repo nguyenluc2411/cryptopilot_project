@@ -165,6 +165,13 @@ public class SecurityConfig {
     static final String[] PUBLIC_HEALTH_PROBES = {"/actuator/health", "/actuator/health/**"};
 
     /**
+     * The OpenAPI document and Swagger UI of TECHNICAL_DESIGN 8, for reading. Open in every profile at the chain,
+     * because the switch is springdoc's: the {@code prod} profile turns both off, so there they answer 404 — no
+     * handler — rather than exposing anything. The document describes the API; it grants nothing.
+     */
+    static final String[] PUBLIC_API_DOCS = {"/v3/api-docs", "/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**"};
+
+    /**
      * The Security tab of SCR-07, the one screen the matrix grants to both roles: an administrator
      * has a password and must be able to change it.
      *
@@ -219,6 +226,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, PUBLIC_MARKET_DATA)
                         .permitAll()
                         .requestMatchers(PUBLIC_HEALTH_PROBES)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_API_DOCS)
                         .permitAll()
                         .requestMatchers(SHARED_PASSWORD_CHANGE)
                         .hasAnyRole(UserRole.TRADER.name(), UserRole.ADMIN.name())

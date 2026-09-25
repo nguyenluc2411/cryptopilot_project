@@ -147,6 +147,14 @@ cryptopilot:
       partitions: 4
       queue-capacity: 10000
 
+springdoc:
+  # TECHNICAL_DESIGN 8: the OpenAPI document and Swagger UI at their standard paths; off in the prod profile.
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+  packages-to-scan: com.cryptopilot
+
 server:
   port: 8080
 
