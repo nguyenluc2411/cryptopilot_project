@@ -44,6 +44,9 @@ cryptopilot:
     stream:
       # NSF-03 runs in this profile: the streams of the pairs an administrator enabled (BR-07).
       enabled: true
+    futures-metrics:
+      # NSF-04 runs in this profile: the futures metrics and funding settlements of the streamed pairs.
+      enabled: true
     demo:
       # Q-16, dev only: activate the seed symbols above on every market where the exchange trades them, once
       # after the first symbol synchronisation, so NSF-03 has pairs to stream. Never set in prod (BR-07).

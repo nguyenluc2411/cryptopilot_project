@@ -2,6 +2,7 @@ package com.cryptopilot.market.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.support.MutableTestClock;
@@ -243,6 +244,69 @@ class BinanceRestClientTest {
             assertThat(ratio.shortAccount()).isEqualTo(new BigDecimal("0.3558"));
             assertThat(ratio.timestamp()).isEqualTo(Instant.ofEpochMilli(1727171700000L));
             assertThat(exchange.requests().get(0).getQuery()).isEqualTo("symbol=BTCUSDT&period=5m&limit=30");
+        }
+
+        /**
+         * NSF-04 and BR-10: the open interest history, with its value, per period; both ends of the range are
+         * sent, because the exchange answers only its latest entries to a start without an end.
+         */
+        @Test
+        void NSF04_openInterestStatistics_readEachPeriodWithItsValue() {
+            exchange.on("/futures/data/openInterestHist", Answer.ok("""
+                    [{"symbol":"BTCUSDT","sumOpenInterest":"95800.38600000","sumOpenInterestValue":"8080839199.40880000",
+                      "CMCCirculatingSupply":"20088518.00000000","timestamp":1790292300000}]"""));
+
+            OpenInterestStatistic statistic = client.openInterestStatistics(
+                            "BTCUSDT",
+                            MarketInterval.FIVE_MINUTES,
+                            Instant.ofEpochMilli(1790292000000L),
+                            Instant.ofEpochMilli(1790292600000L),
+                            500)
+                    .get(0);
+
+            assertThat(statistic.symbol()).isEqualTo("BTCUSDT");
+            assertThat(statistic.openInterest()).isEqualTo(new BigDecimal("95800.38600000"));
+            assertThat(statistic.openInterestValue()).isEqualTo(new BigDecimal("8080839199.40880000"));
+            assertThat(statistic.timestamp()).isEqualTo(Instant.ofEpochMilli(1790292300000L));
+            assertThat(exchange.requests().get(0).getQuery())
+                    .isEqualTo("symbol=BTCUSDT&period=5m&startTime=1790292000000&endTime=1790292600000&limit=500");
+        }
+
+        /** BR-11: the funding interval of each listed symbol, as the exchange states it in whole hours. */
+        @Test
+        void BR11_fundingInfo_readsTheIntervalOfEachListedSymbol() {
+            exchange.on("/fapi/v1/fundingInfo", Answer.ok("""
+                    [{"symbol":"BTCUSDT","adjustedFundingRateCap":"0.00300","adjustedFundingRateFloor":"-0.00300",
+                      "fundingIntervalHours":8,"disclaimer":true,"updateTime":null},
+                     {"symbol":"LPTUSDT","adjustedFundingRateCap":"0.02000000","adjustedFundingRateFloor":"-0.02000000",
+                      "fundingIntervalHours":4,"disclaimer":false,"updateTime":1752854309429},
+                     {"symbol":"LSKUSDT","adjustedFundingRateCap":"0.02000000","adjustedFundingRateFloor":"-0.02000000",
+                      "fundingIntervalHours":1,"disclaimer":false,"updateTime":1789300860655}]"""));
+
+            List<FundingInfo> settings = client.fundingInfo();
+
+            assertThat(settings)
+                    .extracting(FundingInfo::symbol, FundingInfo::fundingInterval)
+                    .containsExactly(
+                            tuple("BTCUSDT", Duration.ofHours(8)),
+                            tuple("LPTUSDT", Duration.ofHours(4)),
+                            tuple("LSKUSDT", Duration.ofHours(1)));
+            assertThat(settings.get(0).adjustedFundingRateCap()).isEqualTo(new BigDecimal("0.00300"));
+            assertThat(settings.get(0).adjustedFundingRateFloor()).isEqualTo(new BigDecimal("-0.00300"));
+            assertThat(exchange.requests().get(0).getPath()).isEqualTo("/fapi/v1/fundingInfo");
+            assertThat(exchange.requests().get(0).getQuery()).isNull();
+        }
+
+        /** BR-11: an interval that is not a positive whole number of hours is not an interval; nothing is guessed. */
+        @ParameterizedTest
+        @ValueSource(strings = {"0", "-4", "\"8\"", "1.5"})
+        void BR11_fundingInfoWithoutAUsableInterval_isMalformed(String hours) {
+            exchange.on(
+                    "/fapi/v1/fundingInfo",
+                    Answer.ok("[{\"symbol\":\"BTCUSDT\",\"adjustedFundingRateCap\":\"0.003\","
+                            + "\"adjustedFundingRateFloor\":\"-0.003\",\"fundingIntervalHours\":" + hours + "}]"));
+
+            assertThat(refusalOf(client::fundingInfo).kind()).isEqualTo(BinanceClientException.Kind.MALFORMED);
         }
     }
 

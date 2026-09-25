@@ -144,6 +144,29 @@ public class BinanceRestClient implements AutoCloseable {
     }
 
     /**
+     * The open interest and its value of one symbol, one entry per period, oldest first (NSF-04). The exchange
+     * keeps the latest month only (BR-10). With only {@code startTime} the exchange answers the most recent
+     * entries, not those after it, so a caller paging forward sends both ends of the range.
+     */
+    public List<OpenInterestStatistic> openInterestStatistics(
+            String symbol, MarketInterval period, Instant startTime, Instant endTime, int limit) {
+        Map<String, Object> query = symbolQuery(symbol);
+        query.put(
+                "period",
+                Objects.requireNonNull(period, "period must not be null").code());
+        putRange(query, startTime, endTime, limit);
+        return parser.openInterestStatistics(get(BinanceVenue.USD_M_FUTURES, "/futures/data/openInterestHist", query));
+    }
+
+    /**
+     * The funding settings of every symbol whose cap, floor or interval the exchange has adjusted (BR-11). A
+     * symbol missing from the answer has no interval stated by this source; see {@link FundingInfo}.
+     */
+    public List<FundingInfo> fundingInfo() {
+        return parser.fundingInfo(get(BinanceVenue.USD_M_FUTURES, "/fapi/v1/fundingInfo", Map.of()));
+    }
+
+    /**
      * The global long/short account ratio of one symbol, one entry per period (NSF-04). The exchange
      * keeps the latest 30 days only (BR-10).
      */
