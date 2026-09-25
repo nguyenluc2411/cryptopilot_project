@@ -468,6 +468,77 @@ class FuturesMetricsServiceTest {
         assertThat(settlements(btc)).containsExactly(Instant.parse("2026-09-24T08:00:00Z"));
     }
 
+    /**
+     * BR-11: a symbol whose interval changes from 8 to 4 hours between two runs, with the funding information
+     * following the change. Every settlement is stored once, on time.
+     */
+    @Test
+    void BR11_anIntervalChangeFromEightToFourHours_losesAndDoublesNothing() {
+        UUID btc = futuresPair("BTCUSDT");
+        stored(btc, "2026-09-24T00:00:00Z");
+        stored(btc, "2026-09-24T08:00:00Z");
+        FuturesMetricsService service = service(500, 50);
+
+        fundingInfo(Map.of("BTCUSDT", 8));
+        markPrice(btc, "BTCUSDT", "2026-09-24T16:00:00Z", NOW.minusSeconds(1));
+        assertThat(service.settleFunding().pairsDue()).as("8 h, current").isZero();
+
+        fundingInfo(Map.of("BTCUSDT", 4));
+        source.settlements(
+                "BTCUSDT",
+                epoch("2026-09-24T08:00:00.005Z") + ",0.00001000,84000.00000000",
+                epoch("2026-09-24T12:00:00.004Z") + ",0.00002000,84100.00000000");
+        runAt(service, btc, "2026-09-24T12:01:30Z", "2026-09-24T16:00:00Z");
+        assertThat(settlements(btc)).last().as("stored on time").isEqualTo(Instant.parse("2026-09-24T12:00:00Z"));
+
+        source.settlements(
+                "BTCUSDT",
+                epoch("2026-09-24T08:00:00.005Z") + ",0.00001000,84000.00000000",
+                epoch("2026-09-24T12:00:00.004Z") + ",0.00002000,84100.00000000",
+                epoch("2026-09-24T16:00:00Z") + ",0.00003000,84200.00000000");
+        runAt(service, btc, "2026-09-24T16:01:30Z", "2026-09-24T20:00:00Z");
+
+        assertThat(settlements(btc))
+                .containsExactly(
+                        Instant.parse("2026-09-24T00:00:00Z"),
+                        Instant.parse("2026-09-24T08:00:00Z"),
+                        Instant.parse("2026-09-24T12:00:00Z"),
+                        Instant.parse("2026-09-24T16:00:00Z"));
+    }
+
+    /**
+     * BR-11: the same change while the funding information still says 8 hours. The 12:00 settlement is found one
+     * interval later, with the 16:00 one: late, but neither lost nor doubled, and no interval assumed.
+     */
+    @Test
+    void BR11_anIntervalChangeTheFundingInfoLagsBehind_isCaughtUpWithoutLossOrDuplicate() {
+        UUID btc = futuresPair("BTCUSDT");
+        stored(btc, "2026-09-24T08:00:00Z");
+        fundingInfo(Map.of("BTCUSDT", 8));
+        FuturesMetricsService service = service(500, 50);
+        source.settlements(
+                "BTCUSDT",
+                epoch("2026-09-24T08:00:00.005Z") + ",0.00001000,84000.00000000",
+                epoch("2026-09-24T12:00:00.004Z") + ",0.00002000,84100.00000000");
+
+        runAt(service, btc, "2026-09-24T12:01:30Z", "2026-09-24T16:00:00Z");
+        assertThat(settlements(btc)).as("not due by the stale 8 h yet").hasSize(1);
+
+        source.settlements(
+                "BTCUSDT",
+                epoch("2026-09-24T08:00:00.005Z") + ",0.00001000,84000.00000000",
+                epoch("2026-09-24T12:00:00.004Z") + ",0.00002000,84100.00000000",
+                epoch("2026-09-24T16:00:00Z") + ",0.00003000,84200.00000000");
+        runAt(service, btc, "2026-09-24T16:01:30Z", "2026-09-24T20:00:00Z");
+        runAt(service, btc, "2026-09-24T16:06:30Z", "2026-09-24T20:00:00Z");
+
+        assertThat(settlements(btc))
+                .containsExactly(
+                        Instant.parse("2026-09-24T08:00:00Z"),
+                        Instant.parse("2026-09-24T12:00:00Z"),
+                        Instant.parse("2026-09-24T16:00:00Z"));
+    }
+
     /** A settlement without a mark price cannot be charged (BR-37) and is not stored; the others are. */
     @Test
     void BR37_aSettlementWithoutAMarkPrice_isNotStored() {
@@ -662,6 +733,12 @@ class FuturesMetricsServiceTest {
                         new BigDecimal("0.0001"),
                         Instant.parse(nextFundingTime),
                         eventTime));
+    }
+
+    private void runAt(FuturesMetricsService service, UUID pairId, String now, String nextFundingTime) {
+        clock.set(Instant.parse(now));
+        markPrice(pairId, "BTCUSDT", nextFundingTime, clock.instant().minusSeconds(1));
+        service.settleFunding();
     }
 
     private static MarkPriceMessage mark(String symbol, String markPrice, Instant at) {
