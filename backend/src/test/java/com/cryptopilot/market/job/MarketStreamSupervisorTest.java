@@ -10,6 +10,7 @@ import com.cryptopilot.market.client.BinanceStreamClient;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.client.StreamFrames;
+import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.client.StubStreamServer;
 import com.cryptopilot.market.client.StubStreamServer.Connection;
 import com.cryptopilot.market.config.CandleBackfillProperties;
@@ -20,6 +21,7 @@ import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.service.CandleBackfillService;
 import com.cryptopilot.market.service.LatestMarketData;
+import com.cryptopilot.market.service.MarketUpdateService;
 import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;
 import com.cryptopilot.market.service.impl.StreamCandleServiceImpl;
@@ -74,6 +76,8 @@ class MarketStreamSupervisorTest {
     private final List<Object> events = new CopyOnWriteArrayList<>();
     private final List<Duration> refreshes = new CopyOnWriteArrayList<>();
     private final LatestMarketData latest = new LatestMarketData();
+    private final List<StreamMessage> realtime = new CopyOnWriteArrayList<>();
+    private MarketUpdateService updates = (market, message) -> realtime.add(message);
 
     private MarketTestData data;
     private StubStreamServer server;
@@ -185,6 +189,29 @@ class MarketStreamSupervisorTest {
     }
 
     /** A lost connection that comes back publishes the reconnection; the first opening does not. */
+    /**
+     * The realtime fan-out sees every message; and when it fails on every one of them — a Redis or a broker that is
+     * down — NSF-03 still stores the closed candle and records the latest values.
+     */
+    @Test
+    void NSF03_aFailingRealtimeFanOut_neverStopsStorage() {
+        updates = (market, message) -> {
+            realtime.add(message);
+            throw new IllegalStateException("the cache is down");
+        };
+        supervisor = supervisor(true, 100);
+        supervisor.start();
+        server.awaitConnection(2);
+        Connection spot = connection("/stream");
+
+        spot.send(StreamFrames.ticker("BTCUSDT", AT));
+        spot.send(StreamFrames.kline("BTCUSDT", MarketInterval.ONE_HOUR, AT, true));
+
+        await(() -> storedCandles() == 1, "the closed candle");
+        await(() -> latest.ticker(btc).isPresent(), "the latest ticker");
+        await(() -> realtime.size() == 2, "both messages handed to the fan-out");
+    }
+
     @Test
     void NSF03_aConnectionBackAfterALoss_isAnnounced() {
         data.enable(btc, true, false);
@@ -310,7 +337,8 @@ class MarketStreamSupervisorTest {
                 new ClosedCandlePipeline(service, properties),
                 recordingScheduler(),
                 properties,
-                events::add);
+                events::add,
+                updates);
     }
 
     private CandleBackfillService backfill() {

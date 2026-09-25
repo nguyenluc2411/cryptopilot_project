@@ -37,6 +37,12 @@ cryptopilot:
     stream:
       # NSF-03 runs in this profile: the streams of the pairs an administrator enabled (BR-07).
       enabled: true
+    cache:
+      # T-022 runs in this profile: the latest prices are written to Redis.
+      enabled: true
+    hub:
+      # T-022 runs in this profile: the market topics are pushed to STOMP clients.
+      enabled: true
     futures-metrics:
       # NSF-04 runs in this profile: the futures metrics and funding settlements of the streamed pairs.
       enabled: true

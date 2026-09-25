@@ -13,6 +13,7 @@ import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.service.LatestMarketData;
+import com.cryptopilot.market.service.MarketUpdateService;
 import com.cryptopilot.market.service.StreamCandleService;
 import jakarta.annotation.PreDestroy;
 import java.util.ArrayList;
@@ -69,6 +70,7 @@ public class MarketStreamSupervisor {
     private final TaskScheduler scheduler;
     private final BinanceStreamProperties properties;
     private final ApplicationEventPublisher events;
+    private final MarketUpdateService updates;
     private final Map<MarketType, MarketStreams> running = new EnumMap<>(MarketType.class);
 
     public MarketStreamSupervisor(
@@ -78,7 +80,8 @@ public class MarketStreamSupervisor {
             ClosedCandlePipeline pipeline,
             TaskScheduler scheduler,
             BinanceStreamProperties properties,
-            ApplicationEventPublisher events) {
+            ApplicationEventPublisher events,
+            MarketUpdateService updates) {
         this.streams = streams;
         this.candles = candles;
         this.latest = latest;
@@ -86,6 +89,7 @@ public class MarketStreamSupervisor {
         this.scheduler = scheduler;
         this.properties = properties;
         this.events = events;
+        this.updates = updates;
     }
 
     /** Opens the streams of both markets and schedules the refresh, when enabled. */
@@ -208,6 +212,13 @@ public class MarketStreamSupervisor {
                 }
                 case TickerMessage ticker -> latest.recordTicker(target.pairId(), ticker);
                 case MarkPriceMessage markPrice -> latest.recordMarkPrice(target.pairId(), markPrice);
+            }
+            // T-022: the cache and the market topics, after storage and on this thread without I/O; whatever they do,
+            // the candle above is already handed to storage and the next message is read.
+            try {
+                updates.onUpdate(market, message);
+            } catch (RuntimeException failure) {
+                log.warn("NSF-03 {} realtime update failed: {}", market, failure.toString());
             }
         }
 
