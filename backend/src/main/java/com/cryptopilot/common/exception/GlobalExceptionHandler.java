@@ -6,18 +6,23 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.TypeMismatchException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.ObjectError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
+import tools.jackson.core.JacksonException;
 
 /**
  * Turns every exception that reaches the web boundary into one response shape, so that a client
@@ -58,6 +63,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     /** Message of a field error whose validation constraint declares none. */
     static final String DEFAULT_FIELD_MESSAGE = "is invalid";
+
+    /** Message of a required parameter that is missing. */
+    static final String MISSING_MESSAGE = "is required";
+
+    /** Message of a body, or a body field, the JSON parser could not read. */
+    static final String UNREADABLE_MESSAGE = "is not readable";
+
+    /** Detail of every MSG01 answer. */
+    static final String VALIDATION_DETAIL = "Request validation failed.";
+
+    /** The key under which an error about the whole body is reported. */
+    static final String BODY = "body";
+
+    /** The key used when Spring cannot name the parameter. */
+    static final String PARAMETER = "parameter";
 
     /** A request refused by a business rule: the error code decides the status. */
     @ExceptionHandler(BusinessException.class)
@@ -122,6 +142,60 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         ProblemDetail body = problemDetail(ErrorCode.VALIDATION_FAILED, "Request validation failed.", traceId());
         body.setProperty(ERRORS, errors);
         return handleExceptionInternal(exception, body, headers, status, request);
+    }
+
+    /** A required query parameter that is missing: MSG01, naming the parameter. */
+    @Override
+    protected ResponseEntity<Object> handleMissingServletRequestParameter(
+            MissingServletRequestParameterException exception,
+            HttpHeaders headers,
+            HttpStatusCode status,
+            WebRequest request) {
+        return invalid(Map.of(exception.getParameterName(), MISSING_MESSAGE), exception, headers, request);
+    }
+
+    /**
+     * A parameter that cannot be converted to its type — a timestamp that is not ISO 8601, a number that is not one.
+     * MSG01, naming the parameter; the conversion error itself, which names Java types, stays in the log.
+     */
+    @Override
+    protected ResponseEntity<Object> handleTypeMismatch(
+            TypeMismatchException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        String name = exception instanceof MethodArgumentTypeMismatchException argument
+                ? argument.getName()
+                : exception.getPropertyName();
+        return invalid(Map.of(name == null ? PARAMETER : name, DEFAULT_FIELD_MESSAGE), exception, headers, request);
+    }
+
+    /**
+     * A body that is not readable JSON, or a field of the wrong type. MSG01, naming the field when the parser can
+     * tell which one, and {@code body} otherwise; the parser's message, which quotes the input, stays in the log.
+     */
+    @Override
+    protected ResponseEntity<Object> handleHttpMessageNotReadable(
+            HttpMessageNotReadableException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        return invalid(Map.of(fieldOf(exception), UNREADABLE_MESSAGE), exception, headers, request);
+    }
+
+    /** The MSG01 body for a request Spring could not bind, with its {@code errors}. */
+    private ResponseEntity<Object> invalid(
+            Map<String, String> errors, Exception exception, HttpHeaders headers, WebRequest request) {
+        log.info("Request refused: code={} errors={}", ErrorCode.VALIDATION_FAILED.code(), errors.keySet());
+        ProblemDetail body = problemDetail(ErrorCode.VALIDATION_FAILED, VALIDATION_DETAIL, traceId());
+        body.setProperty(ERRORS, new LinkedHashMap<>(errors));
+        return handleExceptionInternal(exception, body, headers, ErrorCode.VALIDATION_FAILED.status(), request);
+    }
+
+    /** The JSON property the parser failed on, or {@code body} when it cannot tell. */
+    private static String fieldOf(HttpMessageNotReadableException exception) {
+        Throwable cause = exception.getCause();
+        if (cause instanceof JacksonException databind && !databind.getPath().isEmpty()) {
+            String name = databind.getPath().getLast().getPropertyName();
+            if (name != null) {
+                return name;
+            }
+        }
+        return BODY;
     }
 
     /**
