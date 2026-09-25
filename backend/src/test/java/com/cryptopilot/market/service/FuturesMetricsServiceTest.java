@@ -9,6 +9,7 @@ import com.cryptopilot.market.client.BinanceClientProperties;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.FundingRate;
 import com.cryptopilot.market.client.InMemoryBinanceBans;
+import com.cryptopilot.market.client.LongShortRatio;
 import com.cryptopilot.market.client.OpenInterestStatistic;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StubExchange;
@@ -16,6 +17,7 @@ import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.FuturesMetricsProperties;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
+import com.cryptopilot.market.repository.MarketSnapshotRepository;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.math.BigDecimal;
@@ -65,6 +67,9 @@ class FuturesMetricsServiceTest {
 
     @Autowired
     private FuturesMetricsRepository metrics;
+
+    @Autowired
+    private MarketSnapshotRepository snapshots;
 
     @Autowired
     private PlatformTransactionManager transactions;
@@ -180,6 +185,37 @@ class FuturesMetricsServiceTest {
         assertThat(again.requests()).isZero();
         assertThat(again.openInterestRows()).isZero();
         assertThat(rowCount(btc)).isEqualTo(12);
+    }
+
+    /**
+     * NSF-04 created the row first: NSF-03's snapshot of the same instant fills its own empty columns and leaves
+     * the metrics as they were; a second NSF-03 write of that instant changes nothing — the first one wins.
+     */
+    @Test
+    void NSF03_aRowNsf04CreatedFirst_receivesThePriceAndKeepsTheMetrics() {
+        UUID btc = futuresPair("BTCUSDT");
+        Instant at = Instant.parse("2026-09-24T10:05:00Z");
+        metrics.upsertOpenInterest(
+                btc, List.of(new OpenInterestStatistic("BTCUSDT", new BigDecimal("1.5"), new BigDecimal("2.5"), at)));
+        metrics.upsertLongShortRatio(
+                btc,
+                List.of(new LongShortRatio(
+                        "BTCUSDT", new BigDecimal("1.2346"), new BigDecimal("0.5525"), new BigDecimal("0.4475"), at)));
+
+        int filled = snapshots.insertFutures(at, Map.of(btc, mark("BTCUSDT", "63055.12345678", at)));
+        int again = snapshots.insertFutures(at, Map.of(btc, mark("BTCUSDT", "1.00000000", at)));
+
+        assertThat(filled).isOne();
+        assertThat(again).isZero();
+        Map<String, Object> row = row(btc, at);
+        assertThat(row.get("mark_price")).isEqualTo(new BigDecimal("63055.123456780000"));
+        assertThat(row.get("index_price")).isEqualTo(new BigDecimal("63050.000000000000"));
+        assertThat(row.get("funding_rate")).isEqualTo(new BigDecimal("0.00010000"));
+        assertThat(row.get("next_funding_time")).isNotNull();
+        assertThat(row.get("open_interest")).as("NSF-04's value kept").isEqualTo(new BigDecimal("1.500000000000"));
+        assertThat(row.get("open_interest_value")).isEqualTo(new BigDecimal("2.50000000"));
+        assertThat(row.get("long_short_ratio")).isEqualTo(new BigDecimal("1.23460000"));
+        assertThat(rowCount(btc)).isOne();
     }
 
     /** The same reading written twice by the upsert is one row with the same values. */
@@ -597,6 +633,16 @@ class FuturesMetricsServiceTest {
                         new BigDecimal("0.0001"),
                         Instant.parse(nextFundingTime),
                         eventTime));
+    }
+
+    private static MarkPriceMessage mark(String symbol, String markPrice, Instant at) {
+        return new MarkPriceMessage(
+                symbol,
+                new BigDecimal(markPrice),
+                new BigDecimal("63050.00000000"),
+                new BigDecimal("0.00010000"),
+                Instant.parse("2026-09-24T16:00:00Z"),
+                at);
     }
 
     private void stored(UUID pairId, String fundingTime) {
