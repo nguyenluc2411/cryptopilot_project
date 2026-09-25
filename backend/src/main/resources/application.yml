@@ -1,4 +1,11 @@
 spring:
+  data:
+    redis:
+      # The latest-price cache (TD 5.6, ADR-005). Local defaults; a deployment sets REDIS_HOST/PORT/PASSWORD.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
   application:
     name: cryptopilot
   threads:
@@ -106,6 +113,12 @@ cryptopilot:
       max-candles: 1000
       default-metrics-range: 1d
       max-metrics-range: 7d
+    cache:
+      # T-022: the latest prices in Redis (TD 5.6): px:{market}:{symbol}, 5 minutes to live. Written by a flush that
+      # never runs on the stream thread; off here, on in dev and prod, so a test context schedules nothing.
+      enabled: false
+      ttl: 5m
+      flush-interval: 250ms
     futures-metrics:
       # NSF-04: every 5 minutes, 90 s after the 5-minute instant, the funding settlements and then the open
       # interest and long/short account ratio of the pairs NSF-03 streams. Off here, on in the dev and prod
@@ -167,3 +180,7 @@ management:
     health:
       probes:
         enabled: true
+  health:
+    redis:
+      # Redis is a cache (ADR-005): losing it costs a warm-up, never data, so it does not make the application unhealthy.
+      enabled: false

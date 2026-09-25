@@ -3,6 +3,7 @@ package com.cryptopilot.support;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -51,5 +52,18 @@ public class TestcontainersConfig {
     @ServiceConnection
     PostgreSQLContainer timescaleContainer() {
         return TIMESCALE;
+    }
+
+    /**
+     * The latest-price cache (TD 5.6), the same pinned tag as {@code deploy/docker-compose.dev.yml} (Q-09). Shared by
+     * every context, like the database; tests that need a clean cache empty the keys they use.
+     */
+    private static final GenericContainer<?> REDIS =
+            new GenericContainer<>(DockerImageName.parse("redis:7.4.11-alpine")).withExposedPorts(6379);
+
+    @Bean
+    @ServiceConnection(name = "redis")
+    GenericContainer<?> redisContainer() {
+        return REDIS;
     }
 }
