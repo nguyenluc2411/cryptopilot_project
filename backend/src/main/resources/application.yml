@@ -37,6 +37,13 @@ spring:
       demo_password_hash: ${DEMO_PASSWORD_HASH:!DEMO_PASSWORD_HASH_NOT_SET}
 
 cryptopilot:
+  realtime:
+    # TD 9: the STOMP endpoint's transport limits, so one slow client cannot hold the others (Spring's per-session
+    # decorator buffers up to the limit, then closes that session), and the origins a browser may open it from.
+    allowed-origin-patterns:
+      - "http://localhost:*"
+    send-time-limit: 10s
+    send-buffer-size-limit: 512KB
   auth:
     token:
       # SRS 3.2.3 states all three windows. They are declared rather than hard-coded because an
@@ -119,6 +126,11 @@ cryptopilot:
       enabled: false
       ttl: 5m
       flush-interval: 250ms
+    hub:
+      # T-022: the STOMP market topics (TD 9): ticker at most once a second per destination, overview every 2 s.
+      enabled: false
+      update-interval: 1s
+      overview-interval: 2s
     futures-metrics:
       # NSF-04: every 5 minutes, 90 s after the 5-minute instant, the funding settlements and then the open
       # interest and long/short account ratio of the pairs NSF-03 streams. Off here, on in the dev and prod

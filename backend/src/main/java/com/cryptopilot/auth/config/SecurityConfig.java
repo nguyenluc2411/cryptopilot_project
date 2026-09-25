@@ -169,6 +169,12 @@ public class SecurityConfig {
      * because the switch is springdoc's: the {@code prod} profile turns both off, so there they answer 404 — no
      * handler — rather than exposing anything. The document describes the API; it grants nothing.
      */
+    /**
+     * The STOMP handshake of TECHNICAL_DESIGN 9. The market topics are public (D-50); which destinations a session may
+     * subscribe to is decided per frame by the channel interceptor of {@code WebSocketConfig}, not by this chain.
+     */
+    static final String[] PUBLIC_REALTIME = {"/ws", "/ws/**"};
+
     static final String[] PUBLIC_API_DOCS = {"/v3/api-docs", "/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**"};
 
     /**
@@ -228,6 +234,8 @@ public class SecurityConfig {
                         .requestMatchers(PUBLIC_HEALTH_PROBES)
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, PUBLIC_API_DOCS)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_REALTIME)
                         .permitAll()
                         .requestMatchers(SHARED_PASSWORD_CHANGE)
                         .hasAnyRole(UserRole.TRADER.name(), UserRole.ADMIN.name())
