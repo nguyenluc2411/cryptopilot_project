@@ -1,4 +1,4 @@
-package com.cryptopilot.auth.service;
+package com.cryptopilot.auth.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -8,6 +8,8 @@ import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
 import com.cryptopilot.auth.event.VerificationTokenIssued;
 import com.cryptopilot.auth.repository.UserTokenRepository;
+import com.cryptopilot.auth.service.AuthService;
+import com.cryptopilot.auth.service.SecureTokenFactory;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.support.MutableTestClock;
@@ -296,7 +298,7 @@ class AuthServiceTest {
         assertThat(issued.email()).isEqualTo("link" + TEST_DOMAIN);
         assertThat(issued.token()).isNotBlank();
         assertThat(issued.expiresAt()).isEqualTo(NOW.plus(Duration.ofHours(24)));
-        assertThat(AuthService.VERIFICATION_TOKEN_LIFETIME)
+        assertThat(AuthServiceImpl.VERIFICATION_TOKEN_LIFETIME)
                 .as("BR-01 states the window, and it is declared rather than inferred")
                 .isEqualTo(Duration.ofHours(24));
 
@@ -440,7 +442,7 @@ class AuthServiceTest {
     @Test
     void UC02_aResend_issuesANewLinkAndStopsThePreviousOne() {
         VerificationTokenIssued first = registerAndTakeTheLink("resend" + TEST_DOMAIN);
-        clock.advance(AuthService.RESEND_MINIMUM_INTERVAL);
+        clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL);
 
         authService.resendVerification("resend" + TEST_DOMAIN);
 
@@ -460,7 +462,7 @@ class AuthServiceTest {
     void UC02_aResendWithinTheMinimumInterval_sendsNothing() {
         registerAndTakeTheLink("throttle" + TEST_DOMAIN);
 
-        clock.advance(AuthService.RESEND_MINIMUM_INTERVAL.minusMillis(1));
+        clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL.minusMillis(1));
         authService.resendVerification("throttle" + TEST_DOMAIN);
         assertThat(issuedLinks.all())
                 .as("one millisecond short of the interval, nothing is sent")
@@ -470,7 +472,7 @@ class AuthServiceTest {
         authService.resendVerification("throttle" + TEST_DOMAIN);
         assertThat(issuedLinks.all()).as("at the interval, a link is sent").hasSize(1);
 
-        assertThat(AuthService.RESEND_MINIMUM_INTERVAL)
+        assertThat(AuthServiceImpl.RESEND_MINIMUM_INTERVAL)
                 .as("SRS 3.2.2 states the interval")
                 .isEqualTo(Duration.ofSeconds(60));
     }
@@ -479,21 +481,21 @@ class AuthServiceTest {
     @Test
     void UC02_aSixthLinkInOneDay_isNotSent() {
         registerAndTakeTheLink("daily" + TEST_DOMAIN);
-        int resendsLeftAfterRegistration = AuthService.RESEND_MAXIMUM_PER_DAY - 1;
+        int resendsLeftAfterRegistration = AuthServiceImpl.RESEND_MAXIMUM_PER_DAY - 1;
 
         for (int resend = 0; resend < resendsLeftAfterRegistration; resend++) {
-            clock.advance(AuthService.RESEND_MINIMUM_INTERVAL);
+            clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL);
             authService.resendVerification("daily" + TEST_DOMAIN);
         }
         assertThat(issuedLinks.all())
                 .as("the registration link plus four resends is the five the SRS allows")
                 .hasSize(resendsLeftAfterRegistration);
 
-        clock.advance(AuthService.RESEND_MINIMUM_INTERVAL);
+        clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL);
         authService.resendVerification("daily" + TEST_DOMAIN);
 
         assertThat(issuedLinks.all()).as("the sixth is refused").hasSize(resendsLeftAfterRegistration);
-        assertThat(AuthService.RESEND_MAXIMUM_PER_DAY)
+        assertThat(AuthServiceImpl.RESEND_MAXIMUM_PER_DAY)
                 .as("SRS 3.2.2 states the daily cap")
                 .isEqualTo(5);
     }
@@ -510,7 +512,7 @@ class AuthServiceTest {
 
         VerificationTokenIssued issued = registerAndTakeTheLink("already" + TEST_DOMAIN);
         authService.verifyEmail(issued.token());
-        clock.advance(AuthService.RESEND_MINIMUM_INTERVAL);
+        clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL);
 
         assertThatCode(() -> authService.resendVerification("already" + TEST_DOMAIN))
                 .doesNotThrowAnyException();

@@ -1,4 +1,4 @@
-package com.cryptopilot.auth.service;
+package com.cryptopilot.auth.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -6,7 +6,10 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.auth.config.TokenProperties;
+import com.cryptopilot.auth.model.IssuedSession;
 import com.cryptopilot.auth.repository.UserTokenRepository;
+import com.cryptopilot.auth.service.AuthService;
+import com.cryptopilot.auth.service.SecureTokenFactory;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.support.MutableTestClock;
@@ -493,7 +496,7 @@ class LoginAndSessionTest {
         clock.advance(Duration.ofDays(7));
         String stale = refusalOfRefresh(expired.refreshToken()).getMessage();
 
-        assertThat(unknown).isEqualTo(AuthService.SESSION_OVER_DETAIL);
+        assertThat(unknown).isEqualTo(AuthServiceImpl.SESSION_OVER_DETAIL);
         assertThat(replayed).isEqualTo(unknown);
         assertThat(stale).isEqualTo(unknown);
     }

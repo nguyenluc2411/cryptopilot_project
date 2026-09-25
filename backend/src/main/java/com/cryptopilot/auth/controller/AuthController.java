@@ -1,16 +1,16 @@
 package com.cryptopilot.auth.controller;
 
-import com.cryptopilot.auth.dto.ForgotPasswordRequest;
-import com.cryptopilot.auth.dto.LoginRequest;
-import com.cryptopilot.auth.dto.LogoutRequest;
-import com.cryptopilot.auth.dto.RefreshRequest;
-import com.cryptopilot.auth.dto.RegisterRequest;
-import com.cryptopilot.auth.dto.ResendVerificationRequest;
-import com.cryptopilot.auth.dto.ResetPasswordRequest;
-import com.cryptopilot.auth.dto.SessionResponse;
-import com.cryptopilot.auth.dto.VerifyEmailRequest;
+import com.cryptopilot.auth.dto.request.ForgotPasswordRequest;
+import com.cryptopilot.auth.dto.request.LoginRequest;
+import com.cryptopilot.auth.dto.request.LogoutRequest;
+import com.cryptopilot.auth.dto.request.RefreshRequest;
+import com.cryptopilot.auth.dto.request.RegisterRequest;
+import com.cryptopilot.auth.dto.request.ResendVerificationRequest;
+import com.cryptopilot.auth.dto.request.ResetPasswordRequest;
+import com.cryptopilot.auth.dto.request.VerifyEmailRequest;
+import com.cryptopilot.auth.dto.response.SessionResponse;
+import com.cryptopilot.auth.model.IssuedSession;
 import com.cryptopilot.auth.service.AuthService;
-import com.cryptopilot.auth.service.IssuedSession;
 import com.cryptopilot.common.web.MessageResponse;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;

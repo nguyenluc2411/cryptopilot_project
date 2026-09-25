@@ -1,4 +1,4 @@
-package com.cryptopilot.auth.service;
+package com.cryptopilot.auth.model;
 
 import com.cryptopilot.user.UserRole;
 import java.time.Instant;

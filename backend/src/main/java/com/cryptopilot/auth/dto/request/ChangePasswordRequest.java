@@ -1,4 +1,4 @@
-package com.cryptopilot.auth.dto;
+package com.cryptopilot.auth.dto.request;
 
 import com.cryptopilot.auth.PasswordPolicy;
 import jakarta.validation.constraints.AssertTrue;

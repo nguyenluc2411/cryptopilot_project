@@ -1,4 +1,4 @@
-package com.cryptopilot.auth.dto;
+package com.cryptopilot.auth.dto.response;
 
 import com.cryptopilot.user.UserRole;
 import java.time.Instant;

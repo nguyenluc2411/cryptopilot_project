@@ -1,7 +1,7 @@
 package com.cryptopilot.auth.controller;
 
 import com.cryptopilot.auth.config.JwtConfig;
-import com.cryptopilot.auth.dto.ChangePasswordRequest;
+import com.cryptopilot.auth.dto.request.ChangePasswordRequest;
 import com.cryptopilot.auth.service.PasswordChangeService;
 import com.cryptopilot.common.web.MessageResponse;
 import jakarta.validation.Valid;

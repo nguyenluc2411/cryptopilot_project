@@ -1,6 +1,7 @@
-package com.cryptopilot.auth.service;
+package com.cryptopilot.auth.service.impl;
 
 import com.cryptopilot.auth.repository.UserTokenRepository;
+import com.cryptopilot.auth.service.LiveSessions;
 import java.time.Instant;
 import java.util.UUID;
 import lombok.AccessLevel;

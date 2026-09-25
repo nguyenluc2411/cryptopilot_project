@@ -2,6 +2,8 @@ package com.cryptopilot.auth.dto;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.auth.dto.request.ChangePasswordRequest;
+import com.cryptopilot.auth.dto.request.LogoutRequest;
 import org.junit.jupiter.api.Test;
 
 /**
