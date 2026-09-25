@@ -2,6 +2,7 @@ package com.cryptopilot.market.service;
 
 import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.calculator.FundingSettlementDue;
+import com.cryptopilot.market.calculator.FundingTimes;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.FundingInfo;
@@ -60,8 +61,12 @@ import org.springframework.transaction.support.TransactionTemplate;
  * both read from the exchange, never assumed (BR-11) — whether a settlement has passed that is not stored yet.
  * The next funding time is the streamed one while it is fresh ({@code markPriceMaxAge}), otherwise read from
  * {@code premiumIndex}. The interval comes from {@code fundingInfo}; a symbol it does not list has no interval,
- * and is checked on every run. A due pair's settled rates after the latest stored one are read from
- * {@code fundingRate} and stored once each.
+ * and is checked on every run. A due pair's settled rates after the latest stored one ({@link FundingTimes#after})
+ * are read from {@code fundingRate} and stored once each, at their normalized instant.
+ *
+ * <p>When the exchange changes a symbol's interval, nothing is lost or doubled: the settlements are read from the
+ * latest stored one onwards whatever the interval, so the only effect of a funding information that lags behind
+ * the stream is that a settlement is stored one interval later.
  *
  * <h2>When the exchange refuses</h2>
  *
@@ -170,7 +175,7 @@ public class FuturesMetricsService {
                     continue;
                 }
                 due++;
-                Instant start = stored.map(time -> time.plusMillis(1)).orElse(now.minus(properties.settlementDepth()));
+                Instant start = stored.map(FundingTimes::after).orElse(now.minus(properties.settlementDepth()));
                 Stored result = storeSettlements(pair, start, now);
                 inserted += result.inserted();
                 withoutMarkPrice += result.withoutMarkPrice();

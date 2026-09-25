@@ -352,8 +352,8 @@ class FuturesMetricsServiceTest {
         markPrice(btc, "BTCUSDT", "2026-09-24T16:00:00Z", NOW.minusSeconds(1));
         markPrice(lpt, "LPTUSDT", "2026-09-24T12:00:00Z", NOW.minusSeconds(1));
         markPrice(lsk, "LSKUSDT", "2026-09-24T11:00:00Z", NOW.minusSeconds(1));
-        stored(btc, "2026-09-24T00:00:00.005Z");
-        stored(lpt, "2026-09-24T08:00:00.001Z");
+        stored(btc, "2026-09-24T00:00:00Z");
+        stored(lpt, "2026-09-24T08:00:00Z");
         stored(lsk, "2026-09-24T09:00:00Z");
         source.settlements("BTCUSDT", epoch("2026-09-24T08:00:00.005Z") + ",0.00001422,84374.30000000");
         source.settlements("LPTUSDT", epoch("2026-09-24T08:00:00.001Z") + ",0.00005000,1.61036765");
@@ -368,7 +368,8 @@ class FuturesMetricsServiceTest {
                 .as("4 h pair is current")
                 .isZero();
         assertThat(settlements(btc))
-                .containsExactly(Instant.parse("2026-09-24T00:00:00.005Z"), Instant.parse("2026-09-24T08:00:00.005Z"));
+                .as("stored at the normalized instant")
+                .containsExactly(Instant.parse("2026-09-24T00:00:00Z"), Instant.parse("2026-09-24T08:00:00Z"));
         assertThat(settlements(lsk)).last().isEqualTo(Instant.parse("2026-09-24T10:00:00Z"));
         Map<String, Object> charged = sql.sql(
                         "select * from funding_rate_history where pair_id = ? and funding_time = ?")
@@ -379,7 +380,8 @@ class FuturesMetricsServiceTest {
         assertThat(charged.get("mark_price")).isEqualTo(new BigDecimal("0.521000000000"));
         assertThat(exchange.requests().stream().filter(uri -> uri.getPath().equals(FUNDING_RATE)))
                 .extracting(URI::getQuery)
-                .contains("symbol=BTCUSDT&startTime=" + (epoch("2026-09-24T00:00:00.005Z") + 1) + "&limit=1000");
+                .as("read from half a minute after the stored settlement")
+                .contains("symbol=BTCUSDT&startTime=" + epoch("2026-09-24T00:00:30Z") + "&limit=1000");
     }
 
     /**
@@ -437,6 +439,33 @@ class FuturesMetricsServiceTest {
                         .single())
                 .as("the first reading stays")
                 .isEqualTo(new BigDecimal("0.00004796"));
+    }
+
+    /**
+     * BR-37: one settlement the source stamps two ways ({@code ...600000} and {@code ...600005}) is one row, at the
+     * normalized instant, within a page and through the repository directly.
+     */
+    @Test
+    void BR37_oneSettlementStampedTwoWays_isOneRow() {
+        UUID btc = futuresPair("BTCUSDT");
+        markPrice(btc, "BTCUSDT", "2026-09-24T16:00:00Z", NOW.minusSeconds(1));
+        source.settlements(
+                "BTCUSDT",
+                epoch("2026-09-24T08:00:00Z") + ",0.00001422,84374.30000000",
+                epoch("2026-09-24T08:00:00.005Z") + ",0.00001422,84374.30000000");
+
+        SettlementRun run = service(500, 50).settleFunding();
+        int direct = metrics.insertFundingRates(
+                btc,
+                List.of(new FundingRate(
+                        "BTCUSDT",
+                        Instant.parse("2026-09-24T08:00:00.005Z"),
+                        new BigDecimal("0.00001422"),
+                        new BigDecimal("84374.30000000"))));
+
+        assertThat(run.rowsInserted()).isOne();
+        assertThat(direct).isZero();
+        assertThat(settlements(btc)).containsExactly(Instant.parse("2026-09-24T08:00:00Z"));
     }
 
     /** A settlement without a mark price cannot be charged (BR-37) and is not stored; the others are. */

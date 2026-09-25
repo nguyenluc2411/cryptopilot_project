@@ -1,5 +1,6 @@
 package com.cryptopilot.market.repository;
 
+import com.cryptopilot.market.calculator.FundingTimes;
 import com.cryptopilot.market.client.FundingRate;
 import com.cryptopilot.market.client.LongShortRatio;
 import com.cryptopilot.market.client.OpenInterestStatistic;
@@ -26,13 +27,15 @@ import org.springframework.stereotype.Repository;
  * {@code null} when there is none. No value is ever copied into another minute's row — the four minutes
  * between two readings keep their metric columns {@code null}, because nothing was measured then.
  *
- * <p>NSF-04 only writes instants before the current minute (see the service), by which time NSF-03 has written
- * that minute's row or never will, so NSF-03's insert is not pre-empted by a metrics-only row.
+ * <p>NSF-04 only writes instants before the current minute (see the service), by which time NSF-03 has normally
+ * written that minute's row. Should NSF-04 still create the row first, NSF-03 fills its own empty columns on the
+ * conflict and leaves these alone ({@link MarketSnapshotRepository#insertFutures}).
  *
  * <h2>Settled funding rates</h2>
  *
- * <p>One row per pair and settlement instant, {@code ON CONFLICT DO NOTHING} on {@code (pair_id,
- * funding_time)}: a settlement read twice is stored once, and never changed. No retention reaches the table
+ * <p>One row per pair and settlement instant — the source's instant normalized by {@link FundingTimes} — with
+ * {@code ON CONFLICT DO NOTHING} on {@code (pair_id, funding_time)}: a settlement read twice, or stamped a few
+ * milliseconds differently, is stored once, and never changed. No retention reaches the table
  * (TECHNICAL_DESIGN 6), because a closed position's profit and loss is recomputed from it (BR-37).
  *
  * <p>Rule: NSF-04; BR-10, BR-11, BR-37; TECHNICAL_DESIGN 6 and 7.1 step 8.
@@ -105,8 +108,9 @@ public class FuturesMetricsRepository {
     }
 
     /**
-     * Stores settled funding rates of a pair; answers how many were new. Every rate must carry its mark price,
-     * which the column requires and the profit and loss multiplies by.
+     * Stores settled funding rates of a pair; answers how many were new. Each is stored at its instant normalized by
+     * {@link FundingTimes#normalize}, the one rule for this table, so two stamps of one settlement are one row.
+     * Every rate must carry its mark price, which the column requires and the profit and loss multiplies by.
      */
     public int insertFundingRates(UUID pairId, List<FundingRate> rates) {
         int inserted = 0;
@@ -115,7 +119,11 @@ public class FuturesMetricsRepository {
                             insert into funding_rate_history (pair_id, funding_time, funding_rate, mark_price)
                             values (?, ?, ?, ?)
                             on conflict (pair_id, funding_time) do nothing""")
-                    .params(pairId, Timestamp.from(rate.fundingTime()), rate.fundingRate(), rate.markPrice())
+                    .params(
+                            pairId,
+                            Timestamp.from(FundingTimes.normalize(rate.fundingTime())),
+                            rate.fundingRate(),
+                            rate.markPrice())
                     .update();
         }
         return inserted;
