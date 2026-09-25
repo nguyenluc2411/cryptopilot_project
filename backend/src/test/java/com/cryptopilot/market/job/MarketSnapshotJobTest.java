@@ -3,9 +3,10 @@ package com.cryptopilot.market.job;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.client.BinanceStreamProperties;
+import com.cryptopilot.market.model.SnapshotRun;
 import com.cryptopilot.market.service.LatestMarketData;
 import com.cryptopilot.market.service.MarketSnapshotService;
-import com.cryptopilot.market.service.SnapshotRun;
+import com.cryptopilot.market.service.impl.MarketSnapshotServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import java.lang.reflect.Proxy;
 import java.net.URI;
@@ -58,7 +59,7 @@ class MarketSnapshotJobTest {
 
     /** A service that answers the given run, or fails when there is none. */
     private MarketSnapshotService service(SnapshotRun run) {
-        return new MarketSnapshotService(new LatestMarketData(), null, properties(true), clock) {
+        return new MarketSnapshotServiceImpl(new LatestMarketData(), null, properties(true), clock) {
             @Override
             public SnapshotRun writePeriodic() {
                 if (run == null) {

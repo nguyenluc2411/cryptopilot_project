@@ -2,9 +2,9 @@ package com.cryptopilot.market.job;
 
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.FuturesMetricsProperties;
+import com.cryptopilot.market.model.MetricsRun;
+import com.cryptopilot.market.model.SettlementRun;
 import com.cryptopilot.market.service.FuturesMetricsService;
-import com.cryptopilot.market.service.MetricsRun;
-import com.cryptopilot.market.service.SettlementRun;
 import java.time.Instant;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;

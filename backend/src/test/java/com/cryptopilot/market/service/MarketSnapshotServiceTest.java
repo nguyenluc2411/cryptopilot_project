@@ -7,7 +7,9 @@ import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
+import com.cryptopilot.market.model.SnapshotRun;
 import com.cryptopilot.market.repository.MarketSnapshotRepository;
+import com.cryptopilot.market.service.impl.MarketSnapshotServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.math.BigDecimal;
@@ -59,7 +61,7 @@ class MarketSnapshotServiceTest {
         data = new MarketTestData(sql, NOW);
         btc = data.pair("BTCUSDT", true, true, "TRADING", "TRADING", 0);
         eth = data.pair("ETHUSDT", true, true, "TRADING", "TRADING", 0);
-        service = new MarketSnapshotService(latest, repository, properties(), clock);
+        service = new MarketSnapshotServiceImpl(latest, repository, properties(), clock);
     }
 
     @AfterEach

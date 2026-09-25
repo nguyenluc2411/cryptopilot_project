@@ -7,6 +7,7 @@ import com.cryptopilot.market.config.DemoPairProperties;
 import com.cryptopilot.market.config.SymbolSyncProperties;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.service.DemoPairActivation;
+import com.cryptopilot.market.service.impl.DemoPairActivationImpl;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -71,7 +72,7 @@ class DemoPairActivationJobTest {
     }
 
     private DemoPairActivationJob job(boolean enabled) {
-        DemoPairActivation activation = new DemoPairActivation(null) {
+        DemoPairActivation activation = new DemoPairActivationImpl(null) {
             @Override
             public List<String> activate(MarketType market, List<String> symbols) {
                 calls.add(market + " " + symbols);

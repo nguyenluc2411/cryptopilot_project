@@ -15,8 +15,8 @@ import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.CandleBackfillJob.Outcome;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
-import com.cryptopilot.market.service.CandleBackfillService;
 import com.cryptopilot.market.service.SyntheticKlines;
+import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.lang.reflect.Proxy;
@@ -322,7 +322,7 @@ class CandleBackfillJobTest {
     private CandleBackfillJob job(boolean enabled) {
         CandleBackfillProperties properties = properties(enabled);
         return new CandleBackfillJob(
-                new CandleBackfillService(client, pairs, candles, properties, transactions, clock),
+                new CandleBackfillServiceImpl(client, pairs, candles, properties, transactions, clock),
                 recordingScheduler(),
                 properties,
                 clock);

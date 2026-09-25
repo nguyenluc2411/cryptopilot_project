@@ -2,6 +2,7 @@ package com.cryptopilot.market.repository;
 
 import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.Kline;
+import com.cryptopilot.market.model.StoredGap;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;

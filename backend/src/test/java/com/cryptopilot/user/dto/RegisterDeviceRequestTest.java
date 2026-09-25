@@ -2,6 +2,7 @@ package com.cryptopilot.user.dto;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.user.dto.request.RegisterDeviceRequest;
 import com.cryptopilot.user.entity.DevicePlatform;
 import org.junit.jupiter.api.Test;
 

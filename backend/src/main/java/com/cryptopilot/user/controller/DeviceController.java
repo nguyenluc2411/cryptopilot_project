@@ -1,7 +1,7 @@
 package com.cryptopilot.user.controller;
 
-import com.cryptopilot.user.dto.DeviceResponse;
-import com.cryptopilot.user.dto.RegisterDeviceRequest;
+import com.cryptopilot.user.dto.request.RegisterDeviceRequest;
+import com.cryptopilot.user.dto.response.DeviceResponse;
 import com.cryptopilot.user.service.DeviceService;
 import jakarta.validation.Valid;
 import java.util.UUID;

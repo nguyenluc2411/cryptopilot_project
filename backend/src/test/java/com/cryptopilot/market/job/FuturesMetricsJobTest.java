@@ -14,6 +14,7 @@ import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.service.FuturesMetricsService;
 import com.cryptopilot.market.service.LatestMarketData;
+import com.cryptopilot.market.service.impl.FuturesMetricsServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.lang.reflect.Proxy;
@@ -164,7 +165,7 @@ class FuturesMetricsJobTest {
 
     private FuturesMetricsJob job(boolean enabled) {
         FuturesMetricsProperties properties = properties(enabled);
-        FuturesMetricsService service = new FuturesMetricsService(
+        FuturesMetricsService service = new FuturesMetricsServiceImpl(
                 client, pairs, metrics, new LatestMarketData(), properties, transactions, clock);
         return new FuturesMetricsJob(service, recordingScheduler(), properties);
     }
