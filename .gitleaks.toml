@@ -1,0 +1,13 @@
+# gitleaks configuration: the default rules, plus the confirmed false positives of this repository.
+#
+# Every allowlist entry must name what it allows and why it is not a secret, and must be as narrow as
+# possible (a path and a pattern, never a whole rule). A real secret is never allowlisted: it is rotated,
+# and the team decides whether the history is rewritten.
+#
+# Full-history scan of every branch on 2026-09-25 (gitleaks 8.30.1, 104 commits): no finding, so no
+# allowlist entry is needed yet.
+
+title = "cryptopilot"
+
+[extend]
+useDefault = true
