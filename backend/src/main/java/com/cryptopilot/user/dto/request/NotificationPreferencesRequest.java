@@ -1,4 +1,4 @@
-package com.cryptopilot.user.dto;
+package com.cryptopilot.user.dto.request;
 
 import jakarta.validation.constraints.NotNull;
 

@@ -1,4 +1,4 @@
-package com.cryptopilot.user.service;
+package com.cryptopilot.user.service.impl;
 
 import com.cryptopilot.user.repository.UserAccountRepository;
 import java.time.Instant;

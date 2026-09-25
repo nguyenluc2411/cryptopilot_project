@@ -1,4 +1,4 @@
-package com.cryptopilot.user.dto;
+package com.cryptopilot.user.dto.response;
 
 import com.cryptopilot.user.entity.TradingStyle;
 import java.math.BigDecimal;

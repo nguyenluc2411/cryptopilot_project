@@ -1,9 +1,9 @@
 package com.cryptopilot.user.controller;
 
 import com.cryptopilot.common.web.MessageResponse;
-import com.cryptopilot.user.dto.NotificationPreferencesRequest;
-import com.cryptopilot.user.dto.ProfileResponse;
-import com.cryptopilot.user.dto.UpdateProfileRequest;
+import com.cryptopilot.user.dto.request.NotificationPreferencesRequest;
+import com.cryptopilot.user.dto.request.UpdateProfileRequest;
+import com.cryptopilot.user.dto.response.ProfileResponse;
 import com.cryptopilot.user.service.ProfileService;
 import jakarta.validation.Valid;
 import java.util.UUID;

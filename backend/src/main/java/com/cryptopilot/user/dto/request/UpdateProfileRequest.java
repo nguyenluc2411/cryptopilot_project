@@ -1,4 +1,4 @@
-package com.cryptopilot.user.dto;
+package com.cryptopilot.user.dto.request;
 
 import com.cryptopilot.user.entity.TradingStyle;
 import jakarta.validation.constraints.DecimalMax;
