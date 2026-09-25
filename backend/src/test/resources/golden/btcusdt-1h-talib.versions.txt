@@ -1,0 +1,7 @@
+generated: 2026-09-25
+source: Binance Spot GET /api/v3/klines BTCUSDT 1h (public, no key)
+candles: 1200 closed, open times 1786003200000 to 1790319600000 (epoch ms)
+TA-Lib (Python wrapper): 0.8.1
+TA-Lib (C library): 0.8.1
+numpy: 2.2.3
+python: 3.13.2
