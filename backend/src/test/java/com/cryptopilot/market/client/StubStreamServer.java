@@ -80,7 +80,10 @@ public final class StubStreamServer implements AutoCloseable {
         return connections.get(count - 1);
     }
 
-    /** Waits until the condition holds, failing the test after five seconds. */
+    /**
+     * Waits until the condition holds — an event, not a length of time — failing the test after five seconds. The
+     * deadline is a guard against a hang, never what a test asserts.
+     */
     public static void await(BooleanSupplier condition, String what) {
         Instant deadline = Instant.now().plus(Duration.ofSeconds(5));
         while (!condition.getAsBoolean()) {
@@ -88,12 +91,7 @@ public final class StubStreamServer implements AutoCloseable {
                 throw new AssertionError("timed out waiting for " + what);
             }
             Thread.onSpinWait();
-            try {
-                Thread.sleep(5);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                throw new AssertionError(interrupted);
-            }
+            Thread.yield();
         }
     }
 

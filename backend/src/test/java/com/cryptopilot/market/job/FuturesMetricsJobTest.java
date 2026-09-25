@@ -10,6 +10,8 @@ import com.cryptopilot.market.client.StubExchange;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.FuturesMetricsProperties;
 import com.cryptopilot.market.job.FuturesMetricsJob.Outcome;
+import com.cryptopilot.market.model.MetricsRun;
+import com.cryptopilot.market.model.SettlementRun;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.service.FuturesMetricsService;
@@ -25,6 +27,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -136,14 +139,33 @@ class FuturesMetricsJobTest {
     /** A run that finds the previous one still going does nothing. */
     @Test
     void NSF04_aRunWhileTheLastIsGoing_isSkipped() throws Exception {
-        exchange.on(FUNDING_INFO, Answer.ok("[]").after(Duration.ofMillis(800)));
-        FuturesMetricsJob job = job(true);
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        FuturesMetricsService held = new FuturesMetricsService() {
+            @Override
+            public SettlementRun settleFunding() {
+                inside.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                return new SettlementRun(0, 0, 0, 0, List.of());
+            }
+
+            @Override
+            public MetricsRun collectMetrics() {
+                return new MetricsRun(0, 0, 0, false, List.of());
+            }
+        };
+        FuturesMetricsJob job = new FuturesMetricsJob(held, recordingScheduler(), properties(true));
         CompletableFuture<Outcome> first = CompletableFuture.supplyAsync(job::run);
-        while (exchange.hits(FUNDING_INFO) == 0) {
-            Thread.onSpinWait();
-        }
+        assertThat(inside.await(5, TimeUnit.SECONDS))
+                .as("the first run to be inside")
+                .isTrue();
 
         Outcome second = job.run();
+        release.countDown();
 
         assertThat(second).isEqualTo(Outcome.SKIPPED);
         assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(Outcome.COMPLETED);

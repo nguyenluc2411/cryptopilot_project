@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StubStreamServer.Connection;
+import com.cryptopilot.support.MutableTestClock;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Clock;
@@ -50,14 +51,14 @@ class BinanceStreamShardTest {
     };
 
     private StubStreamServer server;
-    private HttpClient http;
+    private CountingHttpClient http;
     private ScheduledExecutorService timer;
     private BinanceStreamShard shard;
 
     @BeforeEach
     void startTheStandIn() throws Exception {
         server = new StubStreamServer();
-        http = HttpClient.newHttpClient();
+        http = new CountingHttpClient(HttpClient.newHttpClient());
         timer = Executors.newSingleThreadScheduledExecutor();
     }
 
@@ -82,7 +83,9 @@ class BinanceStreamShardTest {
         assertThat(server.paths()).containsExactly("/market/stream?streams=btcusdt@kline_1h/btcusdt@markPrice@1s");
         assertThat(shard.uri().toString()).endsWith("/market/stream?streams=btcusdt@kline_1h/btcusdt@markPrice@1s");
         assertThat(shard.streams()).isEqualTo(STREAMS);
-        await(shard::isConnected, "the shard to see its connection");
+        // The shard registers the connection, then tells its listener outside its lock: wait for the event asserted on.
+        await(() -> !openings.isEmpty(), "the listener to hear of the connection");
+        assertThat(shard.isConnected()).isTrue();
         assertThat(openings).containsExactly(false);
     }
 
@@ -136,7 +139,7 @@ class BinanceStreamShardTest {
     void NSF03_aDroppedConnection_isReopened_andReportedAsALoss() {
         shard = started();
         Connection first = server.awaitConnection(1);
-        await(shard::isConnected, "the first connection");
+        await(() -> openings.size() == 1, "the first connection to be reported");
 
         first.drop();
         Connection second = server.awaitConnection(2);
@@ -152,7 +155,7 @@ class BinanceStreamShardTest {
     void NSF03_aCloseFromTheExchange_isFollowedByANewConnection() {
         shard = started();
         Connection first = server.awaitConnection(1);
-        await(shard::isConnected, "the first connection");
+        await(() -> openings.size() == 1, "the first connection to be reported");
         first.closeWith(1001);
 
         server.awaitConnection(2);
@@ -194,10 +197,14 @@ class BinanceStreamShardTest {
     /** 7.1 step 6: renewed before 24 hours by a second connection; the first is closed once the second is up. */
     @Test
     void NSF03_renewal_opensTheNewConnectionBeforeClosingTheOld_andIsNotALoss() {
-        shard = shard(properties(Duration.ofMillis(300), Duration.ofHours(1)), server.baseUrl(""));
+        Duration renewAfter = Duration.ofMillis(300);
+        ManualScheduler virtualTime = new ManualScheduler();
+        shard = shard(properties(renewAfter, Duration.ofHours(1)), server.baseUrl(""), STREAMS, virtualTime);
         shard.start();
         Connection first = server.awaitConnection(1);
+        await(() -> openings.size() == 1, "the first connection to be reported");
 
+        virtualTime.advance(renewAfter);
         Connection second = server.awaitConnection(2);
         await(() -> first.closeCode() != null, "the old connection to be closed");
 
@@ -212,52 +219,89 @@ class BinanceStreamShardTest {
     /** A renewal that cannot connect keeps the working connection and tries again. */
     @Test
     void NSF03_aFailedRenewal_keepsTheOldConnection_andTriesAgain() {
-        shard = shard(properties(Duration.ofMillis(200), Duration.ofHours(1)), server.baseUrl(""));
+        Duration renewAfter = Duration.ofMillis(200);
+        ManualScheduler virtualTime = new ManualScheduler();
+        shard = shard(properties(renewAfter, Duration.ofHours(1)), server.baseUrl(""), STREAMS, virtualTime);
         shard.start();
         Connection first = server.awaitConnection(1);
+        await(() -> openings.size() == 1, "the first connection to be reported");
         server.refuseNext(1);
 
+        // The renewal falls due and its handshake is refused; the old connection stays and a retry is scheduled.
+        virtualTime.advance(renewAfter);
+        await(() -> server.paths().size() == 2, "the refused renewal handshake");
+        await(() -> virtualTime.hasTaskDueWithin(Duration.ofMillis(100)), "the retry to be scheduled");
+        assertThat(shard.isConnected()).isTrue();
+        assertThat(first.closeCode()).isNull();
+
+        // The retry succeeds: a second connection, the old one closed, and no renewal after it until time moves.
+        virtualTime.advance(Duration.ofMillis(100));
         server.awaitConnection(2);
+        await(() -> openings.size() == 2, "the renewed connection to be reported");
+        await(() -> first.closeCode() != null, "the old connection to be closed after the renewal");
 
         assertThat(server.paths()).hasSize(3);
-        await(() -> first.closeCode() != null, "the old connection to be closed after the renewal");
         assertThat(openings).containsExactly(false, false);
     }
 
     /** A connection that goes silent is presumed dead, aborted and replaced. */
     @Test
     void NSF03_aSilentConnection_isReplaced() {
-        shard = shard(properties(Duration.ofHours(23), Duration.ofMillis(200)), server.baseUrl(""));
+        Duration idleTimeout = Duration.ofMillis(200);
+        MutableTestClock clock = new MutableTestClock(AT);
+        ManualScheduler virtualTime = new ManualScheduler(clock);
+        shard = shard(properties(Duration.ofHours(23), idleTimeout), server.baseUrl(""), STREAMS, virtualTime, clock);
         shard.start();
         server.awaitConnection(1);
+        await(() -> openings.size() == 1, "the first connection to be reported");
 
+        // Silent past the idle timeout: the watchdog aborts it and schedules the reconnect after the back-off.
+        virtualTime.advance(idleTimeout.plus(idleTimeout.dividedBy(2)));
+        assertThat(shard.isConnected()).isFalse();
+        virtualTime.advance(Duration.ofMillis(100));
         server.awaitConnection(2);
-        await(() -> openings.size() == 2, "the replacement");
+        await(() -> openings.size() == 2, "the replacement to be reported");
 
         assertThat(openings).containsExactly(false, true);
+        assertThat(http.webSocketBuilds()).isEqualTo(2);
     }
 
     /** Messages keep a connection alive past the idle timeout. */
     @Test
-    void NSF03_aConnectionThatKeepsTalking_isKept() throws Exception {
-        shard = shard(properties(Duration.ofHours(23), Duration.ofMillis(300)), server.baseUrl(""));
+    void NSF03_aConnectionThatKeepsTalking_isKept() {
+        MutableTestClock clock = new MutableTestClock(AT);
+        ManualScheduler virtualTime = new ManualScheduler(clock);
+        shard = shard(
+                properties(Duration.ofHours(23), Duration.ofMillis(300)),
+                server.baseUrl(""),
+                STREAMS,
+                virtualTime,
+                clock);
         shard.start();
         Connection connection = server.awaitConnection(1);
+        await(() -> openings.size() == 1, "the connection to be reported");
 
+        // A message every 100 ms of virtual time, each seen by the shard before time moves: never 300 ms of silence.
         for (int i = 0; i < 8; i++) {
             connection.send(StreamFrames.markPrice("BTCUSDT", AT));
-            Thread.sleep(100);
+            int received = i + 1;
+            await(() -> messages.size() == received, "message " + received);
+            virtualTime.advance(Duration.ofMillis(100));
         }
 
+        assertThat(shard.isConnected()).isTrue();
+        assertThat(http.webSocketBuilds()).isOne();
         assertThat(server.connections()).hasSize(1);
     }
 
     /** Closed by us: a polite close, and no reconnection afterwards. */
     @Test
-    void NSF03_closingTheShard_closesPolitely_andNeverReconnects() throws Exception {
-        shard = started();
+    void NSF03_closingTheShard_closesPolitely_andNeverReconnects() {
+        ManualScheduler virtualTime = new ManualScheduler();
+        shard = shard(properties(Duration.ofHours(23), Duration.ofHours(1)), server.baseUrl(""), STREAMS, virtualTime);
+        shard.start();
         Connection connection = server.awaitConnection(1);
-        await(shard::isConnected, "the connection");
+        await(() -> openings.size() == 1, "the connection to be reported");
 
         shard.close();
         shard.close();
@@ -265,11 +309,12 @@ class BinanceStreamShardTest {
         await(() -> connection.closeCode() != null, "the close frame");
         assertThat(connection.closeCode()).isEqualTo(1000);
         assertThat(shard.isConnected()).isFalse();
-        Thread.sleep(200);
-        assertThat(server.connections()).hasSize(1);
+        // A day of virtual time runs any retry, renewal or watchdog left behind: none may start an attempt.
+        virtualTime.advance(Duration.ofDays(1));
+        assertThat(http.webSocketBuilds()).isOne();
         shard.start();
-        Thread.sleep(100);
-        assertThat(server.paths()).hasSize(1);
+        assertThat(http.webSocketBuilds()).isOne();
+        assertThat(server.connections()).hasSize(1);
     }
 
     /** A shard closed while its connection is still opening drops that connection when it arrives. */
@@ -284,12 +329,13 @@ class BinanceStreamShardTest {
 
     /** A lost connection after close is not reconnected, and starting twice opens one connection. */
     @Test
-    void NSF03_startingTwice_opensOneConnection() throws Exception {
+    void NSF03_startingTwice_opensOneConnection() {
         shard = started();
         shard.start();
-        server.awaitConnection(1);
-        Thread.sleep(100);
 
+        // The attempt is started synchronously by start(): the count is final as soon as start() returns.
+        assertThat(http.webSocketBuilds()).isOne();
+        server.awaitConnection(1);
         assertThat(server.paths()).hasSize(1);
     }
 
@@ -315,16 +361,30 @@ class BinanceStreamShardTest {
     }
 
     private BinanceStreamShard shard(BinanceStreamProperties properties, URI base, List<String> streams) {
+        return shard(properties, base, streams, timer);
+    }
+
+    private BinanceStreamShard shard(
+            BinanceStreamProperties properties, URI base, List<String> streams, ScheduledExecutorService scheduler) {
+        return shard(properties, base, streams, scheduler, Clock.systemUTC());
+    }
+
+    private BinanceStreamShard shard(
+            BinanceStreamProperties properties,
+            URI base,
+            List<String> streams,
+            ScheduledExecutorService scheduler,
+            Clock clock) {
         return new BinanceStreamShard(
                 "TEST-0",
                 base,
                 streams,
                 http,
                 new BinanceStreamParser(JsonMapper.builder().build()),
-                timer,
+                scheduler,
                 properties,
                 new ReconnectBackoff(Duration.ofMillis(20), Duration.ofMillis(100), 0, () -> 0.0),
-                Clock.systemUTC(),
+                clock,
                 listener);
     }
 

@@ -6,7 +6,6 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -15,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
 
@@ -30,24 +30,28 @@ import java.util.function.Function;
 public final class StubExchange implements AutoCloseable {
 
     /** One canned answer. */
-    public record Answer(int status, Map<String, String> headers, String body, Duration delay) {
+    public record Answer(int status, Map<String, String> headers, String body, boolean withheld) {
 
         public static Answer ok(String body) {
-            return new Answer(200, Map.of(), body, Duration.ZERO);
+            return new Answer(200, Map.of(), body, false);
         }
 
         public static Answer status(int status) {
-            return new Answer(status, Map.of(), "{\"code\":-1,\"msg\":\"stub\"}", Duration.ZERO);
+            return new Answer(status, Map.of(), "{\"code\":-1,\"msg\":\"stub\"}", false);
         }
 
         public Answer withHeader(String name, String value) {
             Map<String, String> all = new HashMap<>(headers);
             all.put(name, value);
-            return new Answer(status, Map.copyOf(all), body, delay);
+            return new Answer(status, Map.copyOf(all), body, withheld);
         }
 
-        public Answer after(Duration wait) {
-            return new Answer(status, headers, body, wait);
+        /**
+         * This answer, held back until {@link StubExchange#release()} or {@link StubExchange#close()}: a server that
+         * does not answer, for as long as the test needs, without any timer of its own.
+         */
+        public Answer held() {
+            return new Answer(status, headers, body, true);
         }
     }
 
@@ -55,6 +59,7 @@ public final class StubExchange implements AutoCloseable {
     private final Map<String, Deque<Answer>> answers = new ConcurrentHashMap<>();
     private final Map<String, Function<URI, Answer>> responders = new ConcurrentHashMap<>();
     private final List<URI> requests = new CopyOnWriteArrayList<>();
+    private final CountDownLatch release = new CountDownLatch(1);
 
     public StubExchange() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -66,10 +71,12 @@ public final class StubExchange implements AutoCloseable {
             Answer answer = responder != null
                     ? responder.apply(exchange.getRequestURI())
                     : next(exchange.getRequestURI().getPath());
-            try {
-                Thread.sleep(answer.delay());
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
+            if (answer.withheld()) {
+                try {
+                    release.await();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
             answer.headers()
                     .forEach((name, value) -> exchange.getResponseHeaders().add(name, value));
@@ -126,8 +133,14 @@ public final class StubExchange implements AutoCloseable {
         }
     }
 
+    /** Lets every held answer go. */
+    public void release() {
+        release.countDown();
+    }
+
     @Override
     public void close() {
+        release.countDown();
         server.stop(0);
     }
 }
