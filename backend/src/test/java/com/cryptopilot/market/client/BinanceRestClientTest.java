@@ -500,7 +500,7 @@ class BinanceRestClientTest {
         void NSF02_aResponseSlowerThanTheReadTimeout_timesOut() throws Exception {
             client.close();
             client = clientFor(exchange.baseUrl(), exchange.baseUrl(), Duration.ofMillis(100));
-            exchange.on(SPOT_KLINES, Answer.ok(KLINES_BODY).after(Duration.ofMillis(600)));
+            exchange.on(SPOT_KLINES, Answer.ok(KLINES_BODY).held());
 
             BinanceClientException slow = refusalOf(
                     () -> client.klines(BinanceVenue.SPOT, "BTCUSDT", MarketInterval.ONE_MINUTE, null, null, 1));

@@ -1,6 +1,8 @@
 package com.cryptopilot.market.client;
 
+import com.cryptopilot.support.MutableTestClock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.PriorityQueue;
@@ -22,9 +24,25 @@ import java.util.concurrent.TimeUnit;
 final class ManualScheduler extends AbstractExecutorService implements ScheduledExecutorService {
 
     private final PriorityQueue<Task> queue = new PriorityQueue<>();
+    private final MutableTestClock clock;
+    private final Instant start;
     private long now;
     private long sequence;
     private boolean shutdown;
+
+    /** A scheduler with no clock of its own to move. */
+    ManualScheduler() {
+        this(null);
+    }
+
+    /**
+     * A scheduler that moves {@code clock} with its virtual time, so that code reading the clock — an idle watchdog
+     * comparing now with the last message — sees the same time as the tasks it schedules.
+     */
+    ManualScheduler(MutableTestClock clock) {
+        this.clock = clock;
+        this.start = clock == null ? Instant.EPOCH : clock.instant();
+    }
 
     /** Runs every task due within {@code amount} of virtual time, in due order, and moves the clock by it. */
     void advance(Duration amount) {
@@ -37,11 +55,11 @@ final class ManualScheduler extends AbstractExecutorService implements Scheduled
             synchronized (this) {
                 next = queue.peek();
                 if (next == null || next.due > target) {
-                    now = target;
+                    moveTo(target);
                     return;
                 }
                 queue.poll();
-                now = next.due;
+                moveTo(next.due);
             }
             if (!next.cancelled) {
                 next.command.run();
@@ -53,6 +71,13 @@ final class ManualScheduler extends AbstractExecutorService implements Scheduled
                     }
                 }
             }
+        }
+    }
+
+    private void moveTo(long nanos) {
+        now = nanos;
+        if (clock != null) {
+            clock.set(start.plusNanos(nanos));
         }
     }
 

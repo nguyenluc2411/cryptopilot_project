@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
@@ -78,9 +79,14 @@ class ClosedCandlePipelineTest {
         pipeline.submit(MarketType.SPOT, btc, closed("BTCUSDT", 0));
         busy.await();
         assertThat(pipeline.submit(MarketType.SPOT, btc, closed("BTCUSDT", 1))).isTrue();
-        long started = System.nanoTime();
-        assertThat(pipeline.submit(MarketType.SPOT, btc, closed("BTCUSDT", 2))).isFalse();
-        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(100));
+        // The consumer is held and the queue is full; a submit that waited would not return before the release.
+        CompletableFuture<Boolean> third =
+                CompletableFuture.supplyAsync(() -> pipeline.submit(MarketType.SPOT, btc, closed("BTCUSDT", 2)));
+        await(third::isDone, "the refused submit to return while the consumer is still held");
+        assertThat(third.join()).isFalse();
+        assertThat(release.getCount())
+                .as("returned before anything was released")
+                .isOne();
 
         release.countDown();
         await(() -> stored.size() == 2, "the two queued candles");

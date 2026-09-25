@@ -18,7 +18,7 @@ import java.time.ZoneOffset;
  */
 public final class MutableTestClock extends Clock {
 
-    private Instant instant;
+    private volatile Instant instant;
 
     public MutableTestClock(Instant start) {
         this.instant = start;
