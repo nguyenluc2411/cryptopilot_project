@@ -101,6 +101,26 @@ class MarketHubTest {
         assertThat(btc.payloads).hasSize(1);
     }
 
+    /**
+     * A client that subscribes and unsubscribes the same destination back to back, many times, leaves no subscription
+     * behind: the broker must handle each session's frames in the order they were sent.
+     */
+    @Test
+    void TD9_subscribeThenUnsubscribeBackToBack_leavesNoSubscription() throws Exception {
+        Client client = connect();
+
+        for (int i = 0; i < 300; i++) {
+            client.session.subscribe(BTC, new Inbox(null)).unsubscribe();
+        }
+
+        awaitSubscribers(BTC, 0);
+        Inbox probe = new Inbox(null);
+        client.session.subscribe(ETH, probe);
+        awaitSubscribers(ETH, 1);
+        // Every frame sent before the probe has been handled; none of them may have left a BTC subscription.
+        assertThat(subscribers(BTC)).isZero();
+    }
+
     /** Each client receives the updates of the pairs it subscribed to, and nothing else. */
     @Test
     void TD9_updates_reachOnlyTheSubscribersOfTheirPair() throws Exception {

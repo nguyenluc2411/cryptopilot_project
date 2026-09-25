@@ -32,8 +32,9 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
  * <h2>Order and slow clients</h2>
  *
  * <p>The broker preserves publish order per session, so a client sees a pair's updates in the order they were pushed.
- * Receive order is deliberately not preserved: with it, an exception of the inbound interceptor is raised on another
- * thread and the client never receives the ERROR frame of a refused subscription.
+ * Spring's receive-order option is deliberately not used — with it, an exception of the inbound interceptor is raised on
+ * another thread and the client never receives the ERROR frame of a refused subscription; the inbound channel runs on a
+ * single thread instead, which keeps each session's frames in order and the ERROR frames intact.
  * A session that cannot keep up is buffered up to {@code sendBufferSizeLimit} and for up to {@code sendTimeLimit}, then
  * closed by Spring's session decorator; the others are not held.
  *
@@ -78,6 +79,12 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
+        // One thread handles the inbound frames of every session, first in first out: a SUBSCRIBE followed at once by
+        // its
+        // UNSUBSCRIBE is handled in that order. On Spring's default pool the two could swap and leave the subscription
+        // registered for good. The interceptor below still runs on the thread that received the frame, so a refusal is
+        // still answered with an ERROR frame. Inbound frames are subscriptions only, so one thread is plenty.
+        registration.taskExecutor().corePoolSize(1).maxPoolSize(1);
         registration.interceptors(new ChannelInterceptor() {
             @Override
             public Message<?> preSend(Message<?> message, MessageChannel channel) {
