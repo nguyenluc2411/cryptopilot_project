@@ -82,7 +82,9 @@ class BinanceStreamShardTest {
         assertThat(server.paths()).containsExactly("/market/stream?streams=btcusdt@kline_1h/btcusdt@markPrice@1s");
         assertThat(shard.uri().toString()).endsWith("/market/stream?streams=btcusdt@kline_1h/btcusdt@markPrice@1s");
         assertThat(shard.streams()).isEqualTo(STREAMS);
-        await(shard::isConnected, "the shard to see its connection");
+        // The shard registers the connection, then tells its listener outside its lock: wait for the event asserted on.
+        await(() -> !openings.isEmpty(), "the listener to hear of the connection");
+        assertThat(shard.isConnected()).isTrue();
         assertThat(openings).containsExactly(false);
     }
 
@@ -212,15 +214,28 @@ class BinanceStreamShardTest {
     /** A renewal that cannot connect keeps the working connection and tries again. */
     @Test
     void NSF03_aFailedRenewal_keepsTheOldConnection_andTriesAgain() {
-        shard = shard(properties(Duration.ofMillis(200), Duration.ofHours(1)), server.baseUrl(""));
+        Duration renewAfter = Duration.ofMillis(200);
+        ManualScheduler virtualTime = new ManualScheduler();
+        shard = shard(properties(renewAfter, Duration.ofHours(1)), server.baseUrl(""), STREAMS, virtualTime);
         shard.start();
         Connection first = server.awaitConnection(1);
+        await(() -> openings.size() == 1, "the first connection to be reported");
         server.refuseNext(1);
 
+        // The renewal falls due and its handshake is refused; the old connection stays and a retry is scheduled.
+        virtualTime.advance(renewAfter);
+        await(() -> server.paths().size() == 2, "the refused renewal handshake");
+        await(() -> virtualTime.hasTaskDueWithin(Duration.ofMillis(100)), "the retry to be scheduled");
+        assertThat(shard.isConnected()).isTrue();
+        assertThat(first.closeCode()).isNull();
+
+        // The retry succeeds: a second connection, the old one closed, and no renewal after it until time moves.
+        virtualTime.advance(Duration.ofMillis(100));
         server.awaitConnection(2);
+        await(() -> openings.size() == 2, "the renewed connection to be reported");
+        await(() -> first.closeCode() != null, "the old connection to be closed after the renewal");
 
         assertThat(server.paths()).hasSize(3);
-        await(() -> first.closeCode() != null, "the old connection to be closed after the renewal");
         assertThat(openings).containsExactly(false, false);
     }
 
@@ -315,13 +330,18 @@ class BinanceStreamShardTest {
     }
 
     private BinanceStreamShard shard(BinanceStreamProperties properties, URI base, List<String> streams) {
+        return shard(properties, base, streams, timer);
+    }
+
+    private BinanceStreamShard shard(
+            BinanceStreamProperties properties, URI base, List<String> streams, ScheduledExecutorService scheduler) {
         return new BinanceStreamShard(
                 "TEST-0",
                 base,
                 streams,
                 http,
                 new BinanceStreamParser(JsonMapper.builder().build()),
-                timer,
+                scheduler,
                 properties,
                 new ReconnectBackoff(Duration.ofMillis(20), Duration.ofMillis(100), 0, () -> 0.0),
                 Clock.systemUTC(),
