@@ -14,8 +14,8 @@ import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.SymbolSyncJob.Outcome;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.service.ExchangeInfoFixtures;
-import com.cryptopilot.market.service.SymbolSyncService;
 import com.cryptopilot.market.service.SymbolSyncWriter;
+import com.cryptopilot.market.service.impl.SymbolSyncServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.lang.reflect.Proxy;
@@ -219,7 +219,7 @@ class SymbolSyncJobTest {
     private SymbolSyncJob job(boolean enabled) {
         SymbolSyncProperties properties = properties(enabled);
         return new SymbolSyncJob(
-                new SymbolSyncService(client, writer, properties, clock),
+                new SymbolSyncServiceImpl(client, writer, properties, clock),
                 recordingScheduler(),
                 properties,
                 clock,

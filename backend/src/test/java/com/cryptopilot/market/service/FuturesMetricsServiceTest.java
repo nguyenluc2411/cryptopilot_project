@@ -15,9 +15,12 @@ import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StubExchange;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.FuturesMetricsProperties;
+import com.cryptopilot.market.model.MetricsRun;
+import com.cryptopilot.market.model.SettlementRun;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.MarketSnapshotRepository;
+import com.cryptopilot.market.service.impl.FuturesMetricsServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.math.BigDecimal;
@@ -689,7 +692,7 @@ class FuturesMetricsServiceTest {
     }
 
     private FuturesMetricsService service(int pageSize, int maxRequests, Duration settlementDepth) {
-        return new FuturesMetricsService(
+        return new FuturesMetricsServiceImpl(
                 client,
                 pairs,
                 metrics,

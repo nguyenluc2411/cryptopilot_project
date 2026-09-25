@@ -18,8 +18,10 @@ import com.cryptopilot.market.config.SymbolSyncProperties;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.entity.ExchangeStatus;
 import com.cryptopilot.market.entity.PairStatus;
+import com.cryptopilot.market.model.SyncReport;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
+import com.cryptopilot.market.service.impl.SymbolSyncServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.net.URI;
@@ -353,7 +355,7 @@ class SymbolSyncServiceTest {
     }
 
     private SymbolSyncService service(List<String> seeds) {
-        return new SymbolSyncService(
+        return new SymbolSyncServiceImpl(
                 client, writer, new SymbolSyncProperties(false, "0 5 0 * * *", ZoneOffset.UTC, seeds), clock);
     }
 

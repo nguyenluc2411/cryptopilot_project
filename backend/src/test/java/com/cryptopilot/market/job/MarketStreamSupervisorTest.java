@@ -15,12 +15,14 @@ import com.cryptopilot.market.client.StubStreamServer.Connection;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
+import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.service.CandleBackfillService;
 import com.cryptopilot.market.service.LatestMarketData;
 import com.cryptopilot.market.service.StreamCandleService;
-import com.cryptopilot.market.service.StreamTarget;
+import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;
+import com.cryptopilot.market.service.impl.StreamCandleServiceImpl;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.lang.reflect.Proxy;
 import java.time.Clock;
@@ -229,7 +231,7 @@ class MarketStreamSupervisorTest {
         supervisor = supervisor(
                 true,
                 100,
-                new StreamCandleService(pairs, candles, backfill(), transactions, events::add, Clock.systemUTC()) {
+                new StreamCandleServiceImpl(pairs, candles, backfill(), transactions, events::add, Clock.systemUTC()) {
                     @Override
                     public List<StreamTarget> targets(MarketType market) {
                         if (market == MarketType.SPOT) {
@@ -282,7 +284,7 @@ class MarketStreamSupervisorTest {
         return supervisor(
                 enabled,
                 maxStreams,
-                new StreamCandleService(pairs, candles, backfill(), transactions, events::add, Clock.systemUTC()));
+                new StreamCandleServiceImpl(pairs, candles, backfill(), transactions, events::add, Clock.systemUTC()));
     }
 
     private MarketStreamSupervisor supervisor(boolean enabled, int maxStreams, StreamCandleService service) {
@@ -312,7 +314,7 @@ class MarketStreamSupervisorTest {
     }
 
     private CandleBackfillService backfill() {
-        return new CandleBackfillService(
+        return new CandleBackfillServiceImpl(
                 exchange,
                 pairs,
                 candles,

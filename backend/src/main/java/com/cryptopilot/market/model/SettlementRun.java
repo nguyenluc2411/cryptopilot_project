@@ -1,4 +1,4 @@
-package com.cryptopilot.market.service;
+package com.cryptopilot.market.model;
 
 import java.util.List;
 

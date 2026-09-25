@@ -8,8 +8,9 @@ import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.Kline;
 import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
+import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.service.StreamCandleService;
-import com.cryptopilot.market.service.StreamTarget;
+import com.cryptopilot.market.service.impl.StreamCandleServiceImpl;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Clock;
@@ -115,7 +116,7 @@ class ClosedCandlePipelineTest {
 
     /** A stand-in for the storage service that records, fails for one symbol, and can be held. */
     private StreamCandleService recording(CountDownLatch busy, CountDownLatch release) {
-        return new StreamCandleService(null, null, null, null, event -> {}, Clock.systemUTC()) {
+        return new StreamCandleServiceImpl(null, null, null, null, event -> {}, Clock.systemUTC()) {
             @Override
             public boolean onKline(MarketType market, StreamTarget target, KlineMessage message) {
                 if (target.symbol().equals("FAILUSDT")) {

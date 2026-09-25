@@ -1,4 +1,4 @@
-package com.cryptopilot.market.service;
+package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.client.BinanceBanStore;
 import com.cryptopilot.market.client.BinanceVenue;

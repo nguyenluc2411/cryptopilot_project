@@ -11,8 +11,11 @@ import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.CandleClosed;
 import com.cryptopilot.market.event.GapDetected;
+import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
+import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;
+import com.cryptopilot.market.service.impl.StreamCandleServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.math.BigDecimal;
@@ -69,7 +72,7 @@ class StreamCandleServiceTest {
     @BeforeEach
     void setUp() {
         data = new MarketTestData(sql, NOW);
-        CandleBackfillService backfill = new CandleBackfillService(
+        CandleBackfillService backfill = new CandleBackfillServiceImpl(
                 exchange,
                 pairs,
                 candles,
@@ -84,7 +87,7 @@ class StreamCandleServiceTest {
                         Duration.ofDays(7)),
                 transactions,
                 clock);
-        service = new StreamCandleService(pairs, candles, backfill, transactions, events::add, clock);
+        service = new StreamCandleServiceImpl(pairs, candles, backfill, transactions, events::add, clock);
         btc = data.pair("BTCUSDT", true, true, "TRADING", "TRADING", 1);
         target = new StreamTarget(btc, "BTCUSDT");
     }

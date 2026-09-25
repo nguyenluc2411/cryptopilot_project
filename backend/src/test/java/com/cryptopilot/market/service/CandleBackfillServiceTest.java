@@ -13,8 +13,11 @@ import com.cryptopilot.market.client.StubExchange;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.GapDetected;
+import com.cryptopilot.market.model.BackfillRun;
+import com.cryptopilot.market.model.GapFill;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
+import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.math.BigDecimal;
@@ -531,7 +534,7 @@ class CandleBackfillServiceTest {
                 depth,
                 new CandleBackfillProperties.PageSize(spotPage, futuresPage),
                 Duration.ofDays(7));
-        return new CandleBackfillService(client, pairs, candles, properties, transactions, clock);
+        return new CandleBackfillServiceImpl(client, pairs, candles, properties, transactions, clock);
     }
 
     private static CandleBackfillProperties.Depth depths() {

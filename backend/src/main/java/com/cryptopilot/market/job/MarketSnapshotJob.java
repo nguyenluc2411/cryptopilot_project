@@ -1,8 +1,8 @@
 package com.cryptopilot.market.job;
 
 import com.cryptopilot.market.client.BinanceStreamProperties;
+import com.cryptopilot.market.model.SnapshotRun;
 import com.cryptopilot.market.service.MarketSnapshotService;
-import com.cryptopilot.market.service.SnapshotRun;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;

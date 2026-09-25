@@ -6,6 +6,8 @@ import com.cryptopilot.market.client.ExchangeSymbol;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.entity.ExchangeStatus;
+import com.cryptopilot.market.model.ExchangeListing;
+import com.cryptopilot.market.model.SyncReport;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import java.time.Instant;

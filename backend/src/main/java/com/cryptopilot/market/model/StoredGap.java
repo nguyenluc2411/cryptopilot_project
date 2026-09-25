@@ -1,4 +1,4 @@
-package com.cryptopilot.market.repository;
+package com.cryptopilot.market.model;
 
 import com.cryptopilot.market.MarketType;
 import java.time.Instant;
