@@ -26,8 +26,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * type, numeric precision and nullability, and the test fails on any column added, removed or
  * changed. That is what catches the two mistakes a rule-based test cannot see: an attribute of the
  * logical model quietly dropped from the migration, and a column that no approved source asks for
- * quietly added to it — {@code setup_bias} on {@code technical_indicator}, for instance, which
- * belongs to an alignment item that is still pending and must not appear before it is approved.
+ * quietly added to it — {@code setup_bias} on {@code technical_indicator}, for instance, which A-07
+ * closed without (D-53): the setup score has no direction and is not stored (V9 drops {@code setup_score}).
  *
  * <p>The csv was generated from the migration and then read line by line against the logical model
  * plus the technical columns of TECHNICAL_DESIGN 5.5 and 6. Regenerating it to make a failure go
