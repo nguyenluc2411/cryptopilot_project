@@ -135,6 +135,25 @@ cryptopilot:
       # T-025: a series is rebuilt from its latest stored closed candles (TD 7.2: 1000, so EMA200 no longer depends on
       # where the history starts). No schedule: the indicators follow the closed candles.
       history-candles: 1000
+    setup-score:
+      # T-027, D-53: style presets v1. Each market's weights add up to 100, each 1–40; checked at start-up.
+      # SCALPING's primary timeframe is 5m; 15m is the nearest one BR-08 ingests.
+      presets:
+        SCALPING:
+          version: v1
+          timeframe: 15m
+          spot: { trend: 20, momentum: 40, volume: 25, level: 15 }
+          futures: { trend: 15, momentum: 35, volume: 20, level: 10, derivatives: 20 }
+        DAY_TRADING:
+          version: v1
+          timeframe: 1h
+          spot: { trend: 35, momentum: 30, volume: 15, level: 20 }
+          futures: { trend: 30, momentum: 25, volume: 15, level: 15, derivatives: 15 }
+        SWING:
+          version: v1
+          timeframe: 4h
+          spot: { trend: 40, momentum: 20, volume: 10, level: 30 }
+          futures: { trend: 35, momentum: 15, volume: 10, level: 25, derivatives: 15 }
     futures-metrics:
       # NSF-04: every 5 minutes, 90 s after the 5-minute instant, the funding settlements and then the open
       # interest and long/short account ratio of the pairs NSF-03 streams. Off here, on in the dev and prod
