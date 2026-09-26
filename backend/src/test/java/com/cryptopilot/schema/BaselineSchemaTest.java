@@ -197,7 +197,7 @@ class BaselineSchemaTest {
         "futures_market_data, funding_rate, numeric, 12, 8",
         "leverage_bracket, maintenance_margin_rate, numeric, 12, 8",
         "technical_indicator, rsi_14, numeric, 28, 10",
-        "technical_indicator, setup_score, numeric, 5, 2",
+        "technical_indicator, trend_score, numeric, 5, 2",
         "subscription_package, price_amount, numeric, 18, 0",
         "subscription_order, amount, numeric, 18, 0"
     })

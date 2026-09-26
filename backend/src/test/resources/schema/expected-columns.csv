@@ -320,7 +320,6 @@ technical_indicator,open_time,timestamp with time zone,,,NO
 technical_indicator,pair_id,uuid,,,NO
 technical_indicator,rsi_14,numeric,28,10,YES
 technical_indicator,score_version,character varying,,,YES
-technical_indicator,setup_score,numeric,5,2,YES
 technical_indicator,sma_20,numeric,28,10,YES
 technical_indicator,timeframe,character varying,,,NO
 technical_indicator,trend_score,numeric,5,2,YES
