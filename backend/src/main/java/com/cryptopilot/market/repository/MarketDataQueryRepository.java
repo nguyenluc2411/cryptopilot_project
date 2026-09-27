@@ -1,5 +1,6 @@
 package com.cryptopilot.market.repository;
 
+import com.cryptopilot.market.model.DerivativesInputs;
 import com.cryptopilot.market.model.FundingSettlement;
 import com.cryptopilot.market.model.FuturesPriceSnapshot;
 import com.cryptopilot.market.model.LongShortReading;
@@ -8,6 +9,7 @@ import com.cryptopilot.market.model.SpotSnapshot;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -166,6 +168,42 @@ public class MarketDataQueryRepository {
                         row.getBigDecimal("funding_rate"),
                         row.getBigDecimal("mark_price")))
                 .list();
+    }
+
+    /**
+     * The Futures data the derivatives component of a candle closing at {@code at} reads: the predicted funding
+     * rate, and the mark price and open interest changes over the hour before {@code at}. Each value is the latest
+     * one stored at or before its instant; a change is {@code null} when either end has none.
+     *
+     * <p>Rule: BR-13; TECHNICAL_DESIGN 7.4.
+     */
+    public DerivativesInputs derivativesAt(UUID pairId, Instant at) {
+        Timestamp now = Timestamp.from(at);
+        Timestamp hourAgo = Timestamp.from(at.minus(Duration.ofHours(1)));
+        return sql.sql("""
+                        select (select funding_rate from futures_market_data
+                                 where pair_id = :pair and snapshot_time <= :now and funding_rate is not null
+                                 order by snapshot_time desc limit 1) as funding_rate,
+                               (select mark_price from futures_market_data
+                                 where pair_id = :pair and snapshot_time <= :now and mark_price is not null
+                                 order by snapshot_time desc limit 1)
+                             - (select mark_price from futures_market_data
+                                 where pair_id = :pair and snapshot_time <= :ago and mark_price is not null
+                                 order by snapshot_time desc limit 1) as price_change,
+                               (select open_interest from futures_market_data
+                                 where pair_id = :pair and snapshot_time <= :now and open_interest is not null
+                                 order by snapshot_time desc limit 1)
+                             - (select open_interest from futures_market_data
+                                 where pair_id = :pair and snapshot_time <= :ago and open_interest is not null
+                                 order by snapshot_time desc limit 1) as open_interest_change""")
+                .param("pair", pairId)
+                .param("now", now)
+                .param("ago", hourAgo)
+                .query((row, index) -> new DerivativesInputs(
+                        row.getBigDecimal("funding_rate"),
+                        row.getBigDecimal("price_change"),
+                        row.getBigDecimal("open_interest_change")))
+                .single();
     }
 
     private Optional<Instant> earliest(String query, UUID pairId) {

@@ -68,7 +68,9 @@ public final class MarketTestData {
 
     /** Empties the market tables these tests write, children first. */
     public void clear() {
-        for (String table : new String[] {"ohlcv", "spot_market_data", "futures_market_data", "crypto_pair", "coin"}) {
+        for (String table : new String[] {
+            "technical_indicator", "ohlcv", "spot_market_data", "futures_market_data", "crypto_pair", "coin"
+        }) {
             sql.sql("delete from " + table).update();
         }
     }
