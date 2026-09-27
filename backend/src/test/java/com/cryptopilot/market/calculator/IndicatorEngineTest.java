@@ -256,10 +256,10 @@ class IndicatorEngineTest {
 
     /**
      * Unchanged closes: the deviation is exactly zero, so the three bands coincide; the averages are the price, the
-     * MACD is zero, and the RSI is 100 as TECHNICAL_DESIGN 7.2 fixes it for an average loss of zero (D-52, Q-20).
+     * MACD is zero, and the RSI is the neutral 50 of D-55, since both averages are zero.
      */
     @Test
-    void BR12_constantCloses_giveZeroDeviationAndTheRsiOfNoLoss() {
+    void BR12_constantCloses_giveZeroDeviationAndANeutralRsi() {
         IndicatorEngine engine = new IndicatorEngine(HOUR);
         for (int i = 0; i < 250; i++) {
             engine.offer(START.plus(HOUR.multipliedBy(i)), 64_123.45, 12.5);
@@ -276,7 +276,7 @@ class IndicatorEngineTest {
         assertThat(s.macdLine()).isCloseTo(0, within(1e-9));
         assertThat(s.macdSignal()).isCloseTo(0, within(1e-9));
         assertThat(s.macdHistogram()).isCloseTo(0, within(1e-9));
-        assertThat(s.rsi14()).isEqualTo(100);
+        assertThat(s.rsi14()).isEqualTo(50);
         assertThat(s.volumeSma20()).isCloseTo(12.5, within(1e-12));
     }
 
