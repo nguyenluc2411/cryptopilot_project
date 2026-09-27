@@ -2,9 +2,9 @@ package com.cryptopilot.billing.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.billing.entity.PlanTier;
+import com.cryptopilot.billing.PlanEntitlements;
+import com.cryptopilot.billing.PlanTier;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
-import com.cryptopilot.billing.model.PlanEntitlements;
 import com.cryptopilot.support.TestcontainersConfig;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;

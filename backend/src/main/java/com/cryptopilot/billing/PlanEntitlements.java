@@ -1,4 +1,4 @@
-package com.cryptopilot.billing.model;
+package com.cryptopilot.billing;
 
 /**
  * What one plan tier allows: seven switches, three maxima and the daily AI quota. A {@code null} maximum is

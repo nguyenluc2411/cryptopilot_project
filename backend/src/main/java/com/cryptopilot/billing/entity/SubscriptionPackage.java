@@ -1,6 +1,7 @@
 package com.cryptopilot.billing.entity;
 
-import com.cryptopilot.billing.model.PlanEntitlements;
+import com.cryptopilot.billing.PlanEntitlements;
+import com.cryptopilot.billing.PlanTier;
 import com.cryptopilot.common.entity.BaseEntity;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
