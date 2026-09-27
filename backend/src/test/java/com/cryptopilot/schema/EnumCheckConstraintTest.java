@@ -60,7 +60,8 @@ class EnumCheckConstraintTest {
      * Values that keep the rest of a row legal while one column is made illegal. They exist only
      * for the tables whose constraints span more than one column: a plan that waits at a limit
      * price needs that price, a journal record is either simulated with a plan or manual without
-     * one, an engagement points at exactly one target, a subscription ends after it starts, a feed
+     * one, an engagement points at exactly one target, a subscription ends after it starts, a paid
+     * package has its tier's rank, a price and a duration (BR-62), a feed
      * is polled at most every fifteen minutes (BR-49), and an indicator alert names an indicator.
      * A new cross-column rule that this map does not know about does not pass silently: the row is
      * refused by the wrong constraint and the test says so.
@@ -70,6 +71,18 @@ class EnumCheckConstraintTest {
             "trading_journal", Map.of("source", "MANUAL"),
             "engagement", Map.of("post_id", UUID.randomUUID()),
             "user_subscription", Map.of("end_at", java.sql.Timestamp.valueOf("2027-01-01 00:00:00")),
+            "subscription_package",
+                    Map.of(
+                            "tier",
+                            "PRO",
+                            "tier_rank",
+                            1,
+                            "price_amount",
+                            new java.math.BigDecimal("99000"),
+                            "duration_days",
+                            30,
+                            "is_purchasable",
+                            true),
             "news_source", Map.of("crawl_interval_minutes", 15),
             "alert.timeframe", Map.of("alert_type", "INDICATOR", "indicator_name", "RSI"));
 

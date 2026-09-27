@@ -60,9 +60,15 @@ class SeedDataTest {
     /** The fixed key of the bootstrap administrator, which the migration writes as a literal. */
     private static final String ADMIN_ID = "019b76da-a800-7000-8000-000000000001";
 
-    /** The tables the seed writes, with the number of rows each one is supposed to receive. */
+    /**
+     * The tables the seed writes, with the number of rows each one holds after every migration: V3 seeds sixteen
+     * settings and V10 removes the watchlist and active alert limits, which are the plan's (BR-62).
+     */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS =
-            Map.of("system_setting", 16, "trading_strategy", 3, "user_account", 1, "user_profile", 1);
+            Map.of("system_setting", 14, "trading_strategy", 3, "user_account", 1, "user_profile", 1);
+
+    /** The settings V3 seeds and V10 deletes, because the limits are the plan's (BR-62, D-58). */
+    private static final List<String> REMOVED_BY_V10 = List.of("MAX_WATCHLIST_ITEMS", "MAX_ACTIVE_ALERTS");
 
     /**
      * Tables that hold no business rows but are legitimately non-empty after a migration: Flyway's
@@ -88,7 +94,7 @@ class SeedDataTest {
     // ------------------------------------------------------------------------------------------
 
     @ParameterizedTest(name = "{0} holds {1} seeded rows")
-    @CsvSource({"system_setting, 16", "trading_strategy, 3", "user_account, 1", "user_profile, 1"})
+    @CsvSource({"system_setting, 14", "trading_strategy, 3", "user_account, 1", "user_profile, 1"})
     void seededTable_holdsExactlyTheExpectedNumberOfRows(String table, int expected) {
         assertThat(countOf(table)).isEqualTo(expected);
     }
@@ -206,16 +212,15 @@ class SeedDataTest {
     // The values approved rules fix
     // ------------------------------------------------------------------------------------------
 
-    /** BR-15: the watchlist limit, with the default the rule states. */
+    /**
+     * BR-15, BR-17: the watchlist and active alert limits are the plan's (BR-62, D-58). V3 seeded them as system
+     * settings; V10 removes them, so no code can read a limit that no longer applies to anybody.
+     */
     @Test
-    void BR15_theWatchlistLimit_isSeededWithTheDefaultTheRuleStates() {
-        assertThat(settingValue("MAX_WATCHLIST_ITEMS")).isEqualTo("50");
-    }
-
-    /** BR-17: the limit on alerts in status ACTIVE, with the default the rule states. */
-    @Test
-    void BR17_theActiveAlertLimit_isSeededWithTheDefaultTheRuleStates() {
-        assertThat(settingValue("MAX_ACTIVE_ALERTS")).isEqualTo("20");
+    void BR62_theWatchlistAndAlertLimits_areNotSystemSettings() {
+        assertThat(jdbc.sql("""
+                                select count(*) from system_setting
+                                 where setting_key in ('MAX_WATCHLIST_ITEMS', 'MAX_ACTIVE_ALERTS')""").query(Integer.class).single()).isZero();
     }
 
     /**
@@ -278,7 +283,7 @@ class SeedDataTest {
                 .query()
                 .listOfRows();
 
-        assertThat(settings).hasSize(16).allSatisfy(setting -> {
+        assertThat(settings).hasSize(14).allSatisfy(setting -> {
             String key = (String) setting.get("setting_key");
             String value = (String) setting.get("setting_value");
             switch ((String) setting.get("value_type")) {
@@ -445,14 +450,27 @@ class SeedDataTest {
      * is what happens when the file is applied by hand to a database that already has it — during a
      * recovery, or on an environment somebody is repairing — and it is the only way to show that
      * the conflict targets actually cover the rows the statements insert.
+     *
+     * <p>V10 deleted two settings V3 seeds (the limits are the plan's, BR-62), so re-applying V3 brings exactly
+     * those two back and nothing else changes. They are removed again afterwards: the database is shared by the
+     * suite and this test commits.
      */
     @Test
-    void reapplyingTheSeed_changesNothing() throws Exception {
+    void reapplyingTheSeed_changesNothingButTheSettingsALaterMigrationRemoved() throws Exception {
         List<Map<String, Object>> before = seededRows();
 
-        applyScript("db/migration/V3__seed_reference_data.sql");
+        try {
+            applyScript("db/migration/V3__seed_reference_data.sql");
 
-        assertThat(seededRows()).isEqualTo(before);
+            List<Map<String, Object>> after = seededRows();
+            assertThat(after.stream().filter(row -> !removedByV10(row))).containsExactlyElementsOf(before);
+            assertThat(after.stream().filter(SeedDataTest::removedByV10).map(row -> row.get("setting_key")))
+                    .containsExactlyInAnyOrderElementsOf(REMOVED_BY_V10);
+        } finally {
+            jdbc.sql("delete from system_setting where setting_key in (:keys)")
+                    .param("keys", REMOVED_BY_V10)
+                    .update();
+        }
         SEEDED_ROW_COUNTS.forEach(
                 (table, expected) -> assertThat(countOf(table)).as(table).isEqualTo(expected));
     }
@@ -460,6 +478,11 @@ class SeedDataTest {
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
+
+    /** Whether a seeded row is one of the settings V10 deletes; rows of other tables have no key. */
+    private static boolean removedByV10(Map<String, Object> row) {
+        return row.get("setting_key") instanceof String key && REMOVED_BY_V10.contains(key);
+    }
 
     private void assertVersionSevenLayout(String uuid) {
         assertThat(uuid.charAt(14)).as("version nibble of %s", uuid).isEqualTo('7');

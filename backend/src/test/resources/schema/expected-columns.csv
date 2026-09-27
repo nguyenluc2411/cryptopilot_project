@@ -282,18 +282,31 @@ subscription_order,payment_gateway,character varying,,,NO
 subscription_order,updated_at,timestamp with time zone,,,NO
 subscription_order,user_id,uuid,,,NO
 subscription_order,version,bigint,64,0,NO
+subscription_package,active_alert_max,integer,32,0,YES
+subscription_package,active_plan_max,integer,32,0,YES
+subscription_package,advanced_performance,boolean,,,NO
 subscription_package,ai_daily_quota,integer,32,0,NO
+subscription_package,ai_performance_context,boolean,,,NO
 subscription_package,can_post_video,boolean,,,NO
 subscription_package,created_at,timestamp with time zone,,,NO
 subscription_package,currency,character varying,,,NO
-subscription_package,duration_days,integer,32,0,NO
+subscription_package,duration_days,integer,32,0,YES
+subscription_package,external_alert_channels,boolean,,,NO
+subscription_package,futures_analysis,boolean,,,NO
+subscription_package,indicator_alert,boolean,,,NO
 subscription_package,is_active,boolean,,,NO
+subscription_package,is_purchasable,boolean,,,NO
+subscription_package,news_ai_insight,boolean,,,NO
 subscription_package,package_code,character varying,,,NO
 subscription_package,package_id,uuid,,,NO
 subscription_package,package_name,character varying,,,NO
 subscription_package,price_amount,numeric,18,0,NO
+subscription_package,score_components,boolean,,,NO
+subscription_package,tier,character varying,,,NO
+subscription_package,tier_rank,smallint,16,0,NO
 subscription_package,updated_at,timestamp with time zone,,,NO
 subscription_package,version,bigint,64,0,NO
+subscription_package,watchlist_max,integer,32,0,YES
 system_setting,description,character varying,,,YES
 system_setting,setting_key,character varying,,,NO
 system_setting,setting_value,character varying,,,NO
