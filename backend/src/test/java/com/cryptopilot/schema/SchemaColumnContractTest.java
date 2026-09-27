@@ -22,7 +22,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * Pins every column of the schema to a reviewed contract.
  *
  * <p>The other schema tests assert rules — a primary key here, a check constraint there. This one
- * asserts the whole shape: {@code schema/expected-columns.csv} lists all 443 columns with their
+ * asserts the whole shape: {@code schema/expected-columns.csv} lists all 471 columns with their
  * type, numeric precision and nullability, and the test fails on any column added, removed or
  * changed. That is what catches the two mistakes a rule-based test cannot see: an attribute of the
  * logical model quietly dropped from the migration, and a column that no approved source asks for

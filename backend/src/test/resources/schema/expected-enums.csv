@@ -31,6 +31,7 @@ subscription_order,currency,ck_subscription_order_currency,VND
 subscription_order,order_status,ck_subscription_order_status,PENDING|PAID|FAILED|EXPIRED
 subscription_order,payment_gateway,ck_subscription_order_gateway,VNPAY|MOMO
 subscription_package,currency,ck_subscription_package_currency,VND
+subscription_package,tier,ck_subscription_package_tier,FREE|PRO|PREMIUM
 system_setting,value_type,ck_system_setting_value_type,INT|DECIMAL|BOOLEAN|STRING
 technical_indicator,market_type,ck_technical_indicator_market_type,SPOT|FUTURES
 technical_indicator,timeframe,ck_technical_indicator_timeframe,15m|1h|4h|1d

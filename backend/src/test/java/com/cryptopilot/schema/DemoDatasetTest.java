@@ -107,8 +107,9 @@ class DemoDatasetTest {
 
         assertThat(count("user_profile")).isEqualTo(2);
         assertThat(count("system_setting"))
-                .as("the demo set adds no setting: the reference values are the same in every environment")
-                .isEqualTo(16);
+                .as("the demo set adds no setting: the reference values are the same in every environment"
+                        + " (V3's sixteen, less the two plan limits V10 removes)")
+                .isEqualTo(14);
         assertThat(count("trading_strategy")).isEqualTo(3);
         assertThat(count("crypto_pair"))
                 .as("the pair list is an open decision, and a development-only file is not a way around it")
