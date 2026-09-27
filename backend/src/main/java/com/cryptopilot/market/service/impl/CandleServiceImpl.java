@@ -47,7 +47,7 @@ public class CandleServiceImpl implements CandleService {
     public CandlesResponse closedCandles(
             String market, String symbol, String timeframe, Integer limit, Instant from, Instant to) {
         MarketType type = MarketRequests.market(market);
-        MarketInterval interval = storedTimeframe(timeframe);
+        MarketInterval interval = MarketRequests.timeframe(timeframe);
         int count = limit == null ? properties.defaultCandles() : limit;
         if (count < 1 || count > properties.maxCandles()) {
             throw MarketRequests.invalid("limit must be between 1 and " + properties.maxCandles() + ", was " + count);
@@ -68,13 +68,6 @@ public class CandleServiceImpl implements CandleService {
                         .map(CandleServiceImpl::response)
                         .toList();
         return new CandlesResponse(pair.getSymbol(), type.name(), interval.code(), found);
-    }
-
-    /** A timeframe BR-08 stores: 15m, 1h, 4h or 1d. */
-    private static MarketInterval storedTimeframe(String timeframe) {
-        return MarketInterval.fromCode(timeframe)
-                .filter(CandleBackfillServiceImpl.TIMEFRAMES::contains)
-                .orElseThrow(() -> MarketRequests.invalid("tf must be one of 15m, 1h, 4h, 1d, was " + timeframe));
     }
 
     private static CandleResponse response(StoredCandle candle) {
