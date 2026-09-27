@@ -15,13 +15,14 @@ import lombok.Getter;
 /**
  * A package of a plan tier: its price and duration, and the entitlements of the tier it belongs to.
  *
- * <p>FREE is the plan of a Trader without an ACTIVE subscription, so the FREE package is priced 0, has no duration
- * and cannot be bought; a paid package has a duration of 1–366 days. Both factories enforce this before the row
- * reaches the database, which enforces it again ({@code ck_subscription_package_free},
+ * <p>FREE is the plan of a Trader without an ACTIVE subscription, so the FREE package is priced 0, has no duration,
+ * cannot be bought and is never deactivated; a paid package is priced above 0 and lasts 1–366 days. Both factories
+ * enforce this before the row reaches the database, which enforces it again ({@code ck_subscription_package_free},
+ * {@code ck_subscription_package_free_active}, {@code ck_subscription_package_paid_price},
  * {@code ck_subscription_package_paid_duration}) together with the single FREE package
- * ({@code uq_subscription_package_one_free}). {@code tier_rank} is written from the tier and never set on its own.
+ * ({@code uq_subscription_package_one_free}). There is no way to deactivate a package yet. {@code tier_rank} is written from the tier and never set on its own.
  *
- * <p>Rule: BR-62, BR-56; SRS v1.1 entity 34, SRS 3.11.5; D-58, D-59.
+ * <p>Rule: BR-62, BR-56, BR-63; SRS v1.1 entity 34, SRS 3.11.5; D-58, D-59.
  * <p>Reference: Codd, E. F. (1970). <i>A Relational Model of Data for Large Shared Data Banks</i>. Communications of
  * the ACM 13(6) (the data kept consistent by the relations that hold it).
  * <p>Reference: Date, C. J. (2003). <i>An Introduction to Database Systems</i> (8th ed.). Addison-Wesley, ch. 9
@@ -147,10 +148,11 @@ public class SubscriptionPackage extends BaseEntity {
     }
 
     /**
-     * A package of a paid tier, on sale.
+     * A package of a paid tier, on sale. The price is above 0: the gateway charges a real amount and the upgrade
+     * credit is computed from it (SRS 3.11.5, BR-63).
      *
      * @param tier PRO or PREMIUM
-     * @param price the price in VND, not negative
+     * @param price the price in VND, above 0
      * @param durationDays 1–366
      */
     public static SubscriptionPackage paid(
@@ -163,8 +165,8 @@ public class SubscriptionPackage extends BaseEntity {
         if (Objects.requireNonNull(tier, "tier must not be null") == PlanTier.FREE) {
             throw new IllegalArgumentException("the FREE package is created with free(), not sold");
         }
-        if (Objects.requireNonNull(price, "price must not be null").signum() < 0) {
-            throw new IllegalArgumentException("a price is not negative, was " + price);
+        if (Objects.requireNonNull(price, "price must not be null").signum() <= 0) {
+            throw new IllegalArgumentException("a paid package is priced above 0 VND, was " + price);
         }
         if (durationDays < MIN_DURATION_DAYS || durationDays > MAX_DURATION_DAYS) {
             throw new IllegalArgumentException("a paid package lasts " + MIN_DURATION_DAYS + "–" + MAX_DURATION_DAYS

@@ -12,7 +12,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * The package invariants of BR-62 enforced before a row reaches the database: FREE priced 0, without duration and
- * not purchasable; a paid package of PRO or PREMIUM lasting 1–366 days at a price that is not negative; the rank
+ * not purchasable; a paid package of PRO or PREMIUM lasting 1–366 days at a price above 0; the rank
  * taken from the tier.
  *
  * <p>Rule: BR-62; SRS v1.1 entity 34, SRS 3.11.5; D-58.
@@ -81,11 +81,14 @@ class SubscriptionPackageTest {
                 .isEqualTo(days);
     }
 
-    @Test
-    void BR56_aNegativePrice_isRefused() {
+    /** SRS 3.11.5, BR-63: a paid package has a real price, so 0 is refused as well as a negative price. */
+    @ParameterizedTest(name = "{0} VND")
+    @ValueSource(strings = {"0", "-1"})
+    void BR63_aPaidPackageNotPricedAboveZero_isRefused(String price) {
         assertThatIllegalArgumentException()
                 .isThrownBy(() ->
-                        SubscriptionPackage.paid("PRO_X", "Pro", PlanTier.PRO, new BigDecimal("-1"), 30, PRO_LIMITS));
+                        SubscriptionPackage.paid("PRO_X", "Pro", PlanTier.PRO, new BigDecimal(price), 30, PRO_LIMITS))
+                .withMessageContaining("above 0");
     }
 
     @Test

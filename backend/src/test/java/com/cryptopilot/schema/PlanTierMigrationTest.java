@@ -60,12 +60,21 @@ class PlanTierMigrationTest {
                 .isEqualTo(2);
     }
 
-    /** A paid package may be priced 0 while it has a duration: the schema does not decide promotions. */
+    /** The FREE package is never deactivated: the default plan always exists (SRS 3.11.5). */
     @Test
-    void BR62_aPaidPackageAtZeroWithADuration_isAccepted() {
-        Map<String, Object> row = paid("PRO_TRIAL", "PRO", 1);
-        row.put("price_amount", BigDecimal.ZERO);
-        row.put("is_purchasable", false);
+    void BR62_aDeactivatedFreePackage_isRefused() {
+        Map<String, Object> row = free();
+        row.put("is_active", false);
+
+        refused(row, "ck_subscription_package_free_active");
+    }
+
+    /** A paid package may be deactivated; it stays for the orders that reference it (SRS 3.11.5). */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({"PRO, 1", "PREMIUM, 2"})
+    void BR62_aDeactivatedPaidPackage_isAccepted(String tier, int rank) {
+        Map<String, Object> row = paid("RETIRED", tier, rank);
+        row.put("is_active", false);
 
         assertThatCode(() -> insert(row)).doesNotThrowAnyException();
     }
@@ -177,12 +186,14 @@ class PlanTierMigrationTest {
         assertThatCode(() -> insert(row)).doesNotThrowAnyException();
     }
 
-    @Test
-    void BR56_aNegativePrice_isRefused() {
-        Map<String, Object> row = paid("NEGATIVE_PRICE", "PRO", 1);
-        row.put("price_amount", new BigDecimal("-1"));
+    /** A paid package is priced above 0, even with a duration: the gateway and BR-63's credit need a real price. */
+    @ParameterizedTest(name = "{0} at {2}")
+    @CsvSource({"PRO, 1, 0", "PREMIUM, 2, 0", "PRO, 1, -1"})
+    void BR63_aPaidPackageNotPricedAboveZero_isRefused(String tier, int rank, String price) {
+        Map<String, Object> row = paid("NO_PRICE", tier, rank);
+        row.put("price_amount", new BigDecimal(price));
 
-        refused(row, "ck_subscription_package_price");
+        refused(row, "ck_subscription_package_paid_price");
     }
 
     // ------------------------------------------------------------------ fixtures
@@ -233,6 +244,7 @@ class PlanTierMigrationTest {
         }) {
             row.put(flag, !"FREE".equals(tier));
         }
+        row.put("is_active", true);
         row.put("created_at", NOW);
         row.put("updated_at", NOW);
         return row;

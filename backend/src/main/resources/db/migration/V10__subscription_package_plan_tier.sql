@@ -12,6 +12,9 @@
 --
 -- FREE is the plan of a Trader without an ACTIVE subscription, not a thing sold: exactly one FREE package exists,
 -- priced 0, without a duration and not purchasable, and a paid tier always has a duration (BR-62, SRS 3.11.5).
+-- A paid package is priced above 0: the gateway charges a real amount and the upgrade credit of BR-63 is computed
+-- from it. Together with the FREE rule this also keeps every price from being negative.
+-- The FREE package is never deactivated (SRS 3.11.5): the default plan must always exist.
 -- The table is empty when this runs (the packages are seeded by T-007), so no existing row needs a tier.
 --
 -- The watchlist and active alert limits move from system_setting to the plan (BR-15, BR-17, BR-62); nothing reads
@@ -52,7 +55,10 @@ ALTER TABLE subscription_package
     ADD CONSTRAINT ck_subscription_package_duration CHECK (duration_days IS NULL OR duration_days BETWEEN 1 AND 366);
 
 ALTER TABLE subscription_package
-    ADD CONSTRAINT ck_subscription_package_price CHECK (price_amount >= 0);
+    ADD CONSTRAINT ck_subscription_package_paid_price CHECK (tier = 'FREE' OR price_amount > 0);
+
+ALTER TABLE subscription_package
+    ADD CONSTRAINT ck_subscription_package_free_active CHECK (tier <> 'FREE' OR is_active);
 
 ALTER TABLE subscription_package
     ADD CONSTRAINT ck_subscription_package_ai_daily_quota CHECK (ai_daily_quota >= 0);
