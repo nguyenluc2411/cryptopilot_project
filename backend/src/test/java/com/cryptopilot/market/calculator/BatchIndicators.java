@@ -107,7 +107,10 @@ final class BatchIndicators {
     }
 
     private static double rsiOf(double gain, double loss) {
-        return loss == 0 ? 100 : 100 - 100 / (1 + gain / loss);
+        if (loss == 0) {
+            return gain == 0 ? 50 : 100;
+        }
+        return 100 - 100 / (1 + gain / loss);
     }
 
     private static double[] populationDeviation(double[] x, int n) {

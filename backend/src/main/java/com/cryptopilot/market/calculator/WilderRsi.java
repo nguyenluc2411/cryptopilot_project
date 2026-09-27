@@ -5,11 +5,11 @@ import java.util.OptionalDouble;
 /**
  * The relative strength index with Wilder's smoothing: the average gain and loss seeded with the simple mean of the first
  * {@code n} changes, then {@code AG_t = (AG_{t−1}·(n − 1) + gain_t)/n} and the same for losses; {@code RSI = 100 −
- * 100/(1 + AG/AL)}, and 100 when the average loss is zero, as TECHNICAL_DESIGN 7.2 fixes it — including a series that
- * has not moved at all, where the ratio is 0/0 (Q-20). The first value comes with the {@code (n + 1)}-th close. O(1) per
- * close.
+ * 100/(1 + AG/AL)}; 100 when only the average loss is zero, 0 when only the average gain is zero, and 50 when both are
+ * — a series that has not moved, where the ratio is 0/0 and neither side has won (D-55). The first value comes with the
+ * {@code (n + 1)}-th close. O(1) per close.
  *
- * <p>Rule: BR-12 (RSI14 with Wilder smoothing); TECHNICAL_DESIGN 7.2; D-52.
+ * <p>Rule: BR-12 (RSI14 with Wilder smoothing); TECHNICAL_DESIGN 7.2; D-52; D-55 (Q-20).
  * <p>Reference: Wilder, J. W. (1978). <i>New Concepts in Technical Trading Systems</i>. Trend Research (the Relative
  * Strength Index and its smoothing).
  */
@@ -54,7 +54,7 @@ public final class WilderRsi {
             averageLoss = (averageLoss * (period - 1) + loss) / period;
         }
         if (averageLoss == 0) {
-            return OptionalDouble.of(100);
+            return OptionalDouble.of(averageGain == 0 ? 50 : 100);
         }
         return OptionalDouble.of(100 - 100 / (1 + averageGain / averageLoss));
     }

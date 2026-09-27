@@ -68,6 +68,43 @@ class IndicatorCalculatorsTest {
         assertThat(down).hasValue(0);
     }
 
+    /** Both averages zero: 0/0, answered with the neutral 50 of D-55 rather than 100. */
+    @Test
+    void BR12_rsi_ofASeriesThatHasNotMoved_isFifty() {
+        WilderRsi rsi = new WilderRsi(14);
+        OptionalDouble value = OptionalDouble.empty();
+        for (int i = 0; i < 30; i++) {
+            value = rsi.update(64_123.45);
+        }
+
+        assertThat(value).hasValue(50);
+    }
+
+    /** A flat seed followed by one rise: only the loss is zero, so the 100 of D-55 applies, not the neutral 50. */
+    @Test
+    void BR12_rsi_ofAFlatSeedThenARise_isHundred() {
+        WilderRsi rsi = new WilderRsi(3);
+        for (int i = 0; i < 4; i++) {
+            rsi.update(100);
+        }
+
+        assertThat(rsi.update(101)).hasValue(100);
+    }
+
+    /** Fewer than {@code n} changes answer nothing, a flat series included: the 0/0 rule never fires during warm-up. */
+    @Test
+    void BR12_rsi_ofASeriesShorterThanThePeriod_staysEmpty() {
+        WilderRsi flat = new WilderRsi(14);
+        WilderRsi moving = new WilderRsi(14);
+        for (int i = 0; i < 14; i++) {
+            assertThat(flat.update(100)).isEmpty();
+            assertThat(moving.update(100 + i % 3)).isEmpty();
+        }
+
+        assertThat(flat.update(100)).hasValue(50);
+        assertThat(moving.update(100)).isPresent();
+    }
+
     /** Period 2, width 2: over 1 and 3 the mean is 2 and the population deviation 1; over 3 and 5, 4 and 1. */
     @Test
     void BR12_bollinger_liesTwoPopulationDeviationsAroundTheMean() {
