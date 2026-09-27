@@ -25,7 +25,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 /**
  * The OpenAPI document of TECHNICAL_DESIGN 8: served at {@code /v3/api-docs} to anyone where it is enabled, listing
- * every HTTP operation of auth, user and market, with decimals described as strings and the bearer scheme on the
+ * every HTTP operation of auth, user, market and analysis, with decimals described as strings and the bearer scheme on the
  * operations that need a session — and switched off by the {@code prod} profile.
  *
  * <p>Rule: TECHNICAL_DESIGN 1.3, 5.4 and 8; SRS 3.1.3.
@@ -54,9 +54,10 @@ class OpenApiDocsTest {
             "/api/v1/market/{market}/{symbol}/candles",
             "/api/v1/market/spot/{symbol}/stats",
             "/api/v1/market/futures/{symbol}/stats",
-            "/api/v1/market/futures/{symbol}/metrics");
+            "/api/v1/market/futures/{symbol}/metrics",
+            "/api/v1/analysis/{market}/{symbol}");
 
-    private static final int OPERATIONS = 19;
+    private static final int OPERATIONS = 20;
 
     @Autowired
     private MockMvc mvc;
@@ -101,6 +102,8 @@ class OpenApiDocsTest {
         assertThat(securityOf(body, "/api/v1/me/profile", "get")).containsExactly(OpenApiConfig.BEARER);
         assertThat(securityOf(body, "/api/v1/me/password", "put")).containsExactly(OpenApiConfig.BEARER);
         assertThat(securityOf(body, "/api/v1/me/devices", "post")).containsExactly(OpenApiConfig.BEARER);
+        assertThat(securityOf(body, "/api/v1/analysis/{market}/{symbol}", "get"))
+                .containsExactly(OpenApiConfig.BEARER);
         assertThat(securityOf(body, "/api/v1/auth/login", "post")).isEmpty();
         assertThat(securityOf(body, "/api/v1/market/pairs", "get")).isEmpty();
         assertThat((String) JsonPath.read(body, "$.components.securitySchemes.bearerAuth.scheme"))
