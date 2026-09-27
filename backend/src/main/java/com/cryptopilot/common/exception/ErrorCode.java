@@ -185,7 +185,33 @@ public enum ErrorCode {
      * this code at all: the screens a role cannot open are not offered to it, so a 403 here means
      * either a direct call to the API or a defect.
      */
-    ACCESS_DENIED(HttpStatus.FORBIDDEN, "MSG43");
+    ACCESS_DENIED(HttpStatus.FORBIDDEN, "MSG43"),
+
+    /**
+     * The caller's plan does not include the feature (BR-62, CR-08). MSG29 names the lowest plan that does, as its
+     * one message argument.
+     *
+     * <p>403, like {@link #ACCESS_DENIED}: the credential is fine and presenting it again will not help; upgrading the
+     * plan will (D-61).
+     */
+    PLAN_FEATURE_NOT_INCLUDED(HttpStatus.FORBIDDEN, "MSG29"),
+
+    /**
+     * The caller already holds as many items as the plan allows (BR-15, BR-17, BR-62). MSG27 takes the maximum, the
+     * items and the plan, in that order.
+     *
+     * <p>409: the request is valid and would succeed with fewer existing items, so it conflicts with the current state
+     * rather than with the caller's rights (D-61).
+     */
+    PLAN_LIMIT_REACHED(HttpStatus.CONFLICT, "MSG27"),
+
+    /**
+     * Today's AI Assistant questions are used up (BR-50). MSG30 takes the daily quota; the quota resets at 00:00
+     * UTC+7.
+     *
+     * <p>429, like {@link #LOGIN_TEMPORARILY_LOCKED}: the same request succeeds once the day turns (D-61).
+     */
+    AI_DAILY_QUOTA_EXHAUSTED(HttpStatus.TOO_MANY_REQUESTS, "MSG30");
 
     private final HttpStatus status;
     private final String messageCode;
