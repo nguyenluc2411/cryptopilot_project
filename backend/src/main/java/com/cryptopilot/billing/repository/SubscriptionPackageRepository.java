@@ -31,9 +31,9 @@ public interface SubscriptionPackageRepository extends Repository<SubscriptionPa
     @Transactional(readOnly = true)
     List<SubscriptionPackage> findByTier(PlanTier tier);
 
-    /** Every package, lowest tier first. */
+    /** The packages still on offer ({@code is_active}), lowest tier first. */
     @Transactional(readOnly = true)
-    List<SubscriptionPackage> findAllByOrderByTierRankAsc();
+    List<SubscriptionPackage> findAllByActiveTrueOrderByTierRankAsc();
 
     /**
      * The packages of the Trader's subscriptions that are ACTIVE and running at {@code now} ({@code start_at <= now <

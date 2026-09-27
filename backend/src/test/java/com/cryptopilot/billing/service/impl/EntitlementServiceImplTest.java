@@ -233,8 +233,22 @@ class EntitlementServiceImplTest {
                 .doesNotThrowAnyException();
     }
 
+    /** A tier whose packages are all withdrawn cannot be bought, so MSG29 names the next tier that is on offer. */
     @Test
-    void CR08_aFeatureNoStoredPackageIncludes_isAConfigurationError() {
+    void CR08_msg29_skipsATierWhosePackagesAreAllWithdrawn() {
+        storePlans();
+        jdbc.sql("update subscription_package set is_active = false where tier = 'PRO'")
+                .update();
+        entityManager.clear();
+        UUID free = trader();
+
+        assertThatExceptionOfType(BusinessException.class)
+                .isThrownBy(() -> service.requireFeature(free, Feature.FUTURES_ANALYSIS))
+                .satisfies(e -> assertThat(e.messageArgs()).containsExactly("PREMIUM"));
+    }
+
+    @Test
+    void CR08_aFeatureNoActivePackageIncludes_isAConfigurationError() {
         packages.save(SubscriptionPackage.free("FREE", "Free", PlanFixtures.FREE));
         entityManager.flush();
 

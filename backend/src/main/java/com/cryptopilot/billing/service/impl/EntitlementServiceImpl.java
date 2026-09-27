@@ -25,7 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>Two ACTIVE subscriptions running at once should not exist (BR-55 keeps one); if the data holds them anyway the
  * highest tier wins and a warning is logged. A missing FREE package — a deployment without the package seed of
- * T-007 — and a feature no package includes are configuration errors and fail loudly rather than guessing.
+ * T-007 — and a feature no active package includes are configuration errors and fail loudly rather than guessing.
  *
  * <p>Rule: BR-62, BR-50, BR-15, BR-17; SRS v1.1 UC-53, CR-08, SRS 3.10.4; D-54, D-58, D-59, D-60, D-61.
  * <p>Reference: Fowler, M. (2002). <i>Patterns of Enterprise Application Architecture</i>. Addison-Wesley, "Service
@@ -36,7 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class EntitlementServiceImpl implements EntitlementService {
 
-    private static final Logger log = LoggerFactory.getLogger(EntitlementService.class);
+    private static final Logger log = LoggerFactory.getLogger(EntitlementServiceImpl.class);
 
     private final SubscriptionPackageRepository packages;
     private final Clock clock;
@@ -121,13 +121,13 @@ public class EntitlementServiceImpl implements EntitlementService {
         return free.getFirst();
     }
 
-    /** MSG29 names the lowest tier whose package includes the feature. */
+    /** MSG29 names the lowest tier with an active package that includes the feature: a tier the Trader can still get. */
     private BusinessException notIncluded(Feature feature, EffectivePlan plan) {
-        PlanTier lowest = packages.findAllByOrderByTierRankAsc().stream()
+        PlanTier lowest = packages.findAllByActiveTrueOrderByTierRankAsc().stream()
                 .filter(p -> feature.includedIn(p.entitlements()))
                 .map(SubscriptionPackage::getTier)
                 .findFirst()
-                .orElseThrow(() -> new IllegalStateException("no stored package includes " + feature));
+                .orElseThrow(() -> new IllegalStateException("no active package includes " + feature));
         return new BusinessException(
                 ErrorCode.PLAN_FEATURE_NOT_INCLUDED,
                 plan.tier() + " does not include " + feature + "; " + lowest + " does",
