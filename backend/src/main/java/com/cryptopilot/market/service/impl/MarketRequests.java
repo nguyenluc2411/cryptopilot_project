@@ -4,6 +4,7 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.market.MarketType;
+import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import java.time.Instant;
@@ -17,7 +18,7 @@ import org.springframework.stereotype.Component;
  * disabled, or is enabled only on the other market, answers exactly like one that does not exist, so the API does
  * not tell which pairs are registered but hidden.
  *
- * <p>Rule: UC-09, BR-07; TECHNICAL_DESIGN 5.1.
+ * <p>Rule: UC-09, UC-10, UC-11, BR-07, BR-08; TECHNICAL_DESIGN 5.1.
  */
 @Component
 class MarketRequests {
@@ -38,6 +39,13 @@ class MarketRequests {
             }
         }
         throw invalid("market must be spot or futures, was " + market);
+    }
+
+    /** A timeframe BR-08 stores: 15m, 1h, 4h or 1d. */
+    static MarketInterval timeframe(String timeframe) {
+        return MarketInterval.fromCode(timeframe)
+                .filter(CandleBackfillServiceImpl.TIMEFRAMES::contains)
+                .orElseThrow(() -> invalid("tf must be one of 15m, 1h, 4h, 1d, was " + timeframe));
     }
 
     /** The pair with this symbol, when it is enabled on this market (BR-07). */
