@@ -20,7 +20,7 @@ import java.util.Set;
  * cannot bear the losses is not pointed to AGGRESSIVE, and neither is one who can bear losses but dislikes them.
  *
  * <p>The questions and scale follow the structure of a summed-score risk tolerance instrument; the thresholds are v1
- * values, chosen so that the middle of the scale is BALANCED, the default of BR-66. The class holds no state and uses
+ * values, chosen so that the middle of the scale is BALANCED, the middle profile of BR-66. The class holds no state and uses
  * no framework, so the scoring is tested on its own.
  *
  * <p>Rule: BR-66; SRS 3.2.5 (5–7 questions on capacity and attitude suggest a profile; the Trader may choose another);

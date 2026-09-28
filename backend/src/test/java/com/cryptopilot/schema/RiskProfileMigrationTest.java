@@ -27,12 +27,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.FileCopyUtils;
 
 /**
- * The risk profile column V12 adds to {@code user_profile}: every existing and new profile holds BALANCED unless one is
- * chosen, only the three profiles are stored, and running the migration again changes nothing.
+ * The risk profile column V12 adds to {@code user_profile}: every existing and new profile holds CONSERVATIVE unless one
+ * is chosen (D-64), only the three profiles are stored, and running the migration again changes nothing.
  *
  * <p>Every test rolls back.
  *
- * <p>Rule: BR-66; SRS 3.2.5; D-53.
+ * <p>Rule: BR-66; SRS 3.2.5; D-53, D-64.
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
@@ -49,18 +49,18 @@ class RiskProfileMigrationTest {
 
     /** The seeded administrator's profile existed before V12, and was given the default. */
     @Test
-    void BR66_aProfileThatExistedBeforeTheMigration_isBalanced() {
+    void D64_aProfileThatExistedBeforeTheMigration_isConservative() {
         assertThat(jdbc.sql("select distinct risk_profile from user_profile")
                         .query(String.class)
                         .list())
-                .containsExactly("BALANCED");
+                .containsExactly("CONSERVATIVE");
     }
 
     @Test
-    void BR66_aProfileInsertedWithoutARiskProfile_isBalanced() {
+    void D64_aProfileInsertedWithoutARiskProfile_isConservative() {
         UUID id = profile();
 
-        assertThat(riskProfileOf(id)).isEqualTo("BALANCED");
+        assertThat(riskProfileOf(id)).isEqualTo("CONSERVATIVE");
     }
 
     @Test

@@ -3,7 +3,7 @@ package com.cryptopilot.common.exception;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Arrays;
-import java.util.regex.Pattern;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -16,16 +16,39 @@ import org.junit.jupiter.params.provider.EnumSource;
  */
 class ErrorCodeTest {
 
-    /** Ids of SRS section 5.3 run from MSG01 to MSG49 (v1.1 added MSG46 to MSG49). */
-    private static final Pattern SRS_MESSAGE_ID = Pattern.compile("MSG\\d{2}");
-
-    private static final int HIGHEST_SRS_MESSAGE = 49;
+    /**
+     * Every constant with the SRS 5.3 message and the status reviewed for it. A constant added without a row here
+     * fails, so no message id reaches a client unless someone checked it exists in SRS 5.3; ids no constant uses yet
+     * (MSG46, MSG47, MSG49 among them) are not listed.
+     */
+    private static final Map<ErrorCode, String> REVIEWED = Map.ofEntries(
+            Map.entry(ErrorCode.VALIDATION_FAILED, "MSG01 400"),
+            Map.entry(ErrorCode.RESOURCE_NOT_FOUND, "MSG41 404"),
+            Map.entry(ErrorCode.INTERNAL_ERROR, "MSG43 500"),
+            Map.entry(ErrorCode.INVALID_CREDENTIALS, "MSG08 401"),
+            Map.entry(ErrorCode.LOGIN_TEMPORARILY_LOCKED, "MSG09 429"),
+            Map.entry(ErrorCode.ACCOUNT_NOT_ACTIVE, "MSG10 403"),
+            Map.entry(ErrorCode.SESSION_EXPIRED, "MSG44 401"),
+            Map.entry(ErrorCode.EMAIL_NOT_VERIFIED, "MSG11 403"),
+            Map.entry(ErrorCode.EMAIL_ALREADY_VERIFIED, "MSG07 409"),
+            Map.entry(ErrorCode.ACCOUNT_STATUS_TRANSITION_INVALID, "MSG39 409"),
+            Map.entry(ErrorCode.TOKEN_INVALID_OR_EXPIRED, "MSG07 400"),
+            Map.entry(ErrorCode.EMAIL_ALREADY_REGISTERED, "MSG04 409"),
+            Map.entry(ErrorCode.PASSWORD_POLICY_VIOLATION, "MSG03 400"),
+            Map.entry(ErrorCode.DATA_CONFLICT, "MSG43 409"),
+            Map.entry(ErrorCode.CURRENT_PASSWORD_INCORRECT, "MSG08 400"),
+            Map.entry(ErrorCode.AUTHENTICATION_REQUIRED, "MSG44 401"),
+            Map.entry(ErrorCode.ACCESS_DENIED, "MSG43 403"),
+            Map.entry(ErrorCode.PLAN_FEATURE_NOT_INCLUDED, "MSG29 403"),
+            Map.entry(ErrorCode.PLAN_LIMIT_REACHED, "MSG27 409"),
+            Map.entry(ErrorCode.AI_DAILY_QUOTA_EXHAUSTED, "MSG30 429"),
+            Map.entry(ErrorCode.RISK_PROFILE_CONFIRMATION_REQUIRED, "MSG48 400"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)
-    void everyCode_namesOneExistingSrsMessage(ErrorCode errorCode) {
-        assertThat(errorCode.messageCode()).matches(SRS_MESSAGE_ID);
-        assertThat(Integer.parseInt(errorCode.messageCode().substring(3))).isBetween(1, HIGHEST_SRS_MESSAGE);
+    void everyCode_carriesTheMessageAndStatusReviewedForIt(ErrorCode errorCode) {
+        assertThat(REVIEWED).as("%s has no reviewed row", errorCode).containsKey(errorCode);
+        assertThat(errorCode.messageCode() + " " + errorCode.status().value()).isEqualTo(REVIEWED.get(errorCode));
     }
 
     @ParameterizedTest

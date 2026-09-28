@@ -66,9 +66,10 @@ public class RiskProfileController {
 
     @Operation(summary = "Choose the risk profile (BR-66); AGGRESSIVE needs the confirmation of MSG48")
     @ApiResponse(responseCode = "200", description = "MSG14: saved")
-    @ApiResponse(responseCode = "400", description = "MSG01: the body is invalid")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01: the body is invalid; MSG48: switching to AGGRESSIVE needs confirmation")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "409", description = "MSG48: switching to AGGRESSIVE needs confirmation")
     @PutMapping("/risk-profile")
     public MessageResponse chooseRiskProfile(
             @AuthenticationPrincipal Jwt caller, @Valid @RequestBody ChooseRiskProfileRequest request) {

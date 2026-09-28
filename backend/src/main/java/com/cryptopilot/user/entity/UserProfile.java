@@ -63,10 +63,10 @@ public class UserProfile extends BaseEntity {
     @Column(name = "trading_style", length = 32)
     private TradingStyle tradingStyle;
 
-    /** How much capital a plan may risk and when it is warned about (BR-66); BALANCED until the Trader chooses. */
+    /** How much capital a plan may risk and when it is warned about (BR-66); CONSERVATIVE until the Trader chooses (D-64). */
     @Enumerated(EnumType.STRING)
     @Column(name = "risk_profile", nullable = false, length = 32)
-    private RiskProfile riskProfile = RiskProfile.BALANCED;
+    private RiskProfile riskProfile = RiskProfile.DEFAULT;
 
     /** Whether notifications also go out by mail. */
     @Column(name = "notify_email", nullable = false)

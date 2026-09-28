@@ -96,7 +96,7 @@ public class RiskProfileServiceImpl implements RiskProfileService {
     @Transactional(readOnly = true)
     public RiskProfileParameters parametersOf(UUID userId) {
         RiskProfile chosen =
-                profiles.findById(userId).map(UserProfile::getRiskProfile).orElse(RiskProfile.BALANCED);
+                profiles.findById(userId).map(UserProfile::getRiskProfile).orElse(RiskProfile.DEFAULT);
         return properties.parameters(chosen);
     }
 

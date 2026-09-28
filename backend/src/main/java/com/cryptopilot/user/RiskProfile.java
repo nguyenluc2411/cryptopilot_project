@@ -11,12 +11,18 @@ package com.cryptopilot.user;
  */
 public enum RiskProfile {
 
-    /** The smallest risk per trade and leverage. */
+    /** The smallest risk per trade and leverage; the default until the Trader chooses (D-64). */
     CONSERVATIVE,
 
-    /** The default of a new Trader. */
+    /** The middle profile. */
     BALANCED,
 
     /** The highest values any profile may have; choosing it needs the confirmation of MSG48. */
-    AGGRESSIVE
+    AGGRESSIVE;
+
+    /**
+     * The profile of a Trader who has not chosen one: the lowest risk, so a Trader is never sized above what they have
+     * accepted (D-64). The column default of {@code user_profile.risk_profile} is the same value.
+     */
+    public static final RiskProfile DEFAULT = CONSERVATIVE;
 }

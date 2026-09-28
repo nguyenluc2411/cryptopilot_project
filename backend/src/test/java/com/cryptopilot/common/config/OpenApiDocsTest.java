@@ -112,6 +112,17 @@ class OpenApiDocsTest {
                 .isEqualTo("bearer");
     }
 
+    /** D-65: the unconfirmed switch to AGGRESSIVE is documented as the 400 of MSG48, like every validation error. */
+    @Test
+    void D65_theRiskProfileChoice_documentsMsg48UnderBadRequest() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Map<String, Object>> responses =
+                JsonPath.read(body, "$.paths['/api/v1/me/risk-profile'].put.responses");
+        assertThat(responses).containsKeys("200", "400", "401").doesNotContainKeys("409", "422");
+        assertThat((String) responses.get("400").get("description")).contains("MSG48");
+    }
+
     /** Swagger UI is reachable for reading where the document is. */
     @Test
     void TD8_swaggerUi_isReachable() throws Exception {

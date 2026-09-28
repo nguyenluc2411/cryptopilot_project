@@ -27,9 +27,9 @@ import org.springframework.test.web.servlet.ResultActions;
 
 /**
  * The risk profile and risk questionnaire of SCR-07 over HTTP, and the same profile read by another module through
- * {@link RiskProfileApi}: the BALANCED start, the suggestion that saves nothing, the choice, and MSG48 before AGGRESSIVE.
+ * {@link RiskProfileApi}: the CONSERVATIVE start (D-64), the suggestion that saves nothing, the choice, and MSG48 before AGGRESSIVE.
  *
- * <p>Rule: BR-66; SRS UC-06, section 3.2.5; messages MSG01, MSG14, MSG48; D-53.
+ * <p>Rule: BR-66; SRS UC-06, section 3.2.5; messages MSG01, MSG14, MSG48; D-53, D-64, D-65.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -67,19 +67,32 @@ class RiskProfileControllerTest {
                 .update();
     }
 
-    /** BR-66: a new Trader starts on BALANCED, shown on the profile and with its parameters. */
+    /** D-64: a new Trader who has not taken the questionnaire is on CONSERVATIVE, shown with its parameters. */
     @Test
-    void BR66_aNewTrader_isBalanced() throws Exception {
+    void D64_aNewTrader_isConservative() throws Exception {
         String token = signedInTrader("fresh");
 
         mvc.perform(get("/api/v1/me/profile").header(HttpHeaders.AUTHORIZATION, token))
-                .andExpect(jsonPath("$.riskProfile").value("BALANCED"));
+                .andExpect(jsonPath("$.riskProfile").value("CONSERVATIVE"));
         mvc.perform(get(RISK_PROFILE).header(HttpHeaders.AUTHORIZATION, token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.riskProfile").value("BALANCED"))
-                .andExpect(jsonPath("$.riskPerTradePercent").value(1))
-                .andExpect(jsonPath("$.maxFuturesLeverage").value(5))
-                .andExpect(jsonPath("$.maxTotalOpenRiskPercent").value(4));
+                .andExpect(jsonPath("$.riskProfile").value("CONSERVATIVE"))
+                .andExpect(jsonPath("$.riskPerTradePercent").value(0.5))
+                .andExpect(jsonPath("$.maxFuturesLeverage").value(3))
+                .andExpect(jsonPath("$.maxTotalOpenRiskPercent").value(2));
+    }
+
+    /** D-64: another module reads CONSERVATIVE for a registered Trader who never took the questionnaire. */
+    @Test
+    void D64_theModuleApi_readsConservativeForATraderWhoNeverTookTheQuestionnaire() throws Exception {
+        signedInTrader("untouched");
+
+        RiskProfileParameters parameters = riskProfileApi.parametersOf(accountIdOf("untouched"));
+
+        assertThat(parameters.profile()).isEqualTo(RiskProfile.CONSERVATIVE);
+        assertThat(parameters.riskPerTradePercent()).isEqualByComparingTo("0.5");
+        assertThat(parameters.maxFuturesLeverage()).isEqualTo(3);
+        assertThat(parameters.maxTotalOpenRiskPercent()).isEqualByComparingTo("2");
     }
 
     @Test
@@ -98,7 +111,6 @@ class RiskProfileControllerTest {
     @Test
     void BR66_aSuggestion_isReturnedAndNothingIsSaved() throws Exception {
         String token = signedInTrader("suggests");
-        choose(token, "CONSERVATIVE", false).andExpect(status().isOk());
 
         mvc.perform(post(QUESTIONNAIRE)
                         .header(HttpHeaders.AUTHORIZATION, token)
@@ -131,28 +143,32 @@ class RiskProfileControllerTest {
     }
 
     @Test
-    void BR66_aLowerProfile_isSavedWithMsg14() throws Exception {
+    void BR66_aProfileBelowAggressive_isSavedWithMsg14WithoutConfirmation() throws Exception {
         String token = signedInTrader("lower");
 
-        choose(token, "CONSERVATIVE", false)
+        choose(token, "BALANCED", false)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.messageCode").value("MSG14"));
 
         mvc.perform(get(RISK_PROFILE).header(HttpHeaders.AUTHORIZATION, token))
-                .andExpect(jsonPath("$.riskProfile").value("CONSERVATIVE"))
-                .andExpect(jsonPath("$.riskPerTradePercent").value(0.5))
-                .andExpect(jsonPath("$.maxFuturesLeverage").value(3));
+                .andExpect(jsonPath("$.riskProfile").value("BALANCED"))
+                .andExpect(jsonPath("$.riskPerTradePercent").value(1))
+                .andExpect(jsonPath("$.maxFuturesLeverage").value(5));
     }
 
-    /** SRS 3.2.5: switching to AGGRESSIVE unconfirmed answers MSG48 and changes nothing; confirmed, it is saved. */
+    /**
+     * SRS 3.2.5: switching to AGGRESSIVE unconfirmed answers MSG48 with 400, like every business validation error of
+     * the API (D-65), and changes nothing; confirmed, it is saved.
+     */
     @Test
     void BR66_switchingToAggressive_needsTheConfirmationOfMsg48() throws Exception {
         String token = signedInTrader("aggressive");
 
         choose(token, "AGGRESSIVE", false)
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.messageCode").value("MSG48"));
-        assertThat(storedProfileOf("aggressive")).isEqualTo("BALANCED");
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG48"))
+                .andExpect(jsonPath("$.code").value("RISK_PROFILE_CONFIRMATION_REQUIRED"));
+        assertThat(storedProfileOf("aggressive")).isEqualTo("CONSERVATIVE");
 
         choose(token, "AGGRESSIVE", true).andExpect(status().isOk());
         assertThat(storedProfileOf("aggressive")).isEqualTo("AGGRESSIVE");
@@ -194,8 +210,8 @@ class RiskProfileControllerTest {
     }
 
     @Test
-    void BR66_theModuleApi_readsBalancedForAnAccountWithoutAProfile() {
-        assertThat(riskProfileApi.parametersOf(UUID.randomUUID()).profile()).isEqualTo(RiskProfile.BALANCED);
+    void D64_theModuleApi_readsConservativeForAnAccountWithoutAProfile() {
+        assertThat(riskProfileApi.parametersOf(UUID.randomUUID()).profile()).isEqualTo(RiskProfile.CONSERVATIVE);
     }
 
     private ResultActions choose(String token, String profile, boolean confirm) throws Exception {

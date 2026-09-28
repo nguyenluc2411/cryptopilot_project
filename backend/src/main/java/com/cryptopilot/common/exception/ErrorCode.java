@@ -217,9 +217,10 @@ public enum ErrorCode {
      * The Trader switches to the AGGRESSIVE risk profile without confirming MSG48's warning (BR-66, SRS 3.2.5). The
      * client shows MSG48 and sends the choice again, confirmed.
      *
-     * <p>409: the request is valid and succeeds once confirmed; nothing about the caller's rights changes.
+     * <p>400, the status every business validation error of this API answers with (MSG01, MSG03, MSG07, MSG08); 422
+     * would be the only one of its kind (D-65).
      */
-    RISK_PROFILE_CONFIRMATION_REQUIRED(HttpStatus.CONFLICT, "MSG48");
+    RISK_PROFILE_CONFIRMATION_REQUIRED(HttpStatus.BAD_REQUEST, "MSG48");
 
     private final HttpStatus status;
     private final String messageCode;

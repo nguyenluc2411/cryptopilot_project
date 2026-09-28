@@ -13,7 +13,7 @@ public interface RiskProfileApi {
 
     /**
      * The risk profile of the account and its parameters. An account without a profile row reads the default,
-     * BALANCED, as a new Trader would.
+     * CONSERVATIVE, as a Trader who has not chosen would (D-64).
      */
     RiskProfileParameters parametersOf(UUID userId);
 }
