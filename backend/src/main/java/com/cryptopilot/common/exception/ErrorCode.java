@@ -15,7 +15,7 @@ import org.springframework.http.HttpStatus;
  * own constants as its use cases are built, and {@code ErrorCodeTest} keeps the invariant that every
  * constant names exactly one existing {@code MSGxx} id.
  *
- * <p>Rule: TECHNICAL_DESIGN section 5.1; SRS section 5.3 (application messages MSG01…MSG45).
+ * <p>Rule: TECHNICAL_DESIGN section 5.1; SRS section 5.3 (application messages MSG01…MSG49 in v1.1).
  *
  * <p>Reference: Nottingham, M., Wilde, E. &amp; Dalal, S. (2023). RFC 9457, <i>Problem Details for
  * HTTP APIs</i>, section 3 (a problem type is a stable identifier, separate from the status code).
@@ -211,7 +211,15 @@ public enum ErrorCode {
      *
      * <p>429, like {@link #LOGIN_TEMPORARILY_LOCKED}: the same request succeeds once the day turns (D-61).
      */
-    AI_DAILY_QUOTA_EXHAUSTED(HttpStatus.TOO_MANY_REQUESTS, "MSG30");
+    AI_DAILY_QUOTA_EXHAUSTED(HttpStatus.TOO_MANY_REQUESTS, "MSG30"),
+
+    /**
+     * The Trader switches to the AGGRESSIVE risk profile without confirming MSG48's warning (BR-66, SRS 3.2.5). The
+     * client shows MSG48 and sends the choice again, confirmed.
+     *
+     * <p>409: the request is valid and succeeds once confirmed; nothing about the caller's rights changes.
+     */
+    RISK_PROFILE_CONFIRMATION_REQUIRED(HttpStatus.CONFLICT, "MSG48");
 
     private final HttpStatus status;
     private final String messageCode;

@@ -50,6 +50,7 @@ trading_plan_warning,warning_type,ck_trading_plan_warning_type,LOW_RR|HIGH_LEVER
 user_account,account_status,ck_user_account_status,ACTIVE|LOCKED|BANNED
 user_account,role,ck_user_account_role,TRADER|ADMIN
 user_device,platform,ck_user_device_platform,ANDROID|IOS
+user_profile,risk_profile,ck_user_profile_risk_profile,CONSERVATIVE|BALANCED|AGGRESSIVE
 user_profile,trading_style,ck_user_profile_trading_style,SCALPING|DAY|SWING|POSITION
 user_subscription,subscription_status,ck_user_subscription_status,ACTIVE|EXPIRED|CANCELLED
 user_token,token_type,ck_user_token_type,EMAIL_VERIFICATION|PASSWORD_RESET|REFRESH

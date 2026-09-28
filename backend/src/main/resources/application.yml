@@ -194,6 +194,26 @@ cryptopilot:
       snapshot-max-age: 2m
       partitions: 4
       queue-capacity: 10000
+  user:
+    risk-profiles:
+      # T-103, BR-66, D-53: risk profiles v1, percentages of capital. No profile may exceed AGGRESSIVE; checked at
+      # start-up. The minimum setup score to alert is kept here but no feature reads it in this release.
+      profiles:
+        CONSERVATIVE:
+          risk-per-trade-percent: 0.5
+          max-futures-leverage: 3
+          max-total-open-risk-percent: 2
+          min-setup-score-to-alert: 75
+        BALANCED:
+          risk-per-trade-percent: 1
+          max-futures-leverage: 5
+          max-total-open-risk-percent: 4
+          min-setup-score-to-alert: 65
+        AGGRESSIVE:
+          risk-per-trade-percent: 2
+          max-futures-leverage: 10
+          max-total-open-risk-percent: 6
+          min-setup-score-to-alert: 55
 
 springdoc:
   # TECHNICAL_DESIGN 8: the OpenAPI document and Swagger UI at their standard paths; off in the prod profile.

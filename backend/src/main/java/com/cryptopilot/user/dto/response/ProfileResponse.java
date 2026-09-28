@@ -1,5 +1,6 @@
 package com.cryptopilot.user.dto.response;
 
+import com.cryptopilot.user.RiskProfile;
 import com.cryptopilot.user.entity.TradingStyle;
 import java.math.BigDecimal;
 
@@ -22,6 +23,7 @@ import java.math.BigDecimal;
  * @param defaultCapital the capital a new plan starts from, or {@code null}
  * @param defaultRiskPercent the risk percentage a new plan starts from, or {@code null}
  * @param tradingStyle how long the account usually holds a position, or {@code null}
+ * @param riskProfile the risk profile (BR-66), BALANCED until the Trader chooses
  * @param notifyEmail whether notifications also go out by mail
  * @param notifyPush whether notifications also go out as push messages
  */
@@ -32,5 +34,6 @@ public record ProfileResponse(
         BigDecimal defaultCapital,
         BigDecimal defaultRiskPercent,
         TradingStyle tradingStyle,
+        RiskProfile riskProfile,
         boolean notifyEmail,
         boolean notifyPush) {}

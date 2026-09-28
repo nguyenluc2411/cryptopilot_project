@@ -16,10 +16,10 @@ import org.junit.jupiter.params.provider.EnumSource;
  */
 class ErrorCodeTest {
 
-    /** Ids of SRS section 5.3 run from MSG01 to MSG45. */
+    /** Ids of SRS section 5.3 run from MSG01 to MSG49 (v1.1 added MSG46 to MSG49). */
     private static final Pattern SRS_MESSAGE_ID = Pattern.compile("MSG\\d{2}");
 
-    private static final int HIGHEST_SRS_MESSAGE = 45;
+    private static final int HIGHEST_SRS_MESSAGE = 49;
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)
