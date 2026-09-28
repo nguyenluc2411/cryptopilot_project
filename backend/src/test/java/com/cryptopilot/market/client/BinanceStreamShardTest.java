@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,11 +39,13 @@ class BinanceStreamShardTest {
     private static final List<String> STREAMS = List.of("btcusdt@kline_1h", "btcusdt@markPrice@1s");
 
     private final List<StreamMessage> messages = new CopyOnWriteArrayList<>();
+    private final Semaphore arrivals = new Semaphore(0);
     private final List<Boolean> openings = new CopyOnWriteArrayList<>();
     private final BinanceStreamShard.Listener listener = new BinanceStreamShard.Listener() {
         @Override
         public void onMessage(StreamMessage message) {
             messages.add(message);
+            arrivals.release();
         }
 
         @Override
@@ -91,7 +95,7 @@ class BinanceStreamShardTest {
 
     /** Messages arrive in order; a malformed frame or an unknown event is skipped and the connection stays. */
     @Test
-    void NSF03_messages_arriveInOrder_andABadFrameIsSkipped() {
+    void NSF03_messages_arriveInOrder_andABadFrameIsSkipped() throws InterruptedException {
         shard = started();
         Connection connection = server.awaitConnection(1);
 
@@ -101,7 +105,11 @@ class BinanceStreamShardTest {
         connection.send(StreamFrames.markPrice("BTCUSDT", AT));
         connection.send(StreamFrames.kline("BTCUSDT", MarketInterval.ONE_HOUR, AT, true));
 
-        await(() -> messages.size() == 3, "three messages");
+        // Waits for the three deliveries themselves; the deadline only stops a hang.
+        assertThat(arrivals.tryAcquire(3, 5, TimeUnit.SECONDS))
+                .as("three messages delivered")
+                .isTrue();
+        assertThat(messages).hasSize(3);
         assertThat(messages.get(0)).isInstanceOfSatisfying(KlineMessage.class, k -> assertThat(k.closed())
                 .isFalse());
         assertThat(messages.get(1)).isInstanceOf(MarkPriceMessage.class);
