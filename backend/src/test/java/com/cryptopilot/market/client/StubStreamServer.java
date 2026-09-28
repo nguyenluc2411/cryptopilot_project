@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
@@ -36,6 +37,9 @@ import java.util.function.BooleanSupplier;
 public final class StubStreamServer implements AutoCloseable {
 
     private static final String GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+    /** How long a wait may last before the test fails as hung. */
+    private static final Duration HANG_GUARD = Duration.ofSeconds(5);
 
     private final ServerSocket server;
     private final List<Connection> connections = new CopyOnWriteArrayList<>();
@@ -74,10 +78,31 @@ public final class StubStreamServer implements AutoCloseable {
         return List.copyOf(connections);
     }
 
-    /** Waits until this many connections have been upgraded, and answers the last one. */
+    /**
+     * Waits until this many connections have been upgraded, and answers the last one. The handshake thread signals
+     * each upgrade, so the test thread sleeps instead of spinning against the threads it is waiting for. The deadline
+     * only stops a hang.
+     *
+     * <p>Reference: Luo, Q., Hariri, F., Eloussi, L., &amp; Marinov, D. (2014). An Empirical Analysis of Flaky
+     * Tests. <i>FSE 2014</i> (asynchronous waits and concurrency are the leading causes of flaky tests).
+     */
     public Connection awaitConnection(int count) {
-        await(() -> connections.size() >= count, "connection " + count);
-        return connections.get(count - 1);
+        long deadline = System.nanoTime() + HANG_GUARD.toNanos();
+        synchronized (connections) {
+            while (connections.size() < count) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0) {
+                    throw new AssertionError("timed out waiting for connection " + count);
+                }
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(connections, left);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError("interrupted waiting for connection " + count, interrupted);
+                }
+            }
+            return connections.get(count - 1);
+        }
     }
 
     /**
@@ -144,7 +169,10 @@ public final class StubStreamServer implements AutoCloseable {
                     .getBytes(StandardCharsets.US_ASCII));
             out.flush();
             Connection connection = new Connection(socket, in, out);
-            connections.add(connection);
+            synchronized (connections) {
+                connections.add(connection);
+                connections.notifyAll();
+            }
             if (closesOnOpen.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
                 connection.closeWith(1001);
             }

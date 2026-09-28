@@ -8,6 +8,7 @@ import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.support.MutableTestClock;
 import java.math.BigDecimal;
 import java.net.URI;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -491,10 +492,10 @@ class BinanceRestClientTest {
          * A response slower than the read timeout is a timeout, retried like a 5xx and then UNAVAILABLE —
          * after exactly three attempts, one plus the two configured retries.
          *
-         * <p>The attempts are counted by the client, which reports them in the refusal, not by the stand-in
-         * server: an attempt the client abandons before the server has even read it never reaches the
-         * server's handler, which happened on a two-CPU CI runner. The server can therefore only confirm
-         * that it never saw more than three.
+         * <p>The attempts are counted by the client, which reports them in the refusal. The cause is the read
+         * timeout itself, not a connect timeout or a refused connection, which would end the same way. The
+         * timeout also covers setting up the connection, so on a loaded machine an attempt can end before the
+         * server has read it — even all three: the server can only confirm that it never saw more than three.
          */
         @Test
         void NSF02_aResponseSlowerThanTheReadTimeout_timesOut() throws Exception {
@@ -507,7 +508,10 @@ class BinanceRestClientTest {
 
             assertThat(slow.kind()).isEqualTo(BinanceClientException.Kind.UNAVAILABLE);
             assertThat(slow.getMessage()).endsWith("failed after 3 attempts");
-            assertThat(exchange.hits(SPOT_KLINES)).isBetween(1L, 3L);
+            assertThat(rootCauseOf(slow))
+                    .as("a read timeout, not a connect timeout or a refused connection")
+                    .isExactlyInstanceOf(HttpTimeoutException.class);
+            assertThat(exchange.hits(SPOT_KLINES)).isLessThanOrEqualTo(3L);
         }
 
         /** A host that refuses the connection is UNAVAILABLE, not an unhandled error. */
@@ -793,6 +797,15 @@ class BinanceRestClientTest {
                 clock,
                 JsonMapper.builder().build(),
                 bans);
+    }
+
+    /** The innermost cause: the I/O failure beneath the refusal and the HTTP layer's wrapper. */
+    private static Throwable rootCauseOf(Throwable failure) {
+        Throwable cause = failure;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 
     private static BinanceClientException refusalOf(Runnable call) {
