@@ -3,11 +3,13 @@ package com.cryptopilot.billing.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.billing.PlanEntitlements;
+import com.cryptopilot.billing.PlanFixtures;
 import com.cryptopilot.billing.PlanTier;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.support.TestcontainersConfig;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -45,6 +47,12 @@ class SubscriptionPackageRepositoryTest {
 
     @Autowired
     private JdbcClient jdbc;
+
+    /** The seeded packages hold the codes and the FREE row these tests write; the rollback restores them. */
+    @BeforeEach
+    void removeSeededPackages() {
+        PlanFixtures.removeSeeded(jdbc);
+    }
 
     @Test
     void BR62_aPaidPackage_survivesAWriteAndAReadWithEveryColumnIntact() {

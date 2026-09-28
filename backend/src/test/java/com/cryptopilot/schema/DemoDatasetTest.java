@@ -114,7 +114,9 @@ class DemoDatasetTest {
         assertThat(count("crypto_pair"))
                 .as("the pair list is an open decision, and a development-only file is not a way around it")
                 .isZero();
-        assertThat(count("subscription_package")).isZero();
+        assertThat(count("subscription_package"))
+                .as("the packages are production data (V11), the same in every environment")
+                .isEqualTo(5);
     }
 
     @Test

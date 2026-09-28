@@ -4,12 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
+import com.cryptopilot.billing.PlanFixtures;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -40,6 +42,12 @@ class PlanTierMigrationTest {
 
     @Autowired
     private JdbcClient jdbc;
+
+    /** The seeded packages hold the codes and the FREE row these tests write; the rollback restores them. */
+    @BeforeEach
+    void removeSeededPackages() {
+        PlanFixtures.removeSeeded(jdbc);
+    }
 
     // ------------------------------------------------------------------ accepted
 
