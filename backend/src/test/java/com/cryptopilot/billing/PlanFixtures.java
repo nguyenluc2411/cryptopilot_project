@@ -4,6 +4,7 @@ import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.billing.repository.SubscriptionPackageRepository;
 import java.math.BigDecimal;
 import java.util.List;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * The five packages of D-58 (SRS v1.1 Table 3.1), built through the entity so a test reads the same rows the seed of
@@ -19,6 +20,14 @@ public final class PlanFixtures {
             new PlanEntitlements(true, true, null, 100, 50, true, true, true, true, 100, true, true);
 
     private PlanFixtures() {}
+
+    /**
+     * Removes the packages the production seed (V11) wrote, so a test can store its own under the same codes and the
+     * single FREE package. Call it inside the test's transaction: the rollback puts the seed back.
+     */
+    public static void removeSeeded(JdbcClient jdbc) {
+        jdbc.sql("delete from subscription_package").update();
+    }
 
     /** Stores FREE, PRO_MONTHLY, PRO_YEARLY, PREMIUM_MONTHLY and PREMIUM_YEARLY. */
     public static List<SubscriptionPackage> storeAll(SubscriptionPackageRepository packages) {

@@ -96,8 +96,8 @@ class DemoDatasetTest {
     @Test
     void theDemoSet_appliesOnTopOfTheProductionPathAndAddsOnlyItsOwnRows() {
         assertThat(count("user_account"))
-                .as("the bootstrap administrator of the production path, and the demo trader beside it")
-                .isEqualTo(2);
+                .as("the bootstrap administrator of the production path, the demo trader, and one Trader per plan tier")
+                .isEqualTo(5);
         assertThat(demoJdbc.sql("select email, role from user_account where user_id = ?::uuid")
                         .param(DEMO_TRADER_ID)
                         .query()
@@ -105,7 +105,11 @@ class DemoDatasetTest {
                 .containsEntry("email", "demo.trader@cryptopilot.invalid")
                 .containsEntry("role", "TRADER");
 
-        assertThat(count("user_profile")).isEqualTo(2);
+        assertThat(count("user_profile")).isEqualTo(5);
+        assertThat(count("subscription_order"))
+                .as("the PRO and PREMIUM demo Traders' orders")
+                .isEqualTo(2);
+        assertThat(count("user_subscription")).isEqualTo(2);
         assertThat(count("system_setting"))
                 .as("the demo set adds no setting: the reference values are the same in every environment"
                         + " (V3's sixteen, less the two plan limits V10 removes)")
@@ -114,18 +118,23 @@ class DemoDatasetTest {
         assertThat(count("crypto_pair"))
                 .as("the pair list is an open decision, and a development-only file is not a way around it")
                 .isZero();
-        assertThat(count("subscription_package")).isZero();
+        assertThat(count("subscription_package"))
+                .as("the packages are production data (V11), the same in every environment")
+                .isEqualTo(5);
     }
 
     @Test
     void reapplyingTheDemoSet_changesNothing() throws Exception {
         List<Map<String, Object>> before = accountRows();
 
-        applyDemoScript();
+        applyDemoScript("db/demo/R__demo_dataset.sql");
+        applyDemoScript("db/demo/R__demo_plan_accounts.sql");
 
         assertThat(accountRows()).isEqualTo(before);
-        assertThat(count("user_account")).isEqualTo(2);
-        assertThat(count("user_profile")).isEqualTo(2);
+        assertThat(count("user_account")).isEqualTo(5);
+        assertThat(count("user_profile")).isEqualTo(5);
+        assertThat(count("subscription_order")).isEqualTo(2);
+        assertThat(count("user_subscription")).isEqualTo(2);
     }
 
     private List<Map<String, Object>> accountRows() {
@@ -135,13 +144,19 @@ class DemoDatasetTest {
         rows.addAll(demoJdbc.sql("select * from user_profile order by display_name")
                 .query()
                 .listOfRows());
+        rows.addAll(demoJdbc.sql("select * from subscription_order order by order_code")
+                .query()
+                .listOfRows());
+        rows.addAll(demoJdbc.sql("select * from user_subscription order by subscription_id")
+                .query()
+                .listOfRows());
         return rows;
     }
 
-    /** The demo file itself, with its placeholders resolved the way Flyway resolved them. */
-    private void applyDemoScript() throws Exception {
+    /** A demo file itself, with its placeholders resolved the way Flyway resolved them. */
+    private void applyDemoScript(String location) throws Exception {
         String sql = new String(
-                FileCopyUtils.copyToByteArray(new ClassPathResource("db/demo/R__demo_dataset.sql").getInputStream()),
+                FileCopyUtils.copyToByteArray(new ClassPathResource(location).getInputStream()),
                 StandardCharsets.UTF_8);
         for (Map.Entry<String, String> placeholder :
                 configuredFlyway.getConfiguration().getPlaceholders().entrySet()) {
@@ -151,7 +166,7 @@ class DemoDatasetTest {
             ScriptUtils.executeSqlScript(
                     connection,
                     new EncodedResource(
-                            new ByteArrayResource(sql.getBytes(StandardCharsets.UTF_8), "demo dataset"),
+                            new ByteArrayResource(sql.getBytes(StandardCharsets.UTF_8), location),
                             StandardCharsets.UTF_8));
         }
     }

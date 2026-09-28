@@ -69,6 +69,8 @@ class EntitlementServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        // The tests store their own packages; the rollback restores the seeded ones.
+        PlanFixtures.removeSeeded(jdbc);
         service = new EntitlementServiceImpl(packages, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 

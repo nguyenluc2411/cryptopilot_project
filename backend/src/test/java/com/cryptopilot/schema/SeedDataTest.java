@@ -13,6 +13,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -43,8 +44,8 @@ import org.springframework.util.FileCopyUtils;
  * to make a demo look complete, or a sample row that escaped the development-only set, is caught.
  * The third is that running the seed again changes nothing.
  *
- * <p>Rule: BR-05 (roles), BR-15, BR-17, BR-29, BR-36, BR-44, BR-54 (the seeded defaults); SRS
- * 3.1.5.
+ * <p>Rule: BR-05 (roles), BR-15, BR-17, BR-29, BR-36, BR-44, BR-54 (the seeded defaults), BR-62 (the packages of
+ * the plan tiers); SRS 3.1.5; D-58, D-62.
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
@@ -60,12 +61,25 @@ class SeedDataTest {
     /** The fixed key of the bootstrap administrator, which the migration writes as a literal. */
     private static final String ADMIN_ID = "019b76da-a800-7000-8000-000000000001";
 
+    /** The fixed keys of the five packages V11 writes. */
+    private static final Map<String, String> PACKAGE_IDS = Map.of(
+            "FREE", "019b76da-a800-7002-8000-000000000001",
+            "PRO_MONTHLY", "019b76da-a800-7002-8000-000000000002",
+            "PRO_YEARLY", "019b76da-a800-7002-8000-000000000003",
+            "PREMIUM_MONTHLY", "019b76da-a800-7002-8000-000000000004",
+            "PREMIUM_YEARLY", "019b76da-a800-7002-8000-000000000005");
+
     /**
      * The tables the seed writes, with the number of rows each one holds after every migration: V3 seeds sixteen
-     * settings and V10 removes the watchlist and active alert limits, which are the plan's (BR-62).
+     * settings and V10 removes the watchlist and active alert limits, which are the plan's (BR-62); V11 seeds the
+     * five packages.
      */
-    private static final Map<String, Integer> SEEDED_ROW_COUNTS =
-            Map.of("system_setting", 14, "trading_strategy", 3, "user_account", 1, "user_profile", 1);
+    private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
+            "system_setting", 14,
+            "trading_strategy", 3,
+            "user_account", 1,
+            "user_profile", 1,
+            "subscription_package", 5);
 
     /** The settings V3 seeds and V10 deletes, because the limits are the plan's (BR-62, D-58). */
     private static final List<String> REMOVED_BY_V10 = List.of("MAX_WATCHLIST_ITEMS", "MAX_ACTIVE_ALERTS");
@@ -94,7 +108,13 @@ class SeedDataTest {
     // ------------------------------------------------------------------------------------------
 
     @ParameterizedTest(name = "{0} holds {1} seeded rows")
-    @CsvSource({"system_setting, 14", "trading_strategy, 3", "user_account, 1", "user_profile, 1"})
+    @CsvSource({
+        "system_setting, 14",
+        "trading_strategy, 3",
+        "user_account, 1",
+        "user_profile, 1",
+        "subscription_package, 5"
+    })
     void seededTable_holdsExactlyTheExpectedNumberOfRows(String table, int expected) {
         assertThat(countOf(table)).isEqualTo(expected);
     }
@@ -115,9 +135,16 @@ class SeedDataTest {
                         "019b76da-a800-7001-8000-000000000003",
                         "019b76da-a800-7001-8000-000000000002");
         assertThat(accountIds).containsExactly(ADMIN_ID);
+        Map<String, String> packageIds = new HashMap<>();
+        jdbc.sql("select package_code, package_id::text as id from subscription_package")
+                .query()
+                .listOfRows()
+                .forEach(row -> packageIds.put((String) row.get("package_code"), (String) row.get("id")));
+        assertThat(packageIds).isEqualTo(PACKAGE_IDS);
         for (String id : strategyIds) {
             assertVersionSevenLayout(id);
         }
+        PACKAGE_IDS.values().forEach(this::assertVersionSevenLayout);
         assertVersionSevenLayout(ADMIN_ID);
     }
 
@@ -136,6 +163,10 @@ class SeedDataTest {
                 .query(OffsetDateTime.class)
                 .list());
         instants.addAll(jdbc.sql("select created_at from user_profile union all select updated_at from user_profile")
+                .query(OffsetDateTime.class)
+                .list());
+        instants.addAll(jdbc.sql(
+                        "select created_at from subscription_package union all select updated_at from subscription_package")
                 .query(OffsetDateTime.class)
                 .list());
 
@@ -302,12 +333,94 @@ class SeedDataTest {
         });
     }
 
+    /**
+     * BR-62, D-58: the five packages of SRS v1.1 Table 3.1 with their tier, rank, price and duration. FREE is the one
+     * package that is free, has no duration and cannot be bought; every package is on offer.
+     */
+    @ParameterizedTest(name = "BR-62 {0}")
+    @CsvSource({
+        "FREE,            FREE,    0, 0,          , false",
+        "PRO_MONTHLY,     PRO,     1, 99000,    30, true",
+        "PRO_YEARLY,      PRO,     1, 990000,  365, true",
+        "PREMIUM_MONTHLY, PREMIUM, 2, 199000,   30, true",
+        "PREMIUM_YEARLY,  PREMIUM, 2, 1990000, 365, true"
+    })
+    void BR62_eachPackage_isSeededWithTheTierPriceAndDurationOfTheTable(
+            String code, String tier, int rank, String price, Integer days, boolean purchasable) {
+        Map<String, Object> row = jdbc.sql("""
+                        select tier, tier_rank, price_amount, currency, duration_days, is_purchasable, is_active
+                          from subscription_package where package_code = ?""").param(code).query().singleRow();
+
+        assertThat(row.get("tier")).isEqualTo(tier);
+        assertThat(((Number) row.get("tier_rank")).intValue()).isEqualTo(rank);
+        assertThat((BigDecimal) row.get("price_amount")).isEqualByComparingTo(price);
+        assertThat(row.get("currency")).isEqualTo("VND");
+        assertThat(row.get("duration_days")).isEqualTo(days);
+        assertThat(row.get("is_purchasable")).isEqualTo(purchasable);
+        assertThat(row.get("is_active")).isEqualTo(true);
+    }
+
+    /**
+     * BR-62, D-58: the entitlements of each tier on every package of that tier, null meaning unlimited. The packages
+     * of one tier carry the same values, so a check reads the same plan whichever package a Trader bought.
+     */
+    @ParameterizedTest(name = "BR-62 {0}")
+    @CsvSource({
+        "FREE,    false, false, 3, 5,   3,  false, false, false, false, 0,   false, false",
+        "PRO,     true,  true,   , 50,  20, true,  true,  true,  true,  30,  false, false",
+        "PREMIUM, true,  true,   , 100, 50, true,  true,  true,  true,  100, true,  true"
+    })
+    void BR62_everyPackageOfATier_carriesTheEntitlementsOfThatTier(
+            String tier,
+            boolean futuresAnalysis,
+            boolean scoreComponents,
+            Integer activePlanMax,
+            Integer watchlistMax,
+            Integer activeAlertMax,
+            boolean indicatorAlert,
+            boolean externalAlertChannels,
+            boolean advancedPerformance,
+            boolean newsAiInsight,
+            int aiDailyQuota,
+            boolean aiPerformanceContext,
+            boolean canPostVideo) {
+        List<Map<String, Object>> rows = jdbc.sql("""
+                        select futures_analysis, score_components, active_plan_max, watchlist_max, active_alert_max,
+                               indicator_alert, external_alert_channels, advanced_performance, news_ai_insight,
+                               ai_daily_quota, ai_performance_context, can_post_video
+                          from subscription_package where tier = ?""").param(tier).query().listOfRows();
+
+        Map<String, Object> expected = new HashMap<>();
+        expected.put("futures_analysis", futuresAnalysis);
+        expected.put("score_components", scoreComponents);
+        expected.put("active_plan_max", activePlanMax);
+        expected.put("watchlist_max", watchlistMax);
+        expected.put("active_alert_max", activeAlertMax);
+        expected.put("indicator_alert", indicatorAlert);
+        expected.put("external_alert_channels", externalAlertChannels);
+        expected.put("advanced_performance", advancedPerformance);
+        expected.put("news_ai_insight", newsAiInsight);
+        expected.put("ai_daily_quota", aiDailyQuota);
+        expected.put("ai_performance_context", aiPerformanceContext);
+        expected.put("can_post_video", canPostVideo);
+        assertThat(rows).isNotEmpty().allSatisfy(row -> assertThat(row).isEqualTo(expected));
+    }
+
+    /** D-62: the plan of a Trader without a subscription exists in every environment, so no check has to guess one. */
+    @Test
+    void BR62_exactlyOneFreePackage_isSeededOnTheProductionPath() {
+        assertThat(jdbc.sql("select package_code from subscription_package where tier = 'FREE'")
+                        .query(String.class)
+                        .list())
+                .containsExactly("FREE");
+    }
+
     // ------------------------------------------------------------------------------------------
     // What the seed deliberately left alone
     // ------------------------------------------------------------------------------------------
 
     /**
-     * The production migration path writes rows into four tables and no others. This is the
+     * The production migration path writes rows into five tables and no others. This is the
      * assertion a sample row has to get past: a pair invented to make a demo browsable, or a demo
      * account that reached the versioned migrations instead of the development-only set, shows up
      * here as a table that is no longer empty.
@@ -346,16 +459,13 @@ class SeedDataTest {
                 .noneMatch(location -> location.contains("demo"));
     }
 
+    /** The pairs and their coins come from the symbol synchronisation (NSF-01, Q-05), never from the seed. */
     @Test
-    void noSeededPairOrPackage_wasInventedWhileTheDecisionIsOpen() {
+    void noPairOrCoin_isSeeded() {
         assertThat(countOf("crypto_pair"))
                 .as("the tick and step sizes a position size is rounded to (BR-23, BR-30) are not guessed")
                 .isZero();
         assertThat(countOf("coin")).isZero();
-        assertThat(countOf("subscription_package"))
-                .as(
-                        "an order copies the package price of the moment (BR-56), so a placeholder price would outlive itself")
-                .isZero();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -435,6 +545,8 @@ class SeedDataTest {
         assertAllowed("user_account", "role", "role");
         assertAllowed("user_account", "account_status", "account_status");
         assertAllowed("system_setting", "value_type", "value_type");
+        assertAllowed("subscription_package", "tier", "(tier)::text = ANY");
+        assertAllowed("subscription_package", "currency", "(currency)::text");
     }
 
     // ------------------------------------------------------------------------------------------
@@ -473,6 +585,20 @@ class SeedDataTest {
         }
         SEEDED_ROW_COUNTS.forEach(
                 (table, expected) -> assertThat(countOf(table)).as(table).isEqualTo(expected));
+    }
+
+    /**
+     * The package seed applied a second time changes nothing: every package collides on its fixed key, and an existing
+     * row is never overwritten, so a price or an entitlement an administrator changed stays changed.
+     */
+    @Test
+    void reapplyingThePackageSeed_changesNothing() throws Exception {
+        List<Map<String, Object>> before = seededRows();
+
+        applyScript("db/migration/V11__seed_subscription_packages.sql");
+
+        assertThat(seededRows()).containsExactlyElementsOf(before);
+        assertThat(countOf("subscription_package")).isEqualTo(5);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -533,6 +659,9 @@ class SeedDataTest {
         rows.addAll(
                 jdbc.sql("select * from user_account order by email").query().listOfRows());
         rows.addAll(jdbc.sql("select * from user_profile order by display_name")
+                .query()
+                .listOfRows());
+        rows.addAll(jdbc.sql("select * from subscription_package order by package_code")
                 .query()
                 .listOfRows());
         return rows;
