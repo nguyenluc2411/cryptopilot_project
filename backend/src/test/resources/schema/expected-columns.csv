@@ -438,6 +438,7 @@ user_profile,default_risk_percent,numeric,6,3,YES
 user_profile,display_name,character varying,,,NO
 user_profile,notify_email,boolean,,,NO
 user_profile,notify_push,boolean,,,NO
+user_profile,risk_profile,character varying,,,NO
 user_profile,trading_style,character varying,,,YES
 user_profile,updated_at,timestamp with time zone,,,NO
 user_profile,user_id,uuid,,,NO

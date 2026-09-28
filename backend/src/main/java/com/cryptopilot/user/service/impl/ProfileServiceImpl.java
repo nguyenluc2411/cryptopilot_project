@@ -91,6 +91,7 @@ public class ProfileServiceImpl implements ProfileService {
                 profile.getDefaultCapital(),
                 profile.getDefaultRiskPercent(),
                 profile.getTradingStyle(),
+                profile.getRiskProfile(),
                 profile.isNotifyEmail(),
                 profile.isNotifyPush());
     }

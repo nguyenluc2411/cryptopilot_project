@@ -1,6 +1,7 @@
 package com.cryptopilot.user.entity;
 
 import com.cryptopilot.common.entity.BaseEntity;
+import com.cryptopilot.user.RiskProfile;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -8,6 +9,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.util.Objects;
 import java.util.UUID;
 import lombok.Getter;
 
@@ -61,6 +63,11 @@ public class UserProfile extends BaseEntity {
     @Column(name = "trading_style", length = 32)
     private TradingStyle tradingStyle;
 
+    /** How much capital a plan may risk and when it is warned about (BR-66); CONSERVATIVE until the Trader chooses (D-64). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "risk_profile", nullable = false, length = 32)
+    private RiskProfile riskProfile = RiskProfile.DEFAULT;
+
     /** Whether notifications also go out by mail. */
     @Column(name = "notify_email", nullable = false)
     private boolean notifyEmail = true;
@@ -110,6 +117,11 @@ public class UserProfile extends BaseEntity {
         this.defaultCapital = capital;
         this.defaultRiskPercent = riskPercent;
         this.tradingStyle = style;
+    }
+
+    /** Records the risk profile the Trader chose (BR-66); the confirmation for AGGRESSIVE is the service's. */
+    public void chooseRiskProfile(RiskProfile profile) {
+        this.riskProfile = Objects.requireNonNull(profile, "riskProfile must not be null");
     }
 
     /** Sets which channels this account accepts notifications on, beside the in-app list. */

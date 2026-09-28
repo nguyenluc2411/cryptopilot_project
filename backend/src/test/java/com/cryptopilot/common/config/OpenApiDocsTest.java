@@ -48,6 +48,8 @@ class OpenApiDocsTest {
             "/api/v1/me/password",
             "/api/v1/me/profile",
             "/api/v1/me/notification-preferences",
+            "/api/v1/me/risk-profile",
+            "/api/v1/me/risk-questionnaire",
             "/api/v1/me/devices",
             "/api/v1/me/devices/{deviceId}",
             "/api/v1/market/pairs",
@@ -57,7 +59,7 @@ class OpenApiDocsTest {
             "/api/v1/market/futures/{symbol}/metrics",
             "/api/v1/analysis/{market}/{symbol}");
 
-    private static final int OPERATIONS = 20;
+    private static final int OPERATIONS = 24;
 
     @Autowired
     private MockMvc mvc;
@@ -108,6 +110,17 @@ class OpenApiDocsTest {
         assertThat(securityOf(body, "/api/v1/market/pairs", "get")).isEmpty();
         assertThat((String) JsonPath.read(body, "$.components.securitySchemes.bearerAuth.scheme"))
                 .isEqualTo("bearer");
+    }
+
+    /** D-65: the unconfirmed switch to AGGRESSIVE is documented as the 400 of MSG48, like every validation error. */
+    @Test
+    void D65_theRiskProfileChoice_documentsMsg48UnderBadRequest() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Map<String, Object>> responses =
+                JsonPath.read(body, "$.paths['/api/v1/me/risk-profile'].put.responses");
+        assertThat(responses).containsKeys("200", "400", "401").doesNotContainKeys("409", "422");
+        assertThat((String) responses.get("400").get("description")).contains("MSG48");
     }
 
     /** Swagger UI is reachable for reading where the document is. */
