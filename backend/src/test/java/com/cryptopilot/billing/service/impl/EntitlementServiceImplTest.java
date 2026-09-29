@@ -5,12 +5,12 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.mockito.Mockito.mock;
 
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.Feature;
 import com.cryptopilot.billing.PlanFixtures;
 import com.cryptopilot.billing.PlanTier;
-import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.billing.repository.SubscriptionPackageRepository;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
@@ -23,7 +23,6 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -39,7 +38,8 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The entitlement checks of UC-53 against the migrated schema: which package is the effective plan at a given instant,
  * what each of the twelve codes of D-58 answers on each tier, and how a refusal carries MSG29, MSG27 or MSG30. The
- * service is built with a fixed clock, so the instants of each subscription are placed exactly around "now".
+ * service is built with a fixed clock, so the instants of each subscription are placed exactly around "now". The
+ * plans are the five packages the production seed wrote; no test stores or removes a package.
  *
  * <p>Every test rolls back.
  *
@@ -69,8 +69,7 @@ class EntitlementServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        // The tests store their own packages; the rollback restores the seeded ones.
-        PlanFixtures.removeSeeded(jdbc);
+        packageIds = PlanFixtures.seededIds(packages);
         service = new EntitlementServiceImpl(packages, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -84,15 +83,12 @@ class EntitlementServiceImplTest {
 
     @Test
     void BR62_aTraderWithoutASubscription_isOnFree() {
-        storePlans();
-
         assertThat(service.effectivePlan(trader()).tier()).isEqualTo(PlanTier.FREE);
     }
 
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"PRO_MONTHLY", "PRO_YEARLY", "PREMIUM_MONTHLY", "PREMIUM_YEARLY"})
     void BR62_anActiveSubscriptionRunningNow_givesItsPackagesTier(String packageCode) {
-        storePlans();
         UUID trader = trader();
         subscribe(trader, packageCode, "ACTIVE", NOW.minus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(29)));
 
@@ -103,7 +99,6 @@ class EntitlementServiceImplTest {
     /** SRS 3.10.4: an ACTIVE row past its end is FREE at once, whether or not the expiry job has run. */
     @Test
     void BR62_anActiveSubscriptionPastItsEnd_isFree_beforeTheExpiryJobRuns() {
-        storePlans();
         UUID trader = trader();
         subscribe(trader, "PRO_MONTHLY", "ACTIVE", NOW.minus(Duration.ofDays(31)), NOW.minusSeconds(1));
 
@@ -112,7 +107,6 @@ class EntitlementServiceImplTest {
 
     @Test
     void BR62_aSubscriptionThatStartsLater_isNotHeldYet() {
-        storePlans();
         UUID trader = trader();
         subscribe(trader, "PREMIUM_MONTHLY", "ACTIVE", NOW.plusSeconds(1), NOW.plus(Duration.ofDays(30)));
 
@@ -122,7 +116,6 @@ class EntitlementServiceImplTest {
     /** The period is {@code [start_at, end_at)}: held at its first instant, not at its end. */
     @Test
     void BR62_theSubscriptionPeriod_includesItsStartAndExcludesItsEnd() {
-        storePlans();
         UUID startsNow = trader();
         UUID endsNow = trader();
         subscribe(startsNow, "PRO_MONTHLY", "ACTIVE", NOW, NOW.plus(Duration.ofDays(30)));
@@ -135,7 +128,6 @@ class EntitlementServiceImplTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"EXPIRED", "CANCELLED"})
     void BR62_aSubscriptionThatIsNotActive_isNotHeldEvenInsideItsPeriod(String status) {
-        storePlans();
         UUID trader = trader();
         subscribe(trader, "PREMIUM_YEARLY", status, NOW.minus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(364)));
 
@@ -145,7 +137,6 @@ class EntitlementServiceImplTest {
     /** Two ACTIVE subscriptions at once should not exist; when they do, the higher tier applies. */
     @Test
     void BR62_twoOverlappingActiveSubscriptions_giveTheHigherTier() {
-        storePlans();
         UUID trader = trader();
         subscribe(trader, "PRO_YEARLY", "ACTIVE", NOW.minus(Duration.ofDays(10)), NOW.plus(Duration.ofDays(355)));
         subscribe(trader, "PREMIUM_MONTHLY", "ACTIVE", NOW.minus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(29)));
@@ -156,17 +147,20 @@ class EntitlementServiceImplTest {
     /** Another Trader's subscription is not mine. */
     @Test
     void BR62_anotherTradersSubscription_isNotHeld() {
-        storePlans();
         UUID mine = trader();
         subscribe(trader(), "PREMIUM_MONTHLY", "ACTIVE", NOW.minus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(29)));
 
         assertThat(service.effectivePlan(mine).tier()).isEqualTo(PlanTier.FREE);
     }
 
+    /** The seeded FREE package cannot be removed, so a repository that finds no package stands for an unseeded one. */
     @Test
     void BR62_withoutAStoredFreePackage_theServiceFailsLoudly() {
+        EntitlementServiceImpl unseeded =
+                new EntitlementServiceImpl(mock(SubscriptionPackageRepository.class), Clock.fixed(NOW, ZoneOffset.UTC));
+
         assertThatIllegalStateException()
-                .isThrownBy(() -> service.effectivePlan(trader()))
+                .isThrownBy(() -> unseeded.effectivePlan(UUID.randomUUID()))
                 .withMessageContaining("FREE");
     }
 
@@ -189,7 +183,6 @@ class EntitlementServiceImplTest {
         "VIDEO_POST, 0, 0, 1",
     })
     void BR62_eachCode_answersTheValueOfTable3_1_onEachTier(String code, String free, String pro, String premium) {
-        storePlans();
         Feature feature = Feature.valueOf(code);
         Map<PlanTier, UUID> traders = tradersOnEachTier();
 
@@ -216,7 +209,6 @@ class EntitlementServiceImplTest {
 
     @Test
     void CR08_aFeatureOutsideThePlan_isRefusedWithMsg29_namingTheLowestTierThatHasIt() {
-        storePlans();
         Map<PlanTier, UUID> traders = tradersOnEachTier();
 
         assertThatExceptionOfType(BusinessException.class)
@@ -238,7 +230,6 @@ class EntitlementServiceImplTest {
     /** A tier whose packages are all withdrawn cannot be bought, so MSG29 names the next tier that is on offer. */
     @Test
     void CR08_msg29_skipsATierWhosePackagesAreAllWithdrawn() {
-        storePlans();
         jdbc.sql("update subscription_package set is_active = false where tier = 'PRO'")
                 .update();
         entityManager.clear();
@@ -249,10 +240,12 @@ class EntitlementServiceImplTest {
                 .satisfies(e -> assertThat(e.messageArgs()).containsExactly("PREMIUM"));
     }
 
+    /** Only PREMIUM includes the video post; with its packages withdrawn no package on offer does. */
     @Test
     void CR08_aFeatureNoActivePackageIncludes_isAConfigurationError() {
-        packages.save(SubscriptionPackage.free("FREE", "Free", PlanFixtures.FREE));
-        entityManager.flush();
+        jdbc.sql("update subscription_package set is_active = false where tier = 'PREMIUM'")
+                .update();
+        entityManager.clear();
 
         assertThatIllegalStateException()
                 .isThrownBy(() -> service.requireFeature(trader(), Feature.VIDEO_POST))
@@ -277,7 +270,6 @@ class EntitlementServiceImplTest {
 
     @Test
     void BR62_theActivePlanLimit_isThreeOnFree_andNeverReachedWhereUnlimited() {
-        storePlans();
         Map<PlanTier, UUID> traders = tradersOnEachTier();
 
         assertThatCode(() -> service.requireWithinLimit(traders.get(PlanTier.FREE), Feature.ACTIVE_PLAN_MAX, 2))
@@ -295,8 +287,6 @@ class EntitlementServiceImplTest {
 
     @Test
     void BR50_withoutTheAiAssistant_aQuestionIsRefusedWithMsg29() {
-        storePlans();
-
         assertThatExceptionOfType(BusinessException.class)
                 .isThrownBy(
                         () -> service.checkDailyQuota(tradersOnEachTier().get(PlanTier.FREE), Feature.AI_CHAT_DAILY, 0))
@@ -309,7 +299,6 @@ class EntitlementServiceImplTest {
     @ParameterizedTest(name = "{0}: {1} a day")
     @CsvSource({"PRO, 30", "PREMIUM, 100"})
     void BR50_theDailyQuota_refusesTheQuestionAfterTheQuotaWithMsg30(PlanTier tier, int quota) {
-        storePlans();
         UUID trader = tradersOnEachTier().get(tier);
 
         assertThatCode(() -> service.checkDailyQuota(trader, Feature.AI_CHAT_DAILY, quota - 1))
@@ -326,7 +315,6 @@ class EntitlementServiceImplTest {
 
     @Test
     void UC53_aQuestionAskedOfTheWrongKindOfCode_isRefused() {
-        storePlans();
         UUID trader = trader();
 
         assertThatIllegalArgumentException().isThrownBy(() -> service.getLimit(trader, Feature.VIDEO_POST));
@@ -362,7 +350,6 @@ class EntitlementServiceImplTest {
     // ------------------------------------------------------------------ fixtures
 
     private void assertLimit(PlanTier tier, Feature feature, int max, String items) {
-        storePlans();
         UUID trader = tradersOnEachTier().get(tier);
 
         assertThatCode(() -> service.requireWithinLimit(trader, feature, max - 1))
@@ -373,12 +360,6 @@ class EntitlementServiceImplTest {
                     assertThat(e.errorCode()).isEqualTo(ErrorCode.PLAN_LIMIT_REACHED);
                     assertThat(e.messageArgs()).containsExactly(String.valueOf(max), items, tier.name());
                 });
-    }
-
-    private void storePlans() {
-        packageIds = PlanFixtures.storeAll(packages).stream()
-                .collect(Collectors.toMap(SubscriptionPackage::getPackageCode, SubscriptionPackage::getId));
-        entityManager.flush();
     }
 
     /** One Trader on FREE, one with a running PRO subscription, one with a running PREMIUM subscription. */

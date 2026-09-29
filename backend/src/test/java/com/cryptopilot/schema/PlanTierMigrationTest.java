@@ -11,7 +11,6 @@ import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -29,7 +28,8 @@ import org.springframework.transaction.annotation.Transactional;
  * names, so the constraint named in the failure is determined, and removing a constraint makes its test fail
  * instead of passing on a neighbour.
  *
- * <p>Every test rolls back.
+ * <p>The schema admits one FREE package and the production seed has written it, so a constraint on the FREE row is
+ * broken by updating the seeded row; every package a test inserts carries a {@code TEST_} code. Every test rolls back.
  *
  * <p>Rule: BR-62; SRS v1.1 entity 34, SRS 3.11.5; D-58, D-59.
  */
@@ -43,38 +43,34 @@ class PlanTierMigrationTest {
     @Autowired
     private JdbcClient jdbc;
 
-    /** The seeded packages hold the codes and the FREE row these tests write; the rollback restores them. */
-    @BeforeEach
-    void removeSeededPackages() {
-        PlanFixtures.removeSeeded(jdbc);
-    }
-
     // ------------------------------------------------------------------ accepted
 
-    /** One FREE package and paid packages of both tiers; the maxima may be null (unlimited). */
+    /** Paid packages of both tiers beside the seeded FREE package; the maxima may be null (unlimited). */
     @Test
-    void BR62_aFreePackage_andPaidPackagesWithUnlimitedMaxima_areAccepted() {
+    void BR62_paidPackagesWithUnlimitedMaxima_areAcceptedBesideTheSeededFreePackage() {
         assertThatCode(() -> {
-                    insert(free());
                     insert(paid("PRO_MONTHLY", "PRO", 1));
                     Map<String, Object> premium = paid("PREMIUM_YEARLY", "PREMIUM", 2);
                     premium.put("duration_days", 365);
                     insert(premium);
                 })
                 .doesNotThrowAnyException();
-        assertThat(jdbc.sql("select count(*) from subscription_package where active_plan_max is null")
+        assertThat(jdbc.sql("select count(*) from subscription_package"
+                                + " where active_plan_max is null and starts_with(package_code, ?)")
+                        .param(PlanFixtures.TEST_CODE_PREFIX)
                         .query(Integer.class)
                         .single())
                 .isEqualTo(2);
+        assertThat(jdbc.sql("select count(*) from subscription_package where tier = 'FREE'")
+                        .query(Integer.class)
+                        .single())
+                .isOne();
     }
 
     /** The FREE package is never deactivated: the default plan always exists (SRS 3.11.5). */
     @Test
     void BR62_aDeactivatedFreePackage_isRefused() {
-        Map<String, Object> row = free();
-        row.put("is_active", false);
-
-        refused(row, "ck_subscription_package_free_active");
+        refusedOnSeededFree("is_active", false, "ck_subscription_package_free_active");
     }
 
     /** A paid package may be deactivated; it stays for the orders that reference it (SRS 3.11.5). */
@@ -90,28 +86,22 @@ class PlanTierMigrationTest {
     // ------------------------------------------------------------------ FREE
 
     @Test
-    void BR62_aSecondFreePackage_isRefused() {
-        insert(free());
-        Map<String, Object> second = free();
-        second.put("package_code", "FREE_2");
-
-        refused(second, "uq_subscription_package_one_free");
+    void BR62_aSecondFreePackage_besideTheSeededOne_isRefused() {
+        refused(free(), "uq_subscription_package_one_free");
     }
 
     /** FREE is priced 0, has no duration and cannot be bought; any one of the three broken is refused. */
     @ParameterizedTest(name = "{0} = {1}")
     @CsvSource({"price_amount, 99000", "duration_days, 30", "is_purchasable, true"})
     void BR62_aFreePackageThatLooksPaid_isRefused(String column, String value) {
-        Map<String, Object> row = free();
-        row.put(
-                column,
+        Object typed =
                 switch (column) {
                     case "price_amount" -> new BigDecimal(value);
                     case "duration_days" -> Integer.valueOf(value);
                     default -> Boolean.valueOf(value);
-                });
+                };
 
-        refused(row, "ck_subscription_package_free");
+        refusedOnSeededFree(column, typed, "ck_subscription_package_free");
     }
 
     // ------------------------------------------------------------------ paid tiers
@@ -166,7 +156,11 @@ class PlanTierMigrationTest {
     @ParameterizedTest(name = "{0} ranked {1}")
     @CsvSource({"FREE, 1", "PRO, 0", "PRO, 2", "PREMIUM, 1"})
     void BR62_aRankThatIsNotTheTiers_isRefused(String tier, int rank) {
-        Map<String, Object> row = "FREE".equals(tier) ? free() : paid("BAD_RANK", tier, rank);
+        if ("FREE".equals(tier)) {
+            refusedOnSeededFree("tier_rank", rank, "ck_subscription_package_tier_rank");
+            return;
+        }
+        Map<String, Object> row = paid("BAD_RANK", tier, rank);
         row.put("tier_rank", rank);
 
         refused(row, "ck_subscription_package_tier_rank");
@@ -206,7 +200,7 @@ class PlanTierMigrationTest {
 
     // ------------------------------------------------------------------ fixtures
 
-    /** The FREE package of Table 3.1. */
+    /** A FREE package as Table 3.1 describes it, under a test code; the seeded one leaves no room for it. */
     private static Map<String, Object> free() {
         Map<String, Object> row = base("FREE", "FREE", 0);
         row.put("price_amount", BigDecimal.ZERO);
@@ -235,7 +229,7 @@ class PlanTierMigrationTest {
     private static Map<String, Object> base(String code, String tier, int rank) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("package_id", UUID.randomUUID());
-        row.put("package_code", code);
+        row.put("package_code", PlanFixtures.testCode(code));
         row.put("package_name", code);
         row.put("currency", "VND");
         row.put("tier", tier);
@@ -264,6 +258,15 @@ class PlanTierMigrationTest {
         jdbc.sql("insert into subscription_package (" + columns + ") values (" + marks + ")")
                 .params(row.values().toArray())
                 .update();
+    }
+
+    /** Breaks one column of the seeded FREE package and expects the named constraint to refuse it. */
+    private void refusedOnSeededFree(String column, Object value, String constraint) {
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> jdbc.sql("update subscription_package set " + column + " = ? where tier = 'FREE'")
+                        .param(value)
+                        .update())
+                .withStackTraceContaining("\"" + constraint + "\"");
     }
 
     /** Quoted as PostgreSQL quotes it, so {@code …_tier} is not satisfied by {@code …_tier_rank}. */

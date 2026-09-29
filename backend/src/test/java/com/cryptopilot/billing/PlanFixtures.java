@@ -2,18 +2,38 @@ package com.cryptopilot.billing;
 
 import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.billing.repository.SubscriptionPackageRepository;
-import java.math.BigDecimal;
 import java.util.List;
-import org.springframework.jdbc.core.simple.JdbcClient;
+import java.util.Map;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
- * The five packages of D-58 (SRS v1.1 Table 3.1), built through the entity so a test reads the same rows the seed of
- * T-007 will write. Tests state the expected values themselves; this class only stores the packages.
+ * The five packages of D-58 as the production seed (V11) writes them, and the rule for the packages a test writes
+ * itself.
+ *
+ * <p>The seeded packages are a shared fixture that no test changes for good: a test reads them, and whatever it
+ * updates is rolled back with its transaction. A test that needs a package of its own writes a fresh one under a code
+ * starting with {@link #TEST_CODE_PREFIX}, which the seed never uses, and never a second FREE package, since the seeded
+ * one is the only FREE package the schema admits.
+ *
+ * <p>Rule: BR-62; D-58, D-62.
+ *
+ * <p>Reference: Meszaros, G. (2007). xUnit Test Patterns: Refactoring Test Code. Addison-Wesley — Fresh Fixture and
+ * Shared Fixture (Immutable Shared Fixture).
  */
 public final class PlanFixtures {
 
+    /** The prefix of every package code a test writes; no seeded code starts with it. */
+    public static final String TEST_CODE_PREFIX = "TEST_";
+
+    /** The codes V11 seeds. */
+    public static final List<String> SEEDED_CODES =
+            List.of("FREE", "PRO_MONTHLY", "PRO_YEARLY", "PREMIUM_MONTHLY", "PREMIUM_YEARLY");
+
+    /** The entitlements V11 gives each tier; tests compare the seeded rows against them. */
     public static final PlanEntitlements FREE =
             new PlanEntitlements(false, false, 3, 5, 3, false, false, false, false, 0, false, false);
+
     public static final PlanEntitlements PRO =
             new PlanEntitlements(true, true, null, 50, 20, true, true, true, true, 30, false, false);
     public static final PlanEntitlements PREMIUM =
@@ -21,30 +41,16 @@ public final class PlanFixtures {
 
     private PlanFixtures() {}
 
-    /**
-     * Removes the packages the production seed (V11) wrote, so a test can store its own under the same codes and the
-     * single FREE package. Call it inside the test's transaction: the rollback puts the seed back.
-     */
-    public static void removeSeeded(JdbcClient jdbc) {
-        jdbc.sql("delete from subscription_package").update();
+    /** The id of each seeded package by its code; fails when the seed has not run. */
+    public static Map<String, UUID> seededIds(SubscriptionPackageRepository packages) {
+        return SEEDED_CODES.stream()
+                .map(code -> packages.findByPackageCode(code)
+                        .orElseThrow(() -> new IllegalStateException("the seeded package " + code + " is missing")))
+                .collect(Collectors.toMap(SubscriptionPackage::getPackageCode, SubscriptionPackage::getId));
     }
 
-    /** Stores FREE, PRO_MONTHLY, PRO_YEARLY, PREMIUM_MONTHLY and PREMIUM_YEARLY. */
-    public static List<SubscriptionPackage> storeAll(SubscriptionPackageRepository packages) {
-        return List.of(
-                packages.save(SubscriptionPackage.free("FREE", "Free", FREE)),
-                packages.save(SubscriptionPackage.paid(
-                        "PRO_MONTHLY", "Pro monthly", PlanTier.PRO, new BigDecimal("99000"), 30, PRO)),
-                packages.save(SubscriptionPackage.paid(
-                        "PRO_YEARLY", "Pro yearly", PlanTier.PRO, new BigDecimal("990000"), 365, PRO)),
-                packages.save(SubscriptionPackage.paid(
-                        "PREMIUM_MONTHLY", "Premium monthly", PlanTier.PREMIUM, new BigDecimal("199000"), 30, PREMIUM)),
-                packages.save(SubscriptionPackage.paid(
-                        "PREMIUM_YEARLY",
-                        "Premium yearly",
-                        PlanTier.PREMIUM,
-                        new BigDecimal("1990000"),
-                        365,
-                        PREMIUM)));
+    /** A code for a package the test writes itself. */
+    public static String testCode(String name) {
+        return TEST_CODE_PREFIX + name;
     }
 }
