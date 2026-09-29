@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.support.FixedClockConfig;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.jayway.jsonpath.JsonPath;
 import java.math.BigDecimal;
@@ -37,13 +38,13 @@ import org.springframework.test.web.servlet.ResultActions;
  * which candles come back and how a client pages through them, how the snapshot blocks and the sparse metric series
  * of D-45 are answered — a row with metrics only included — and which requests are refused, with which message.
  *
- * <p>The application's clock is the real one, so the data is written relative to the moment the test runs.
+ * <p>The application's clock is fixed ({@link FixedClockConfig}), and the data is written relative to it.
  *
  * <p>Rule: UC-09, BR-07, BR-08, BR-10, BR-11; NSF-03, NSF-04; SRS 3.1.3, 3.3.1, 3.3.3; D-45, D-46.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestcontainersConfig.class)
+@Import({TestcontainersConfig.class, FixedClockConfig.class})
 class MarketControllerTest {
 
     private static final String BASE = "/api/v1/market";
@@ -59,7 +60,7 @@ class MarketControllerTest {
 
     @BeforeEach
     void setUp() {
-        minute = Instant.now().truncatedTo(ChronoUnit.MINUTES);
+        minute = FixedClockConfig.NOW.truncatedTo(ChronoUnit.MINUTES);
         data = new MarketTestData(sql, minute);
     }
 

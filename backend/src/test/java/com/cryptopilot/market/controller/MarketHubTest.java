@@ -1,6 +1,7 @@
 package com.cryptopilot.market.controller;
 
 import static com.cryptopilot.market.client.StubStreamServer.await;
+import static com.cryptopilot.market.client.StubStreamServer.signal;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.MarketType;
@@ -233,6 +234,7 @@ class MarketHubTest {
                     @Override
                     public void handleFrame(StompHeaders headers, Object payload) {
                         errors.add(String.valueOf(headers.getFirst("message")));
+                        signal();
                     }
 
                     @Override
@@ -240,7 +242,7 @@ class MarketHubTest {
                         return String.class;
                     }
                 })
-                .get(5, TimeUnit.SECONDS);
+                .get(5, TimeUnit.SECONDS); // ends when the session connects; the bound only stops a hang
         sessions.add(session);
         return new Client(session, errors);
     }
@@ -272,6 +274,7 @@ class MarketHubTest {
                 }
             }
             payloads.add((String) payload);
+            signal();
         }
     }
 

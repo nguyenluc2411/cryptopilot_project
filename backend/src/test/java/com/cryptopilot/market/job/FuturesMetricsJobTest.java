@@ -160,6 +160,7 @@ class FuturesMetricsJobTest {
         };
         FuturesMetricsJob job = new FuturesMetricsJob(held, recordingScheduler(), properties(true));
         CompletableFuture<Outcome> first = CompletableFuture.supplyAsync(job::run);
+        // Both waits end on an event (the latch, the future); the five seconds only stop a hang.
         assertThat(inside.await(5, TimeUnit.SECONDS))
                 .as("the first run to be inside")
                 .isTrue();

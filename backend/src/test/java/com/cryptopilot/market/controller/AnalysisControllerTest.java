@@ -13,6 +13,7 @@ import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
+import com.cryptopilot.support.FixedClockConfig;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.UserRole;
 import java.math.BigDecimal;
@@ -45,11 +46,13 @@ import org.springframework.test.web.servlet.ResultActions;
  * timeframe the setup score is read on, the dominant side beside a Futures score and its absence on Spot, the nulls of
  * a series that is still warming up or has nothing stored, and the refusals.
  *
+ * <p>The application's clock is fixed ({@link FixedClockConfig}); the data and the tokens are written relative to it.
+ *
  * <p>Rule: UC-10, UC-11, BR-07, BR-08, BR-12, BR-13, BR-14; SRS 3.3.2; TECHNICAL_DESIGN 7.4; D-53.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestcontainersConfig.class)
+@Import({TestcontainersConfig.class, FixedClockConfig.class})
 class AnalysisControllerTest {
 
     private static final String BASE = "/api/v1/analysis";
@@ -71,7 +74,7 @@ class AnalysisControllerTest {
 
     @BeforeEach
     void setUp() {
-        hour = Instant.now().truncatedTo(ChronoUnit.HOURS).minus(Duration.ofHours(1));
+        hour = FixedClockConfig.NOW.truncatedTo(ChronoUnit.HOURS).minus(Duration.ofHours(1));
         data = new MarketTestData(sql, hour);
     }
 
@@ -369,7 +372,7 @@ class AnalysisControllerTest {
     }
 
     private String trader() {
-        Instant now = Instant.now();
+        Instant now = FixedClockConfig.NOW;
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .issuer(JwtConfig.ISSUER)
                 .subject(UUID.randomUUID().toString())

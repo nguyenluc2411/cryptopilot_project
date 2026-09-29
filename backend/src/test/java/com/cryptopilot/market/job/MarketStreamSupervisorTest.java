@@ -1,6 +1,7 @@
 package com.cryptopilot.market.job;
 
 import static com.cryptopilot.market.client.StubStreamServer.await;
+import static com.cryptopilot.market.client.StubStreamServer.signal;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.MarketTestData;
@@ -77,7 +78,10 @@ class MarketStreamSupervisorTest {
     private final List<Duration> refreshes = new CopyOnWriteArrayList<>();
     private final LatestMarketData latest = new LatestMarketData();
     private final List<StreamMessage> realtime = new CopyOnWriteArrayList<>();
-    private MarketUpdateService updates = (market, message) -> realtime.add(message);
+    private MarketUpdateService updates = (market, message) -> {
+        realtime.add(message);
+        signal();
+    };
 
     private MarketTestData data;
     private StubStreamServer server;
@@ -197,6 +201,7 @@ class MarketStreamSupervisorTest {
     void NSF03_aFailingRealtimeFanOut_neverStopsStorage() {
         updates = (market, message) -> {
             realtime.add(message);
+            signal();
             throw new IllegalStateException("the cache is down");
         };
         supervisor = supervisor(true, 100);
@@ -258,7 +263,8 @@ class MarketStreamSupervisorTest {
         supervisor = supervisor(
                 true,
                 100,
-                new StreamCandleServiceImpl(pairs, candles, backfill(), transactions, events::add, Clock.systemUTC()) {
+                new StreamCandleServiceImpl(
+                        pairs, candles, backfill(), transactions, this::publish, Clock.systemUTC()) {
                     @Override
                     public List<StreamTarget> targets(MarketType market) {
                         if (market == MarketType.SPOT) {
@@ -291,6 +297,12 @@ class MarketStreamSupervisorTest {
         assertThat(supervisor.shards(MarketType.SPOT)).isEmpty();
     }
 
+    /** The event publisher of the services under test: records the event and wakes the waits. */
+    private void publish(Object event) {
+        events.add(event);
+        signal();
+    }
+
     private Connection connection(String pathStart) {
         await(() -> server.paths().stream().anyMatch(p -> p.startsWith(pathStart + "?")), pathStart);
         int index = 0;
@@ -311,7 +323,8 @@ class MarketStreamSupervisorTest {
         return supervisor(
                 enabled,
                 maxStreams,
-                new StreamCandleServiceImpl(pairs, candles, backfill(), transactions, events::add, Clock.systemUTC()));
+                new StreamCandleServiceImpl(
+                        pairs, candles, backfill(), transactions, this::publish, Clock.systemUTC()));
     }
 
     private MarketStreamSupervisor supervisor(boolean enabled, int maxStreams, StreamCandleService service) {
@@ -337,7 +350,7 @@ class MarketStreamSupervisorTest {
                 new ClosedCandlePipeline(service, properties),
                 recordingScheduler(),
                 properties,
-                events::add,
+                this::publish,
                 updates);
     }
 

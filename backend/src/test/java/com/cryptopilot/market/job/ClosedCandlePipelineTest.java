@@ -1,6 +1,7 @@
 package com.cryptopilot.market.job;
 
 import static com.cryptopilot.market.client.StubStreamServer.await;
+import static com.cryptopilot.market.client.StubStreamServer.signal;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.MarketType;
@@ -137,6 +138,7 @@ class ClosedCandlePipelineTest {
                     }
                 }
                 stored.add(target.symbol() + " " + message.kline().openTime());
+                signal();
                 return true;
             }
         };
