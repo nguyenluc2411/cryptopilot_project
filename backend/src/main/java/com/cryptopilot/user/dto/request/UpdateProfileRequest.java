@@ -1,6 +1,6 @@
 package com.cryptopilot.user.dto.request;
 
-import com.cryptopilot.user.entity.TradingStyle;
+import com.cryptopilot.user.model.enums.TradingStyle;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;

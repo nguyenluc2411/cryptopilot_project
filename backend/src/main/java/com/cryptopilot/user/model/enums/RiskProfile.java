@@ -1,4 +1,4 @@
-package com.cryptopilot.user;
+package com.cryptopilot.user.model.enums;
 
 /**
  * How much capital a Trader puts into a setup and when a plan is warned about (BR-66). It never changes a setup score

@@ -9,7 +9,7 @@ import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.support.TestcontainersConfig;
-import com.cryptopilot.user.UserRole;
+import com.cryptopilot.user.model.enums.UserRole;
 import com.cryptopilot.user.service.impl.ProfileSetupStyleSource;
 import java.sql.Timestamp;
 import java.time.Instant;

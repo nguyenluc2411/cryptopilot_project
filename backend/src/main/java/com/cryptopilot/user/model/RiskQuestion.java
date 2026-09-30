@@ -1,5 +1,6 @@
 package com.cryptopilot.user.model;
 
+import com.cryptopilot.user.model.enums.QuestionGroup;
 import java.util.List;
 
 /**

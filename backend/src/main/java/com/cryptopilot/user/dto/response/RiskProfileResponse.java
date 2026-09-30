@@ -1,6 +1,6 @@
 package com.cryptopilot.user.dto.response;
 
-import com.cryptopilot.user.RiskProfile;
+import com.cryptopilot.user.model.enums.RiskProfile;
 import java.math.BigDecimal;
 
 /**

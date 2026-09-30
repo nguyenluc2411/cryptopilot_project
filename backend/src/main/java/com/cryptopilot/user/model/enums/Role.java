@@ -1,4 +1,4 @@
-package com.cryptopilot.user.entity;
+package com.cryptopilot.user.model.enums;
 
 /**
  * The role an account holds. Every account has exactly one, and there are exactly two.

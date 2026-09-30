@@ -15,7 +15,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.support.FixedClockConfig;
 import com.cryptopilot.support.TestcontainersConfig;
-import com.cryptopilot.user.UserRole;
+import com.cryptopilot.user.model.enums.UserRole;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;

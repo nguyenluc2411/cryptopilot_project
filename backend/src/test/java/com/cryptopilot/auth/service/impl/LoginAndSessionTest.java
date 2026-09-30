@@ -14,7 +14,7 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
-import com.cryptopilot.user.UserRole;
+import com.cryptopilot.user.model.enums.UserRole;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;

@@ -3,6 +3,8 @@ package com.cryptopilot.user.entity;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.cryptopilot.user.model.enums.DevicePlatform;
+import com.cryptopilot.user.model.enums.TradingStyle;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;

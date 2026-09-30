@@ -1,5 +1,6 @@
 package com.cryptopilot.user;
 
+import com.cryptopilot.user.model.enums.RiskProfile;
 import java.math.BigDecimal;
 import java.util.Objects;
 

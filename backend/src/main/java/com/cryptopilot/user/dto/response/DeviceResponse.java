@@ -1,6 +1,6 @@
 package com.cryptopilot.user.dto.response;
 
-import com.cryptopilot.user.entity.DevicePlatform;
+import com.cryptopilot.user.model.enums.DevicePlatform;
 import java.util.UUID;
 
 /**

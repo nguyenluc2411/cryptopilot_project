@@ -1,6 +1,6 @@
 package com.cryptopilot.auth.config;
 
-import com.cryptopilot.user.UserRole;
+import com.cryptopilot.user.model.enums.UserRole;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;

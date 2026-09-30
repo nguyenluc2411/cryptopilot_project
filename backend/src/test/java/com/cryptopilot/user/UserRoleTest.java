@@ -2,7 +2,8 @@ package com.cryptopilot.user;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.user.entity.Role;
+import com.cryptopilot.user.model.enums.Role;
+import com.cryptopilot.user.model.enums.UserRole;
 import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 

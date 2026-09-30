@@ -8,9 +8,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.support.TestcontainersConfig;
-import com.cryptopilot.user.RiskProfile;
 import com.cryptopilot.user.RiskProfileApi;
 import com.cryptopilot.user.RiskProfileParameters;
+import com.cryptopilot.user.model.enums.RiskProfile;
 import com.jayway.jsonpath.JsonPath;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;

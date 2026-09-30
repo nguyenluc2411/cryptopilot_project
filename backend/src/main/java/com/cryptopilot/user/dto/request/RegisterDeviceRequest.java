@@ -1,6 +1,6 @@
 package com.cryptopilot.user.dto.request;
 
-import com.cryptopilot.user.entity.DevicePlatform;
+import com.cryptopilot.user.model.enums.DevicePlatform;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;

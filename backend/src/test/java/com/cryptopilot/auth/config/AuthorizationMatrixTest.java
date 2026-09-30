@@ -7,7 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ProblemDetails;
 import com.cryptopilot.support.TestcontainersConfig;
-import com.cryptopilot.user.UserRole;
+import com.cryptopilot.user.model.enums.UserRole;
 import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Nested;

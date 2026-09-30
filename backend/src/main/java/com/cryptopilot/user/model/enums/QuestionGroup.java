@@ -1,4 +1,4 @@
-package com.cryptopilot.user.model;
+package com.cryptopilot.user.model.enums;
 
 /**
  * The two groups of the risk questionnaire (SRS 3.2.5, D-53).

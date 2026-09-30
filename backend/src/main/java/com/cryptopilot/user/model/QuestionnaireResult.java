@@ -1,6 +1,6 @@
 package com.cryptopilot.user.model;
 
-import com.cryptopilot.user.RiskProfile;
+import com.cryptopilot.user.model.enums.RiskProfile;
 
 /**
  * What a completed risk questionnaire suggests.

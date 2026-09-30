@@ -1,7 +1,7 @@
 package com.cryptopilot.user.config;
 
-import com.cryptopilot.user.RiskProfile;
 import com.cryptopilot.user.RiskProfileParameters;
+import com.cryptopilot.user.model.enums.RiskProfile;
 import java.math.BigDecimal;
 import java.util.EnumMap;
 import java.util.EnumSet;

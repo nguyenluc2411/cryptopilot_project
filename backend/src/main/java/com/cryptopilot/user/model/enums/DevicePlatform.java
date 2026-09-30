@@ -1,4 +1,4 @@
-package com.cryptopilot.user.entity;
+package com.cryptopilot.user.model.enums;
 
 /**
  * The mobile platform a registered device runs, which decides how a push notification is addressed.

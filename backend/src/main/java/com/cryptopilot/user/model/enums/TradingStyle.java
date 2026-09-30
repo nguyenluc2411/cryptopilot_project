@@ -1,4 +1,4 @@
-package com.cryptopilot.user.entity;
+package com.cryptopilot.user.model.enums;
 
 /**
  * How long a trader usually holds a position. A profile preference, used to pre-fill a plan and to

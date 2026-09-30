@@ -7,6 +7,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.user.model.enums.AccountStatus;
+import com.cryptopilot.user.model.enums.Role;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.function.Consumer;

@@ -1,10 +1,10 @@
 package com.cryptopilot.user.calculator;
 
-import com.cryptopilot.user.RiskProfile;
-import com.cryptopilot.user.model.QuestionGroup;
 import com.cryptopilot.user.model.QuestionnaireResult;
 import com.cryptopilot.user.model.RiskAnswerOption;
 import com.cryptopilot.user.model.RiskQuestion;
+import com.cryptopilot.user.model.enums.QuestionGroup;
+import com.cryptopilot.user.model.enums.RiskProfile;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
