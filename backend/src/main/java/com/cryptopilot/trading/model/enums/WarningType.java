@@ -1,4 +1,4 @@
-package com.cryptopilot.trading;
+package com.cryptopilot.trading.model.enums;
 
 /**
  * The kinds of warning a trading plan can raise, each with the one severity its rule gives it. The names are the

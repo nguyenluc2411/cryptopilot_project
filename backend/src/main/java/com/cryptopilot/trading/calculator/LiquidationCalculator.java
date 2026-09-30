@@ -1,13 +1,13 @@
 package com.cryptopilot.trading.calculator;
 
 import com.cryptopilot.common.util.Rounding;
-import com.cryptopilot.trading.Direction;
 import com.cryptopilot.trading.model.InputViolation;
 import com.cryptopilot.trading.model.LeverageBracket;
 import com.cryptopilot.trading.model.LiquidationEstimate;
 import com.cryptopilot.trading.model.LiquidationInput;
 import com.cryptopilot.trading.model.LiquidationOutcome;
 import com.cryptopilot.trading.model.RiskInputRejected;
+import com.cryptopilot.trading.model.enums.Direction;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;

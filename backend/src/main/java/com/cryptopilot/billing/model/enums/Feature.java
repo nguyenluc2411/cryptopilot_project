@@ -1,5 +1,6 @@
-package com.cryptopilot.billing;
+package com.cryptopilot.billing.model.enums;
 
+import com.cryptopilot.billing.PlanEntitlements;
 import java.util.function.Function;
 import java.util.function.Predicate;
 

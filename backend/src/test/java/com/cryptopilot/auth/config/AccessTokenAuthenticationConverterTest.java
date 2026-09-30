@@ -2,7 +2,7 @@ package com.cryptopilot.auth.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.user.UserRole;
+import com.cryptopilot.user.model.enums.UserRole;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;

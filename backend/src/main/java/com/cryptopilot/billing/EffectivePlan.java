@@ -1,5 +1,6 @@
 package com.cryptopilot.billing;
 
+import com.cryptopilot.billing.model.enums.PlanTier;
 import java.util.Objects;
 
 /**

@@ -1,7 +1,7 @@
 package com.cryptopilot.trading.model;
 
-import com.cryptopilot.trading.WarningSeverity;
-import com.cryptopilot.trading.WarningType;
+import com.cryptopilot.trading.model.enums.WarningSeverity;
+import com.cryptopilot.trading.model.enums.WarningType;
 import java.util.Objects;
 
 /**

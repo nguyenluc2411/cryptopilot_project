@@ -3,11 +3,11 @@ package com.cryptopilot.market.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.MarketTestData;
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.SnapshotRun;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.MarketSnapshotRepository;
 import com.cryptopilot.market.service.impl.MarketSnapshotServiceImpl;
 import com.cryptopilot.support.MutableTestClock;

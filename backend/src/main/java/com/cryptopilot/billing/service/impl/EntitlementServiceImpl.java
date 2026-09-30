@@ -1,9 +1,9 @@
 package com.cryptopilot.billing.service.impl;
 
 import com.cryptopilot.billing.EffectivePlan;
-import com.cryptopilot.billing.Feature;
-import com.cryptopilot.billing.PlanTier;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
+import com.cryptopilot.billing.model.enums.Feature;
+import com.cryptopilot.billing.model.enums.PlanTier;
 import com.cryptopilot.billing.repository.SubscriptionPackageRepository;
 import com.cryptopilot.billing.service.EntitlementService;
 import com.cryptopilot.common.exception.BusinessException;

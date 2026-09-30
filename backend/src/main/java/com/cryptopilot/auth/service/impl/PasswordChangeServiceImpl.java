@@ -1,7 +1,7 @@
 package com.cryptopilot.auth.service.impl;
 
 import com.cryptopilot.auth.PasswordPolicy;
-import com.cryptopilot.auth.entity.TokenType;
+import com.cryptopilot.auth.model.enums.TokenType;
 import com.cryptopilot.auth.repository.UserTokenRepository;
 import com.cryptopilot.auth.service.LiveSessions;
 import com.cryptopilot.auth.service.PasswordChangeService;

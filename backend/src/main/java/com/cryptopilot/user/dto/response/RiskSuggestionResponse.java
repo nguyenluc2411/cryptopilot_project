@@ -1,6 +1,6 @@
 package com.cryptopilot.user.dto.response;
 
-import com.cryptopilot.user.RiskProfile;
+import com.cryptopilot.user.model.enums.RiskProfile;
 
 /**
  * The profile a completed questionnaire suggests (SRS 3.2.5). Nothing is saved: the Trader may choose another.

@@ -1,4 +1,4 @@
-package com.cryptopilot.user;
+package com.cryptopilot.user.model.enums;
 
 /**
  * The role an account holds, as the {@code user} module publishes it to the rest of the application.

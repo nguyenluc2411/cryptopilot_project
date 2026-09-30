@@ -2,9 +2,8 @@ package com.cryptopilot.trading.calculator.warning;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
-import com.cryptopilot.trading.Direction;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.calculator.LiquidationCalculator;
 import com.cryptopilot.trading.calculator.PositionSizeCalculator;
 import com.cryptopilot.trading.model.LeverageBracket;
@@ -17,6 +16,7 @@ import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskOutcome;
 import com.cryptopilot.trading.model.RiskProfileLimits;
 import com.cryptopilot.trading.model.WarningThresholds;
+import com.cryptopilot.trading.model.enums.Direction;
 import java.math.BigDecimal;
 import java.util.List;
 

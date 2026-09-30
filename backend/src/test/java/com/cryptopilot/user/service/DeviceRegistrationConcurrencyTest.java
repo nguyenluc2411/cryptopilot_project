@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.UserApi;
 import com.cryptopilot.user.dto.request.RegisterDeviceRequest;
-import com.cryptopilot.user.entity.DevicePlatform;
+import com.cryptopilot.user.model.enums.DevicePlatform;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;

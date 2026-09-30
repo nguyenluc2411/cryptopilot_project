@@ -1,9 +1,9 @@
 package com.cryptopilot.market.job;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.model.StreamTarget;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.StreamCandleService;
 import java.util.ArrayList;
 import java.util.List;

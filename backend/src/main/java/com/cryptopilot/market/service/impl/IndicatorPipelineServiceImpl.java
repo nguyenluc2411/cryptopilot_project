@@ -1,15 +1,15 @@
 package com.cryptopilot.market.service.impl;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.calculator.SetupComponents;
 import com.cryptopilot.market.calculator.SwingSupportResistance;
-import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.event.CandleClosed;
 import com.cryptopilot.market.model.ComponentInputs;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.DerivativesInputs;
 import com.cryptopilot.market.model.IndicatorSnapshot;
 import com.cryptopilot.market.model.StoredIndicators;
+import com.cryptopilot.market.model.enums.MarketInterval;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.MarketDataQueryRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;

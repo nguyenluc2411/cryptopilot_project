@@ -1,7 +1,7 @@
 package com.cryptopilot.market.service.impl;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketBroadcastService;
 import com.cryptopilot.market.service.MarketUpdateService;
 import com.cryptopilot.market.service.PriceCacheService;

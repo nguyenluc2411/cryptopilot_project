@@ -2,11 +2,11 @@ package com.cryptopilot.market.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.config.MarketHubProperties;
 import com.cryptopilot.market.config.PriceCacheProperties;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketBroadcastService;
 import com.cryptopilot.market.service.PriceCacheService;
 import java.lang.reflect.Proxy;

@@ -1,8 +1,8 @@
 package com.cryptopilot.market.repository;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.StoredIndicators;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;

@@ -1,10 +1,10 @@
 package com.cryptopilot.user.service;
 
-import com.cryptopilot.user.RiskProfile;
 import com.cryptopilot.user.RiskProfileApi;
 import com.cryptopilot.user.dto.response.RiskProfileResponse;
 import com.cryptopilot.user.dto.response.RiskQuestionnaireResponse;
 import com.cryptopilot.user.dto.response.RiskSuggestionResponse;
+import com.cryptopilot.user.model.enums.RiskProfile;
 import java.util.Map;
 import java.util.UUID;
 

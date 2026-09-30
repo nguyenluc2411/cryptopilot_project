@@ -1,6 +1,6 @@
 package com.cryptopilot.market.event;
 
-import com.cryptopilot.market.MarketType;
+import com.cryptopilot.market.model.enums.MarketType;
 
 /**
  * NSF-01 has synchronised one market: the pairs' exchange statuses are current. Published by the symbol

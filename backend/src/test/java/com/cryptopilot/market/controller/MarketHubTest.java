@@ -4,8 +4,8 @@ import static com.cryptopilot.market.client.StubStreamServer.await;
 import static com.cryptopilot.market.client.StubStreamServer.signal;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketBroadcastService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.jayway.jsonpath.JsonPath;

@@ -1,6 +1,5 @@
 package com.cryptopilot.market.service.impl;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
@@ -8,6 +7,7 @@ import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.dto.response.KlineUpdateResponse;
 import com.cryptopilot.market.dto.response.MarketOverviewResponse;
 import com.cryptopilot.market.dto.response.TickerUpdateResponse;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketBroadcastService;
 import java.time.Clock;
 import java.time.Instant;

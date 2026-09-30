@@ -17,8 +17,8 @@ import org.springframework.stereotype.Service;
 /**
  * Enforces the package convention of D-48 in every module: service interfaces in {@code service}, their
  * {@code @Service} implementations in {@code service.impl}, API records in {@code dto.request} and
- * {@code dto.response}, internal records in {@code model}, and the Binance client records kept inside
- * {@code market}.
+ * {@code dto.response}, internal records in {@code model}, top-level enums in {@code model.enums}, and the
+ * Binance client records kept inside {@code market}.
  *
  * <p>The record rule is about files: a private record nested inside an implementation, such as the result of one
  * of its private steps, is part of that class and stays there.
@@ -38,11 +38,17 @@ class PackageConventionTest {
     private static final String CONTROLLER = "com.cryptopilot..controller..";
     private static final String DTO = "com.cryptopilot..dto..";
     private static final String MODEL = "com.cryptopilot..model..";
+    private static final String MODEL_ENUMS = "com.cryptopilot..model.enums..";
+    private static final String ENTITY = "com.cryptopilot..entity..";
+    private static final String ERROR_CODE = "com.cryptopilot.common.exception.ErrorCode";
     private static final String MARKET = "com.cryptopilot.market..";
     private static final String MARKET_CLIENT = "com.cryptopilot.market.client..";
 
     private static final DescribedPredicate<JavaClass> RECORDS = DescribedPredicate.describe(
             "top-level records", javaClass -> javaClass.isTopLevelClass() && javaClass.isRecord());
+
+    private static final DescribedPredicate<JavaClass> ENUMS = DescribedPredicate.describe(
+            "top-level enums", javaClass -> javaClass.isTopLevelClass() && javaClass.isEnum());
 
     private static final DescribedPredicate<JavaClass> NAMED_LIKE_A_DTO = DescribedPredicate.describe(
             "named like a DTO (…Request, …Response)",
@@ -81,15 +87,28 @@ class PackageConventionTest {
             .resideInAPackage(SERVICE_IMPL)
             .allowEmptyShould(true);
 
-    /** A DTO may name an entity enum, and nothing else of the entity package. */
+    /** A DTO names enums from {@code model.enums} and nothing of the entity package. */
     @ArchTest
-    static final ArchRule dtos_useOnlyEntityEnums = noClasses()
+    static final ArchRule dtos_doNotDependOnEntities = noClasses()
             .that()
             .resideInAPackage(DTO)
             .should()
-            .dependOnClassesThat(DescribedPredicate.describe(
-                    "are entity classes other than enums",
-                    target -> target.getPackageName().contains(".entity") && !target.isEnum()))
+            .dependOnClassesThat()
+            .resideInAPackage(ENTITY)
+            .allowEmptyShould(true);
+
+    /**
+     * A top-level enum lives in its module's {@code model.enums}, which the module exposes as a named interface;
+     * the shared error codes of {@code common} are the one exception. An enum that only means something inside
+     * one class stays nested in that class.
+     */
+    @ArchTest
+    static final ArchRule enums_resideInModelEnums = classes()
+            .that(ENUMS)
+            .and()
+            .doNotHaveFullyQualifiedName(ERROR_CODE)
+            .should()
+            .resideInAPackage(MODEL_ENUMS)
             .allowEmptyShould(true);
 
     /** An internal model never reaches up into the layers that produce or expose it. */

@@ -3,8 +3,8 @@ package com.cryptopilot.market.job;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.event.CandleClosed;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.IndicatorPipelineService;
 import java.math.BigDecimal;
 import java.time.Instant;

@@ -1,7 +1,7 @@
 package com.cryptopilot.market.repository;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.entity.CryptoPair;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,13 +33,13 @@ public interface CryptoPairRepository extends Repository<CryptoPair, UUID> {
 
     /** The pairs available on Spot (BR-07), lowest display order first, then by symbol. */
     @Transactional(readOnly = true)
-    @Query("select p from CryptoPair p where p.pairStatus = com.cryptopilot.market.entity.PairStatus.ACTIVE"
+    @Query("select p from CryptoPair p where p.pairStatus = com.cryptopilot.market.model.enums.PairStatus.ACTIVE"
             + " and p.spotEnabled = true order by p.displayOrder, p.symbol")
     List<CryptoPair> findEnabledOnSpot();
 
     /** The pairs available on futures (BR-07), lowest display order first, then by symbol. */
     @Transactional(readOnly = true)
-    @Query("select p from CryptoPair p where p.pairStatus = com.cryptopilot.market.entity.PairStatus.ACTIVE"
+    @Query("select p from CryptoPair p where p.pairStatus = com.cryptopilot.market.model.enums.PairStatus.ACTIVE"
             + " and p.futuresEnabled = true order by p.displayOrder, p.symbol")
     List<CryptoPair> findEnabledOnFutures();
 

@@ -1,5 +1,6 @@
 package com.cryptopilot.market.client;
 
+import com.cryptopilot.market.model.enums.MarketInterval;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;

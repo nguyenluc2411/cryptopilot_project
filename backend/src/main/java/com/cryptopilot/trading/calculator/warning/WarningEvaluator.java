@@ -1,8 +1,8 @@
 package com.cryptopilot.trading.calculator.warning;
 
-import com.cryptopilot.trading.WarningSeverity;
 import com.cryptopilot.trading.model.PlanCalculation;
 import com.cryptopilot.trading.model.PlanWarning;
+import com.cryptopilot.trading.model.enums.WarningSeverity;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;

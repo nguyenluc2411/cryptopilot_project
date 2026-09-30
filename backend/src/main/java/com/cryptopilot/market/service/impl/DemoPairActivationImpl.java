@@ -1,8 +1,8 @@
 package com.cryptopilot.market.service.impl;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.entity.CryptoPair;
-import com.cryptopilot.market.entity.ExchangeStatus;
+import com.cryptopilot.market.model.enums.ExchangeStatus;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.service.DemoPairActivation;
 import java.util.ArrayList;

@@ -1,6 +1,6 @@
 package com.cryptopilot.trading.model;
 
-import com.cryptopilot.market.MarketType;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.math.BigDecimal;
 import java.util.Objects;
 

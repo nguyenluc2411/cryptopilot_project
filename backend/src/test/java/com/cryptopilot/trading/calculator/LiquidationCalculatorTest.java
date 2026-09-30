@@ -4,9 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.tuple;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
-import com.cryptopilot.trading.Direction;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.InputViolation;
 import com.cryptopilot.trading.model.LeverageBracket;
 import com.cryptopilot.trading.model.LiquidationEstimate;
@@ -16,6 +15,7 @@ import com.cryptopilot.trading.model.RiskCalculation;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskInputRejected;
 import com.cryptopilot.trading.model.RiskProfileLimits;
+import com.cryptopilot.trading.model.enums.Direction;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;

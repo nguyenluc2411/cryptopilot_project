@@ -1,4 +1,4 @@
-package com.cryptopilot.market.client;
+package com.cryptopilot.market.model.enums;
 
 /**
  * The two Binance APIs this system reads: Spot and USDⓈ-M perpetual futures.

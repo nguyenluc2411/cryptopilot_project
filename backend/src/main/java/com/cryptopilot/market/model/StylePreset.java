@@ -1,7 +1,7 @@
 package com.cryptopilot.market.model;
 
-import com.cryptopilot.market.MarketType;
-import com.cryptopilot.market.SetupStyle;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import java.util.List;
 import java.util.Objects;
 

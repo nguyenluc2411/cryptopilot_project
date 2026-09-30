@@ -1,8 +1,8 @@
 package com.cryptopilot.market.service;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.MarketType;
 
 /**
  * The latest-price cache of T-022; implemented by {@link com.cryptopilot.market.service.impl.PriceCacheServiceImpl}.

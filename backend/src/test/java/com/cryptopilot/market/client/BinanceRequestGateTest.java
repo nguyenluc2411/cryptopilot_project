@@ -8,6 +8,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.cryptopilot.market.model.enums.BinanceVenue;
 import com.cryptopilot.support.MutableTestClock;
 import java.time.Duration;
 import java.time.Instant;

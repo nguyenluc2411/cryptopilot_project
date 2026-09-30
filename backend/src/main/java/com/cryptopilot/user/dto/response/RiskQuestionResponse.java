@@ -1,6 +1,6 @@
 package com.cryptopilot.user.dto.response;
 
-import com.cryptopilot.user.model.QuestionGroup;
+import com.cryptopilot.user.model.enums.QuestionGroup;
 import java.util.List;
 
 /**

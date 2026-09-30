@@ -1,5 +1,6 @@
 package com.cryptopilot.market.client;
 
+import com.cryptopilot.market.model.enums.BinanceVenue;
 import java.io.Serial;
 import java.time.Instant;
 import java.util.Objects;

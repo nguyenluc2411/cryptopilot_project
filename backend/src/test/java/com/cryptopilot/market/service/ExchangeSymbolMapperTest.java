@@ -3,10 +3,10 @@ package com.cryptopilot.market.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.client.ExchangeSymbol;
 import com.cryptopilot.market.model.ExchangeListing;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;

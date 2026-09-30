@@ -1,14 +1,14 @@
 package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.calculator.IndicatorEngine;
-import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.config.IndicatorProperties;
 import com.cryptopilot.market.event.CandleClosed;
-import com.cryptopilot.market.model.IndicatorOutcome;
 import com.cryptopilot.market.model.IndicatorSnapshot;
 import com.cryptopilot.market.model.IndicatorUpdate;
 import com.cryptopilot.market.model.SeriesKey;
 import com.cryptopilot.market.model.StoredCandle;
+import com.cryptopilot.market.model.enums.IndicatorOutcome;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.service.IndicatorService;
 import java.time.Duration;

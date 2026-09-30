@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
-import com.cryptopilot.market.MarketType;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
 

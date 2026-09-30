@@ -1,8 +1,10 @@
 package com.cryptopilot.market.entity;
 
 import com.cryptopilot.common.entity.BaseEntity;
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.model.enums.ExchangeStatus;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.PairStatus;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

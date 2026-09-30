@@ -1,6 +1,5 @@
 package com.cryptopilot.market.job;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.GapDetected;
@@ -8,6 +7,7 @@ import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.BackfillRun;
 import com.cryptopilot.market.model.GapFill;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.CandleBackfillService;
 import java.time.Clock;
 import java.time.Instant;

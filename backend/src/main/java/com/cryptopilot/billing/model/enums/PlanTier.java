@@ -1,4 +1,4 @@
-package com.cryptopilot.billing;
+package com.cryptopilot.billing.model.enums;
 
 /**
  * The plan tier of a subscription package, lowest first. The constants are the values of the

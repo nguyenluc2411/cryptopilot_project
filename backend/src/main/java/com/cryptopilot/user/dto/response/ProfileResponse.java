@@ -1,7 +1,7 @@
 package com.cryptopilot.user.dto.response;
 
-import com.cryptopilot.user.RiskProfile;
-import com.cryptopilot.user.entity.TradingStyle;
+import com.cryptopilot.user.model.enums.RiskProfile;
+import com.cryptopilot.user.model.enums.TradingStyle;
 import java.math.BigDecimal;
 
 /**

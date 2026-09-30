@@ -1,5 +1,6 @@
 package com.cryptopilot.auth.entity;
 
+import com.cryptopilot.auth.model.enums.TokenType;
 import com.cryptopilot.common.entity.BaseEntity;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;

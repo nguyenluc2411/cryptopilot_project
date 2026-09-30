@@ -1,7 +1,5 @@
 package com.cryptopilot.market.service.impl;
 
-import com.cryptopilot.market.MarketType;
-import com.cryptopilot.market.SetupStyle;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.calculator.SetupComponents;
 import com.cryptopilot.market.calculator.SetupScoreCalculator;
@@ -16,12 +14,14 @@ import com.cryptopilot.market.dto.response.SpotComponentsResponse;
 import com.cryptopilot.market.dto.response.SpotSetupScoreResponse;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.ComponentScores;
-import com.cryptopilot.market.model.DominantSide;
 import com.cryptopilot.market.model.IndicatorSnapshot;
 import com.cryptopilot.market.model.SetupScore;
 import com.cryptopilot.market.model.StoredCandle;
 import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.StylePreset;
+import com.cryptopilot.market.model.enums.DominantSide;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.market.service.AnalysisService;

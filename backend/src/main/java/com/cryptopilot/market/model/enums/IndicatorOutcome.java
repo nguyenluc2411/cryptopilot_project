@@ -1,4 +1,4 @@
-package com.cryptopilot.market.model;
+package com.cryptopilot.market.model.enums;
 
 /**
  * What happened to a closed candle offered to the indicators of its series.

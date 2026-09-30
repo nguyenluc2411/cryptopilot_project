@@ -3,15 +3,15 @@ package com.cryptopilot.market.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.MarketTestData;
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.Kline;
-import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.CandleClosed;
 import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.model.StreamTarget;
+import com.cryptopilot.market.model.enums.MarketInterval;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;

@@ -1,4 +1,4 @@
-package com.cryptopilot.market.model;
+package com.cryptopilot.market.model.enums;
 
 /**
  * The winning side of the Futures trend component; it accompanies a setup score and is never part of it.

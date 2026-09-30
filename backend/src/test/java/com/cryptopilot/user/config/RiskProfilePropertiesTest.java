@@ -2,8 +2,8 @@ package com.cryptopilot.user.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.user.RiskProfile;
 import com.cryptopilot.user.RiskProfileParameters;
+import com.cryptopilot.user.model.enums.RiskProfile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;

@@ -1,6 +1,6 @@
 package com.cryptopilot.auth.config;
 
-import com.cryptopilot.user.UserRole;
+import com.cryptopilot.user.model.enums.UserRole;
 import java.util.List;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
@@ -32,7 +32,7 @@ import org.springframework.stereotype.Component;
  * it here means the caller ends up with no authority and is denied, which is the direction to fail.
  *
  * <p>The same check is what keeps BR-05's two roles two. A third role reaches this class only after
- * it has been added to {@link UserRole}, to {@link com.cryptopilot.user.entity.Role} and to the
+ * it has been added to {@link UserRole}, to {@link com.cryptopilot.user.model.enums.Role} and to the
  * {@code ck_user_account_role} check constraint, which is three deliberate steps rather than a
  * string.
  *

@@ -1,4 +1,4 @@
-package com.cryptopilot.market;
+package com.cryptopilot.market.model.enums;
 
 /**
  * The two markets a pair can be traded on in this system: Binance Spot and USDⓈ-M perpetual futures.

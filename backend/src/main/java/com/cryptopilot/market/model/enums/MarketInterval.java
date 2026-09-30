@@ -1,4 +1,4 @@
-package com.cryptopilot.market.client;
+package com.cryptopilot.market.model.enums;
 
 import java.time.Duration;
 import java.util.Optional;

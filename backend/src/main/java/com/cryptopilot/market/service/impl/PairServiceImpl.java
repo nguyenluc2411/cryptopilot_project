@@ -1,11 +1,11 @@
 package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.common.web.PageResponse;
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.dto.response.PairResponse;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.service.PairService;

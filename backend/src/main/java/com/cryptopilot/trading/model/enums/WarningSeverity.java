@@ -1,4 +1,4 @@
-package com.cryptopilot.trading;
+package com.cryptopilot.trading.model.enums;
 
 /**
  * How serious a plan warning is, lowest first. Only {@link #BLOCKING} stops a plan from being activated; a plan with

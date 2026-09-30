@@ -1,6 +1,6 @@
 package com.cryptopilot.auth.model;
 
-import com.cryptopilot.user.UserRole;
+import com.cryptopilot.user.model.enums.UserRole;
 import java.time.Instant;
 import java.util.UUID;
 

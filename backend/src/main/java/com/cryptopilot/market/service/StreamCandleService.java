@@ -1,8 +1,8 @@
 package com.cryptopilot.market.service;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.model.StreamTarget;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.util.List;
 
 /**

@@ -1,7 +1,7 @@
 package com.cryptopilot.billing.repository;
 
-import com.cryptopilot.billing.PlanTier;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
+import com.cryptopilot.billing.model.enums.PlanTier;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;

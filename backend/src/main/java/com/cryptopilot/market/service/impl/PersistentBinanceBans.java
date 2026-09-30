@@ -1,7 +1,7 @@
 package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.client.BinanceBanStore;
-import com.cryptopilot.market.client.BinanceVenue;
+import com.cryptopilot.market.model.enums.BinanceVenue;
 import com.cryptopilot.market.repository.BinanceBanRepository;
 import java.time.Clock;
 import java.time.Instant;

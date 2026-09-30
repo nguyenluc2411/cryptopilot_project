@@ -1,4 +1,4 @@
-package com.cryptopilot.market;
+package com.cryptopilot.market.model.enums;
 
 /**
  * The style presets a setup score is read under; each has its own timeframe and component weights.

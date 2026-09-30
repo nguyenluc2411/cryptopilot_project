@@ -1,7 +1,8 @@
 package com.cryptopilot.user.entity;
 
 import com.cryptopilot.common.entity.BaseEntity;
-import com.cryptopilot.user.RiskProfile;
+import com.cryptopilot.user.model.enums.RiskProfile;
+import com.cryptopilot.user.model.enums.TradingStyle;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

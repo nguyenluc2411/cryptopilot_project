@@ -5,15 +5,15 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.tuple;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
-import com.cryptopilot.trading.Direction;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.InputViolation;
 import com.cryptopilot.trading.model.RiskCalculation;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskInputRejected;
 import com.cryptopilot.trading.model.RiskOutcome;
 import com.cryptopilot.trading.model.RiskProfileLimits;
+import com.cryptopilot.trading.model.enums.Direction;
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.Test;

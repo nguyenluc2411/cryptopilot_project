@@ -1,7 +1,7 @@
 package com.cryptopilot.market.calculator;
 
-import com.cryptopilot.market.model.IndicatorOutcome;
 import com.cryptopilot.market.model.IndicatorSnapshot;
+import com.cryptopilot.market.model.enums.IndicatorOutcome;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;

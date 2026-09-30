@@ -1,10 +1,8 @@
 package com.cryptopilot.market.job;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceStreamClient;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.BinanceStreamShard;
-import com.cryptopilot.market.client.BinanceVenue;
 import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
@@ -12,6 +10,8 @@ import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.StreamTarget;
+import com.cryptopilot.market.model.enums.BinanceVenue;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.LatestMarketData;
 import com.cryptopilot.market.service.MarketUpdateService;
 import com.cryptopilot.market.service.StreamCandleService;

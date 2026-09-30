@@ -8,9 +8,9 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.mockito.Mockito.mock;
 
 import com.cryptopilot.billing.EntitlementApi;
-import com.cryptopilot.billing.Feature;
 import com.cryptopilot.billing.PlanFixtures;
-import com.cryptopilot.billing.PlanTier;
+import com.cryptopilot.billing.model.enums.Feature;
+import com.cryptopilot.billing.model.enums.PlanTier;
 import com.cryptopilot.billing.repository.SubscriptionPackageRepository;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;

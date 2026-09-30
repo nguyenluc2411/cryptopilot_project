@@ -1,9 +1,9 @@
 package com.cryptopilot.trading.calculator.warning;
 
-import com.cryptopilot.trading.Direction;
-import com.cryptopilot.trading.WarningType;
 import com.cryptopilot.trading.model.PlanCalculation;
 import com.cryptopilot.trading.model.PlanWarning;
+import com.cryptopilot.trading.model.enums.Direction;
+import com.cryptopilot.trading.model.enums.WarningType;
 import java.math.BigDecimal;
 import java.util.Optional;
 

@@ -4,8 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
+import com.cryptopilot.auth.model.enums.TokenType;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.entity.UserAccount;
 import jakarta.persistence.EntityManager;

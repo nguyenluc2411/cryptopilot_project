@@ -3,10 +3,10 @@ package com.cryptopilot.market.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.impl.MarketUpdateServiceImpl;
 import java.math.BigDecimal;
 import java.time.Instant;

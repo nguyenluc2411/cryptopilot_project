@@ -1,9 +1,9 @@
 package com.cryptopilot.user.service.impl;
 
-import com.cryptopilot.market.SetupStyle;
 import com.cryptopilot.market.SetupStyleSource;
-import com.cryptopilot.user.entity.TradingStyle;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.user.entity.UserProfile;
+import com.cryptopilot.user.model.enums.TradingStyle;
 import com.cryptopilot.user.repository.UserProfileRepository;
 import java.util.Optional;
 import java.util.UUID;

@@ -1,6 +1,6 @@
 package com.cryptopilot.user.dto.request;
 
-import com.cryptopilot.user.RiskProfile;
+import com.cryptopilot.user.model.enums.RiskProfile;
 import jakarta.validation.constraints.NotNull;
 
 /**

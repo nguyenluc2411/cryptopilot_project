@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import com.cryptopilot.billing.PlanEntitlements;
-import com.cryptopilot.billing.PlanTier;
+import com.cryptopilot.billing.model.enums.PlanTier;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;

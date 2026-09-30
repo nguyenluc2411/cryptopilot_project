@@ -1,6 +1,6 @@
 package com.cryptopilot.market.event;
 
-import com.cryptopilot.market.MarketType;
+import com.cryptopilot.market.model.enums.MarketType;
 
 /**
  * A stream connection of a market has opened again after it was lost: candles may have closed while nobody

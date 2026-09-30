@@ -1,5 +1,6 @@
 package com.cryptopilot.market.client;
 
+import com.cryptopilot.market.model.enums.MarketInterval;
 import java.time.Instant;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;

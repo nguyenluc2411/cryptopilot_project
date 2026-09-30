@@ -1,7 +1,7 @@
 package com.cryptopilot.market.model;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.model.enums.MarketType;
 
 /**
  * What the exchange says about one symbol on one market, in the system's own terms: which coins it is

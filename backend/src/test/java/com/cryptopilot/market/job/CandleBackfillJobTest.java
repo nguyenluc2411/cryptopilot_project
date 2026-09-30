@@ -2,7 +2,6 @@ package com.cryptopilot.market.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceClientProperties;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.InMemoryBinanceBans;
@@ -13,6 +12,7 @@ import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.CandleBackfillJob.Outcome;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.service.SyntheticKlines;

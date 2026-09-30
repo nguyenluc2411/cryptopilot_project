@@ -1,10 +1,10 @@
 package com.cryptopilot.market.job;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.SymbolSyncProperties;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.SyncReport;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.SymbolSyncService;
 import java.time.Clock;
 import java.time.Instant;

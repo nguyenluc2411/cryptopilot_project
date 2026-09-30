@@ -2,11 +2,11 @@ package com.cryptopilot.auth.service.impl;
 
 import com.cryptopilot.auth.PasswordPolicy;
 import com.cryptopilot.auth.config.TokenProperties;
-import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
 import com.cryptopilot.auth.event.PasswordResetTokenIssued;
 import com.cryptopilot.auth.event.VerificationTokenIssued;
 import com.cryptopilot.auth.model.IssuedSession;
+import com.cryptopilot.auth.model.enums.TokenType;
 import com.cryptopilot.auth.repository.UserTokenRepository;
 import com.cryptopilot.auth.service.AccessTokenIssuer;
 import com.cryptopilot.auth.service.AuthService;

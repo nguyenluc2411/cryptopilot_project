@@ -4,10 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
-import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
 import com.cryptopilot.auth.event.PasswordResetTokenIssued;
 import com.cryptopilot.auth.model.IssuedSession;
+import com.cryptopilot.auth.model.enums.TokenType;
 import com.cryptopilot.auth.repository.UserTokenRepository;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;

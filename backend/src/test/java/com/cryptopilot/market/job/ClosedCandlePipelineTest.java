@@ -4,12 +4,12 @@ import static com.cryptopilot.market.client.StubStreamServer.await;
 import static com.cryptopilot.market.client.StubStreamServer.signal;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.Kline;
-import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.model.StreamTarget;
+import com.cryptopilot.market.model.enums.MarketInterval;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.market.service.impl.StreamCandleServiceImpl;
 import java.math.BigDecimal;

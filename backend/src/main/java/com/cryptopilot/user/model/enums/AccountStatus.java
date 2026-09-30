@@ -1,4 +1,4 @@
-package com.cryptopilot.user.entity;
+package com.cryptopilot.user.model.enums;
 
 /**
  * The lifecycle state of an account.

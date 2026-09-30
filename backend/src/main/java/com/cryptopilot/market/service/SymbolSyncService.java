@@ -1,8 +1,8 @@
 package com.cryptopilot.market.service;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.model.SyncReport;
+import com.cryptopilot.market.model.enums.MarketType;
 
 /**
  * The use cases of {@link com.cryptopilot.market.service.impl.SymbolSyncServiceImpl}: the methods called from outside it (D-48).

@@ -3,10 +3,10 @@ package com.cryptopilot.trading.calculator.warning;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
-import com.cryptopilot.trading.WarningSeverity;
-import com.cryptopilot.trading.WarningType;
 import com.cryptopilot.trading.model.PlanCalculation;
 import com.cryptopilot.trading.model.PlanWarning;
+import com.cryptopilot.trading.model.enums.WarningSeverity;
+import com.cryptopilot.trading.model.enums.WarningType;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;

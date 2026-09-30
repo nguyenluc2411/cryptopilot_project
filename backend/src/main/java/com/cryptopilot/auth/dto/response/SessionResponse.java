@@ -1,6 +1,6 @@
 package com.cryptopilot.auth.dto.response;
 
-import com.cryptopilot.user.UserRole;
+import com.cryptopilot.user.model.enums.UserRole;
 import java.time.Instant;
 
 /**

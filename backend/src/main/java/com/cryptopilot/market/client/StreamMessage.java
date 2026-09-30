@@ -1,5 +1,6 @@
 package com.cryptopilot.market.client;
 
+import com.cryptopilot.market.model.enums.MarketInterval;
 import java.math.BigDecimal;
 import java.time.Instant;
 

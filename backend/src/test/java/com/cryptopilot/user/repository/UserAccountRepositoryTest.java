@@ -5,9 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.cryptopilot.support.TestcontainersConfig;
-import com.cryptopilot.user.entity.AccountStatus;
-import com.cryptopilot.user.entity.Role;
 import com.cryptopilot.user.entity.UserAccount;
+import com.cryptopilot.user.model.enums.AccountStatus;
+import com.cryptopilot.user.model.enums.Role;
 import jakarta.persistence.EntityManager;
 import java.sql.Connection;
 import java.sql.ResultSet;

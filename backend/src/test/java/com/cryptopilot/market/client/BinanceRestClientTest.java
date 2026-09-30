@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 
 import com.cryptopilot.market.client.StubExchange.Answer;
+import com.cryptopilot.market.model.enums.BinanceVenue;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.support.MutableTestClock;
 import java.math.BigDecimal;
 import java.net.URI;
