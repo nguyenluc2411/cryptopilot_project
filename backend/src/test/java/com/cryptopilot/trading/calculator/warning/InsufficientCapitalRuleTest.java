@@ -2,9 +2,9 @@ package com.cryptopilot.trading.calculator.warning;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.trading.WarningSeverity;
-import com.cryptopilot.trading.WarningType;
 import com.cryptopilot.trading.model.PlanWarning;
+import com.cryptopilot.trading.model.enums.WarningSeverity;
+import com.cryptopilot.trading.model.enums.WarningType;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 

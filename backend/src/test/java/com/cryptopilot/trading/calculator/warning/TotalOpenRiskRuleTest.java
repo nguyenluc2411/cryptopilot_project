@@ -6,11 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.model.enums.MarketType;
-import com.cryptopilot.trading.Direction;
-import com.cryptopilot.trading.WarningSeverity;
-import com.cryptopilot.trading.WarningType;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskProfileLimits;
+import com.cryptopilot.trading.model.enums.Direction;
+import com.cryptopilot.trading.model.enums.WarningSeverity;
+import com.cryptopilot.trading.model.enums.WarningType;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 

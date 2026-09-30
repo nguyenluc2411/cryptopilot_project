@@ -1,4 +1,4 @@
-package com.cryptopilot.trading;
+package com.cryptopilot.trading.model.enums;
 
 /**
  * The side of a trading plan. A Spot plan is always {@link #LONG} (BR-21).

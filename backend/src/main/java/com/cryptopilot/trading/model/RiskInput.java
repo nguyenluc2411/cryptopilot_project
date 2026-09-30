@@ -2,7 +2,7 @@ package com.cryptopilot.trading.model;
 
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.model.enums.MarketType;
-import com.cryptopilot.trading.Direction;
+import com.cryptopilot.trading.model.enums.Direction;
 import java.math.BigDecimal;
 import java.util.Objects;
 

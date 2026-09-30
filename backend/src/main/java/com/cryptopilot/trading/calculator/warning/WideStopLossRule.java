@@ -1,10 +1,10 @@
 package com.cryptopilot.trading.calculator.warning;
 
 import com.cryptopilot.common.util.Rounding;
-import com.cryptopilot.trading.WarningType;
 import com.cryptopilot.trading.model.PlanCalculation;
 import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.RiskInput;
+import com.cryptopilot.trading.model.enums.WarningType;
 import java.math.BigDecimal;
 import java.util.Optional;
 
