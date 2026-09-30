@@ -1,6 +1,7 @@
 package com.cryptopilot.market.client;
 
 import static com.cryptopilot.market.client.StubStreamServer.await;
+import static com.cryptopilot.market.client.StubStreamServer.signal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -46,11 +47,13 @@ class BinanceStreamShardTest {
         public void onMessage(StreamMessage message) {
             messages.add(message);
             arrivals.release();
+            signal();
         }
 
         @Override
         public void onConnected(BinanceStreamShard shard, boolean afterLoss) {
             openings.add(afterLoss);
+            signal();
         }
     };
 

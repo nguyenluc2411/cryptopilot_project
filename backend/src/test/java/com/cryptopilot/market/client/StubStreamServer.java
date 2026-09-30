@@ -13,7 +13,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -40,6 +39,17 @@ public final class StubStreamServer implements AutoCloseable {
 
     /** How long a wait may last before the test fails as hung. */
     private static final Duration HANG_GUARD = Duration.ofSeconds(5);
+
+    /**
+     * The longest {@link #await} sleeps without a signal before it looks again, for a condition on state that no
+     * test code can signal (a shard's connection flag, a row in the database). It bounds the delay, never the outcome.
+     */
+    private static final Duration RECHECK = Duration.ofMillis(20);
+
+    /** What {@link #await} sleeps on; {@link #signal} bumps the generation and wakes it. */
+    private static final Object CHANGES = new Object();
+
+    private static long generation;
 
     private final ServerSocket server;
     private final List<Connection> connections = new CopyOnWriteArrayList<>();
@@ -106,17 +116,48 @@ public final class StubStreamServer implements AutoCloseable {
     }
 
     /**
-     * Waits until the condition holds — an event, not a length of time — failing the test after five seconds. The
-     * deadline is a guard against a hang, never what a test asserts.
+     * Waits until the condition holds, failing the test after five seconds. The thread sleeps between checks and is
+     * woken by {@link #signal} as soon as observed state changes, so it does not compete for the CPU with the threads it
+     * waits for. The deadline only stops a hang and is never what a test asserts.
+     *
+     * <p>The condition is evaluated outside the monitor: it may take locks of the code under test, whose threads call
+     * {@link #signal} while holding them.
+     *
+     * <p>Reference: Luo, Q., Hariri, F., Eloussi, L., &amp; Marinov, D. (2014). An Empirical Analysis of Flaky
+     * Tests. <i>FSE 2014</i> (asynchronous waits and concurrency are the leading causes of flaky tests).
      */
     public static void await(BooleanSupplier condition, String what) {
-        Instant deadline = Instant.now().plus(Duration.ofSeconds(5));
-        while (!condition.getAsBoolean()) {
-            if (Instant.now().isAfter(deadline)) {
-                throw new AssertionError("timed out waiting for " + what);
+        long deadline = System.nanoTime() + HANG_GUARD.toNanos();
+        while (true) {
+            long seen;
+            synchronized (CHANGES) {
+                seen = generation;
             }
-            Thread.onSpinWait();
-            Thread.yield();
+            if (condition.getAsBoolean()) {
+                return;
+            }
+            synchronized (CHANGES) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0) {
+                    throw new AssertionError("timed out waiting for " + what);
+                }
+                if (generation == seen) {
+                    try {
+                        TimeUnit.NANOSECONDS.timedWait(CHANGES, Math.min(left, RECHECK.toNanos()));
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("interrupted waiting for " + what, interrupted);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Tells every {@link #await} that observed state has changed; call it after recording what a test waits on. */
+    public static void signal() {
+        synchronized (CHANGES) {
+            generation++;
+            CHANGES.notifyAll();
         }
     }
 
@@ -149,6 +190,7 @@ public final class StubStreamServer implements AutoCloseable {
                 lines.add(line);
             }
             paths.add(lines.getFirst().split(" ")[1]);
+            signal();
             if (refusals.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
                 out.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                         .getBytes(StandardCharsets.US_ASCII));
@@ -173,6 +215,7 @@ public final class StubStreamServer implements AutoCloseable {
                 connections.add(connection);
                 connections.notifyAll();
             }
+            signal();
             if (closesOnOpen.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
                 connection.closeWith(1001);
             }
@@ -238,6 +281,7 @@ public final class StubStreamServer implements AutoCloseable {
         public void drop() {
             ended = true;
             closeQuietly(socket);
+            signal();
         }
 
         /** The payloads of the pongs the client sent. */
@@ -276,6 +320,7 @@ public final class StubStreamServer implements AutoCloseable {
                 out.flush();
             } catch (IOException gone) {
                 ended = true;
+                signal();
             }
         }
 
@@ -302,9 +347,13 @@ public final class StubStreamServer implements AutoCloseable {
                         payload[i] ^= mask[i % 4];
                     }
                     switch (first & 0x0F) {
-                        case 0xA -> pongs.add(new String(payload, StandardCharsets.UTF_8));
+                        case 0xA -> {
+                            pongs.add(new String(payload, StandardCharsets.UTF_8));
+                            signal();
+                        }
                         case 0x8 -> {
                             closeCode = payload.length >= 2 ? ((payload[0] & 0xFF) << 8) | (payload[1] & 0xFF) : 1005;
+                            signal();
                             frame(0x8, payload.length >= 2 ? new byte[] {payload[0], payload[1]} : new byte[0]);
                             return;
                         }
@@ -316,6 +365,7 @@ public final class StubStreamServer implements AutoCloseable {
             } finally {
                 ended = true;
                 closeQuietly(socket);
+                signal();
             }
         }
     }
