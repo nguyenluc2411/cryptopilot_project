@@ -1,4 +1,4 @@
-package com.cryptopilot.auth.service;
+package com.cryptopilot.auth.service.impl;
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.auth.config.TokenProperties;

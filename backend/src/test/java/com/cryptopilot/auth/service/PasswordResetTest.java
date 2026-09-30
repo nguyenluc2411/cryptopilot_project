@@ -9,6 +9,7 @@ import com.cryptopilot.auth.event.PasswordResetTokenIssued;
 import com.cryptopilot.auth.model.IssuedSession;
 import com.cryptopilot.auth.model.enums.TokenType;
 import com.cryptopilot.auth.repository.UserTokenRepository;
+import com.cryptopilot.auth.service.impl.SecureTokenFactory;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.support.MutableTestClock;

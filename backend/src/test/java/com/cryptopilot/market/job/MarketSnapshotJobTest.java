@@ -4,8 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.model.SnapshotRun;
-import com.cryptopilot.market.service.LatestMarketData;
 import com.cryptopilot.market.service.MarketSnapshotService;
+import com.cryptopilot.market.service.impl.LatestMarketData;
 import com.cryptopilot.market.service.impl.MarketSnapshotServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import java.lang.reflect.Proxy;

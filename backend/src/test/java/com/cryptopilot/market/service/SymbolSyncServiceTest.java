@@ -22,6 +22,7 @@ import com.cryptopilot.market.model.enums.PairStatus;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.service.impl.SymbolSyncServiceImpl;
+import com.cryptopilot.market.service.impl.SymbolSyncWriter;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.net.URI;

@@ -1,4 +1,4 @@
-package com.cryptopilot.auth.service;
+package com.cryptopilot.auth.service.impl;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

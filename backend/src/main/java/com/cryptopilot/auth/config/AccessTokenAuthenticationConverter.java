@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>The resource server's default converter reads the {@code scope} and {@code scp} claims and
  * publishes them as {@code SCOPE_*} authorities. This application's tokens carry neither: they carry
- * {@code role}, written by {@link com.cryptopilot.auth.service.AccessTokenIssuer}. Without the
+ * {@code role}, written by {@link com.cryptopilot.auth.service.impl.AccessTokenIssuer}. Without the
  * conversion below a valid token would authenticate a caller with an empty authority list, every
  * {@code hasRole(...)} rule in {@link SecurityConfig} would be false, and the whole authorization
  * matrix would refuse everybody — a failure that is safe but total, and silent in the sense that

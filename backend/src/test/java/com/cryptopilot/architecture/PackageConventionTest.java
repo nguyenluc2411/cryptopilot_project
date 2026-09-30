@@ -15,7 +15,7 @@ import com.tngtech.archunit.lang.SimpleConditionEvent;
 import org.springframework.stereotype.Service;
 
 /**
- * Enforces the package convention of D-48 in every module: service interfaces in {@code service}, their
+ * Enforces the package convention of D-48 in every module: only service interfaces in {@code service}, their
  * {@code @Service} implementations in {@code service.impl}, API records in {@code dto.request} and
  * {@code dto.response}, internal records in {@code model}, top-level enums in {@code model.enums}, and the
  * Binance client records kept inside {@code market}.
@@ -41,6 +41,10 @@ class PackageConventionTest {
     private static final String MODEL_ENUMS = "com.cryptopilot..model.enums..";
     private static final String ENTITY = "com.cryptopilot..entity..";
     private static final String ERROR_CODE = "com.cryptopilot.common.exception.ErrorCode";
+
+    /** Injected by {@code auth.config} (JWT decoder and session validator), which may not reach {@code service.impl}. */
+    private static final String LIVE_SESSIONS = "com.cryptopilot.auth.service.LiveSessions";
+
     private static final String MARKET = "com.cryptopilot.market..";
     private static final String MARKET_CLIENT = "com.cryptopilot.market.client..";
 
@@ -62,6 +66,28 @@ class PackageConventionTest {
             .that(RECORDS.or(NAMED_LIKE_A_DTO))
             .should()
             .resideOutsideOfPackage(SERVICE)
+            .allowEmptyShould(true);
+
+    /**
+     * A {@code service} package is the module's contract and holds interfaces only; implementations and the helpers
+     * they use live in {@code service.impl}. {@code LiveSessions} is the one exception, because {@code auth.config}
+     * injects it and a configuration class must not depend on an implementation package.
+     *
+     * <p>Reference: Martin, R. C. (2017). <i>Clean Architecture</i>. Prentice Hall, ch. 34 (package by layer vs.
+     * package by component).
+     */
+    @ArchTest
+    static final ArchRule servicePackages_holdOnlyInterfaces = classes()
+            .that()
+            .areTopLevelClasses()
+            .and()
+            .resideInAPackage(SERVICE)
+            .and()
+            .resideOutsideOfPackage(SERVICE_IMPL)
+            .and()
+            .doNotHaveFullyQualifiedName(LIVE_SESSIONS)
+            .should()
+            .beInterfaces()
             .allowEmptyShould(true);
 
     /**

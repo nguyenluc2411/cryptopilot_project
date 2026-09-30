@@ -1,4 +1,4 @@
-package com.cryptopilot.market.service;
+package com.cryptopilot.market.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
