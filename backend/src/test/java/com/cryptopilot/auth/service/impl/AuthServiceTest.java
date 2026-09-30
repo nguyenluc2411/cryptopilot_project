@@ -4,9 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
-import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
 import com.cryptopilot.auth.event.VerificationTokenIssued;
+import com.cryptopilot.auth.model.enums.TokenType;
 import com.cryptopilot.auth.repository.UserTokenRepository;
 import com.cryptopilot.auth.service.AuthService;
 import com.cryptopilot.auth.service.SecureTokenFactory;

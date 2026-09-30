@@ -3,8 +3,8 @@ package com.cryptopilot.schema;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
+import com.cryptopilot.auth.model.enums.TokenType;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.entity.AccountStatus;

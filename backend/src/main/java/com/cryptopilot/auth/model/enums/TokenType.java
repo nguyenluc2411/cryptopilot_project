@@ -1,4 +1,4 @@
-package com.cryptopilot.auth.entity;
+package com.cryptopilot.auth.model.enums;
 
 /**
  * What a stored token is for. The three kinds share one table because they share one shape — a

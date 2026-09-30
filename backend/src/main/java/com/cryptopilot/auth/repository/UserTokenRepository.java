@@ -1,7 +1,7 @@
 package com.cryptopilot.auth.repository;
 
-import com.cryptopilot.auth.entity.TokenType;
 import com.cryptopilot.auth.entity.UserToken;
+import com.cryptopilot.auth.model.enums.TokenType;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -189,7 +189,7 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
     @Transactional
     @Modifying(flushAutomatically = true)
     @Query("update UserToken t set t.usedAt = :now"
-            + " where t.userId = :userId and t.tokenType = com.cryptopilot.auth.entity.TokenType.REFRESH"
+            + " where t.userId = :userId and t.tokenType = com.cryptopilot.auth.model.enums.TokenType.REFRESH"
             + " and t.usedAt is null and t.tokenFamilyId <> :keptFamilyId")
     int revokeOtherSessions(
             @Param("userId") UUID userId, @Param("keptFamilyId") UUID keptFamilyId, @Param("now") Instant now);
@@ -208,7 +208,7 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
      */
     @Transactional(readOnly = true)
     @Query("select count(t) from UserToken t where t.tokenFamilyId = :familyId and t.userId = :userId"
-            + " and t.tokenType = com.cryptopilot.auth.entity.TokenType.REFRESH and t.usedAt is null")
+            + " and t.tokenType = com.cryptopilot.auth.model.enums.TokenType.REFRESH and t.usedAt is null")
     int countUnusedInSession(@Param("familyId") UUID familyId, @Param("userId") UUID userId);
 
     /**
