@@ -4,8 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.billing.PlanEntitlements;
 import com.cryptopilot.billing.PlanFixtures;
-import com.cryptopilot.billing.PlanTier;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
+import com.cryptopilot.billing.model.enums.PlanTier;
 import com.cryptopilot.support.TestcontainersConfig;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;

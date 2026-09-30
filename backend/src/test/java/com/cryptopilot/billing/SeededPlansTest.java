@@ -2,6 +2,8 @@ package com.cryptopilot.billing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.billing.model.enums.Feature;
+import com.cryptopilot.billing.model.enums.PlanTier;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.sql.Timestamp;
 import java.time.Clock;
