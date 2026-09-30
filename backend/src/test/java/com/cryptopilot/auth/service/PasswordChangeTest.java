@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.auth.model.IssuedSession;
+import com.cryptopilot.auth.service.impl.SecureTokenFactory;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;

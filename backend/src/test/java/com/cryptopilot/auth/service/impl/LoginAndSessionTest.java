@@ -9,7 +9,6 @@ import com.cryptopilot.auth.config.TokenProperties;
 import com.cryptopilot.auth.model.IssuedSession;
 import com.cryptopilot.auth.repository.UserTokenRepository;
 import com.cryptopilot.auth.service.AuthService;
-import com.cryptopilot.auth.service.SecureTokenFactory;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.support.MutableTestClock;

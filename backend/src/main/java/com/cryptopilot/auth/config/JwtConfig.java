@@ -77,7 +77,7 @@ public class JwtConfig {
 
     /**
      * The claim naming the role the account holds. Written by
-     * {@link com.cryptopilot.auth.service.AccessTokenIssuer} and read by
+     * {@link com.cryptopilot.auth.service.impl.AccessTokenIssuer} and read by
      * {@link AccessTokenAuthenticationConverter}, which is why it lives here rather than at either
      * end: the two would still compile if they disagreed about the spelling, and every request would
      * then authenticate with no role at all.
