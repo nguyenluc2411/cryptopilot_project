@@ -71,18 +71,23 @@ class SeedDataTest {
 
     /**
      * The tables the seed writes, with the number of rows each one holds after every migration: V3 seeds sixteen
-     * settings and V10 removes the watchlist and active alert limits, which are the plan's (BR-62); V11 seeds the
+     * settings, V10 removes the watchlist and active alert limits, which are the plan's (BR-62), and V13 the
+     * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V11 seeds the
      * five packages.
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
-            "system_setting", 14,
+            "system_setting", 12,
             "trading_strategy", 3,
             "user_account", 1,
             "user_profile", 1,
             "subscription_package", 5);
 
-    /** The settings V3 seeds and V10 deletes, because the limits are the plan's (BR-62, D-58). */
-    private static final List<String> REMOVED_BY_V10 = List.of("MAX_WATCHLIST_ITEMS", "MAX_ACTIVE_ALERTS");
+    /**
+     * The settings V3 seeds and a later migration deletes: V10 the plan limits (BR-62, D-58), V13 the thresholds the
+     * risk profile now sets (BR-29, D-53).
+     */
+    private static final List<String> REMOVED_LATER = List.of(
+            "MAX_WATCHLIST_ITEMS", "MAX_ACTIVE_ALERTS", "WARN_OVERSIZED_POSITION_RISK_PERCENT", "WARN_HIGH_LEVERAGE");
 
     /**
      * Tables that hold no business rows but are legitimately non-empty after a migration: Flyway's
@@ -109,7 +114,7 @@ class SeedDataTest {
 
     @ParameterizedTest(name = "{0} holds {1} seeded rows")
     @CsvSource({
-        "system_setting, 14",
+        "system_setting, 12",
         "trading_strategy, 3",
         "user_account, 1",
         "user_profile, 1",
@@ -255,16 +260,25 @@ class SeedDataTest {
     }
 
     /**
-     * BR-29 names five warning thresholds and says they are configurable in system settings. What
-     * is proved here is that each one has the value the rule states, at the scale of the column it
-     * will be compared against. That the risk calculation then raises the warning at that boundary
+     * BR-29, BR-66: OVERSIZED_POSITION and HIGH_LEVERAGE compare with the Trader's risk profile (D-53). V3 seeded a
+     * fixed 2 % and 20x; V13 removes them, so no code can read a threshold that no longer applies to anybody.
+     */
+    @Test
+    void BR29_theRiskProfileThresholds_areNotSystemSettings() {
+        assertThat(jdbc.sql("""
+                                select count(*) from system_setting
+                                 where setting_key in ('WARN_OVERSIZED_POSITION_RISK_PERCENT', 'WARN_HIGH_LEVERAGE')""").query(Integer.class).single()).isZero();
+    }
+
+    /**
+     * BR-29: the three warning thresholds the risk profile does not define are configurable in system
+     * settings. What is proved here is that each one has the value the rule states, at the scale of
+     * the column it will be compared against. That the risk calculation then raises the warning at that boundary
      * is the rule itself and belongs to the trading plan task.
      */
     @ParameterizedTest(name = "BR-29 {0} = {1}")
     @CsvSource({
         "WARN_LOW_RR_RATIO, 1.50000000",
-        "WARN_OVERSIZED_POSITION_RISK_PERCENT, 2.000",
-        "WARN_HIGH_LEVERAGE, 20",
         "WARN_WIDE_STOP_LOSS_PERCENT, 10.000",
         "WARN_HIGH_FUNDING_RATE, 0.00100000"
     })
@@ -314,7 +328,7 @@ class SeedDataTest {
                 .query()
                 .listOfRows();
 
-        assertThat(settings).hasSize(14).allSatisfy(setting -> {
+        assertThat(settings).hasSize(12).allSatisfy(setting -> {
             String key = (String) setting.get("setting_key");
             String value = (String) setting.get("setting_value");
             switch ((String) setting.get("value_type")) {
@@ -563,8 +577,8 @@ class SeedDataTest {
      * recovery, or on an environment somebody is repairing — and it is the only way to show that
      * the conflict targets actually cover the rows the statements insert.
      *
-     * <p>V10 deleted two settings V3 seeds (the limits are the plan's, BR-62), so re-applying V3 brings exactly
-     * those two back and nothing else changes. They are removed again afterwards: the database is shared by the
+     * <p>V10 and V13 deleted four settings V3 seeds (the plan's limits, BR-62, and the risk profile's thresholds,
+     * BR-29), so re-applying V3 brings exactly those four back and nothing else changes. They are removed again afterwards: the database is shared by the
      * suite and this test commits.
      */
     @Test
@@ -575,12 +589,12 @@ class SeedDataTest {
             applyScript("db/migration/V3__seed_reference_data.sql");
 
             List<Map<String, Object>> after = seededRows();
-            assertThat(after.stream().filter(row -> !removedByV10(row))).containsExactlyElementsOf(before);
-            assertThat(after.stream().filter(SeedDataTest::removedByV10).map(row -> row.get("setting_key")))
-                    .containsExactlyInAnyOrderElementsOf(REMOVED_BY_V10);
+            assertThat(after.stream().filter(row -> !removedLater(row))).containsExactlyElementsOf(before);
+            assertThat(after.stream().filter(SeedDataTest::removedLater).map(row -> row.get("setting_key")))
+                    .containsExactlyInAnyOrderElementsOf(REMOVED_LATER);
         } finally {
             jdbc.sql("delete from system_setting where setting_key in (:keys)")
-                    .param("keys", REMOVED_BY_V10)
+                    .param("keys", REMOVED_LATER)
                     .update();
         }
         SEEDED_ROW_COUNTS.forEach(
@@ -605,9 +619,9 @@ class SeedDataTest {
     // Helpers
     // ------------------------------------------------------------------------------------------
 
-    /** Whether a seeded row is one of the settings V10 deletes; rows of other tables have no key. */
-    private static boolean removedByV10(Map<String, Object> row) {
-        return row.get("setting_key") instanceof String key && REMOVED_BY_V10.contains(key);
+    /** Whether a seeded row is one of the settings a later migration deletes; rows of other tables have no key. */
+    private static boolean removedLater(Map<String, Object> row) {
+        return row.get("setting_key") instanceof String key && REMOVED_LATER.contains(key);
     }
 
     private void assertVersionSevenLayout(String uuid) {
