@@ -23,6 +23,9 @@ public enum WarningType {
     /** Leverage above the maximum of the Trader's risk profile (BR-29, BR-66). */
     HIGH_LEVERAGE(WarningSeverity.WARNING),
 
+    /** This plan's risk plus the other open risk above the risk profile's maximum (BR-29, BR-66, Q-27). */
+    TOTAL_OPEN_RISK(WarningSeverity.WARNING),
+
     /** Stop loss further from the entry than the configured percentage (BR-29). */
     WIDE_STOP_LOSS(WarningSeverity.INFO),
 

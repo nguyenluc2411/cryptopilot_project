@@ -43,6 +43,7 @@ final class PlanFixture {
     private String riskPercent = "1";
     private int leverage = 5;
     private RiskProfileLimits profile = new RiskProfileLimits(BigDecimal.ONE, 5, new BigDecimal("4"));
+    private String otherOpenRisk = "0";
     private String fundingRate;
     private WarningThresholds thresholds =
             new WarningThresholds(new BigDecimal("1.5"), BigDecimal.TEN, new BigDecimal("0.001"));
@@ -98,7 +99,17 @@ final class PlanFixture {
     }
 
     PlanFixture profile(String riskPerTrade, int maxLeverage) {
-        profile = new RiskProfileLimits(new BigDecimal(riskPerTrade), maxLeverage, new BigDecimal("6"));
+        return profile(riskPerTrade, maxLeverage, "6");
+    }
+
+    PlanFixture profile(String riskPerTrade, int maxLeverage, String maxTotalOpenRisk) {
+        profile = new RiskProfileLimits(new BigDecimal(riskPerTrade), maxLeverage, new BigDecimal(maxTotalOpenRisk));
+        return this;
+    }
+
+    /** The risk amount of the Trader's other ACTIVE plans and open positions, in USDT. */
+    PlanFixture otherOpenRisk(String value) {
+        otherOpenRisk = value;
         return this;
     }
 
@@ -125,7 +136,7 @@ final class PlanFixture {
                 leverage,
                 new PairFilters(new BigDecimal("0.01"), new BigDecimal("0.001"), new BigDecimal("5")),
                 profile,
-                BigDecimal.ZERO);
+                new BigDecimal(otherOpenRisk));
         RiskOutcome sizing = PositionSizeCalculator.calculate(plan);
         assertThat(sizing).as("the fixture's plan is sized").isInstanceOf(RiskCalculation.class);
         RiskCalculation sized = (RiskCalculation) sizing;

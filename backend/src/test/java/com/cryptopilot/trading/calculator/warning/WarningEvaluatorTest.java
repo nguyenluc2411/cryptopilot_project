@@ -37,18 +37,20 @@ class WarningEvaluatorTest {
     }
 
     /**
-     * Futures LONG E 100, S 89, T 105, risk 2 % on a BALANCED profile, 20x, funding 0.002: the stop is below the
-     * 20x liquidation price of 95.39, the ratio is 5 / 11, the risk and leverage exceed the profile, the stop is 11 %
-     * away and a LONG pays the rate. Only INSUFFICIENT_CAPITAL stays silent (margin 9.09 of 1,000).
+     * Futures LONG E 100, S 89, T 105, risk 2 % on a BALANCED profile, 20x, funding 0.002, other open risk 30: the
+     * stop is below the 20x liquidation price of 95.39, the ratio is 5 / 11, the risk and leverage exceed the profile,
+     * the total open risk is 4.9998 % of 4 %, the stop is 11 % away and a LONG pays the rate. Only
+     * INSUFFICIENT_CAPITAL stays silent (margin 9.09 of 1,000).
      */
     @Test
-    void BR29_aPlanBreakingSixRules_raisesSixWarnings_mostSevereFirst() {
+    void BR29_aPlanBreakingSevenRules_raisesSevenWarnings_mostSevereFirst() {
         List<PlanWarning> warnings = WarningEvaluator.evaluate(PlanFixture.futuresLong()
                 .stop("89")
                 .takeProfit("105")
                 .riskPercent("2")
                 .leverage(20)
                 .fundingRate("0.002")
+                .otherOpenRisk("30")
                 .build());
 
         assertThat(warnings)
@@ -58,6 +60,7 @@ class WarningEvaluatorTest {
                         WarningType.LOW_RR,
                         WarningType.OVERSIZED_POSITION,
                         WarningType.HIGH_LEVERAGE,
+                        WarningType.TOTAL_OPEN_RISK,
                         WarningType.HIGH_FUNDING_RATE,
                         WarningType.WIDE_STOP_LOSS);
         assertThat(warnings).extracting(PlanWarning::severity).isSortedAccordingTo((a, b) -> b.compareTo(a));
@@ -92,6 +95,7 @@ class WarningEvaluatorTest {
         "LOW_RR, WARNING",
         "OVERSIZED_POSITION, WARNING",
         "HIGH_LEVERAGE, WARNING",
+        "TOTAL_OPEN_RISK, WARNING",
         "WIDE_STOP_LOSS, INFO",
         "HIGH_FUNDING_RATE, WARNING"
     })
