@@ -1,11 +1,11 @@
 package com.cryptopilot.market.service;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceClientException;
-import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.model.BackfillRun;
 import com.cryptopilot.market.model.GapFill;
+import com.cryptopilot.market.model.enums.MarketInterval;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.time.Instant;
 import java.util.List;
 

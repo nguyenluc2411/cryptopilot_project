@@ -2,15 +2,15 @@ package com.cryptopilot.market.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.Kline;
-import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.dto.response.KlineUpdateResponse;
 import com.cryptopilot.market.dto.response.MarketOverviewResponse;
 import com.cryptopilot.market.dto.response.TickerUpdateResponse;
+import com.cryptopilot.market.model.enums.MarketInterval;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.impl.MarketBroadcastServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import java.math.BigDecimal;

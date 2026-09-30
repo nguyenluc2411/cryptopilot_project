@@ -8,8 +8,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.cryptopilot.market.MarketType;
-import com.cryptopilot.market.SetupStyle;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.config.SetupScoreProperties;
 import com.cryptopilot.market.dto.response.AnalysisResponse;
@@ -18,6 +16,8 @@ import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.ComponentWeights;
 import com.cryptopilot.market.model.StoredIndicators;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import java.math.BigDecimal;

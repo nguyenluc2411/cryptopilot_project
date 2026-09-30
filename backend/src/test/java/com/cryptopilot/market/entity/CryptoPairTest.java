@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.model.enums.ExchangeStatus;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.PairStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;

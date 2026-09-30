@@ -1,12 +1,12 @@
 package com.cryptopilot.market.calculator;
 
 import com.cryptopilot.common.util.Rounding;
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.model.ComponentInputs;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.DerivativesInputs;
-import com.cryptopilot.market.model.DominantSide;
 import com.cryptopilot.market.model.IndicatorSnapshot;
+import com.cryptopilot.market.model.enums.DominantSide;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Objects;

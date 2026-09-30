@@ -1,6 +1,5 @@
 package com.cryptopilot.market.service.impl;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.config.MarketApiProperties;
 import com.cryptopilot.market.dto.response.FundingSettlementResponse;
 import com.cryptopilot.market.dto.response.FuturesMetricsResponse;
@@ -16,6 +15,7 @@ import com.cryptopilot.market.model.FuturesPriceSnapshot;
 import com.cryptopilot.market.model.LongShortReading;
 import com.cryptopilot.market.model.OpenInterestReading;
 import com.cryptopilot.market.model.SpotSnapshot;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.MarketDataQueryRepository;
 import com.cryptopilot.market.service.MarketStatsService;
 import java.time.Clock;

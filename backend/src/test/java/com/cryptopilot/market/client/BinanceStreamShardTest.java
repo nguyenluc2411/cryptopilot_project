@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StubStreamServer.Connection;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.support.MutableTestClock;
 import java.net.URI;
 import java.net.http.HttpClient;

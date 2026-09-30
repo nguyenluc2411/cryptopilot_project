@@ -2,6 +2,7 @@ package com.cryptopilot.market.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.market.model.enums.BinanceVenue;
 import java.lang.reflect.Modifier;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;

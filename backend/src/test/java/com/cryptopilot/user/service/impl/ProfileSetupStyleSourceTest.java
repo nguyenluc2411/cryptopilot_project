@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.cryptopilot.market.SetupStyle;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.user.entity.TradingStyle;
 import com.cryptopilot.user.entity.UserProfile;
 import com.cryptopilot.user.repository.UserProfileRepository;

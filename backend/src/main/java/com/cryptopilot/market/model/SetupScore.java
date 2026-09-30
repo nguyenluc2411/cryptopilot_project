@@ -1,6 +1,7 @@
 package com.cryptopilot.market.model;
 
-import com.cryptopilot.market.SetupStyle;
+import com.cryptopilot.market.model.enums.DominantSide;
+import com.cryptopilot.market.model.enums.SetupStyle;
 
 /**
  * A setup score read under one style preset, with the components it was weighted from.

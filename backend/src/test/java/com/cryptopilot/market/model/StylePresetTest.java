@@ -3,8 +3,8 @@ package com.cryptopilot.market.model;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.cryptopilot.market.MarketType;
-import com.cryptopilot.market.SetupStyle;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 

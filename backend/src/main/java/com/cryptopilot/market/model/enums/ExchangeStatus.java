@@ -1,4 +1,4 @@
-package com.cryptopilot.market.entity;
+package com.cryptopilot.market.model.enums;
 
 /**
  * The exchange's trading status of one market of a pair, in the system's own vocabulary (Q-15). The

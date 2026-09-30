@@ -1,9 +1,9 @@
 package com.cryptopilot.market.job;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.config.DemoPairProperties;
 import com.cryptopilot.market.config.SymbolSyncProperties;
 import com.cryptopilot.market.event.SymbolsSynchronised;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.DemoPairActivation;
 import java.util.EnumSet;
 import java.util.List;

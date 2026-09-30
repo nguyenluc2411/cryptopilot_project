@@ -3,11 +3,11 @@ package com.cryptopilot.market.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
-import com.cryptopilot.market.entity.PairStatus;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.PairStatus;
 import com.cryptopilot.support.TestcontainersConfig;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;

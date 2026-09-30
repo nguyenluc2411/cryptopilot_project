@@ -1,6 +1,5 @@
 package com.cryptopilot.market.service.impl;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.calculator.FundingSettlementDue;
 import com.cryptopilot.market.calculator.FundingTimes;
 import com.cryptopilot.market.client.BinanceClientException;
@@ -8,14 +7,15 @@ import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.FundingInfo;
 import com.cryptopilot.market.client.FundingRate;
 import com.cryptopilot.market.client.LongShortRatio;
-import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.client.OpenInterestStatistic;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.config.FuturesMetricsProperties;
 import com.cryptopilot.market.entity.CryptoPair;
-import com.cryptopilot.market.entity.ExchangeStatus;
 import com.cryptopilot.market.model.MetricsRun;
 import com.cryptopilot.market.model.SettlementRun;
+import com.cryptopilot.market.model.enums.ExchangeStatus;
+import com.cryptopilot.market.model.enums.MarketInterval;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.service.FuturesMetricsService;

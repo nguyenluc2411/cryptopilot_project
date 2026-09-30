@@ -1,8 +1,8 @@
 package com.cryptopilot.market.service;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;

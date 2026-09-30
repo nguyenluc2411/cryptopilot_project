@@ -3,13 +3,13 @@ package com.cryptopilot.market.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.config.PriceCacheProperties;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.impl.PriceCacheServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -163,7 +163,7 @@ class PriceCacheServiceTest {
                 MarketType.SPOT,
                 new KlineMessage(
                         "BTCUSDT",
-                        com.cryptopilot.market.client.MarketInterval.ONE_HOUR,
+                        com.cryptopilot.market.model.enums.MarketInterval.ONE_HOUR,
                         new com.cryptopilot.market.client.Kline(
                                 AT,
                                 AT.plusSeconds(3599),

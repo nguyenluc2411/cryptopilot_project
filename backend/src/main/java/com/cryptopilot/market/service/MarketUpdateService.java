@@ -1,7 +1,7 @@
 package com.cryptopilot.market.service;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage;
+import com.cryptopilot.market.model.enums.MarketType;
 
 /**
  * Where the stream hands every message besides storage: the latest-price cache and the market topics (T-022);

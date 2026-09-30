@@ -2,16 +2,16 @@ package com.cryptopilot.market.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.BinanceClientProperties;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.InMemoryBinanceBans;
 import com.cryptopilot.market.client.StubExchange;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.SymbolSyncProperties;
-import com.cryptopilot.market.entity.ExchangeStatus;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.SymbolSyncJob.Outcome;
+import com.cryptopilot.market.model.enums.ExchangeStatus;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.service.ExchangeInfoFixtures;
 import com.cryptopilot.market.service.SymbolSyncWriter;

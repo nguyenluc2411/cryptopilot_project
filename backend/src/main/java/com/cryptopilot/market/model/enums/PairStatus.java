@@ -1,4 +1,4 @@
-package com.cryptopilot.market.entity;
+package com.cryptopilot.market.model.enums;
 
 /**
  * Whether an administrator has made a pair available (BR-07, SCR-37). The constants are the values of the

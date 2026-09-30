@@ -2,10 +2,10 @@ package com.cryptopilot.market.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.cryptopilot.market.MarketType;
-import com.cryptopilot.market.SetupStyle;
 import com.cryptopilot.market.model.ComponentWeights;
 import com.cryptopilot.market.model.StylePreset;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;

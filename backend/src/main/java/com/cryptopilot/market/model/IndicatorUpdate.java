@@ -1,5 +1,7 @@
 package com.cryptopilot.market.model;
 
+import com.cryptopilot.market.model.enums.IndicatorOutcome;
+
 /**
  * The result of offering a closed candle to the indicators of its series.
  *

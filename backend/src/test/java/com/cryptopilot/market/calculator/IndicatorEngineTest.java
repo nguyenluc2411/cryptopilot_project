@@ -7,8 +7,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import com.cryptopilot.market.calculator.IndicatorFixture.Row;
-import com.cryptopilot.market.model.IndicatorOutcome;
 import com.cryptopilot.market.model.IndicatorSnapshot;
+import com.cryptopilot.market.model.enums.IndicatorOutcome;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;

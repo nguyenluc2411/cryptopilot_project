@@ -1,9 +1,9 @@
 package com.cryptopilot.market.service;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.client.ExchangeSymbol;
 import com.cryptopilot.market.model.ExchangeListing;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.util.Objects;
 import java.util.Optional;
 

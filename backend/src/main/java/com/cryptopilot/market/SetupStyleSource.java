@@ -1,5 +1,6 @@
 package com.cryptopilot.market;
 
+import com.cryptopilot.market.model.enums.SetupStyle;
 import java.util.Optional;
 import java.util.UUID;
 

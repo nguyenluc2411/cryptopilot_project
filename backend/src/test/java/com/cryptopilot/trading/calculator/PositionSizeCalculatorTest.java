@@ -5,8 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.tuple;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.Direction;
 import com.cryptopilot.trading.model.InputViolation;
 import com.cryptopilot.trading.model.RiskCalculation;

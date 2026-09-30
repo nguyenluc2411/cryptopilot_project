@@ -1,6 +1,6 @@
 package com.cryptopilot.market.model;
 
-import com.cryptopilot.market.MarketType;
+import com.cryptopilot.market.model.enums.MarketType;
 import java.time.Instant;
 import java.util.UUID;
 

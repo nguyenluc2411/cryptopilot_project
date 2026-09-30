@@ -1,7 +1,7 @@
 package com.cryptopilot.market.service;
 
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.client.StreamMessage;
+import com.cryptopilot.market.model.enums.MarketType;
 
 /**
  * The market topics of T-022 (TECHNICAL_DESIGN 9); implemented by

@@ -1,8 +1,8 @@
 package com.cryptopilot.trading.calculator;
 
 import com.cryptopilot.common.util.Rounding;
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.Direction;
 import com.cryptopilot.trading.model.InputViolation;
 import com.cryptopilot.trading.model.RiskCalculation;

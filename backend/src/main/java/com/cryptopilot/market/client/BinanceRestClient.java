@@ -1,5 +1,7 @@
 package com.cryptopilot.market.client;
 
+import com.cryptopilot.market.model.enums.BinanceVenue;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import java.io.IOException;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;

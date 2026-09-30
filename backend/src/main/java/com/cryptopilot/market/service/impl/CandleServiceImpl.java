@@ -1,12 +1,12 @@
 package com.cryptopilot.market.service.impl;
 
-import com.cryptopilot.market.MarketType;
-import com.cryptopilot.market.client.MarketInterval;
 import com.cryptopilot.market.config.MarketApiProperties;
 import com.cryptopilot.market.dto.response.CandleResponse;
 import com.cryptopilot.market.dto.response.CandlesResponse;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.StoredCandle;
+import com.cryptopilot.market.model.enums.MarketInterval;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.service.CandleService;
 import java.time.Clock;

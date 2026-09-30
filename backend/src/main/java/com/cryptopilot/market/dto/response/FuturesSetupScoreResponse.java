@@ -1,7 +1,7 @@
 package com.cryptopilot.market.dto.response;
 
-import com.cryptopilot.market.SetupStyle;
-import com.cryptopilot.market.model.DominantSide;
+import com.cryptopilot.market.model.enums.DominantSide;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import java.time.Instant;
 
 /**

@@ -3,7 +3,6 @@ package com.cryptopilot.market.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.MarketTestData;
-import com.cryptopilot.market.MarketType;
 import com.cryptopilot.market.calculator.SetupComponents;
 import com.cryptopilot.market.calculator.SwingSupportResistance;
 import com.cryptopilot.market.client.Kline;
@@ -13,6 +12,7 @@ import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.IndicatorSnapshot;
 import com.cryptopilot.market.model.SeriesKey;
 import com.cryptopilot.market.model.StoredIndicators;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.support.TestcontainersConfig;

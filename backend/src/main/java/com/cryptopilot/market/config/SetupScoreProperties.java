@@ -1,8 +1,8 @@
 package com.cryptopilot.market.config;
 
-import com.cryptopilot.market.SetupStyle;
 import com.cryptopilot.market.model.ComponentWeights;
 import com.cryptopilot.market.model.StylePreset;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Map;
