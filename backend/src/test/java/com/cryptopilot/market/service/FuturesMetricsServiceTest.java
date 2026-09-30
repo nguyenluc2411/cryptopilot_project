@@ -21,6 +21,7 @@ import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.MarketSnapshotRepository;
 import com.cryptopilot.market.service.impl.FuturesMetricsServiceImpl;
+import com.cryptopilot.market.service.impl.LatestMarketData;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.math.BigDecimal;

@@ -6,7 +6,6 @@ import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.SnapshotRun;
 import com.cryptopilot.market.repository.MarketSnapshotRepository;
-import com.cryptopilot.market.service.LatestMarketData;
 import com.cryptopilot.market.service.MarketSnapshotService;
 import java.time.Clock;
 import java.time.Instant;

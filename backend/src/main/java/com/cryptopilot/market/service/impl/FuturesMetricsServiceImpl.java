@@ -19,7 +19,6 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.service.FuturesMetricsService;
-import com.cryptopilot.market.service.LatestMarketData;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;

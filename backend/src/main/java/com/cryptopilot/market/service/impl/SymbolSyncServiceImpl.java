@@ -7,7 +7,6 @@ import com.cryptopilot.market.config.SymbolSyncProperties;
 import com.cryptopilot.market.model.SyncReport;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.SymbolSyncService;
-import com.cryptopilot.market.service.SymbolSyncWriter;
 import java.time.Clock;
 import java.util.List;
 import java.util.Objects;
