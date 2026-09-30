@@ -9,7 +9,8 @@ import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.support.TestcontainersConfig;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
-import org.junit.jupiter.api.BeforeEach;
+import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -23,7 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
  * mapping itself happens at start-up ({@code ddl-auto=validate}); this proves what validation cannot, that no two
  * columns are swapped.
  *
- * <p>Every test rolls back.
+ * <p>Every test rolls back. A package a test writes carries a {@code TEST_} code; the seeded packages are only read.
  *
  * <p>Rule: BR-62; SRS v1.1 entity 34; D-59.
  */
@@ -36,9 +37,6 @@ class SubscriptionPackageRepositoryTest {
     private static final PlanEntitlements PREMIUM_LIMITS =
             new PlanEntitlements(true, false, null, 100, 50, true, false, true, false, 100, true, true);
 
-    private static final PlanEntitlements FREE_LIMITS =
-            new PlanEntitlements(false, true, 3, 5, 4, false, true, false, true, 0, false, false);
-
     @Autowired
     private SubscriptionPackageRepository packages;
 
@@ -48,20 +46,15 @@ class SubscriptionPackageRepositoryTest {
     @Autowired
     private JdbcClient jdbc;
 
-    /** The seeded packages hold the codes and the FREE row these tests write; the rollback restores them. */
-    @BeforeEach
-    void removeSeededPackages() {
-        PlanFixtures.removeSeeded(jdbc);
-    }
-
     @Test
     void BR62_aPaidPackage_survivesAWriteAndAReadWithEveryColumnIntact() {
+        String code = PlanFixtures.testCode("PREMIUM_YEARLY");
         SubscriptionPackage saved = packages.save(SubscriptionPackage.paid(
-                "PREMIUM_YEARLY", "Premium yearly", PlanTier.PREMIUM, new BigDecimal("1990000"), 365, PREMIUM_LIMITS));
+                code, "Premium yearly", PlanTier.PREMIUM, new BigDecimal("1990000"), 365, PREMIUM_LIMITS));
         entityManager.flush();
         entityManager.clear();
 
-        SubscriptionPackage read = packages.findByPackageCode("PREMIUM_YEARLY").orElseThrow();
+        SubscriptionPackage read = packages.findByPackageCode(code).orElseThrow();
         assertThat(read.getId()).isEqualTo(saved.getId());
         assertThat(read.getPackageName()).isEqualTo("Premium yearly");
         assertThat(read.getTier()).isEqualTo(PlanTier.PREMIUM);
@@ -78,16 +71,34 @@ class SubscriptionPackageRepositoryTest {
                 .isEqualTo("PREMIUM");
     }
 
+    /** The schema admits one FREE package, so the FREE mapping is read on the seeded one. */
     @Test
-    void BR62_theFreePackage_storesNoDurationAndIsFoundById() {
-        SubscriptionPackage saved = packages.save(SubscriptionPackage.free("FREE", "Free", FREE_LIMITS));
-        entityManager.flush();
-        entityManager.clear();
+    void BR62_theSeededFreePackage_readsNoDurationAndIsFoundById() {
+        UUID seeded = jdbc.sql("select package_id from subscription_package where tier = 'FREE'")
+                .query(UUID.class)
+                .single();
 
-        SubscriptionPackage read = packages.findById(saved.getId()).orElseThrow();
+        SubscriptionPackage read = packages.findById(seeded).orElseThrow();
+        assertThat(read.getPackageCode()).isEqualTo("FREE");
+        assertThat(read.getTier()).isEqualTo(PlanTier.FREE);
+        assertThat(read.getTierRank()).isZero();
         assertThat(read.getDurationDays()).isNull();
         assertThat(read.getPriceAmount()).isZero();
         assertThat(read.isPurchasable()).isFalse();
-        assertThat(read.entitlements()).isEqualTo(FREE_LIMITS);
+        assertThat(read.entitlements()).isEqualTo(PlanFixtures.FREE);
+    }
+
+    /** Every seeded package reads back with the entitlements of its tier, which the other billing tests rely on. */
+    @Test
+    void BR62_theSeededPackages_readTheEntitlementsOfTheirTier() {
+        Map<PlanTier, PlanEntitlements> byTier = Map.of(
+                PlanTier.FREE, PlanFixtures.FREE,
+                PlanTier.PRO, PlanFixtures.PRO,
+                PlanTier.PREMIUM, PlanFixtures.PREMIUM);
+
+        for (String code : PlanFixtures.SEEDED_CODES) {
+            SubscriptionPackage read = packages.findByPackageCode(code).orElseThrow();
+            assertThat(read.entitlements()).as(code).isEqualTo(byTier.get(read.getTier()));
+        }
     }
 }
