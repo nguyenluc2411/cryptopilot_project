@@ -367,12 +367,15 @@ trading_journal,updated_at,timestamp with time zone,,,NO
 trading_journal,user_id,uuid,,,NO
 trading_journal,version,bigint,64,0,NO
 trading_plan,activated_at,timestamp with time zone,,,YES
+trading_plan,cancelled_at,timestamp with time zone,,,YES
 trading_plan,capital_amount,numeric,28,8,NO
 trading_plan,created_at,timestamp with time zone,,,NO
 trading_plan,direction,character varying,,,NO
 trading_plan,entry_price,numeric,28,12,YES
 trading_plan,entry_type,character varying,,,NO
 trading_plan,estimated_liquidation_price,numeric,28,12,YES
+trading_plan,executed_at,timestamp with time zone,,,YES
+trading_plan,expired_at,timestamp with time zone,,,YES
 trading_plan,expires_at,timestamp with time zone,,,YES
 trading_plan,initial_margin,numeric,28,8,YES
 trading_plan,leverage,integer,32,0,YES

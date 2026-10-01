@@ -220,7 +220,23 @@ public enum ErrorCode {
      * <p>400, the status every business validation error of this API answers with (MSG01, MSG03, MSG07, MSG08); 422
      * would be the only one of its kind (D-65).
      */
-    RISK_PROFILE_CONFIRMATION_REQUIRED(HttpStatus.BAD_REQUEST, "MSG48");
+    RISK_PROFILE_CONFIRMATION_REQUIRED(HttpStatus.BAD_REQUEST, "MSG48"),
+
+    /**
+     * The plan holds a BLOCKING warning, so it cannot be activated (BR-25, BR-26, BR-28, BR-32). It can still be
+     * saved as a draft.
+     *
+     * <p>409, as {@link #PLAN_LIMIT_REACHED}: the request is valid and the plan's current warnings are what refuse it
+     * (D-66).
+     */
+    TRADING_BLOCKING_WARNING(HttpStatus.CONFLICT, "MSG18"),
+
+    /**
+     * The action does not exist from the plan's current status: an edit outside DRAFT, or a transition BR-32 does not
+     * list. SRS section 5.3 has no text for this, so it borrows MSG43 like {@link #DATA_CONFLICT} until A-38 is
+     * answered (D-66).
+     */
+    TRADING_PLAN_STATUS_TRANSITION_INVALID(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;
