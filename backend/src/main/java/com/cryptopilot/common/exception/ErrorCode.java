@@ -236,7 +236,14 @@ public enum ErrorCode {
      * list. SRS section 5.3 has no text for this, so it borrows MSG43 like {@link #DATA_CONFLICT} until A-38 is
      * answered (D-66).
      */
-    TRADING_PLAN_STATUS_TRANSITION_INVALID(HttpStatus.CONFLICT, "MSG43");
+    TRADING_PLAN_STATUS_TRANSITION_INVALID(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A MARKET plan needs the pair's current last price (BR-33) and the latest-price cache has none: the price is
+     * missing, older than the cache's time to live, or the cache cannot be read (NSF-03, CR-09). 503: the same request
+     * succeeds once prices flow again. SRS 5.3 has no text for this, so it borrows MSG43 until A-39 is answered (D-71).
+     */
+    MARKET_PRICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

@@ -44,7 +44,8 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.AI_DAILY_QUOTA_EXHAUSTED, "MSG30 429"),
             Map.entry(ErrorCode.RISK_PROFILE_CONFIRMATION_REQUIRED, "MSG48 400"),
             Map.entry(ErrorCode.TRADING_BLOCKING_WARNING, "MSG18 409"),
-            Map.entry(ErrorCode.TRADING_PLAN_STATUS_TRANSITION_INVALID, "MSG43 409"));
+            Map.entry(ErrorCode.TRADING_PLAN_STATUS_TRANSITION_INVALID, "MSG43 409"),
+            Map.entry(ErrorCode.MARKET_PRICE_UNAVAILABLE, "MSG43 503"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)
