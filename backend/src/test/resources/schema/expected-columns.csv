@@ -391,7 +391,7 @@ trading_plan,position_quantity,numeric,28,12,YES
 trading_plan,reward_amount,numeric,28,8,YES
 trading_plan,risk_amount,numeric,28,8,YES
 trading_plan,risk_percent,numeric,6,3,NO
-trading_plan,risk_reward_ratio,numeric,12,8,YES
+trading_plan,risk_reward_ratio,numeric,20,8,YES
 trading_plan,stop_loss_price,numeric,28,12,NO
 trading_plan,take_profit_price,numeric,28,12,NO
 trading_plan,updated_at,timestamp with time zone,,,NO

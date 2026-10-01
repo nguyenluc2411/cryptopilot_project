@@ -35,7 +35,7 @@ public record PlanSnapshot(
     /** Decimals of {@code numeric(28,12)}: the quantity and the prices. */
     private static final int PRICE_SCALE = 12;
 
-    /** Decimals of {@code numeric(12,8)}: the two rates. */
+    /** Decimals of the two rate columns, the bracket rate and the risk/reward ratio. */
     private static final int RATE_SCALE = 8;
 
     public PlanSnapshot {
