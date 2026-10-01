@@ -25,9 +25,9 @@ import java.util.List;
  * those calculations produce. The default is a Futures LONG that raises no warning: E 100, S 95, T 110, capital
  * 1,000, risk 1 %, 5x, a BALANCED profile (1 %, 5x, 4 %) and the seeded thresholds (1.5, 10 %, 0.001).
  */
-final class PlanFixture {
+public final class PlanFixture {
 
-    static final List<LeverageBracket> BRACKETS = List.of(
+    public static final List<LeverageBracket> BRACKETS = List.of(
             new LeverageBracket(1, BigDecimal.ZERO, new BigDecimal("50000"), 125, new BigDecimal("0.004"), null),
             new LeverageBracket(
                     2, new BigDecimal("50000"), new BigDecimal("250000"), 100, new BigDecimal("0.005"), null),
@@ -48,83 +48,83 @@ final class PlanFixture {
     private WarningThresholds thresholds =
             new WarningThresholds(new BigDecimal("1.5"), BigDecimal.TEN, new BigDecimal("0.001"));
 
-    static PlanFixture futuresLong() {
+    public static PlanFixture futuresLong() {
         return new PlanFixture();
     }
 
-    static PlanFixture futuresShort() {
+    public static PlanFixture futuresShort() {
         return new PlanFixture().direction(Direction.SHORT).stop("105").takeProfit("90");
     }
 
-    static PlanFixture spot() {
+    public static PlanFixture spot() {
         PlanFixture plan = new PlanFixture();
         plan.market = MarketType.SPOT;
         plan.leverage = 1;
         return plan;
     }
 
-    PlanFixture direction(Direction value) {
+    public PlanFixture direction(Direction value) {
         direction = value;
         return this;
     }
 
-    PlanFixture entry(String value) {
+    public PlanFixture entry(String value) {
         entry = value;
         return this;
     }
 
-    PlanFixture stop(String value) {
+    public PlanFixture stop(String value) {
         stop = value;
         return this;
     }
 
-    PlanFixture takeProfit(String value) {
+    public PlanFixture takeProfit(String value) {
         takeProfit = value;
         return this;
     }
 
-    PlanFixture capital(String value) {
+    public PlanFixture capital(String value) {
         capital = value;
         return this;
     }
 
-    PlanFixture riskPercent(String value) {
+    public PlanFixture riskPercent(String value) {
         riskPercent = value;
         return this;
     }
 
-    PlanFixture leverage(int value) {
+    public PlanFixture leverage(int value) {
         leverage = value;
         return this;
     }
 
-    PlanFixture profile(String riskPerTrade, int maxLeverage) {
+    public PlanFixture profile(String riskPerTrade, int maxLeverage) {
         return profile(riskPerTrade, maxLeverage, "6");
     }
 
-    PlanFixture profile(String riskPerTrade, int maxLeverage, String maxTotalOpenRisk) {
+    public PlanFixture profile(String riskPerTrade, int maxLeverage, String maxTotalOpenRisk) {
         profile = new RiskProfileLimits(new BigDecimal(riskPerTrade), maxLeverage, new BigDecimal(maxTotalOpenRisk));
         return this;
     }
 
     /** The risk amount of the Trader's other ACTIVE plans and open positions, in USDT. */
-    PlanFixture otherOpenRisk(String value) {
+    public PlanFixture otherOpenRisk(String value) {
         otherOpenRisk = value;
         return this;
     }
 
-    PlanFixture fundingRate(String value) {
+    public PlanFixture fundingRate(String value) {
         fundingRate = value;
         return this;
     }
 
-    PlanFixture thresholds(String minRiskReward, String wideStopPercent, String highFunding) {
+    public PlanFixture thresholds(String minRiskReward, String wideStopPercent, String highFunding) {
         thresholds = new WarningThresholds(
                 new BigDecimal(minRiskReward), new BigDecimal(wideStopPercent), new BigDecimal(highFunding));
         return this;
     }
 
-    PlanCalculation build() {
+    public PlanCalculation build() {
         RiskInput plan = new RiskInput(
                 market,
                 direction,

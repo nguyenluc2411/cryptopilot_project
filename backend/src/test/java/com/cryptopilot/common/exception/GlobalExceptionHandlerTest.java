@@ -67,6 +67,25 @@ class GlobalExceptionHandlerTest {
         assertThat(result).bodyJson().extractingPath("$.detail").isEqualTo("Leverage 125 exceeds the maximum");
     }
 
+    /** A domain rule that rejects named fields answers like a failed request body: 400, MSG01, one entry per field. */
+    @Test
+    void fieldValidation_answers400WithTheMessageCodeOfEachField() {
+        MvcTestResult result = mockMvc.get().uri("/test-errors/fields").exchange();
+
+        assertThat(result).hasStatus(HttpStatus.BAD_REQUEST);
+        assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("VALIDATION_FAILED");
+        assertThat(result).bodyJson().extractingPath("$.messageCode").isEqualTo("MSG01");
+        assertThat(result).bodyJson().extractingPath("$.errors.stopLoss").isEqualTo("MSG16");
+        assertThat(result).bodyJson().extractingPath("$.errors.quantity").isEqualTo("MSG15");
+    }
+
+    @Test
+    void aBusinessExceptionWithoutFields_hasNoErrorsProperty() {
+        MvcTestResult result = mockMvc.get().uri("/test-errors/business").exchange();
+
+        assertThat(result).bodyJson().doesNotHavePath("$.errors");
+    }
+
     @Test
     void resourceNotFound_answers404WithMsg41() {
         MvcTestResult result = mockMvc.get().uri("/test-errors/missing").exchange();
@@ -196,6 +215,12 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/business")
         void business() {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Leverage 125 exceeds the maximum");
+        }
+
+        @GetMapping("/fields")
+        void fields() {
+            throw new FieldValidationException(
+                    "the plan's inputs are rejected", java.util.Map.of("stopLoss", "MSG16", "quantity", "MSG15"));
         }
 
         @GetMapping("/missing")
