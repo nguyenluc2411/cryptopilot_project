@@ -2,6 +2,7 @@ package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
@@ -10,6 +11,7 @@ import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
 import com.cryptopilot.market.service.PriceCacheService;
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,6 +39,21 @@ public class MarketApiImpl implements MarketApi {
     public Optional<TradablePair> tradablePair(UUID pairId, MarketType market) {
         return pairs.findById(pairId).filter(pair -> pair.isEnabledOn(market)).flatMap(pair -> pair.filters(market)
                 .map(filters -> new TradablePair(pair.getId(), pair.getSymbol(), market, filters)));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<PairListing> pairListings(Collection<UUID> pairIds) {
+        if (pairIds.isEmpty()) {
+            return List.of();
+        }
+        return pairs.findAllByIdIn(pairIds).stream()
+                .map(pair -> new PairListing(
+                        pair.getId(),
+                        pair.getSymbol(),
+                        pair.isEnabledOn(MarketType.SPOT),
+                        pair.isEnabledOn(MarketType.FUTURES)))
+                .toList();
     }
 
     @Override

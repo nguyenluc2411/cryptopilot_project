@@ -2,6 +2,7 @@ package com.cryptopilot.market.repository;
 
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.enums.MarketType;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,6 +27,10 @@ public interface CryptoPairRepository extends Repository<CryptoPair, UUID> {
 
     @Transactional(readOnly = true)
     Optional<CryptoPair> findById(UUID pairId);
+
+    /** The stored pairs among these ids; an unknown id is left out. */
+    @Transactional(readOnly = true)
+    List<CryptoPair> findAllByIdIn(Collection<UUID> pairIds);
 
     /** The pair with this symbol, e.g. {@code BTCUSDT}, or empty. */
     @Transactional(readOnly = true)
