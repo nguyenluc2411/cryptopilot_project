@@ -120,7 +120,19 @@ class TradingPlanApiTest {
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
         sql.sql("delete from trading_plan where pair_id = ?").param(pair).update();
+        List<UUID> coins = sql.sql("select base_coin_id from crypto_pair where pair_id = ?"
+                        + " union select quote_coin_id from crypto_pair where pair_id = ?")
+                .params(pair, pair)
+                .query(UUID.class)
+                .list();
         sql.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
+        // MarketTestData created the coins too; the seed tests expect none left behind.
+        for (UUID coin : coins) {
+            sql.sql("""
+                            delete from coin where coin_id = ?
+                               and not exists (select 1 from crypto_pair
+                                                where base_coin_id = coin.coin_id or quote_coin_id = coin.coin_id)""").param(coin).update();
+        }
     }
 
     // ------------------------------------------------------------------------------------------
