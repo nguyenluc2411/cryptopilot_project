@@ -3,6 +3,7 @@ package com.cryptopilot.trading.entity;
 import com.cryptopilot.common.entity.BaseEntity;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.calculator.PositionSizeCalculator;
 import com.cryptopilot.trading.calculator.warning.WarningEvaluator;
@@ -32,7 +33,9 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -51,7 +54,8 @@ import lombok.Getter;
  * </ul>
  *
  * <p>The plan's inputs are checked by the calculation that sized them (BR-21, BR-22, BR-30): the plan asks
- * {@link PositionSizeCalculator} again rather than repeating the comparisons, so the rules live in one place.
+ * {@link PositionSizeCalculator} again rather than repeating the comparisons, so the rules live in one place, and a
+ * rejection is reported per field ({@link FieldValidationException}).
  *
  * <p>Rule: BR-21, BR-22, BR-31, BR-32; MSG18; TECHNICAL_DESIGN 3.2 and 4.3; D-66, D-67, D-68, D-69.
  *
@@ -212,6 +216,8 @@ public class TradingPlan extends BaseEntity {
      * @param warnings the warnings of that calculation
      * @param now the activation instant
      * @throws IllegalPlanStateException when the plan is not a DRAFT
+     * @throws FieldValidationException when the recalculated inputs are rejected, e.g. a MARKET last price past the
+     *     stop loss (MSG15, MSG16)
      * @throws PlanActivationBlockedException when a warning is BLOCKING (MSG18)
      * @throws BusinessException {@code VALIDATION_FAILED} when the expiry is not after {@code now}
      */
@@ -310,11 +316,17 @@ public class TradingPlan extends BaseEntity {
         replaceWarnings(newWarnings);
     }
 
-    /** BR-21, BR-22 and BR-30, as the sizing checks them. */
+    /**
+     * BR-21, BR-22 and BR-30, as the sizing checks them. A Trader can reach a rejection, e.g. a MARKET plan whose last
+     * price has moved past its stop loss by the time it is activated, so it is a validation error naming each field.
+     */
     private static void requireAccepted(PlanCalculation calculation) {
         Objects.requireNonNull(calculation, "calculation");
         if (PositionSizeCalculator.calculate(calculation.plan()) instanceof RiskInputRejected rejected) {
-            throw new IllegalArgumentException("the calculation rejects the plan's inputs: " + rejected.violations());
+            Map<String, String> errors = new LinkedHashMap<>();
+            rejected.violations().forEach(v -> errors.putIfAbsent(v.field(), v.messageCode()));
+            throw new FieldValidationException(
+                    "the calculation rejects the plan's inputs: " + rejected.violations(), errors);
         }
     }
 

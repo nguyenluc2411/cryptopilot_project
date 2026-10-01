@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.calculator.warning.WarningEvaluator;
@@ -25,6 +26,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -157,37 +159,71 @@ class TradingPlanTest {
         PlanCalculation futuresLong = PlanFixture.futuresLong().build();
         PlanCalculation futuresShort = PlanFixture.futuresShort().build();
         return Stream.of(
-                Arguments.of("BR-21 Spot SHORT", with(spot, Direction.SHORT, "100", "105", "90", 1)),
-                Arguments.of("BR-21 Spot leverage 2", with(spot, Direction.LONG, "100", "95", "110", 2)),
-                Arguments.of("BR-22 LONG stop above entry", with(futuresLong, Direction.LONG, "100", "101", "110", 5)),
-                Arguments.of("BR-22 LONG stop equal entry", with(futuresLong, Direction.LONG, "100", "100", "110", 5)),
-                Arguments.of("BR-22 LONG target below entry", with(futuresLong, Direction.LONG, "100", "95", "99", 5)),
-                Arguments.of("BR-22 LONG target equal entry", with(futuresLong, Direction.LONG, "100", "95", "100", 5)),
-                Arguments.of("BR-22 SHORT stop below entry", with(futuresShort, Direction.SHORT, "100", "99", "90", 5)),
-                Arguments.of(
-                        "BR-22 SHORT stop equal entry", with(futuresShort, Direction.SHORT, "100", "100", "90", 5)),
-                Arguments.of(
-                        "BR-22 SHORT target above entry", with(futuresShort, Direction.SHORT, "100", "105", "101", 5)),
-                Arguments.of(
-                        "BR-22 SHORT target equal entry", with(futuresShort, Direction.SHORT, "100", "105", "100", 5)));
+                rejected("BR-21 Spot SHORT", with(spot, Direction.SHORT, "100", "105", "90", 1), "direction", "MSG01"),
+                rejected(
+                        "BR-21 Spot leverage 2",
+                        with(spot, Direction.LONG, "100", "95", "110", 2),
+                        "leverage",
+                        "MSG01"),
+                rejected(
+                        "BR-22 LONG stop above entry",
+                        with(futuresLong, Direction.LONG, "100", "101", "110", 5),
+                        "stopLoss",
+                        "MSG16"),
+                rejected(
+                        "BR-22 LONG stop equal entry",
+                        with(futuresLong, Direction.LONG, "100", "100", "110", 5),
+                        "stopLoss",
+                        "MSG16"),
+                rejected(
+                        "BR-22 LONG target below entry",
+                        with(futuresLong, Direction.LONG, "100", "95", "99", 5),
+                        "takeProfit",
+                        "MSG16"),
+                rejected(
+                        "BR-22 LONG target equal entry",
+                        with(futuresLong, Direction.LONG, "100", "95", "100", 5),
+                        "takeProfit",
+                        "MSG16"),
+                rejected(
+                        "BR-22 SHORT stop below entry",
+                        with(futuresShort, Direction.SHORT, "100", "99", "90", 5),
+                        "stopLoss",
+                        "MSG16"),
+                rejected(
+                        "BR-22 SHORT stop equal entry",
+                        with(futuresShort, Direction.SHORT, "100", "100", "90", 5),
+                        "stopLoss",
+                        "MSG16"),
+                rejected(
+                        "BR-22 SHORT target above entry",
+                        with(futuresShort, Direction.SHORT, "100", "105", "101", 5),
+                        "takeProfit",
+                        "MSG16"),
+                rejected(
+                        "BR-22 SHORT target equal entry",
+                        with(futuresShort, Direction.SHORT, "100", "105", "100", 5),
+                        "takeProfit",
+                        "MSG16"));
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("rejectedInputs")
-    void BR21_BR22_inputsTheSizingRejects_areRefusedWhenADraftIsCreated(String rule, PlanCalculation calculation) {
+    void BR21_BR22_inputsTheSizingRejects_areRefusedWhenADraftIsCreated(
+            String rule, PlanCalculation calculation, Map<String, String> errors) {
         assertThatThrownBy(() -> TradingPlan.draft(USER, PAIR, calculation, LIMIT, List.of()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("rejects the plan's inputs");
+                .satisfies(e -> assertValidationFailed(e, errors));
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("rejectedInputs")
-    void BR21_BR22_inputsTheSizingRejects_areRefusedWhenADraftIsEdited(String rule, PlanCalculation calculation) {
+    void BR21_BR22_inputsTheSizingRejects_areRefusedWhenADraftIsEdited(
+            String rule, PlanCalculation calculation, Map<String, String> errors) {
         TradingPlan plan =
                 TradingPlan.draft(USER, PAIR, PlanFixture.futuresLong().build(), LIMIT, List.of(WARNING));
 
         assertThatThrownBy(() -> plan.updateDraft(calculation, LIMIT, List.of()))
-                .isInstanceOf(IllegalArgumentException.class);
+                .satisfies(e -> assertValidationFailed(e, errors));
         assertThat(plan.getWarnings()).containsExactly(WARNING);
     }
 
@@ -207,8 +243,50 @@ class TradingPlanTest {
                 TradingPlan.draft(USER, PAIR, PlanFixture.futuresLong().build(), LIMIT, List.of());
         PlanCalculation rejected = with(PlanFixture.futuresLong().build(), Direction.LONG, "100", "100", "110", 5);
 
-        assertThatThrownBy(() -> plan.activate(rejected, List.of(), NOW)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> plan.activate(rejected, List.of(), NOW))
+                .satisfies(e -> assertValidationFailed(e, Map.of("stopLoss", "MSG16")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+    }
+
+    /**
+     * A MARKET plan is recalculated at the last price when it is activated; if that price has already passed the stop
+     * loss, the Trader gets the field error, not a server error, and the draft is left as it was.
+     */
+    static Stream<Arguments> marketPricePastTheStop() {
+        return Stream.of(
+                Arguments.of(
+                        "LONG, last price below the stop",
+                        PlanFixture.futuresLong(),
+                        Direction.LONG,
+                        "94",
+                        "95",
+                        "110"),
+                Arguments.of(
+                        "SHORT, last price above the stop",
+                        PlanFixture.futuresShort(),
+                        Direction.SHORT,
+                        "106",
+                        "105",
+                        "90"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("marketPricePastTheStop")
+    void BR22_aMarketPlanWhosePriceHasPassedTheStop_isRefusedAtActivationAndLeftUnchanged(
+            String side, PlanFixture saved, Direction direction, String lastPrice, String stop, String takeProfit) {
+        PlanCalculation draft = saved.build();
+        TradingPlan plan = TradingPlan.draft(USER, PAIR, draft, MARKET, List.of(WARNING));
+        PlanCalculation atLastPrice = with(draft, direction, lastPrice, stop, takeProfit, 5);
+
+        assertThatThrownBy(() -> plan.activate(atLastPrice, List.of(), NOW))
+                .satisfies(e -> assertValidationFailed(e, Map.of("stopLoss", "MSG16")));
+
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        assertThat(plan.getActivatedAt()).isNull();
+        assertThat(plan.getEntryPrice()).isEqualByComparingTo("100");
+        assertThat(plan.getSnapshot()).isEqualTo(PlanSnapshot.of(draft));
+        assertThat(plan.getWarnings()).containsExactly(WARNING);
+        assertThat(plan.getVersion()).isZero();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -485,6 +563,18 @@ class TradingPlanTest {
             case CANCELLED -> plan -> plan.cancel(LATER);
             case EXPIRED -> plan -> plan.expire(EXPIRY);
         };
+    }
+
+    private static Arguments rejected(String rule, PlanCalculation calculation, String field, String messageCode) {
+        return Arguments.of(rule, calculation, Map.of(field, messageCode));
+    }
+
+    /** VALIDATION_FAILED (400, MSG01) naming exactly these fields with their message codes. */
+    private static void assertValidationFailed(Throwable thrown, Map<String, String> errors) {
+        assertThat(thrown).isInstanceOf(FieldValidationException.class);
+        FieldValidationException invalid = (FieldValidationException) thrown;
+        assertThat(invalid.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED);
+        assertThat(invalid.errors()).isEqualTo(errors);
     }
 
     /** {@code base} with other inputs and the same sizing, as only a calculation that was skipped could produce. */
