@@ -57,9 +57,14 @@ class OpenApiDocsTest {
             "/api/v1/market/spot/{symbol}/stats",
             "/api/v1/market/futures/{symbol}/stats",
             "/api/v1/market/futures/{symbol}/metrics",
-            "/api/v1/analysis/{market}/{symbol}");
+            "/api/v1/analysis/{market}/{symbol}",
+            "/api/v1/plans",
+            "/api/v1/plans/calculate",
+            "/api/v1/plans/{id}",
+            "/api/v1/plans/{id}/activate",
+            "/api/v1/plans/{id}/cancel");
 
-    private static final int OPERATIONS = 24;
+    private static final int OPERATIONS = 31;
 
     @Autowired
     private MockMvc mvc;
@@ -106,6 +111,7 @@ class OpenApiDocsTest {
         assertThat(securityOf(body, "/api/v1/me/devices", "post")).containsExactly(OpenApiConfig.BEARER);
         assertThat(securityOf(body, "/api/v1/analysis/{market}/{symbol}", "get"))
                 .containsExactly(OpenApiConfig.BEARER);
+        assertThat(securityOf(body, "/api/v1/plans", "post")).containsExactly(OpenApiConfig.BEARER);
         assertThat(securityOf(body, "/api/v1/auth/login", "post")).isEmpty();
         assertThat(securityOf(body, "/api/v1/market/pairs", "get")).isEmpty();
         assertThat((String) JsonPath.read(body, "$.components.securitySchemes.bearerAuth.scheme"))

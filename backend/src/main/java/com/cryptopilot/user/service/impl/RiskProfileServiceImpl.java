@@ -3,6 +3,7 @@ package com.cryptopilot.user.service.impl;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.user.PlanDefaults;
 import com.cryptopilot.user.RiskProfileParameters;
 import com.cryptopilot.user.calculator.RiskQuestionnaire;
 import com.cryptopilot.user.config.RiskProfileProperties;
@@ -17,6 +18,7 @@ import com.cryptopilot.user.model.enums.RiskProfile;
 import com.cryptopilot.user.repository.UserProfileRepository;
 import com.cryptopilot.user.service.RiskProfileService;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -98,6 +100,17 @@ public class RiskProfileServiceImpl implements RiskProfileService {
         RiskProfile chosen =
                 profiles.findById(userId).map(UserProfile::getRiskProfile).orElse(RiskProfile.DEFAULT);
         return properties.parameters(chosen);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PlanDefaults planDefaultsOf(UUID userId) {
+        Optional<UserProfile> profile = profiles.findById(userId);
+        RiskProfile chosen = profile.map(UserProfile::getRiskProfile).orElse(RiskProfile.DEFAULT);
+        return new PlanDefaults(
+                properties.parameters(chosen),
+                profile.map(UserProfile::getDefaultCapital).orElse(null),
+                profile.map(UserProfile::getDefaultRiskPercent).orElse(null));
     }
 
     private UserProfile profileRowOf(UUID userId) {

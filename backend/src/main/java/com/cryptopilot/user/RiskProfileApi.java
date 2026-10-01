@@ -16,4 +16,7 @@ public interface RiskProfileApi {
      * CONSERVATIVE, as a Trader who has not chosen would (D-64).
      */
     RiskProfileParameters parametersOf(UUID userId);
+
+    /** The risk profile and the plan defaults of the profile screen; an account without a profile row has none. */
+    PlanDefaults planDefaultsOf(UUID userId);
 }

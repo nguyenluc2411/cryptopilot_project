@@ -86,6 +86,18 @@ class GlobalExceptionHandlerTest {
         assertThat(result).bodyJson().doesNotHavePath("$.errors");
     }
 
+    /** A write that lost the optimistic lock answers 409 like a refused write, naming nothing of the row. */
+    @Test
+    void lostOptimisticLock_answers409DataConflict() throws UnsupportedEncodingException {
+        MvcTestResult result = mockMvc.get().uri("/test-errors/stale").exchange();
+
+        assertThat(result).hasStatus(HttpStatus.CONFLICT);
+        assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("DATA_CONFLICT");
+        assertThat(result).bodyJson().extractingPath("$.messageCode").isEqualTo("MSG43");
+        assertThat(result).bodyJson().extractingPath("$.traceId").isNotNull();
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("TradingPlan");
+    }
+
     @Test
     void resourceNotFound_answers404WithMsg41() {
         MvcTestResult result = mockMvc.get().uri("/test-errors/missing").exchange();
@@ -221,6 +233,11 @@ class GlobalExceptionHandlerTest {
         void fields() {
             throw new FieldValidationException(
                     "the plan's inputs are rejected", java.util.Map.of("stopLoss", "MSG16", "quantity", "MSG15"));
+        }
+
+        @GetMapping("/stale")
+        void stale() {
+            throw new org.springframework.orm.ObjectOptimisticLockingFailureException("TradingPlan", 42);
         }
 
         @GetMapping("/missing")

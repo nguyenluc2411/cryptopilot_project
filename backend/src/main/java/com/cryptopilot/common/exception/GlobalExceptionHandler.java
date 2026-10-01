@@ -13,6 +13,7 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.ObjectError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -60,6 +61,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     /** Text of a refused write; names no table and no constraint. */
     static final String CONFLICT_DETAIL = "The request conflicts with data that already exists.";
+
+    /** Detail of a write that lost the optimistic lock to a concurrent change. */
+    static final String CONCURRENT_CHANGE_DETAIL = "The data was changed by another request; reload it and try again.";
 
     /** Message of a field error whose validation constraint declares none. */
     static final String DEFAULT_FIELD_MESSAGE = "is invalid";
@@ -114,6 +118,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .orElseGet(() -> UuidV7.next().toString());
         log.warn("Integrity constraint refused a write, reference {}: {}", reference, mostSpecificMessage(exception));
         ProblemDetail body = problemDetail(ErrorCode.DATA_CONFLICT, CONFLICT_DETAIL, reference);
+        return ResponseEntity.status(ErrorCode.DATA_CONFLICT.status()).body(body);
+    }
+
+    /**
+     * A write that lost a race on the optimistic lock (TECHNICAL_DESIGN 5.5): another transaction changed the row since
+     * it was read, e.g. a Trader cancels a plan while the matching engine fills it. 409 like a refused write, because
+     * nothing is broken and the client reloads and decides again; the row and the versions go to the log only.
+     */
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ProblemDetail> handleOptimisticLockingFailure(
+            ObjectOptimisticLockingFailureException exception) {
+        String reference = CorrelationIdFilter.currentCorrelationId()
+                .orElseGet(() -> UuidV7.next().toString());
+        log.warn("A concurrent change won the optimistic lock, reference {}: {}", reference, exception.getMessage());
+        ProblemDetail body = problemDetail(ErrorCode.DATA_CONFLICT, CONCURRENT_CHANGE_DETAIL, reference);
         return ResponseEntity.status(ErrorCode.DATA_CONFLICT.status()).body(body);
     }
 

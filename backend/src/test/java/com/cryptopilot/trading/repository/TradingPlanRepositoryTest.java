@@ -155,6 +155,25 @@ class TradingPlanRepositoryTest {
                           and maintenance_margin_rate_used is null and estimated_liquidation_price is null""").param(id).query(Long.class).single()).isEqualTo(1L);
     }
 
+    /** V16: a far take profit over a near stop is a valid plan, and its ratio of 10,000 or more is stored. */
+    @Test
+    void BR24_aRiskRewardRatioOfTenThousand_isStored() {
+        PlanCalculation calculation = PlanFixture.spot()
+                .stop("99.99")
+                .takeProfit("200")
+                .capital("1000000")
+                .build();
+        UUID id = inTransaction(
+                        () -> plans.save(TradingPlan.draft(SEEDED_ACCOUNT, pair, calculation, LIMIT, List.of())))
+                .getId();
+
+        assertThat(jdbc.sql("select risk_reward_ratio from trading_plan where plan_id = ?")
+                        .param(id)
+                        .query(java.math.BigDecimal.class)
+                        .single())
+                .isEqualByComparingTo("10000");
+    }
+
     @Test
     void BR31_savingADraftAgain_deletesTheWarningsItReplaces() {
         UUID id = inTransaction(() -> plans.save(TradingPlan.draft(

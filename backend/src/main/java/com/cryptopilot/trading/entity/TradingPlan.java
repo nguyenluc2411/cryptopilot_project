@@ -33,9 +33,7 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -138,7 +136,7 @@ public class TradingPlan extends BaseEntity {
     private BigDecimal rewardAmount;
 
     @Getter(AccessLevel.NONE)
-    @Column(name = "risk_reward_ratio", precision = 12, scale = 8)
+    @Column(name = "risk_reward_ratio", precision = 20, scale = 8)
     private BigDecimal riskRewardRatio;
 
     @Getter(AccessLevel.NONE)
@@ -323,10 +321,8 @@ public class TradingPlan extends BaseEntity {
     private static void requireAccepted(PlanCalculation calculation) {
         Objects.requireNonNull(calculation, "calculation");
         if (PositionSizeCalculator.calculate(calculation.plan()) instanceof RiskInputRejected rejected) {
-            Map<String, String> errors = new LinkedHashMap<>();
-            rejected.violations().forEach(v -> errors.putIfAbsent(v.field(), v.messageCode()));
             throw new FieldValidationException(
-                    "the calculation rejects the plan's inputs: " + rejected.violations(), errors);
+                    "the calculation rejects the plan's inputs: " + rejected.violations(), rejected.fieldErrors());
         }
     }
 
