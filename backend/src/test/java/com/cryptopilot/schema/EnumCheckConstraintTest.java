@@ -84,7 +84,7 @@ class EnumCheckConstraintTest {
                             "is_purchasable",
                             true),
             "news_source", Map.of("crawl_interval_minutes", 15),
-            "alert.timeframe", Map.of("alert_type", "INDICATOR", "indicator_name", "RSI"));
+            "alert.timeframe", Map.of("alert_type", "INDICATOR", "indicator_name", "RSI_14"));
 
     @Autowired
     private DataSource dataSource;
