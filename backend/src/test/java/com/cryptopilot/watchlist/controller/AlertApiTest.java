@@ -673,6 +673,44 @@ class AlertApiTest {
     }
 
     @Test
+    void BR16_aConfirmationForAnOutdatedAlertCount_isAskedAgain_andDeletesNothing() throws Exception {
+        UUID trader = trader();
+        String row = JsonPath.read(body(as(trader, post(ALERTS), price(pairs.get(0), "SPOT", "1"))), "$.watchlistId");
+        as(trader, post(ALERTS), price(pairs.get(0), "SPOT", "2")).andExpect(status().isCreated());
+        as(trader, delete(WATCHLIST + "/" + row), null)
+                .andExpect(jsonPath("$.messageArgs[1]").value("2"));
+        as(trader, post(ALERTS), price(pairs.get(0), "SPOT", "3")).andExpect(status().isCreated());
+
+        as(trader, delete(WATCHLIST + "/" + row).param("confirm", "true").param("expectedAlertCount", "2"), null)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG26"))
+                .andExpect(jsonPath("$.messageArgs[0]").value(symbols.get(0)))
+                .andExpect(jsonPath("$.messageArgs[1]").value("3"));
+        assertThat(watchRows(trader)).isOne();
+        assertThat(alertsOf(trader, null)).isEqualTo(3);
+
+        as(trader, delete(WATCHLIST + "/" + row).param("confirm", "true").param("expectedAlertCount", "3"), null)
+                .andExpect(status().isNoContent());
+        assertThat(watchRows(trader)).isZero();
+        assertThat(alertsOf(trader, null)).isZero();
+    }
+
+    @Test
+    void BR16_anExpectedCountWithoutConfirm_stillAsksMsg26_andARowWithoutAlertsGoesWithoutOne() throws Exception {
+        UUID trader = trader();
+        String withAlert =
+                JsonPath.read(body(as(trader, post(ALERTS), price(pairs.get(0), "SPOT", "1"))), "$.watchlistId");
+        String empty = watch(trader, pairs.get(1));
+
+        as(trader, delete(WATCHLIST + "/" + withAlert).param("expectedAlertCount", "1"), null)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG26"));
+        as(trader, delete(WATCHLIST + "/" + empty), null).andExpect(status().isNoContent());
+
+        assertThat(watchRows(trader)).isOne();
+    }
+
+    @Test
     void BR16_removingAWatchedPair_asksMsg26WithItsAlertCount_andThenTakesThemWithIt() throws Exception {
         UUID trader = trader();
         String row = JsonPath.read(body(as(trader, post(ALERTS), price(pairs.get(0), "SPOT", "1"))), "$.watchlistId");
