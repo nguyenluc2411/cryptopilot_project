@@ -164,6 +164,33 @@ class SchemaConstraintTest {
                         () -> insertAlert(watchlistId, "FUTURES", "INDICATOR", "OPEN_INTEREST_CHANGE", "4h", 1, null));
     }
 
+    @Test
+    void D76_aLineCross_isStoredWithoutAThreshold() {
+        UUID watchlistId = insertWatchlist();
+
+        insertCross(watchlistId, null);
+    }
+
+    @Test
+    void D76_aLineCrossWithAThreshold_isRejected() {
+        UUID watchlistId = insertWatchlist();
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertCross(watchlistId, java.math.BigDecimal.ZERO));
+    }
+
+    @Test
+    void D76_aPriceAlertWithoutAThreshold_isRejected() {
+        UUID watchlistId = insertWatchlist();
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> jdbc.sql("""
+                        insert into alert (alert_id, user_id, watchlist_id, market_type, alert_type,
+                                           condition_operator, trigger_mode, alert_status, created_at, updated_at)
+                        values (?, ?, ?, 'SPOT', 'PRICE', 'CROSS_ABOVE', 'ONCE', 'ACTIVE', ?, ?)""")
+                .params(UUID.randomUUID(), userId, watchlistId, NOW, NOW)
+                .update());
+    }
+
     // ---------------------------------------------------------------- trading plans
 
     @Test
@@ -410,6 +437,17 @@ class SchemaConstraintTest {
                                                created_at, updated_at)
                         values (?, ?, ?, ?, ?, ?)""").params(id, userId, pairId, NOW, NOW, NOW).update();
         return id;
+    }
+
+    private void insertCross(UUID watchlistId, java.math.BigDecimal threshold) {
+        jdbc.sql("""
+                        insert into alert (alert_id, user_id, watchlist_id, market_type, alert_type, indicator_name,
+                                           timeframe, condition_operator, threshold_value, trigger_mode, alert_status,
+                                           created_at, updated_at)
+                        values (?, ?, ?, 'SPOT', 'INDICATOR', 'MACD_CROSS', '1h', 'CROSS_ABOVE',
+                                cast(? as numeric), 'ONCE', 'ACTIVE', ?, ?)""")
+                .params(UUID.randomUUID(), userId, watchlistId, threshold, NOW, NOW)
+                .update();
     }
 
     private void insertAlert(

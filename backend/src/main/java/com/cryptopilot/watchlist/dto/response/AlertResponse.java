@@ -24,7 +24,7 @@ import java.util.UUID;
  * @param indicator the indicator, {@code null} for PRICE
  * @param timeframe the timeframe, {@code null} for PRICE
  * @param condition the comparison
- * @param threshold the value compared with
+ * @param threshold the value compared with; {@code null} for MACD_CROSS and EMA_CROSS
  * @param triggerMode ONCE, ONCE_PER_BAR or EVERY_TIME
  * @param cooldownMinutes the cooldown, or {@code null}
  * @param notifyInApp always true

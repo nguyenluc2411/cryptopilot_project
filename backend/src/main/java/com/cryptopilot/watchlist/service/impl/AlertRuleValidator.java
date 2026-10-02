@@ -25,8 +25,8 @@ import java.util.Set;
  *   <li>PRICE: a target above zero, no indicator and no timeframe; the target is put on the tick by
  *       {@link #onTick}.
  *   <li>RSI_14: a timeframe and a level from 0 to 100.
- *   <li>MACD_CROSS, EMA_CROSS: a timeframe and a cross condition; no threshold, since the line crosses zero
- *       (TECHNICAL_DESIGN 7.9).
+ *   <li>MACD_CROSS, EMA_CROSS: a timeframe and a cross condition; no threshold, since one line crosses the other
+ *       (TECHNICAL_DESIGN 7.9), so the stored threshold is {@code null} (D-76).
  *   <li>FUNDING_RATE, OPEN_INTEREST_CHANGE: Futures only and a threshold; the timeframe is 1h, set here, and a client
  *       that sends one is refused (A-40).
  *   <li>EVERY_TIME needs a cooldown (BR-19); an expiry is after now and at most 90 days ahead (SRS 3.4.2).
@@ -97,7 +97,6 @@ final class AlertRuleValidator {
                     errors.put("condition", NOT_APPLICABLE);
                 }
                 reject(errors, "threshold", threshold);
-                threshold = BigDecimal.ZERO;
             } else if (threshold == null) {
                 errors.put("threshold", REQUIRED);
             } else if (threshold.signum() < 0 || threshold.compareTo(RSI_MAX) > 0) {

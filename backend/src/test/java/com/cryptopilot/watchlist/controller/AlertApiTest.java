@@ -216,7 +216,7 @@ class AlertApiTest {
         as(trader, post(ALERTS), indicator(pairs.get(0), "SPOT", "MACD_CROSS", "4h", "CROSS_ABOVE", null))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.timeframe").value("4h"))
-                .andExpect(jsonPath("$.threshold").value(0));
+                .andExpect(jsonPath("$.threshold").doesNotExist());
         as(trader, post(ALERTS), indicator(pairs.get(0), "FUTURES", "EMA_CROSS", "1d", "CROSS_BELOW", null))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.market").value("FUTURES"))
@@ -372,6 +372,12 @@ class AlertApiTest {
         as(trader, post(ALERTS), indicator(pairs.get(0), "SPOT", "MACD_CROSS", "1h", "GREATER_THAN", null))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.condition").value("MSG01"));
+        as(trader, post(ALERTS), indicator(pairs.get(0), "SPOT", "EMA_CROSS", "1h", "CROSS_ABOVE", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.threshold").value("MSG01"));
+        as(trader, post(ALERTS), indicator(pairs.get(0), "SPOT", "RSI_14", "1h", "CROSS_ABOVE", null))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.threshold").value("MSG01"));
         as(trader, post(ALERTS), price(pairs.get(0), "SPOT", "0.004"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.threshold").value("MSG15"));
@@ -650,6 +656,21 @@ class AlertApiTest {
     // ------------------------------------------------------------------------------------------
     // Removing the watched pair (BR-16, MSG26)
     // ------------------------------------------------------------------------------------------
+
+    @Test
+    void D76_aCrossAlert_isStoredWithoutAThreshold() throws Exception {
+        UUID trader = proTrader();
+        String alert =
+                id(as(trader, post(ALERTS), indicator(pairs.get(0), "SPOT", "EMA_CROSS", "1h", "CROSS_ABOVE", null))
+                        .andExpect(status().isCreated()));
+
+        assertThat(sql.sql("select count(*) from alert where alert_id = ? and threshold_value is null")
+                        .param(UUID.fromString(alert))
+                        .query(Long.class)
+                        .single())
+                .isOne();
+        as(trader, get(ALERTS), null).andExpect(jsonPath("$.items[0].threshold").doesNotExist());
+    }
 
     @Test
     void BR16_removingAWatchedPair_asksMsg26WithItsAlertCount_andThenTakesThemWithIt() throws Exception {

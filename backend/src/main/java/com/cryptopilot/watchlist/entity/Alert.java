@@ -67,7 +67,8 @@ public class Alert extends BaseEntity {
     @Column(name = "condition_operator", nullable = false, length = 32)
     private ConditionOperator condition;
 
-    @Column(name = "threshold_value", nullable = false, precision = 28, scale = 12)
+    /** {@code null} for MACD_CROSS and EMA_CROSS, which compare two lines (D-76). */
+    @Column(name = "threshold_value", precision = 28, scale = 12)
     private BigDecimal threshold;
 
     @Enumerated(EnumType.STRING)

@@ -42,7 +42,7 @@ alert,market_type,character varying,,,NO
 alert,notify_email,boolean,,,NO
 alert,notify_in_app,boolean,,,NO
 alert,notify_push,boolean,,,NO
-alert,threshold_value,numeric,28,12,NO
+alert,threshold_value,numeric,28,12,YES
 alert,timeframe,character varying,,,YES
 alert,trigger_count,integer,32,0,NO
 alert,trigger_mode,character varying,,,NO

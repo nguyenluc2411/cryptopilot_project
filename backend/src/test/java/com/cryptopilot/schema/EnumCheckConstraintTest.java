@@ -62,7 +62,8 @@ class EnumCheckConstraintTest {
      * price needs that price, a journal record is either simulated with a plan or manual without
      * one, an engagement points at exactly one target, a subscription ends after it starts, a paid
      * package has its tier's rank, a price and a duration (BR-62), a feed
-     * is polled at most every fifteen minutes (BR-49), and an indicator alert names an indicator.
+     * is polled at most every fifteen minutes (BR-49), an indicator alert names an indicator, and every
+     * alert but a line cross has a threshold (D-76).
      * A new cross-column rule that this map does not know about does not pass silently: the row is
      * refused by the wrong constraint and the test says so.
      */
@@ -84,6 +85,7 @@ class EnumCheckConstraintTest {
                             "is_purchasable",
                             true),
             "news_source", Map.of("crawl_interval_minutes", 15),
+            "alert", Map.of("threshold_value", 70),
             "alert.timeframe", Map.of("alert_type", "INDICATOR", "indicator_name", "RSI_14"));
 
     @Autowired

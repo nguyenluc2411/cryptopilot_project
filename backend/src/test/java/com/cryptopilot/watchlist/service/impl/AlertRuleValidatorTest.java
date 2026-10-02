@@ -134,12 +134,12 @@ class AlertRuleValidatorTest {
     @EnumSource(
             value = AlertIndicator.class,
             names = {"MACD_CROSS", "EMA_CROSS"})
-    void TD79_aLineCross_crossesZero_inEitherDirection(AlertIndicator line) {
+    void D76_aLineCross_hasNoThreshold_inEitherDirection(AlertIndicator line) {
         AlertDefinition up = AlertRuleValidator.validate(indicator(FUTURES, line, "4h", CROSS_ABOVE, null), NOW);
         AlertDefinition down = AlertRuleValidator.validate(indicator(SPOT, line, "15m", CROSS_BELOW, null), NOW);
 
-        assertThat(up.threshold()).isEqualByComparingTo("0");
-        assertThat(down.threshold()).isEqualByComparingTo("0");
+        assertThat(up.threshold()).isNull();
+        assertThat(down.threshold()).isNull();
         assertThat(up.timeframe()).isEqualTo("4h");
     }
 

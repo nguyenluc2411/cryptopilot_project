@@ -171,6 +171,27 @@ class AlertTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void D76_onlyALineCross_goesWithoutAThreshold() {
+        AlertDefinition cross = new AlertDefinition(
+                MarketType.SPOT,
+                AlertType.INDICATOR,
+                AlertIndicator.MACD_CROSS,
+                "1h",
+                ConditionOperator.CROSS_ABOVE,
+                null,
+                TriggerMode.ONCE,
+                null,
+                false,
+                false,
+                null);
+
+        assertThat(Alert.create(UUID.randomUUID(), UUID.randomUUID(), cross).getThreshold())
+                .isNull();
+        assertThatThrownBy(() -> cross.withThreshold(BigDecimal.ZERO)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> PRICE_RULE.withThreshold(null)).isInstanceOf(IllegalArgumentException.class);
+    }
+
     // The engine fields and statuses are T-055's to write; a test sets them the way a loaded row would hold them.
     private static void set(Alert alert, String field, Object value) throws Exception {
         Field declared = Alert.class.getDeclaredField(field);
