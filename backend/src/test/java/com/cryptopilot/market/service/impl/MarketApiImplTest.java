@@ -2,10 +2,12 @@ package com.cryptopilot.market.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.CachedPrice;
@@ -70,6 +72,26 @@ class MarketApiImplTest {
         when(pairs.findById(unknown)).thenReturn(Optional.empty());
 
         assertThat(api.tradablePair(unknown, MarketType.SPOT)).isEmpty();
+    }
+
+    @Test
+    void BR07_aPairListing_namesTheMarketsThePairIsEnabledOn_andAnUnlistedPairIsStillReturned() {
+        CryptoPair spotOnly = pair();
+        spotOnly.enable(MarketType.SPOT);
+        CryptoPair unlisted = CryptoPair.register(UUID.randomUUID(), UUID.randomUUID(), "ETHUSDT");
+        List<UUID> ids = List.of(spotOnly.getId(), unlisted.getId(), UUID.randomUUID());
+        when(pairs.findAllByIdIn(ids)).thenReturn(List.of(spotOnly, unlisted));
+
+        assertThat(api.pairListings(ids))
+                .containsExactlyInAnyOrder(
+                        new PairListing(spotOnly.getId(), "BTCUSDT", true, false),
+                        new PairListing(unlisted.getId(), "ETHUSDT", false, false));
+    }
+
+    @Test
+    void noPairIds_needNoQuery() {
+        assertThat(api.pairListings(List.of())).isEmpty();
+        verifyNoInteractions(pairs);
     }
 
     @Test

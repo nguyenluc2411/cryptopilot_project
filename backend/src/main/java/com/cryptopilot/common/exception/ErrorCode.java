@@ -243,7 +243,20 @@ public enum ErrorCode {
      * missing, older than the cache's time to live, or the cache cannot be read (NSF-03, CR-09). 503: the same request
      * succeeds once prices flow again. SRS 5.3 has no text for this, so it borrows MSG43 until A-39 is answered (D-71).
      */
-    MARKET_PRICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43");
+    MARKET_PRICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43"),
+
+    /**
+     * The pair is already in the caller's watchlist (BR-15). MSG45 takes the symbol. 409: the request conflicts with
+     * a row that exists, like {@link #DATA_CONFLICT}.
+     */
+    WATCHLIST_PAIR_ALREADY_WATCHED(HttpStatus.CONFLICT, "MSG45"),
+
+    /**
+     * The caller removes a watched pair that has alerts without confirming MSG26 (BR-16). MSG26 takes the symbol and the
+     * number of alerts; the client asks and sends the removal again, confirmed. 400, as
+     * {@link #RISK_PROFILE_CONFIRMATION_REQUIRED} (D-65).
+     */
+    WATCHLIST_REMOVAL_CONFIRMATION_REQUIRED(HttpStatus.BAD_REQUEST, "MSG26");
 
     private final HttpStatus status;
     private final String messageCode;
