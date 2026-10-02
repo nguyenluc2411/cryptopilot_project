@@ -118,6 +118,8 @@ public class WatchlistServiceImpl implements WatchlistService {
     @Override
     @Transactional
     public void remove(UUID userId, UUID watchlistId, boolean confirmed) {
+        // Alerts are created under this lock, so none can join the row between the count and the delete (BR-16).
+        lock.lock(userId);
         Watchlist row = owned(userId, watchlistId);
         long alerts = watchlist.countAlerts(row.getId());
         if (alerts > 0 && !confirmed) {
