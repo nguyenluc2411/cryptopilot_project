@@ -10,8 +10,10 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -28,6 +30,9 @@ import org.springframework.stereotype.Component;
  * <p>A failure storing one candle is logged and the consumer carries on; that series' next close reports the
  * gap the same way.
  *
+ * <p>The consumers come from a {@link ThreadFactory}, virtual threads unless a test passes its own, so that a test can
+ * hold the threads it stops and wait for them to end.
+ *
  * <p>Rule: NSF-03; BR-08; TECHNICAL_DESIGN 7.1 step 2 and 10.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
@@ -39,11 +44,18 @@ public class ClosedCandlePipeline {
     private static final Logger log = LoggerFactory.getLogger(ClosedCandlePipeline.class);
 
     private final StreamCandleService candles;
+    private final ThreadFactory threads;
     private final List<BlockingQueue<Work>> partitions = new ArrayList<>();
     private final List<Thread> consumers = new ArrayList<>();
 
+    @Autowired
     public ClosedCandlePipeline(StreamCandleService candles, BinanceStreamProperties properties) {
+        this(candles, properties, Thread.ofVirtual().factory());
+    }
+
+    ClosedCandlePipeline(StreamCandleService candles, BinanceStreamProperties properties, ThreadFactory threads) {
         this.candles = candles;
+        this.threads = threads;
         for (int i = 0; i < properties.partitions(); i++) {
             partitions.add(new ArrayBlockingQueue<>(properties.queueCapacity()));
         }
@@ -56,7 +68,10 @@ public class ClosedCandlePipeline {
         }
         for (int i = 0; i < partitions.size(); i++) {
             BlockingQueue<Work> queue = partitions.get(i);
-            consumers.add(Thread.ofVirtual().name("market-candles-" + i).start(() -> drain(queue)));
+            Thread consumer = threads.newThread(() -> drain(queue));
+            consumer.setName("market-candles-" + i);
+            consumer.start();
+            consumers.add(consumer);
         }
     }
 
