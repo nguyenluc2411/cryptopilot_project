@@ -63,6 +63,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <p>Reference: Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf, ch. 5 (bounded retries).
  * <p>Reference: Metcalfe, R. M. &amp; Boggs, D. R. (1976). Ethernet: distributed packet switching for local computer
  * networks. <i>Communications of the ACM</i>, 19(7), 395-404 (exponential back-off).
+ * <p>Reference: Akidau, T. et al. (2015). The Dataflow Model. <i>PVLDB</i>, 8(12), 1792-1803 (a watermark never passes
+ * event time whose input is not complete).
  */
 @Component
 public class MatchingWorker {
@@ -280,6 +282,12 @@ public class MatchingWorker {
          */
         private final Map<PairKey, List<PendingFill>> retries = new HashMap<>();
 
+        /**
+         * Pairs with a fill given up since the start: their watermark stays before the candle that reached it, so a
+         * restart replays that candle (Akidau et al. 2015: a watermark must not pass input not fully processed).
+         */
+        private final Set<PairKey> watermarkHeld = new HashSet<>();
+
         Partition(int capacity) {
             this.queue = new ArrayBlockingQueue<>(capacity);
         }
@@ -478,7 +486,7 @@ public class MatchingWorker {
             PairKey key = new PairKey(range.market(), range.pairId());
             retryDue(key);
             engine.onRange(range).forEach(fill -> fill(key, fill, null));
-            if (range.closed() && !retries.containsKey(key)) {
+            if (range.closed() && !retries.containsKey(key) && !watermarkHeld.contains(key)) {
                 advanceWatermark(range);
             }
         }
@@ -506,7 +514,8 @@ public class MatchingWorker {
 
         /**
          * The candle is closed and every fill it decided is stored: a restart replays from the next candle. Not
-         * advanced while a fill of the pair waits for a retry, so a restart replays the candle that reached it.
+         * advanced while a fill of the pair waits for a retry or was given up, so a restart replays the candle that
+         * reached it.
          */
         private void advanceWatermark(PriceRange range) {
             try {
@@ -542,8 +551,10 @@ public class MatchingWorker {
                 int failures = previous == null ? 1 : previous.failures() + 1;
                 Instant firstFailedAt = previous == null ? now : previous.firstFailedAt();
                 if (!now.isBefore(firstFailedAt.plus(properties.retry().deadline()))) {
+                    watermarkHeld.add(key);
                     log.error(
-                            "NSF-07 plan {} fill failed {} times since {}; no longer retried, the plan stays ACTIVE",
+                            "NSF-07 plan {} fill failed {} times since {}; no longer retried, the plan stays ACTIVE"
+                                    + " and the pair's watermark is held until a restart replays it",
                             fill.planId(),
                             failures,
                             firstFailedAt,

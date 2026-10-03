@@ -797,6 +797,27 @@ class MatchingWorkerTest {
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, AT);
     }
 
+    /** R2: a fill given up holds the pair's watermark before the candle that reached it, so a restart replays it. */
+    @Test
+    void R2_aFillGivenUp_holdsThePairsWatermarkBeforeTheCandleThatReachedIt() {
+        UUID plan = UUID.randomUUID();
+        when(matching.fill(filledPlan(plan))).thenThrow(new IllegalStateException("database down"));
+        worker = new MatchingWorker(matching, retrying(Duration.ZERO), clock, recording, () -> 0.0);
+        worker.start();
+        worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
+
+        worker.submit(closed("150", "160", AT));
+        worker.submit(closed("99", "101", AT.plusSeconds(60)));
+        worker.submit(closed("150", "160", AT.plusSeconds(120)));
+        awaitProcessed();
+
+        verify(matching).advanceWatermark(MarketType.SPOT, PAIR, AT);
+        verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, AT.plusSeconds(60));
+        verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, AT.plusSeconds(120));
+        assertThat(logs.list)
+                .anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("watermark is held"));
+    }
+
     @Test
     void A04_aWatermarkThatCannotBeWritten_isLogged_andMatchingCarriesOn() {
         UUID plan = UUID.randomUUID();
