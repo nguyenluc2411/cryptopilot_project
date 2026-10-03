@@ -11,7 +11,6 @@ import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
@@ -19,6 +18,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
@@ -58,7 +58,13 @@ class MatchingWorkerTest {
     /** Long before every range of these tests, so the activation guard (D-77) never holds an entry back. */
     private static final Instant ACTIVATED = AT.minusSeconds(3600);
 
+    private static final UUID MARKER_PAIR = UUID.fromString("019b76da-a800-7000-8000-00000000b0ff");
+    /** No back-off: a failed fill is tried again on the pair's next range. */
+    private static final MatchingProperties.Retry RETRY_AT_ONCE =
+            new MatchingProperties.Retry(Duration.ZERO, Duration.ZERO, 0, Duration.ofMinutes(10));
+
     private final MatchingService matching = mock(MatchingService.class);
+    private final MutableTestClock clock = new MutableTestClock(AT);
     private final List<Thread> started = new CopyOnWriteArrayList<>();
     private final ThreadFactory recording = task -> {
         Thread thread = Thread.ofVirtual().unstarted(task);
@@ -89,7 +95,12 @@ class MatchingWorkerTest {
 
     @Test
     void NSF07_whenDisabled_nothingStartsAndNothingIsQueued() {
-        worker = new MatchingWorker(matching, new MatchingProperties(false, 1, 1, 5, Duration.ofSeconds(5)), recording);
+        worker = new MatchingWorker(
+                matching,
+                new MatchingProperties(false, 1, 1, RETRY_AT_ONCE, 60, Duration.ofSeconds(5)),
+                clock,
+                recording,
+                () -> 0.0);
 
         worker.start();
         worker.onActivated(activated(UUID.randomUUID(), EntryType.LIMIT, "100"));
@@ -104,7 +115,7 @@ class MatchingWorkerTest {
 
     @Test
     void NSF07_start_loadsTheActiveEntriesAndStartsOneNamedConsumerPerPartition_once() {
-        worker = new MatchingWorker(matching, properties(3, 10), recording);
+        worker = new MatchingWorker(matching, properties(3, 10), clock, recording, () -> 0.0);
 
         worker.start();
         worker.start();
@@ -122,7 +133,7 @@ class MatchingWorkerTest {
             entries.add(entry(UUID.randomUUID(), Direction.LONG, "100"));
         }
         when(matching.activeEntries()).thenReturn(entries);
-        worker = new MatchingWorker(matching, properties(1, 2), recording);
+        worker = new MatchingWorker(matching, properties(1, 2), clock, recording, () -> 0.0);
 
         assertTimeoutPreemptively(Duration.ofSeconds(5), worker::start);
         worker.submit(range("99", "101", AT));
@@ -198,7 +209,7 @@ class MatchingWorkerTest {
     void NSF07_aCancel_goesToItsPairsPartitionOnly_soFullPartitionsDoNotDelayIt() {
         int partitions = 4;
         UUID cancelledPair = pairIn(0, partitions);
-        worker = new MatchingWorker(matching, properties(partitions, 1), idle());
+        worker = new MatchingWorker(matching, properties(partitions, 1), clock, idle(), () -> 0.0);
         worker.start();
         for (int i = 1; i < partitions; i++) {
             worker.submit(new PriceRange(MarketType.SPOT, pairIn(i, partitions), BigDecimal.ONE, BigDecimal.TEN, AT));
@@ -568,25 +579,51 @@ class MatchingWorkerTest {
     }
 
     @Test
-    void NSF07_aFillThatKeepsFailing_isTriedMaxAttemptsTimes_withOneErrorLog_andNothingElseTouchesThePlan() {
+    void NSF07_aFailedFill_waitsForItsBackOff_thenIsTriedAgainOnThePairsNextRange_atItsOriginalTime() {
         UUID plan = UUID.randomUUID();
-        UUID marker = UUID.randomUUID();
-        when(matching.fill(filledPlan(plan))).thenThrow(new IllegalStateException("database down"));
-        worker =
-                new MatchingWorker(matching, new MatchingProperties(true, 1, 100, 3, Duration.ofSeconds(5)), recording);
+        when(matching.fill(filled(plan, AT)))
+                .thenThrow(new IllegalStateException("database down"))
+                .thenReturn(true);
+        worker = new MatchingWorker(matching, retrying(Duration.ofMinutes(10)), clock, recording, () -> 0.0);
         worker.start();
         worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
 
-        for (int i = 0; i < 6; i++) {
-            worker.submit(range("99", "101", AT.plusSeconds(60L * i)));
-        }
-        worker.onActivated(activated(marker, EntryType.LIMIT, "100"));
-        worker.submit(range("99", "101", AT.plusSeconds(600)));
+        worker.submit(range("99", "101", AT));
+        awaitProcessed();
+        clock.advance(Duration.ofMillis(999));
+        worker.submit(range("150", "160", AT.plusSeconds(60)));
+        awaitProcessed();
+        verify(matching, times(1)).fill(filledPlan(plan));
 
-        verify(matching, timeout(WAIT)).fill(filledPlan(marker));
+        clock.advance(Duration.ofMillis(1));
+        worker.submit(range("150", "160", AT.plusSeconds(120)));
+        awaitProcessed();
+
+        verify(matching, times(2)).fill(filled(plan, AT));
+    }
+
+    @Test
+    void NSF07_aFillStillFailingAtItsDeadline_isGivenUpWithOneErrorLog_andNothingElseTouchesThePlan() {
+        UUID plan = UUID.randomUUID();
+        when(matching.fill(filledPlan(plan))).thenThrow(new IllegalStateException("database down"));
+        worker = new MatchingWorker(matching, retrying(Duration.ofSeconds(5)), clock, recording, () -> 0.0);
+        worker.start();
+        worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
+
+        worker.submit(range("99", "101", AT));
+        awaitProcessed();
+        clock.advance(Duration.ofSeconds(1));
+        worker.submit(range("150", "160", AT.plusSeconds(60)));
+        awaitProcessed();
+        clock.advance(Duration.ofSeconds(4));
+        worker.submit(range("150", "160", AT.plusSeconds(120)));
+        awaitProcessed();
+        clock.advance(Duration.ofMinutes(5));
+        worker.submit(range("99", "101", AT.plusSeconds(180)));
+        awaitProcessed();
+
         verify(matching, times(3)).fill(filled(plan, AT));
-        verify(matching).activeEntries();
-        verifyNoMoreInteractions(matching);
+        verify(matching, never()).fill(filled(plan, AT.plusSeconds(180)));
         assertThat(logs.list)
                 .filteredOn(event -> event.getLevel() == Level.ERROR)
                 .singleElement()
@@ -596,6 +633,50 @@ class MatchingWorkerTest {
         assertThat(logs.list)
                 .filteredOn(event -> event.getLevel() == Level.WARN)
                 .hasSize(2);
+    }
+
+    @Test
+    void NSF07_theBackOff_doublesFromTheInitialDelay_upToTheMaximum_lessItsJitter() {
+        MatchingProperties.Retry retry =
+                new MatchingProperties.Retry(Duration.ofSeconds(1), Duration.ofSeconds(30), 20, Duration.ofMinutes(10));
+
+        assertThat(MatchingWorker.backoff(retry, 1, 0.0)).isEqualTo(Duration.ofSeconds(1));
+        assertThat(MatchingWorker.backoff(retry, 2, 0.0)).isEqualTo(Duration.ofSeconds(2));
+        assertThat(MatchingWorker.backoff(retry, 3, 0.0)).isEqualTo(Duration.ofSeconds(4));
+        assertThat(MatchingWorker.backoff(retry, 10, 0.0)).isEqualTo(Duration.ofSeconds(30));
+        assertThat(MatchingWorker.backoff(retry, 99, 0.0)).isEqualTo(Duration.ofSeconds(30));
+        assertThat(MatchingWorker.backoff(retry, 10, 0.5)).isEqualTo(Duration.ofSeconds(27));
+        assertThat(MatchingWorker.backoff(retry, 1, 0.999)).isGreaterThan(Duration.ofMillis(800));
+    }
+
+    @Test
+    void NSF07_aPairWhosePendingRangesPassTheThreshold_isWarnedAboutOnce() throws InterruptedException {
+        TrackedEntry holder = entry(UUID.randomUUID(), Direction.LONG, "100");
+        when(matching.activeEntries()).thenReturn(List.of(holder));
+        Gate held = new Gate();
+        doAnswer(held::pass).when(matching).fill(filledPlan(holder.planId()));
+        worker = new MatchingWorker(
+                matching,
+                new MatchingProperties(true, 1, 1, RETRY_AT_ONCE, 3, Duration.ofSeconds(5)),
+                clock,
+                recording,
+                () -> 0.0);
+        worker.start();
+        worker.submit(range("99", "101", AT));
+        held.awaitEntered();
+
+        for (int minute = 1; minute <= 8; minute++) {
+            worker.submit(range("150", "160", AT.plusSeconds(60L * minute)));
+        }
+        held.release();
+
+        assertThat(logs.list)
+                .filteredOn(event -> event.getFormattedMessage().contains("pending ranges"))
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                    assertThat(event.getFormattedMessage()).contains("holds 4 pending ranges");
+                });
     }
 
     @Test
@@ -618,7 +699,7 @@ class MatchingWorkerTest {
                 })
                 .when(matching)
                 .fill(any());
-        worker = new MatchingWorker(matching, properties(2, 100), counting);
+        worker = new MatchingWorker(matching, properties(2, 100), clock, counting, () -> 0.0);
 
         for (int i = 0; i < 20; i++) {
             worker.start();
@@ -654,7 +735,11 @@ class MatchingWorkerTest {
                 .when(matching)
                 .fill(any());
         worker = new MatchingWorker(
-                matching, new MatchingProperties(true, 1, 100, 5, Duration.ofMillis(200)), recording);
+                matching,
+                new MatchingProperties(true, 1, 100, RETRY_AT_ONCE, 60, Duration.ofMillis(200)),
+                clock,
+                recording,
+                () -> 0.0);
         worker.start();
         worker.submit(range("99", "101", AT));
         assertThat(inFill.await(WAIT, TimeUnit.MILLISECONDS)).isTrue();
@@ -701,7 +786,7 @@ class MatchingWorkerTest {
 
     @Test
     void NSF07_aCommandLostToAnInterrupt_isLogged_andTheInterruptKept() {
-        worker = new MatchingWorker(matching, properties(1, 1), idle());
+        worker = new MatchingWorker(matching, properties(1, 1), clock, idle(), () -> 0.0);
         worker.start();
         worker.submit(range("99", "101", AT));
 
@@ -730,7 +815,8 @@ class MatchingWorkerTest {
     }
 
     private MatchingWorker started(int partitions, int capacity) {
-        MatchingWorker started = new MatchingWorker(matching, properties(partitions, capacity), recording);
+        MatchingWorker started =
+                new MatchingWorker(matching, properties(partitions, capacity), clock, recording, () -> 0.0);
         started.start();
         return started;
     }
@@ -761,8 +847,27 @@ class MatchingWorkerTest {
         }
     }
 
+    private static MatchingProperties retrying(Duration deadline) {
+        return new MatchingProperties(
+                true,
+                1,
+                100,
+                new MatchingProperties.Retry(Duration.ofSeconds(1), Duration.ofSeconds(1), 0, deadline),
+                60,
+                Duration.ofSeconds(5));
+    }
+
+    /** Returns once every command queued so far is handled: a marker of another pair is filled after them. */
+    private void awaitProcessed() {
+        UUID marker = UUID.randomUUID();
+        worker.onActivated(new TradingPlanActivated(
+                marker, MarketType.SPOT, MARKER_PAIR, Direction.LONG, EntryType.LIMIT, BigDecimal.ONE, ACTIVATED));
+        worker.submit(new PriceRange(MarketType.SPOT, MARKER_PAIR, new BigDecimal("0.5"), new BigDecimal("1.5"), AT));
+        verify(matching, timeout(WAIT)).fill(filledPlan(marker));
+    }
+
     private static MatchingProperties properties(int partitions, int capacity) {
-        return new MatchingProperties(true, partitions, capacity, 5, Duration.ofSeconds(5));
+        return new MatchingProperties(true, partitions, capacity, RETRY_AT_ONCE, 60, Duration.ofSeconds(5));
     }
 
     private static TrackedEntry entry(UUID planId, Direction direction, String price) {

@@ -11,7 +11,9 @@ import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.service.MatchingService;
 import jakarta.annotation.PreDestroy;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -28,7 +30,9 @@ import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
+import java.util.function.DoubleSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,7 +49,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <p>Commands: track an activated entry, untrack a cancelled plan, and a price range. Track and untrack wait for room
  * in the channel, because losing one would leave the books wrong. A range never waits and is never lost: when the
  * channel is full it waits as a pending range of its pair (see {@link #submit}). A fill that fails is kept with its
- * price and time and tried again on the pair's next range, at most {@code maxFillAttempts} times.
+ * price and time and tried again on the pair's next range once its back-off has passed, until a deadline.
  *
  * <p>Each start builds new partitions from the ACTIVE LIMIT plans, written straight into each engine before its
  * consumer starts, and never while a consumer of the previous run is still alive.
@@ -57,6 +61,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <p>Reference: Hohpe, G. &amp; Woolf, B. (2003). <i>Enterprise Integration Patterns</i>. Addison-Wesley, "Message
  * Channel" and "Aggregator".
  * <p>Reference: Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf, ch. 5 (bounded retries).
+ * <p>Reference: Metcalfe, R. M. &amp; Boggs, D. R. (1976). Ethernet: distributed packet switching for local computer
+ * networks. <i>Communications of the ACM</i>, 19(7), 395-404 (exponential back-off).
  */
 @Component
 public class MatchingWorker {
@@ -66,6 +72,8 @@ public class MatchingWorker {
     private final MatchingService matching;
     private final MatchingProperties properties;
     private final ThreadFactory threads;
+    private final Clock clock;
+    private final DoubleSupplier random;
 
     /** Replaced as a whole by each start; the consumers of a run keep their own partitions. */
     private volatile List<Partition> partitions = List.of();
@@ -76,14 +84,22 @@ public class MatchingWorker {
     private volatile boolean running;
 
     @Autowired
-    public MatchingWorker(MatchingService matching, MatchingProperties properties) {
-        this(matching, properties, Thread.ofVirtual().factory());
+    public MatchingWorker(MatchingService matching, MatchingProperties properties, Clock clock) {
+        this(matching, properties, clock, Thread.ofVirtual().factory(), () -> ThreadLocalRandom.current()
+                .nextDouble());
     }
 
-    MatchingWorker(MatchingService matching, MatchingProperties properties, ThreadFactory threads) {
+    MatchingWorker(
+            MatchingService matching,
+            MatchingProperties properties,
+            Clock clock,
+            ThreadFactory threads,
+            DoubleSupplier random) {
         this.matching = matching;
         this.properties = properties;
+        this.clock = clock;
         this.threads = threads;
+        this.random = random;
     }
 
     /**
@@ -182,6 +198,21 @@ public class MatchingWorker {
         }
     }
 
+    /**
+     * The wait before the next try after {@code failures} failures: the initial delay doubled per failure up to the
+     * maximum, less a random share of up to {@code jitterPercent} so failing fills do not retry in step.
+     *
+     * <p>Reference: Metcalfe &amp; Boggs (1976), exponential back-off.
+     *
+     * @param random a value in [0, 1)
+     */
+    static Duration backoff(MatchingProperties.Retry retry, int failures, double random) {
+        double doubled = retry.initialDelay().toMillis() * Math.pow(2, Math.min(failures - 1, 30));
+        long capped = (long) Math.min(doubled, retry.maxDelay().toMillis());
+        long jitter = (long) (capped * retry.jitterPercent() / 100.0 * random);
+        return Duration.ofMillis(capped - jitter);
+    }
+
     /** Two updates of the same candle as one: the lowest low, the highest high, the earliest and latest time. */
     static PriceRange merge(PriceRange earlier, PriceRange later) {
         return new PriceRange(
@@ -249,8 +280,8 @@ public class MatchingWorker {
         private final MatchingEngine engine = new MatchingEngine();
 
         /**
-         * Fills that failed, per pair, with their price, time and failed attempts: a retry list, tried on the pair's
-         * next range so a fill is not lost when the price moves away (Hohpe &amp; Woolf 2003).
+         * Fills that failed, per pair, with their price, time, failures and next try: a retry list, tried on the pair's
+         * next range once due, so a fill is not lost when the price moves away (Hohpe &amp; Woolf 2003).
          */
         private final Map<PairKey, List<PendingFill>> retries = new HashMap<>();
 
@@ -286,12 +317,25 @@ public class MatchingWorker {
                     last.range = merge(last.range, range);
                 } else {
                     state.segments.add(new Segment(++sequence, range));
+                    warnOnBacklog(key, state);
                 }
                 // Wakes an idle consumer; at most one per pair. When the channel is full, the consumer is busy and
                 // reads the pending ranges after its next command anyway.
                 if (!state.flushQueued && queue.offer(new Command.Flush(key))) {
                     state.flushQueued = true;
                 }
+            }
+        }
+
+        /** Warns once per backlog when a pair holds more pending ranges than the threshold. */
+        private void warnOnBacklog(PairKey key, PairState state) {
+            if (!state.backlogWarned && state.segments.size() > properties.pendingWarnThreshold()) {
+                state.backlogWarned = true;
+                log.warn(
+                        "NSF-07 {} {} holds {} pending ranges; matching is behind",
+                        key.market(),
+                        key.pairId(),
+                        state.segments.size());
             }
         }
 
@@ -437,18 +481,39 @@ public class MatchingWorker {
 
         private void onRange(PriceRange range) {
             PairKey key = new PairKey(range.market(), range.pairId());
-            List<PendingFill> waiting = retries.remove(key);
-            if (waiting != null) {
-                waiting.forEach(retry -> fill(key, retry.fill(), retry.failures()));
+            retryDue(key);
+            engine.onRange(range).forEach(fill -> fill(key, fill, null));
+        }
+
+        /** Tries again the pair's failed fills whose back-off has passed; the others keep waiting. */
+        private void retryDue(PairKey key) {
+            List<PendingFill> waiting = retries.get(key);
+            if (waiting == null) {
+                return;
             }
-            engine.onRange(range).forEach(fill -> fill(key, fill, 0));
+            Instant now = clock.instant();
+            List<PendingFill> due = new ArrayList<>();
+            waiting.removeIf(retry -> {
+                boolean isDue = !retry.nextTryAt().isAfter(now);
+                if (isDue) {
+                    due.add(retry);
+                }
+                return isDue;
+            });
+            if (waiting.isEmpty()) {
+                retries.remove(key);
+            }
+            due.forEach(retry -> fill(key, retry.fill(), retry));
         }
 
         /**
-         * Stores a fill. A failure of any kind keeps it for the pair's next range, up to {@code maxFillAttempts}; then
-         * it is logged once as an error and dropped, and the plan stays ACTIVE in the database for a person to handle.
+         * Stores a fill. A failure of any kind keeps it in the retry list with an exponential back-off; once the
+         * deadline since its first failure has passed it is logged once as an error and dropped, and the plan stays
+         * ACTIVE in the database for a person to handle.
+         *
+         * @param previous the retry this try comes from, or {@code null} for a first try
          */
-        private void fill(PairKey key, Fill fill, int failuresBefore) {
+        private void fill(PairKey key, Fill fill, PendingFill previous) {
             try {
                 if (!matching.fill(fill)) {
                     log.debug("NSF-07 plan {} was no longer ACTIVE", fill.planId());
@@ -458,22 +523,27 @@ public class MatchingWorker {
                     // A stop: keep the signal for the consumer loop.
                     Thread.currentThread().interrupt();
                 }
-                int failures = failuresBefore + 1;
-                if (failures >= properties.maxFillAttempts()) {
+                Instant now = clock.instant();
+                int failures = previous == null ? 1 : previous.failures() + 1;
+                Instant firstFailedAt = previous == null ? now : previous.firstFailedAt();
+                if (!now.isBefore(firstFailedAt.plus(properties.retry().deadline()))) {
                     log.error(
-                            "NSF-07 plan {} fill failed {} times; no longer retried, the plan stays ACTIVE",
+                            "NSF-07 plan {} fill failed {} times since {}; no longer retried, the plan stays ACTIVE",
                             fill.planId(),
                             failures,
+                            firstFailedAt,
                             failure);
                     return;
                 }
+                Duration wait = backoff(properties.retry(), failures, random.getAsDouble());
                 log.warn(
-                        "NSF-07 plan {} fill failed ({} of {}); retried on the next range of its pair: {}",
+                        "NSF-07 plan {} fill failed ({}); retried in {}: {}",
                         fill.planId(),
                         failures,
-                        properties.maxFillAttempts(),
+                        wait,
                         failure.toString());
-                retries.computeIfAbsent(key, ignored -> new ArrayList<>()).add(new PendingFill(fill, failures));
+                retries.computeIfAbsent(key, ignored -> new ArrayList<>())
+                        .add(new PendingFill(fill, failures, firstFailedAt, now.plus(wait)));
             }
         }
     }
@@ -489,6 +559,7 @@ public class MatchingWorker {
         private final Set<Long> notQueued = new HashSet<>();
         private int queued;
         private boolean flushQueued;
+        private boolean backlogWarned;
 
         boolean isIdle() {
             return segments.isEmpty() && unhandled.isEmpty() && queued == 0 && !flushQueued;
@@ -510,8 +581,8 @@ public class MatchingWorker {
 
     private record PairKey(MarketType market, UUID pairId) {}
 
-    /** A fill to try again, with the failures so far. */
-    private record PendingFill(Fill fill, int failures) {}
+    /** A fill to try again: its failures so far, when the first one happened, and when to try next. */
+    private record PendingFill(Fill fill, int failures, Instant firstFailedAt, Instant nextTryAt) {}
 
     /** What a partition's consumer is asked to do. */
     private sealed interface Command {

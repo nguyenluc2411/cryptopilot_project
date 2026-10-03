@@ -1,5 +1,6 @@
 package com.cryptopilot.trading.config;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -17,7 +18,8 @@ import org.springframework.validation.annotation.Validated;
  * @param partitions how many single-consumer partitions share the pairs
  * @param queueCapacity commands a partition may hold; a price update beyond it waits merged with the other updates of
  *     its pair's candle, never dropped
- * @param maxFillAttempts how many times a failing fill is tried before the plan is left ACTIVE for a person to look at
+ * @param retry how a failing fill is tried again
+ * @param pendingWarnThreshold how many pending ranges a pair may hold before one warning is logged
  * @param stopTimeout how long a stop waits for the consumers to end; a start never runs beside one still running
  */
 @Validated
@@ -26,5 +28,22 @@ public record MatchingProperties(
         @DefaultValue("true") boolean enabled,
         @Min(1) @Max(64) @DefaultValue("4") int partitions,
         @Min(1) @DefaultValue("10000") int queueCapacity,
-        @Min(1) @DefaultValue("5") int maxFillAttempts,
-        @NotNull @DefaultValue("10s") Duration stopTimeout) {}
+        @NotNull @Valid @DefaultValue Retry retry,
+        @Min(1) @DefaultValue("60") int pendingWarnThreshold,
+        @NotNull @DefaultValue("10s") Duration stopTimeout) {
+
+    /**
+     * The retries of a failing fill: exponential back-off with jitter, until a deadline counted from the first failure.
+     * A retry that is due runs on the pair's next range.
+     *
+     * @param initialDelay the wait after the first failure
+     * @param maxDelay the longest wait between two tries
+     * @param jitterPercent the largest share of a wait taken off at random
+     * @param deadline how long after the first failure the fill is given up; the plan then stays ACTIVE
+     */
+    public record Retry(
+            @NotNull @DefaultValue("1s") Duration initialDelay,
+            @NotNull @DefaultValue("30s") Duration maxDelay,
+            @Min(0) @Max(100) @DefaultValue("20") int jitterPercent,
+            @NotNull @DefaultValue("10m") Duration deadline) {}
+}
