@@ -281,7 +281,8 @@ public class MatchingWorker {
 
         /**
          * Fills that failed, per pair, with their price, time, failures and next try: a retry list, tried on the pair's
-         * next range once due, so a fill is not lost when the price moves away (Hohpe &amp; Woolf 2003).
+         * next range once due, so a fill is not lost when the price moves away (Hohpe &amp; Woolf 2003). A retry runs
+         * only when the pair's next price update arrives (about every 2 s on {@code kline_1m}); no timer fires it.
          */
         private final Map<PairKey, List<PendingFill>> retries = new HashMap<>();
 

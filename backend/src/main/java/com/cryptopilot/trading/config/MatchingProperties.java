@@ -34,7 +34,8 @@ public record MatchingProperties(
 
     /**
      * The retries of a failing fill: exponential back-off with jitter, until a deadline counted from the first failure.
-     * A retry that is due runs on the pair's next range.
+     * A retry runs only when the pair's next price update arrives after it is due (about every 2 s on
+     * {@code kline_1m}); no timer fires it, so a pair without updates waits.
      *
      * @param initialDelay the wait after the first failure
      * @param maxDelay the longest wait between two tries
