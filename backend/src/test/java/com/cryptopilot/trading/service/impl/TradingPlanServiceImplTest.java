@@ -505,7 +505,7 @@ class TradingPlanServiceImplTest {
         assertThat(cancelled.status()).isEqualTo(PlanStatus.CANCELLED);
         assertThat(cancelled.editable()).isFalse();
         assertThat(cancelled.statusHistory()).containsExactly(new StatusChangeResponse(PlanStatus.CANCELLED, NOW));
-        verify(events).publishEvent(new TradingPlanCancelled(plan.getId()));
+        verify(events).publishEvent(new TradingPlanCancelled(plan.getId(), plan.getMarket(), plan.getPairId()));
     }
 
     @Test

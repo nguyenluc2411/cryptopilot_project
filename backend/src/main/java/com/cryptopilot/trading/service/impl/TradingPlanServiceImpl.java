@@ -155,7 +155,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     public TradingPlanResponse cancel(UUID userId, UUID planId) {
         TradingPlan plan = owned(userId, planId);
         plan.cancel(clock.instant());
-        events.publishEvent(new TradingPlanCancelled(plan.getId()));
+        events.publishEvent(new TradingPlanCancelled(plan.getId(), plan.getMarket(), plan.getPairId()));
         return PlanResponses.detail(plans.save(plan));
     }
 
