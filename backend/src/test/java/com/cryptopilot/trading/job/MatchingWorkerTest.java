@@ -11,6 +11,7 @@ import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
@@ -39,6 +40,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -87,7 +89,7 @@ class MatchingWorkerTest {
 
     @Test
     void NSF07_whenDisabled_nothingStartsAndNothingIsQueued() {
-        worker = new MatchingWorker(matching, new MatchingProperties(false, 1, 1), recording);
+        worker = new MatchingWorker(matching, new MatchingProperties(false, 1, 1, 5, Duration.ofSeconds(5)), recording);
 
         worker.start();
         worker.onActivated(activated(UUID.randomUUID(), EntryType.LIMIT, "100"));
@@ -338,6 +340,96 @@ class MatchingWorkerTest {
         verify(matching, timeout(WAIT)).fill(filled(bySecond.planId(), nextMinute));
     }
 
+    /**
+     * N1: a pair's pending range is matched right after the command in progress, while the channel still holds another
+     * pair's traffic, and not only once the channel is empty.
+     */
+    @Test
+    void NSF07_aPendingRange_doesNotWaitBehindAnotherPairsTraffic() throws InterruptedException {
+        UUID otherPair = UUID.randomUUID();
+        TrackedEntry holder = new TrackedEntry(
+                UUID.randomUUID(), MarketType.SPOT, otherPair, Direction.LONG, new BigDecimal("100"), ACTIVATED);
+        TrackedEntry later = new TrackedEntry(
+                UUID.randomUUID(), MarketType.SPOT, otherPair, Direction.SHORT, new BigDecimal("200"), ACTIVATED);
+        TrackedEntry pending = entry(UUID.randomUUID(), Direction.LONG, "50");
+        when(matching.activeEntries()).thenReturn(List.of(holder, later, pending));
+        List<UUID> order = new CopyOnWriteArrayList<>();
+        Gate held = new Gate();
+        doAnswer(call -> {
+                    order.add(holder.planId());
+                    return held.pass(call);
+                })
+                .when(matching)
+                .fill(filledPlan(holder.planId()));
+        doAnswer(call -> order.add(((Fill) call.getArgument(0)).planId()))
+                .when(matching)
+                .fill(filledPlan(later.planId()));
+        doAnswer(call -> order.add(((Fill) call.getArgument(0)).planId()))
+                .when(matching)
+                .fill(filledPlan(pending.planId()));
+        worker = started(1, 2);
+        worker.submit(new PriceRange(MarketType.SPOT, otherPair, new BigDecimal("99"), new BigDecimal("101"), AT));
+        held.awaitEntered();
+        worker.submit(new PriceRange(MarketType.SPOT, otherPair, new BigDecimal("150"), new BigDecimal("160"), AT));
+        worker.submit(new PriceRange(MarketType.SPOT, otherPair, new BigDecimal("195"), new BigDecimal("205"), AT));
+
+        worker.submit(range("49", "51", AT));
+        held.release();
+
+        verify(matching, timeout(WAIT)).fill(filledPlan(later.planId()));
+        verify(matching, timeout(WAIT)).fill(filledPlan(pending.planId()));
+        assertThat(order).containsExactly(holder.planId(), pending.planId(), later.planId());
+    }
+
+    /**
+     * N1: however many updates of a pair wait as pending ranges, they put at most one wake-up in the channel, so the
+     * room left stays for other commands: here an activation finds a free slot instead of waiting.
+     */
+    @Test
+    void NSF07_manyPendingUpdatesOfAPair_putAtMostOneWakeUpInTheChannel() throws InterruptedException {
+        UUID otherPair = UUID.randomUUID();
+        TrackedEntry first = entry(UUID.randomUUID(), Direction.LONG, "100");
+        TrackedEntry second = entry(UUID.randomUUID(), Direction.LONG, "95");
+        TrackedEntry reached = entry(UUID.randomUUID(), Direction.LONG, "90");
+        when(matching.activeEntries()).thenReturn(List.of(first, second, reached));
+        Gate inFirst = new Gate();
+        Gate inSecond = new Gate();
+        doAnswer(inFirst::pass).when(matching).fill(filledPlan(first.planId()));
+        doAnswer(inSecond::pass).when(matching).fill(filledPlan(second.planId()));
+        worker = started(1, 4);
+        worker.submit(update("99", "101", AT, 0));
+        inFirst.awaitEntered();
+        worker.submit(update("99", "101", AT, 1));
+        worker.submit(update("94", "101", AT, 2));
+        worker.submit(update("99", "101", AT, 3));
+        worker.submit(update("99", "101", AT, 4));
+        worker.submit(update("99", "101", AT, 5));
+        inFirst.release();
+        inSecond.awaitEntered();
+
+        // Two slots are free; the 44 pending updates take one of them between them.
+        for (int i = 6; i < 50; i++) {
+            worker.submit(update("99", "101", AT, i));
+        }
+        UUID otherPlan = UUID.randomUUID();
+        assertTimeoutPreemptively(
+                Duration.ofSeconds(2),
+                () -> worker.onActivated(new TradingPlanActivated(
+                        otherPlan,
+                        MarketType.SPOT,
+                        otherPair,
+                        Direction.LONG,
+                        EntryType.LIMIT,
+                        new BigDecimal("10"),
+                        ACTIVATED)));
+        worker.submit(update("89", "101", AT, 50));
+        inSecond.release();
+        worker.submit(new PriceRange(MarketType.SPOT, otherPair, new BigDecimal("9"), new BigDecimal("11"), AT));
+
+        verify(matching, timeout(WAIT)).fill(filled(reached.planId(), AT));
+        verify(matching, timeout(WAIT)).fill(filled(otherPlan, AT));
+    }
+
     @Test
     void NSF07_merge_keepsTheLowestLowTheHighestHighAndTheEarliestAndLatestTime_inEitherOrder() {
         PriceRange earlier = range("95", "105", AT);
@@ -476,6 +568,116 @@ class MatchingWorkerTest {
     }
 
     @Test
+    void NSF07_aFillThatKeepsFailing_isTriedMaxAttemptsTimes_withOneErrorLog_andNothingElseTouchesThePlan() {
+        UUID plan = UUID.randomUUID();
+        UUID marker = UUID.randomUUID();
+        when(matching.fill(filledPlan(plan))).thenThrow(new IllegalStateException("database down"));
+        worker =
+                new MatchingWorker(matching, new MatchingProperties(true, 1, 100, 3, Duration.ofSeconds(5)), recording);
+        worker.start();
+        worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
+
+        for (int i = 0; i < 6; i++) {
+            worker.submit(range("99", "101", AT.plusSeconds(60L * i)));
+        }
+        worker.onActivated(activated(marker, EntryType.LIMIT, "100"));
+        worker.submit(range("99", "101", AT.plusSeconds(600)));
+
+        verify(matching, timeout(WAIT)).fill(filledPlan(marker));
+        verify(matching, times(3)).fill(filled(plan, AT));
+        verify(matching).activeEntries();
+        verifyNoMoreInteractions(matching);
+        assertThat(logs.list)
+                .filteredOn(event -> event.getLevel() == Level.ERROR)
+                .singleElement()
+                .satisfies(event -> assertThat(event.getFormattedMessage())
+                        .contains(plan.toString())
+                        .contains("stays ACTIVE"));
+        assertThat(logs.list)
+                .filteredOn(event -> event.getLevel() == Level.WARN)
+                .hasSize(2);
+    }
+
+    @Test
+    void NSF07_stopThenStart_repeatedly_neverRunsTwoGenerationsOfConsumersTogether() {
+        AtomicInteger alive = new AtomicInteger();
+        AtomicInteger mostAlive = new AtomicInteger();
+        ThreadFactory counting = task -> recording.newThread(() -> {
+            mostAlive.accumulateAndGet(alive.incrementAndGet(), Math::max);
+            try {
+                task.run();
+            } finally {
+                alive.decrementAndGet();
+            }
+        });
+        TrackedEntry entry = entry(UUID.randomUUID(), Direction.LONG, "100");
+        when(matching.activeEntries()).thenReturn(List.of(entry));
+        doAnswer(call -> {
+                    Thread.sleep(5);
+                    return true;
+                })
+                .when(matching)
+                .fill(any());
+        worker = new MatchingWorker(matching, properties(2, 100), counting);
+
+        for (int i = 0; i < 20; i++) {
+            worker.start();
+            worker.submit(range("99", "101", AT));
+            worker.stop();
+            assertThat(alive.get())
+                    .as("every consumer has ended when stop returns")
+                    .isZero();
+        }
+
+        assertThat(mostAlive.get()).isLessThanOrEqualTo(2);
+        assertThat(started).hasSize(40).noneMatch(Thread::isAlive);
+    }
+
+    @Test
+    void NSF07_aConsumerThatOutlivesTheStopTimeout_blocksTheNextStart_untilItEnds() throws InterruptedException {
+        TrackedEntry entry = entry(UUID.randomUUID(), Direction.LONG, "100");
+        when(matching.activeEntries()).thenReturn(List.of(entry));
+        CountDownLatch inFill = new CountDownLatch(1);
+        CountDownLatch letGo = new CountDownLatch(1);
+        doAnswer(call -> {
+                    inFill.countDown();
+                    // Deaf to the interrupt, like a call that never checks it.
+                    while (true) {
+                        try {
+                            letGo.await();
+                            return true;
+                        } catch (InterruptedException ignored) {
+                            // keeps waiting
+                        }
+                    }
+                })
+                .when(matching)
+                .fill(any());
+        worker = new MatchingWorker(
+                matching, new MatchingProperties(true, 1, 100, 5, Duration.ofMillis(200)), recording);
+        worker.start();
+        worker.submit(range("99", "101", AT));
+        assertThat(inFill.await(WAIT, TimeUnit.MILLISECONDS)).isTrue();
+
+        worker.stop();
+        worker.start();
+
+        assertThat(started).hasSize(1);
+        assertThat(worker.isRunning()).isFalse();
+        assertThat(logs.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getFormattedMessage()).contains("not started");
+        });
+
+        letGo.countDown();
+        started.getFirst().join(WAIT);
+        worker.start();
+
+        assertThat(started).hasSize(2);
+        assertThat(worker.isRunning()).isTrue();
+    }
+
+    @Test
     void NSF07_aCommandLostToAnInterrupt_doesNotHoldBackItsPairsRanges() throws InterruptedException {
         TrackedEntry holder = entry(UUID.randomUUID(), Direction.LONG, "100");
         TrackedEntry waiting = entry(UUID.randomUUID(), Direction.LONG, "98");
@@ -560,7 +762,7 @@ class MatchingWorkerTest {
     }
 
     private static MatchingProperties properties(int partitions, int capacity) {
-        return new MatchingProperties(true, partitions, capacity);
+        return new MatchingProperties(true, partitions, capacity, 5, Duration.ofSeconds(5));
     }
 
     private static TrackedEntry entry(UUID planId, Direction direction, String price) {

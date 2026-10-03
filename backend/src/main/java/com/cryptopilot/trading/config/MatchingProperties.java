@@ -2,6 +2,8 @@ package com.cryptopilot.trading.config;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
@@ -15,10 +17,14 @@ import org.springframework.validation.annotation.Validated;
  * @param partitions how many single-consumer partitions share the pairs
  * @param queueCapacity commands a partition may hold; a price update beyond it waits merged with the other updates of
  *     its pair's candle, never dropped
+ * @param maxFillAttempts how many times a failing fill is tried before the plan is left ACTIVE for a person to look at
+ * @param stopTimeout how long a stop waits for the consumers to end; a start never runs beside one still running
  */
 @Validated
 @ConfigurationProperties("cryptopilot.trading.matching")
 public record MatchingProperties(
         @DefaultValue("true") boolean enabled,
         @Min(1) @Max(64) @DefaultValue("4") int partitions,
-        @Min(1) @DefaultValue("10000") int queueCapacity) {}
+        @Min(1) @DefaultValue("10000") int queueCapacity,
+        @Min(1) @DefaultValue("5") int maxFillAttempts,
+        @NotNull @DefaultValue("10s") Duration stopTimeout) {}

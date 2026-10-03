@@ -11,6 +11,7 @@ import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.service.MatchingService;
 import jakarta.annotation.PreDestroy;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -27,6 +28,7 @@ import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ThreadFactory;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,18 +44,19 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *
  * <p>Commands: track an activated entry, untrack a cancelled plan, and a price range. Track and untrack wait for room
  * in the channel, because losing one would leave the books wrong. A range never waits and is never lost: when the
- * channel is full it is merged into a pending range of its pair (see {@link #submit}). A fill that fails is kept
- * with its original time and tried again on the pair's next range.
+ * channel is full it waits as a pending range of its pair (see {@link #submit}). A fill that fails is kept with its
+ * price and time and tried again on the pair's next range, at most {@code maxFillAttempts} times.
  *
- * <p>The books start from the ACTIVE LIMIT plans, written straight into each engine before its consumer starts.
- * Nothing feeds price ranges yet: the {@code kline_1m} stream of D-43 is connected by T-043 (Q-32).
+ * <p>Each start builds new partitions from the ACTIVE LIMIT plans, written straight into each engine before its
+ * consumer starts, and never while a consumer of the previous run is still alive.
  *
  * <p>Rule: NSF-07, BR-33; TECHNICAL_DESIGN 7.7 and 10; D-09, D-77, D-78.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
- * (producer-consumer with bounded blocking queues).
+ * (producer-consumer with bounded blocking queues) and ch. 7 (cancellation and shutdown).
  * <p>Reference: Hohpe, G. &amp; Woolf, B. (2003). <i>Enterprise Integration Patterns</i>. Addison-Wesley, "Message
  * Channel" and "Aggregator".
+ * <p>Reference: Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf, ch. 5 (bounded retries).
  */
 @Component
 public class MatchingWorker {
@@ -63,8 +66,13 @@ public class MatchingWorker {
     private final MatchingService matching;
     private final MatchingProperties properties;
     private final ThreadFactory threads;
-    private final List<Partition> partitions = new ArrayList<>();
+
+    /** Replaced as a whole by each start; the consumers of a run keep their own partitions. */
+    private volatile List<Partition> partitions = List.of();
+
+    /** Consumers started and not yet seen to end; guarded by {@code this}. */
     private final List<Thread> consumers = new ArrayList<>();
+
     private volatile boolean running;
 
     @Autowired
@@ -76,50 +84,66 @@ public class MatchingWorker {
         this.matching = matching;
         this.properties = properties;
         this.threads = threads;
-        for (int i = 0; i < properties.partitions(); i++) {
-            partitions.add(new Partition(properties.queueCapacity()));
-        }
     }
 
-    /** Rebuilds the books from the ACTIVE LIMIT plans and starts one consumer per partition; a second call does nothing. */
+    /**
+     * Builds the books from the ACTIVE LIMIT plans and starts one consumer per partition. A second call does nothing,
+     * and nothing starts while a consumer of the previous run has not ended.
+     */
     @EventListener(ApplicationReadyEvent.class)
     public synchronized void start() {
         if (!properties.enabled() || running) {
             return;
         }
-        // Set first, so an activation or cancel committed during the rebuild is queued and applied after it.
+        if (!consumersEnded()) {
+            log.error(
+                    "NSF-07 matching not started: {} consumers of the previous run are still running",
+                    consumers.size());
+            return;
+        }
+        List<Partition> fresh = new ArrayList<>();
+        for (int i = 0; i < properties.partitions(); i++) {
+            fresh.add(new Partition(properties.queueCapacity()));
+        }
+        partitions = List.copyOf(fresh);
+        // Set before the rebuild, so an activation or cancel committed during it is queued and applied after it.
         running = true;
-        partitions.forEach(Partition::reset);
         List<TrackedEntry> entries = matching.activeEntries();
         // Straight into the engines, never through the bounded channels: no consumer runs yet to empty them.
         entries.forEach(
                 entry -> partitionOf(entry.market(), entry.pairId()).engine.track(entry));
-        // Ranges from before this point are not seen; the restart replay of T-043 covers them.
-        for (int i = 0; i < partitions.size(); i++) {
-            Thread consumer = threads.newThread(partitions.get(i)::drain);
+        for (int i = 0; i < fresh.size(); i++) {
+            Thread consumer = threads.newThread(fresh.get(i)::drain);
             consumer.setName("trading-matching-" + i);
             consumer.start();
             consumers.add(consumer);
         }
-        log.info("NSF-07 matching started with {} entries in {} partitions", entries.size(), partitions.size());
+        log.info("NSF-07 matching started with {} entries in {} partitions", entries.size(), fresh.size());
     }
 
-    /** Stops the consumers; the books are rebuilt at the next start. */
+    /** Stops the consumers and waits up to {@code stopTimeout} for them to end; the books are rebuilt at the next start. */
     @PreDestroy
     public synchronized void stop() {
         running = false;
+        partitions.forEach(Partition::stop);
         consumers.forEach(Thread::interrupt);
-        consumers.clear();
-        partitions.forEach(Partition::clear);
+        if (!consumersEnded()) {
+            log.warn("NSF-07 {} matching consumers did not end within {}", consumers.size(), properties.stopTimeout());
+        }
+    }
+
+    /** Whether the engine accepts ranges and commands. */
+    public boolean isRunning() {
+        return running;
     }
 
     /**
-     * Hands a price range to its partition without waiting. When the channel is full, the range is merged into the
-     * pair's open pending range of the same candle: the lowest low, the highest high, the earliest and the latest time.
-     * Every price the separate updates reached is still reached by the merged one, so no candle's extreme is lost (an
-     * Aggregator, Hohpe &amp; Woolf 2003); updates of another candle start a new pending range, so each fill keeps its
-     * candle's open time (D-78). The order rule of {@link Partition} keeps the pair's ranges, activations and cancels in
-     * the order they arrived.
+     * Hands a price range to its partition without waiting. When the channel is full, or the pair has commands or
+     * ranges waiting ahead of it, the range waits as a pending range of its pair; the pending ranges of the same
+     * candle are merged into one, with the lowest low, the highest high and the latest time (an Aggregator, Hohpe
+     * &amp; Woolf 2003). Every price the separate updates reached is still reached, and since they share a candle, the
+     * fill time (D-78) is the same. The order rule of {@link Partition} keeps the pair's ranges, activations and
+     * cancels in the order they arrived.
      *
      * @return whether the range was accepted; {@code false} only when the engine is not running
      */
@@ -127,12 +151,7 @@ public class MatchingWorker {
         if (!running) {
             return false;
         }
-        Partition partition = partitionOf(range.market(), range.pairId());
-        if (!partition.offer(new PairKey(range.market(), range.pairId()), range)) {
-            // Wakes a consumer that has emptied the channel meanwhile; if the channel is still full, the consumer
-            // reaches the pending ranges once it has emptied it.
-            partition.queue.offer(new Command.Flush());
-        }
+        partitionOf(range.market(), range.pairId()).offer(new PairKey(range.market(), range.pairId()), range);
         return true;
     }
 
@@ -163,6 +182,7 @@ public class MatchingWorker {
         }
     }
 
+    /** Two updates of the same candle as one: the lowest low, the highest high, the earliest and latest time. */
     static PriceRange merge(PriceRange earlier, PriceRange later) {
         return new PriceRange(
                 earlier.market(),
@@ -173,8 +193,30 @@ public class MatchingWorker {
                 earlier.at().isAfter(later.at()) ? earlier.at() : later.at());
     }
 
+    /** Joins the consumers within {@code stopTimeout} in all; forgets those that ended. Guarded by {@code this}. */
+    private boolean consumersEnded() {
+        long deadline = System.nanoTime() + properties.stopTimeout().toNanos();
+        for (Iterator<Thread> it = consumers.iterator(); it.hasNext(); ) {
+            Thread consumer = it.next();
+            long left = deadline - System.nanoTime();
+            try {
+                if (left > 0) {
+                    consumer.join(Duration.ofNanos(left));
+                }
+            } catch (InterruptedException stopped) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            if (!consumer.isAlive()) {
+                it.remove();
+            }
+        }
+        return consumers.isEmpty();
+    }
+
     private Partition partitionOf(MarketType market, UUID pairId) {
-        return partitions.get(Math.floorMod(Objects.hash(market, pairId), partitions.size()));
+        List<Partition> current = partitions;
+        return current.get(Math.floorMod(Objects.hash(market, pairId), current.size()));
     }
 
     /**
@@ -186,6 +228,9 @@ public class MatchingWorker {
      * one waits for room in the channel, the pair's new ranges wait as pending ranges too. So a range matches a plan
      * only if it arrived after the plan's activation, and a range that reached an entry before its cancel still
      * fills it.
+     *
+     * <p>A pair's pending ranges are matched as soon as none of its ranges is left in the channel ahead of them, after
+     * whatever command the consumer has just handled; they never wait for the other pairs' traffic to stop.
      *
      * <p>Reference: Lamport, L. (1978). Time, clocks, and the ordering of events in a distributed system.
      * <i>Communications of the ACM</i>, 21(7), 558-565.
@@ -200,12 +245,12 @@ public class MatchingWorker {
         private final Map<PairKey, PairState> pairs = new HashMap<>();
         private long sequence;
 
-        /** Read and written by the consumer only, after {@link #reset()} on the starting thread. */
-        private MatchingEngine engine = new MatchingEngine();
+        /** Written by the starting thread before the consumer starts, then by the consumer only. */
+        private final MatchingEngine engine = new MatchingEngine();
 
         /**
-         * Fills that failed, per pair, with the time of the range that reached them: a retry list, tried on the
-         * pair's next range so a fill is not lost when the price moves away (Hohpe &amp; Woolf 2003).
+         * Fills that failed, per pair, with their price, time and failed attempts: a retry list, tried on the pair's
+         * next range so a fill is not lost when the price moves away (Hohpe &amp; Woolf 2003).
          */
         private final Map<PairKey, List<PendingFill>> retries = new HashMap<>();
 
@@ -213,30 +258,27 @@ public class MatchingWorker {
             this.queue = new ArrayBlockingQueue<>(capacity);
         }
 
-        void reset() {
-            engine = new MatchingEngine();
-            retries.clear();
-        }
+        /** Set by {@link #stop()}: the consumer ends after its current command, even if that command ate the interrupt. */
+        private volatile boolean stopped;
 
-        void clear() {
+        void stop() {
+            stopped = true;
             queue.clear();
             synchronized (lock) {
                 pairs.clear();
             }
+            // Wakes a consumer waiting on an empty channel whose interrupt was lost.
+            queue.offer(new Command.Stop());
         }
 
-        /**
-         * Queues the range, or keeps it pending when the channel is full, the pair already has pending ranges or a
-         * command of the pair is on its way.
-         *
-         * @return whether it went into the channel
-         */
-        boolean offer(PairKey key, PriceRange range) {
+        /** Queues the range, or keeps it pending when the channel is full or something of its pair is ahead of it. */
+        void offer(PairKey key, PriceRange range) {
             synchronized (lock) {
                 PairState state = pairs.get(key);
                 boolean behindNothing = state == null || (state.segments.isEmpty() && state.notQueued.isEmpty());
-                if (behindNothing && queue.offer(new Command.Range(range))) {
-                    return true;
+                if (behindNothing && queue.offer(new Command.Range(key, range))) {
+                    pairs.computeIfAbsent(key, ignored -> new PairState()).queued++;
+                    return;
                 }
                 state = pairs.computeIfAbsent(key, ignored -> new PairState());
                 Segment last = state.segments.peekLast();
@@ -245,7 +287,11 @@ public class MatchingWorker {
                 } else {
                     state.segments.add(new Segment(++sequence, range));
                 }
-                return false;
+                // Wakes an idle consumer; at most one per pair. When the channel is full, the consumer is busy and
+                // reads the pending ranges after its next command anyway.
+                if (!state.flushQueued && queue.offer(new Command.Flush(key))) {
+                    state.flushQueued = true;
+                }
             }
         }
 
@@ -283,8 +329,8 @@ public class MatchingWorker {
         }
 
         void drain() {
-            // Ends only through take(): an interrupt set while a command runs makes the next take() throw.
-            while (true) {
+            // Ends on the stop flag, or through take(): an interrupt set while a command runs makes it throw.
+            while (!stopped) {
                 Command command;
                 try {
                     command = queue.take();
@@ -294,9 +340,7 @@ public class MatchingWorker {
                 }
                 try {
                     handle(command);
-                    if (queue.isEmpty()) {
-                        dueRanges().forEach(this::onRange);
-                    }
+                    dueRanges().forEach(this::onRange);
                 } catch (Exception unexpected) {
                     // Anything not caught below; the consumer must outlive one bad command.
                     log.error("NSF-07 {} failed; the partition carries on", command, unexpected);
@@ -317,9 +361,26 @@ public class MatchingWorker {
                             .forEach(waiting ->
                                     waiting.removeIf(p -> p.fill().planId().equals(untrack.planId())));
                 }
-                case Command.Range range -> onRange(range.range());
-                case Command.Flush flush -> {
-                    // The pending ranges are read once the channel is empty.
+                case Command.Range range -> {
+                    onRange(range.range());
+                    update(range.key(), state -> state.queued--);
+                }
+                case Command.Flush flush -> update(flush.key(), state -> state.flushQueued = false);
+                case Command.Stop stop -> {
+                    // The loop ends on the flag.
+                }
+            }
+        }
+
+        /** Changes the pair's state, which a stop may have cleared, and drops it once nothing is left in it. */
+        private void update(PairKey key, Consumer<PairState> change) {
+            synchronized (lock) {
+                PairState state = pairs.get(key);
+                if (state != null) {
+                    change.accept(state);
+                    if (state.isIdle()) {
+                        pairs.remove(key);
+                    }
                 }
             }
         }
@@ -331,19 +392,21 @@ public class MatchingWorker {
         private List<PriceRange> dueRanges(PairCommand command) {
             List<PriceRange> due = new ArrayList<>();
             synchronized (lock) {
-                takeDue(pairs.get(command.key()), due);
+                Optional.ofNullable(pairs.get(command.key())).ifPresent(state -> takeDue(state, due));
                 forget(command);
             }
             return due;
         }
 
-        /** Every pair's pending ranges numbered below its oldest unhandled command. */
+        /** The pending ranges of every pair with none of its ranges left in the channel, up to its oldest command. */
         private List<PriceRange> dueRanges() {
             List<PriceRange> due = new ArrayList<>();
             synchronized (lock) {
                 for (Iterator<PairState> it = pairs.values().iterator(); it.hasNext(); ) {
                     PairState state = it.next();
-                    takeDue(state, due);
+                    if (state.queued == 0) {
+                        takeDue(state, due);
+                    }
                     if (state.isIdle()) {
                         it.remove();
                     }
@@ -362,6 +425,9 @@ public class MatchingWorker {
         /** The command is handled or lost; drops the pair's state once nothing is left in it. */
         private void forget(PairCommand command) {
             PairState state = pairs.get(command.key());
+            if (state == null) {
+                return;
+            }
             state.unhandled.remove(command.number());
             state.notQueued.remove(command.number());
             if (state.isIdle()) {
@@ -373,40 +439,63 @@ public class MatchingWorker {
             PairKey key = new PairKey(range.market(), range.pairId());
             List<PendingFill> waiting = retries.remove(key);
             if (waiting != null) {
-                waiting.forEach(retry -> fill(key, retry.fill()));
+                waiting.forEach(retry -> fill(key, retry.fill(), retry.failures()));
             }
-            engine.onRange(range).forEach(fill -> fill(key, fill));
+            engine.onRange(range).forEach(fill -> fill(key, fill, 0));
         }
 
-        private void fill(PairKey key, Fill fill) {
+        /**
+         * Stores a fill. A failure of any kind keeps it for the pair's next range, up to {@code maxFillAttempts}; then
+         * it is logged once as an error and dropped, and the plan stays ACTIVE in the database for a person to handle.
+         */
+        private void fill(PairKey key, Fill fill, int failuresBefore) {
             try {
                 if (!matching.fill(fill)) {
                     log.debug("NSF-07 plan {} was no longer ACTIVE", fill.planId());
                 }
             } catch (Exception failure) {
-                // Any failure, checked ones included: the entry has left the books, so it must not be lost.
-                log.error("NSF-07 plan {} fill failed; retried on the next range of its pair", fill.planId(), failure);
-                retries.computeIfAbsent(key, ignored -> new ArrayList<>()).add(new PendingFill(fill));
+                if (failure instanceof InterruptedException) {
+                    // A stop: keep the signal for the consumer loop.
+                    Thread.currentThread().interrupt();
+                }
+                int failures = failuresBefore + 1;
+                if (failures >= properties.maxFillAttempts()) {
+                    log.error(
+                            "NSF-07 plan {} fill failed {} times; no longer retried, the plan stays ACTIVE",
+                            fill.planId(),
+                            failures,
+                            failure);
+                    return;
+                }
+                log.warn(
+                        "NSF-07 plan {} fill failed ({} of {}); retried on the next range of its pair: {}",
+                        fill.planId(),
+                        failures,
+                        properties.maxFillAttempts(),
+                        failure.toString());
+                retries.computeIfAbsent(key, ignored -> new ArrayList<>()).add(new PendingFill(fill, failures));
             }
         }
     }
 
     /**
-     * The pending ranges of a pair and the numbers of its commands not handled yet; {@code notQueued} are those still
-     * waiting for room in the channel, which the pair's new ranges must not overtake.
+     * The pending ranges of a pair, its ranges in the channel, and the numbers of its commands not handled yet;
+     * {@code notQueued} are those still waiting for room in the channel, which the pair's new ranges must not overtake.
      */
     private static final class PairState {
 
         private final Deque<Segment> segments = new ArrayDeque<>();
         private final TreeSet<Long> unhandled = new TreeSet<>();
         private final Set<Long> notQueued = new HashSet<>();
+        private int queued;
+        private boolean flushQueued;
 
         boolean isIdle() {
-            return segments.isEmpty() && unhandled.isEmpty();
+            return segments.isEmpty() && unhandled.isEmpty() && queued == 0 && !flushQueued;
         }
     }
 
-    /** Ranges merged between two commands of a pair; numbered when it opens, closed by the next command. */
+    /** Updates of one candle merged between two commands of a pair; numbered when it opens, closed by a command. */
     private static final class Segment {
 
         private final long number;
@@ -421,16 +510,19 @@ public class MatchingWorker {
 
     private record PairKey(MarketType market, UUID pairId) {}
 
-    /** A fill to try again, with the price and time it was decided with. */
-    private record PendingFill(Fill fill) {}
+    /** A fill to try again, with the failures so far. */
+    private record PendingFill(Fill fill, int failures) {}
 
     /** What a partition's consumer is asked to do. */
     private sealed interface Command {
 
-        record Range(PriceRange range) implements Command {}
+        record Range(PairKey key, PriceRange range) implements Command {}
 
-        /** Read the pending ranges. */
-        record Flush() implements Command {}
+        /** Read the pending ranges; at most one per pair is in the channel. */
+        record Flush(PairKey key) implements Command {}
+
+        /** End the consumer. */
+        record Stop() implements Command {}
 
         record Track(PairKey key, long number, TrackedEntry entry) implements PairCommand {}
 
