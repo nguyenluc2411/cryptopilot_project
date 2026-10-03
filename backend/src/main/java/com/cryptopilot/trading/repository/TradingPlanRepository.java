@@ -2,23 +2,26 @@ package com.cryptopilot.trading.repository;
 
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.entity.TradingPlan;
+import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
  * The trading plans. {@link TradingPlan} is the aggregate root, so its warnings are saved and deleted through it and
- * have no repository of their own. The compare-and-set status update of TECHNICAL_DESIGN 5.5 comes with the matching engine (T-042).
+ * have no repository of their own.
  *
- * <p>Rule: BR-31, BR-32; TECHNICAL_DESIGN 5.5; D-23.
+ * <p>Rule: BR-31, BR-32; NSF-07; TECHNICAL_DESIGN 5.5; D-23.
  */
 public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
 
@@ -65,4 +68,23 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
             Instant from,
             Instant to,
             Pageable pageable);
+
+    /**
+     * Compare-and-set ACTIVE to EXECUTED: exactly one of two racing writers sees {@code 1}. The version is raised, so a
+     * cancel that loaded the plan before this update fails its optimistic lock instead of overwriting the fill.
+     *
+     * @return 1 when the plan was ACTIVE and is now EXECUTED, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update TradingPlan p set p.status = com.cryptopilot.trading.model.enums.PlanStatus.EXECUTED,"
+            + " p.executedAt = :at, p.updatedAt = :now, p.version = p.version + 1"
+            + " where p.id = :id and p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE")
+    int executeIfActive(UUID id, Instant at, Instant now);
+
+    /** The entries of every ACTIVE LIMIT plan, for the matching books. */
+    @Transactional(readOnly = true)
+    @Query("select new com.cryptopilot.trading.model.TrackedEntry(p.id, p.market, p.pairId, p.direction, p.entryPrice)"
+            + " from TradingPlan p where p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE"
+            + " and p.entryType = com.cryptopilot.trading.model.enums.EntryType.LIMIT")
+    List<TrackedEntry> findActiveLimitEntries();
 }
