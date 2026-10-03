@@ -2,6 +2,7 @@ package com.cryptopilot.trading.matching;
 
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.matching.PriceLevelBook.Side;
+import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
@@ -13,16 +14,16 @@ import java.util.UUID;
 
 /**
  * The books of one partition: for each (market, pair), a BELOW book of LONG entries and an ABOVE book of SHORT
- * entries. A price range fires every entry it reached and drops it from the books; whether the fill then happens is
- * decided by the compare-and-set on the plan's status, not here.
+ * entries. A price range fills every entry it reached, by {@link EntryFillRule}, and drops it from the books; whether
+ * the fill is stored is decided by the compare-and-set on the plan's status, not here.
  *
  * <p>Not thread-safe on purpose: one consumer thread owns an engine, so its books need no locks and see the updates
  * of a pair in arrival order.
  *
- * <p>Only LIMIT entries are tracked here. The fill price, marketable limits and MARKET entries are T-043; exits and
- * the mark price books are T-044.
+ * <p>Only LIMIT entries wait here: a MARKET entry, or one the last price already reached, is filled at activation.
+ * Exits and the mark price books are T-044.
  *
- * <p>Rule: NSF-07; TECHNICAL_DESIGN 7.7; D-09; ADR-011.
+ * <p>Rule: NSF-07, BR-33; TECHNICAL_DESIGN 7.7; D-09, D-77, D-78; ADR-011.
  *
  * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges: Market Microstructure for Practitioners</i>. Oxford
  * University Press, ch. 4 (a buy limit executes at or below its price, a sell limit at or above it).
@@ -58,10 +59,10 @@ public final class MatchingEngine {
     }
 
     /**
-     * The entries the range reached, removed from the books: LONG entries at or above its low, SHORT entries at or
-     * below its high.
+     * The fills of the entries the range reached, which leave the books: LONG entries at or above its low, SHORT
+     * entries at or below its high. An entry of a plan activated after the range's candle opened stays (D-77).
      */
-    public List<TrackedEntry> onRange(PriceRange range) {
+    public List<Fill> onRange(PriceRange range) {
         BookKey key = new BookKey(range.market(), range.pairId());
         Books pair = books.get(key);
         if (pair == null) {
@@ -69,10 +70,20 @@ public final class MatchingEngine {
         }
         List<UUID> ids = new ArrayList<>(pair.below.fire(range.low(), range.high()));
         ids.addAll(pair.above.fire(range.low(), range.high()));
+        List<Fill> fills = new ArrayList<>();
+        for (UUID id : ids) {
+            TrackedEntry entry = tracked.get(id);
+            if (EntryFillRule.mayFill(entry, range)) {
+                tracked.remove(id);
+                fills.add(EntryFillRule.byRange(entry, range));
+            } else {
+                pair.of(entry.direction()).add(entry.entryPrice(), id);
+            }
+        }
         if (pair.isEmpty()) {
             books.remove(key);
         }
-        return ids.stream().map(tracked::remove).toList();
+        return fills;
     }
 
     /** How many entries are tracked. */

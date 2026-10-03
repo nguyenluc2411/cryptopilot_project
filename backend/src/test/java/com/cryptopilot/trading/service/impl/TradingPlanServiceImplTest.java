@@ -352,7 +352,13 @@ class TradingPlanServiceImplTest {
         order.verify(plans).save(any());
         verify(events)
                 .publishEvent(new TradingPlanActivated(
-                        saved.getId(), MarketType.SPOT, PAIR, Direction.LONG, EntryType.LIMIT, saved.getEntryPrice()));
+                        saved.getId(),
+                        MarketType.SPOT,
+                        PAIR,
+                        Direction.LONG,
+                        EntryType.LIMIT,
+                        saved.getEntryPrice(),
+                        NOW));
     }
 
     @Test

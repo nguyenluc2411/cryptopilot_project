@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
@@ -29,20 +30,20 @@ class MatchingServiceImplTest {
     void NSF07_theCompareAndSetThatChangesTheRow_isAFill() {
         when(plans.executeIfActive(PLAN, AT, NOW)).thenReturn(1);
 
-        assertThat(service.fill(PLAN, AT)).isTrue();
+        assertThat(service.fill(new Fill(PLAN, new BigDecimal("100"), AT))).isTrue();
     }
 
     @Test
     void NSF07_theCompareAndSetThatChangesNothing_isNoFill() {
         when(plans.executeIfActive(PLAN, AT, NOW)).thenReturn(0);
 
-        assertThat(service.fill(PLAN, AT)).isFalse();
+        assertThat(service.fill(new Fill(PLAN, new BigDecimal("100"), AT))).isFalse();
     }
 
     @Test
     void NSF07_theBooksStartFromTheActiveLimitEntries() {
         List<TrackedEntry> entries = List.of(
-                new TrackedEntry(PLAN, MarketType.SPOT, UUID.randomUUID(), Direction.LONG, new BigDecimal("100")));
+                new TrackedEntry(PLAN, MarketType.SPOT, UUID.randomUUID(), Direction.LONG, new BigDecimal("100"), AT));
         when(plans.findActiveLimitEntries()).thenReturn(entries);
 
         assertThat(service.activeEntries()).isEqualTo(entries);

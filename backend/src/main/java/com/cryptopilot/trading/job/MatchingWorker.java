@@ -5,12 +5,12 @@ import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.matching.MatchingEngine;
+import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.service.MatchingService;
 import jakarta.annotation.PreDestroy;
-import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -46,9 +46,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * with its original time and tried again on the pair's next range.
  *
  * <p>The books start from the ACTIVE LIMIT plans, written straight into each engine before its consumer starts.
- * Nothing feeds price ranges yet: the {@code kline_1m} stream of D-43 is connected with the fill rules (T-043, Q-32).
+ * Nothing feeds price ranges yet: the {@code kline_1m} stream of D-43 is connected by T-043 (Q-32).
  *
- * <p>Rule: NSF-07; TECHNICAL_DESIGN 7.7 and 10; D-09.
+ * <p>Rule: NSF-07, BR-33; TECHNICAL_DESIGN 7.7 and 10; D-09, D-77, D-78.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
  * (producer-consumer with bounded blocking queues).
@@ -115,9 +115,10 @@ public class MatchingWorker {
 
     /**
      * Hands a price range to its partition without waiting. When the channel is full, the range is merged into the
-     * pair's open pending range: the lowest low, the highest high, the earliest and the latest time. Every price the
-     * separate ranges reached is still reached by the merged one, so no candle's extreme is lost (an Aggregator,
-     * Hohpe &amp; Woolf 2003). The order rule of {@link Partition} keeps the pair's ranges, activations and cancels in
+     * pair's open pending range of the same candle: the lowest low, the highest high, the earliest and the latest time.
+     * Every price the separate updates reached is still reached by the merged one, so no candle's extreme is lost (an
+     * Aggregator, Hohpe &amp; Woolf 2003); updates of another candle start a new pending range, so each fill keeps its
+     * candle's open time (D-78). The order rule of {@link Partition} keeps the pair's ranges, activations and cancels in
      * the order they arrived.
      *
      * @return whether the range was accepted; {@code false} only when the engine is not running
@@ -135,12 +136,17 @@ public class MatchingWorker {
         return true;
     }
 
-    /** A LIMIT plan just activated waits in the books; a MARKET entry is filled on activation (T-043). */
+    /** A LIMIT plan that was not filled at its activation waits in the books (BR-33). */
     @TransactionalEventListener
     public void onActivated(TradingPlanActivated event) {
         if (running && event.entryType() == EntryType.LIMIT) {
             TrackedEntry entry = new TrackedEntry(
-                    event.planId(), event.market(), event.pairId(), event.direction(), event.entryPrice());
+                    event.planId(),
+                    event.market(),
+                    event.pairId(),
+                    event.direction(),
+                    event.entryPrice(),
+                    event.activatedAt());
             PairKey key = new PairKey(event.market(), event.pairId());
             Partition partition = partitionOf(event.market(), event.pairId());
             partition.put(new Command.Track(key, partition.seal(key), entry));
@@ -234,7 +240,7 @@ public class MatchingWorker {
                 }
                 state = pairs.computeIfAbsent(key, ignored -> new PairState());
                 Segment last = state.segments.peekLast();
-                if (last != null && last.open) {
+                if (last != null && last.open && last.range.from().equals(range.from())) {
                     last.range = merge(last.range, range);
                 } else {
                     state.segments.add(new Segment(++sequence, range));
@@ -309,7 +315,7 @@ public class MatchingWorker {
                     engine.untrack(untrack.planId());
                     retries.values()
                             .forEach(waiting ->
-                                    waiting.removeIf(p -> p.entry().planId().equals(untrack.planId())));
+                                    waiting.removeIf(p -> p.fill().planId().equals(untrack.planId())));
                 }
                 case Command.Range range -> onRange(range.range());
                 case Command.Flush flush -> {
@@ -367,20 +373,20 @@ public class MatchingWorker {
             PairKey key = new PairKey(range.market(), range.pairId());
             List<PendingFill> waiting = retries.remove(key);
             if (waiting != null) {
-                waiting.forEach(retry -> fill(key, retry.entry(), retry.at()));
+                waiting.forEach(retry -> fill(key, retry.fill()));
             }
-            engine.onRange(range).forEach(entry -> fill(key, entry, range.at()));
+            engine.onRange(range).forEach(fill -> fill(key, fill));
         }
 
-        private void fill(PairKey key, TrackedEntry entry, Instant at) {
+        private void fill(PairKey key, Fill fill) {
             try {
-                if (!matching.fill(entry.planId(), at)) {
-                    log.debug("NSF-07 plan {} was no longer ACTIVE", entry.planId());
+                if (!matching.fill(fill)) {
+                    log.debug("NSF-07 plan {} was no longer ACTIVE", fill.planId());
                 }
             } catch (Exception failure) {
                 // Any failure, checked ones included: the entry has left the books, so it must not be lost.
-                log.error("NSF-07 plan {} fill failed; retried on the next range of its pair", entry.planId(), failure);
-                retries.computeIfAbsent(key, ignored -> new ArrayList<>()).add(new PendingFill(entry, at));
+                log.error("NSF-07 plan {} fill failed; retried on the next range of its pair", fill.planId(), failure);
+                retries.computeIfAbsent(key, ignored -> new ArrayList<>()).add(new PendingFill(fill));
             }
         }
     }
@@ -415,8 +421,8 @@ public class MatchingWorker {
 
     private record PairKey(MarketType market, UUID pairId) {}
 
-    /** A fill to try again, at the time the price first reached the entry. */
-    private record PendingFill(TrackedEntry entry, Instant at) {}
+    /** A fill to try again, with the price and time it was decided with. */
+    private record PendingFill(Fill fill) {}
 
     /** What a partition's consumer is asked to do. */
     private sealed interface Command {

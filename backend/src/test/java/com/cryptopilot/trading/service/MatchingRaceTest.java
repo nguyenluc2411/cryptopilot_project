@@ -10,6 +10,7 @@ import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.job.MatchingWorker;
+import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
@@ -116,8 +117,8 @@ class MatchingRaceTest {
         UUID id = activePlan(LIMIT);
         long version = plan(id).getVersion();
 
-        assertThat(matching.fill(id, FILLED_AT)).isTrue();
-        assertThat(matching.fill(id, FILLED_AT.plusSeconds(60)))
+        assertThat(matching.fill(fill(id, FILLED_AT))).isTrue();
+        assertThat(matching.fill(fill(id, FILLED_AT.plusSeconds(60))))
                 .as("a second fill finds nothing ACTIVE")
                 .isFalse();
 
@@ -133,8 +134,8 @@ class MatchingRaceTest {
         UUID cancelled = activePlan(LIMIT);
         tradingPlans.cancel(SEEDED_ACCOUNT, cancelled);
 
-        assertThat(matching.fill(draft, FILLED_AT)).isFalse();
-        assertThat(matching.fill(cancelled, FILLED_AT)).isFalse();
+        assertThat(matching.fill(fill(draft, FILLED_AT))).isFalse();
+        assertThat(matching.fill(fill(cancelled, FILLED_AT))).isFalse();
         assertThat(plan(draft).getStatus()).isEqualTo(PlanStatus.DRAFT);
         assertThat(plan(cancelled).getStatus()).isEqualTo(PlanStatus.CANCELLED);
     }
@@ -155,6 +156,7 @@ class MatchingRaceTest {
                 .satisfies(entry -> {
                     assertThat(entry.pairId()).isEqualTo(pair);
                     assertThat(entry.entryPrice()).isEqualByComparingTo("100");
+                    assertThat(entry.activatedAt()).isEqualTo(NOW);
                 });
     }
 
@@ -164,7 +166,7 @@ class MatchingRaceTest {
         CyclicBarrier together = new CyclicBarrier(2);
         Callable<Boolean> fill = () -> {
             together.await();
-            return matching.fill(id, FILLED_AT);
+            return matching.fill(fill(id, FILLED_AT));
         };
         Callable<IllegalPlanStateException> cancel = () -> {
             together.await();
@@ -223,7 +225,17 @@ class MatchingRaceTest {
     private TradingPlanActivated activated(UUID id) {
         TradingPlan plan = plan(id);
         return new TradingPlanActivated(
-                id, plan.getMarket(), pair, plan.getDirection(), plan.getEntryType(), plan.getEntryPrice());
+                id,
+                plan.getMarket(),
+                pair,
+                plan.getDirection(),
+                plan.getEntryType(),
+                plan.getEntryPrice(),
+                plan.getActivatedAt());
+    }
+
+    private static Fill fill(UUID id, Instant at) {
+        return new Fill(id, new BigDecimal("100"), at);
     }
 
     private UUID activePlan(PlanDetails details) {

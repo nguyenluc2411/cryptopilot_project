@@ -324,6 +324,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 plan.getPairId(),
                 plan.getDirection(),
                 plan.getEntryType(),
-                plan.getEntryPrice()));
+                plan.getEntryPrice(),
+                plan.getActivatedAt()));
     }
 }

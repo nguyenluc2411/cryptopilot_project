@@ -13,8 +13,8 @@ import org.springframework.validation.annotation.Validated;
  *
  * @param enabled whether the engine runs at all
  * @param partitions how many single-consumer partitions share the pairs
- * @param queueCapacity commands a partition may hold; a price update beyond it is dropped, and the next update of
- *     the same candle carries its range again
+ * @param queueCapacity commands a partition may hold; a price update beyond it waits merged with the other updates of
+ *     its pair's candle, never dropped
  */
 @Validated
 @ConfigurationProperties("cryptopilot.trading.matching")

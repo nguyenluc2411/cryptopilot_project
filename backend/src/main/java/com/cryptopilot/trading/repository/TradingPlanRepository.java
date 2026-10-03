@@ -93,7 +93,8 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
 
     /** The entries of every ACTIVE LIMIT plan, for the matching books. */
     @Transactional(readOnly = true)
-    @Query("select new com.cryptopilot.trading.model.TrackedEntry(p.id, p.market, p.pairId, p.direction, p.entryPrice)"
+    @Query("select new com.cryptopilot.trading.model.TrackedEntry(p.id, p.market, p.pairId, p.direction, p.entryPrice,"
+            + " p.activatedAt)"
             + " from TradingPlan p where p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE"
             + " and p.entryType = com.cryptopilot.trading.model.enums.EntryType.LIMIT")
     List<TrackedEntry> findActiveLimitEntries();
