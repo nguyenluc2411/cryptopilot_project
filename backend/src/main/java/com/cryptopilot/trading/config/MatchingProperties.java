@@ -18,7 +18,7 @@ import org.springframework.validation.annotation.Validated;
  * @param partitions how many single-consumer partitions share the pairs
  * @param queueCapacity commands a partition may hold; a price update beyond it waits merged with the other updates of
  *     its pair's candle, never dropped
- * @param retry how a failing fill is tried again
+ * @param retry how a failing fill is tried again; a failed replay uses the same back-off, without the deadline
  * @param pendingWarnThreshold how many pending ranges a pair may hold before one warning is logged
  * @param stopTimeout how long a stop waits for the consumers to end; a start never runs beside one still running
  * @param replay the restart replay of the closed 1-minute candles missed while the engine was down
@@ -59,7 +59,8 @@ public record MatchingProperties(
      *     the skipped interval is logged (Q-34)
      * @param catchUpWait how long to wait before asking again for a candle that closed while the replay ran but is not
      *     served yet
-     * @param catchUpAttempts how many times to ask again before the pair goes live with the hole logged
+     * @param catchUpAttempts how many times to ask again before the replay counts as failed and is retried with the
+     *     back-off of {@code retry}; the pair keeps replaying
      * @param maxBufferedMinutes how many minutes of live updates a pair keeps while its replay runs; the oldest is
      *     dropped beyond it, with a warning
      */

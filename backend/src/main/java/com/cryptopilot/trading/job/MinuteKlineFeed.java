@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -23,6 +24,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -50,6 +53,9 @@ import org.springframework.stereotype.Component;
  *   <li>While a pair replays, its live updates are held, one merged range per minute. It goes live once the replay
  *       has reached the held minutes, or, with nothing held, the current minute; minutes already replayed are dropped,
  *       so no candle is applied twice.
+ *   <li>A replay that fails (an exception, or candles still not served after the catch-ups) is tried again from where
+ *       it stopped, with the back-off of the fill retries and no deadline. The pair keeps replaying and holding its
+ *       live updates meanwhile, so the watermark never passes the minutes not replayed.
  * </ul>
  *
  * <p>Rule: NSF-07, BR-33; TECHNICAL_DESIGN 7.7; A-04; D-09, D-77, D-78; ADR-011.
@@ -75,7 +81,7 @@ public class MinuteKlineFeed implements MinuteKlineListener {
     private final Map<PairKey, PairFeed> feeds = new ConcurrentHashMap<>();
     private final BlockingQueue<Replay> replays = new LinkedBlockingQueue<>();
 
-    /** Replays queued or running. */
+    /** Replays queued or running for the first time; one retried after a failure is not counted. */
     private final AtomicInteger outstanding = new AtomicInteger();
 
     /** Whether a pair seen for the first time goes live at once; until the first start, every pair waits. */
@@ -168,7 +174,10 @@ public class MinuteKlineFeed implements MinuteKlineListener {
         feeds.clear();
     }
 
-    /** Whether no replay is queued or running. */
+    /**
+     * Whether no replay is queued or running for the first time. A replay retried after a failure does not count: it
+     * retries for as long as the failure lasts.
+     */
     public boolean isIdle() {
         return outstanding.get() == 0;
     }
@@ -210,29 +219,69 @@ public class MinuteKlineFeed implements MinuteKlineListener {
         replays.add(replay);
     }
 
-    /** The replay thread: one pair at a time, until stopped. */
+    /** The replay thread: one pair at a time, until stopped. Failed replays wait out their back-off here. */
     private void runReplays() {
+        List<Parked> parked = new ArrayList<>();
         while (!stopped) {
             Replay replay;
             try {
-                replay = replays.take();
+                replay = next(parked);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return;
             }
+            if (replay == null) {
+                continue;
+            }
             try {
-                replay(replay);
+                Replay retry = replay(replay);
+                if (retry != null) {
+                    Duration wait = MatchingWorker.backoff(
+                            properties.retry(),
+                            retry.failures(),
+                            ThreadLocalRandom.current().nextDouble());
+                    parked.add(new Parked(retry, System.nanoTime() + wait.toNanos()));
+                }
             } finally {
-                outstanding.decrementAndGet();
+                if (replay.failures() == 0) {
+                    outstanding.decrementAndGet();
+                }
             }
         }
     }
 
-    /** Replays one pair's closed candles page by page, then lets its held live updates through. */
-    private void replay(Replay replay) {
+    /** A queued replay first, then a failed one whose back-off has passed; waits for either. */
+    private Replay next(List<Parked> parked) throws InterruptedException {
+        Replay queued = replays.poll();
+        if (queued != null) {
+            return queued;
+        }
+        if (parked.isEmpty()) {
+            return replays.take();
+        }
+        long now = System.nanoTime();
+        long wait = Long.MAX_VALUE;
+        for (Iterator<Parked> it = parked.iterator(); it.hasNext(); ) {
+            Parked candidate = it.next();
+            long left = candidate.dueNanos() - now;
+            if (left <= 0) {
+                it.remove();
+                return candidate.replay();
+            }
+            wait = Math.min(wait, left);
+        }
+        return replays.poll(wait, TimeUnit.NANOSECONDS);
+    }
+
+    /**
+     * Replays one pair's closed candles page by page, then lets its held live updates through.
+     *
+     * @return the replay to try again from where this one stopped, or {@code null} when done or stopped
+     */
+    private Replay replay(Replay replay) {
         PairFeed feed = feeds.get(replay.key());
         if (feed == null) {
-            return;
+            return null;
         }
         Instant cursor = replay.from();
         int catchUps = 0;
@@ -255,9 +304,19 @@ public class MinuteKlineFeed implements MinuteKlineListener {
                 if (advanced) {
                     continue;
                 }
-                if (feed.goLiveAfterReplay(
-                        cursor, catchUps >= properties.replay().catchUpAttempts())) {
-                    return;
+                if (feed.goLiveAfterReplay(cursor)) {
+                    if (replay.failures() > 0) {
+                        log.info(
+                                "NSF-07 {} {} replay resumed after {} failures since {}",
+                                replay.key().market(),
+                                replay.key().pairId(),
+                                replay.failures(),
+                                replay.firstFailedAt());
+                    }
+                    return null;
+                }
+                if (catchUps >= properties.replay().catchUpAttempts()) {
+                    return failed(replay, cursor, new IllegalStateException("candles from " + cursor + " not served"));
                 }
                 catchUps++;
                 Thread.sleep(properties.replay().catchUpWait());
@@ -265,14 +324,36 @@ public class MinuteKlineFeed implements MinuteKlineListener {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         } catch (RuntimeException failure) {
+            return failed(replay, cursor, failure);
+        }
+        return null;
+    }
+
+    /** Logs a failed replay, an error the first time and a warning after, and gives the replay to try again. */
+    private Replay failed(Replay replay, Instant cursor, RuntimeException failure) {
+        Replay retry = new Replay(
+                replay.key(),
+                cursor,
+                replay.failures() + 1,
+                replay.failures() == 0 ? clock.instant() : replay.firstFailedAt());
+        if (retry.failures() == 1) {
             log.error(
-                    "NSF-07 {} {} replay failed at {}",
+                    "NSF-07 {} {} replay failed at {}; the watermark is held and the replay retried until it succeeds",
                     replay.key().market(),
                     replay.key().pairId(),
                     cursor,
                     failure);
-            feed.goLiveAfterReplay(cursor, true);
+        } else {
+            log.warn(
+                    "NSF-07 {} {} replay failed at {} again ({} times since {}): {}",
+                    replay.key().market(),
+                    replay.key().pairId(),
+                    cursor,
+                    retry.failures(),
+                    retry.firstFailedAt(),
+                    failure.toString());
         }
+        return retry;
     }
 
     private void sleepUntil(Instant retryAt) throws InterruptedException {
@@ -338,29 +419,17 @@ public class MinuteKlineFeed implements MinuteKlineListener {
          * updates of candles already replayed are dropped, the rest handed on in order.
          *
          * @param replayedUntil the open time of the first candle not replayed
-         * @param evenWithAHole whether to go live although candles are missing between the replay and what follows
-         * @return whether the pair is live now
+         * @return whether the pair is live now; if not, it keeps replaying
          */
-        synchronized boolean goLiveAfterReplay(Instant replayedUntil, boolean evenWithAHole) {
+        synchronized boolean goLiveAfterReplay(Instant replayedUntil) {
             boolean ready = held.isEmpty()
                     ? !replayedUntil.isBefore(minuteOf(clock.instant()))
                     : !held.firstKey().isAfter(replayedUntil);
-            if (!ready && !evenWithAHole) {
+            if (!ready) {
                 return false;
             }
             this.replayedUntil = replayedUntil;
             lastClosed = replayedUntil.minus(MINUTE);
-            if (!ready) {
-                Instant next = held.isEmpty() ? minuteOf(clock.instant()) : held.firstKey();
-                log.warn(
-                        "NSF-07 {} {}: no candles from {} to {}; not matched",
-                        key.market(),
-                        key.pairId(),
-                        replayedUntil,
-                        next);
-                // The exchange has nothing for the hole: accept it rather than replay it again.
-                lastClosed = next.minus(MINUTE);
-            }
             held.headMap(replayedUntil).clear();
             goLive();
             return true;
@@ -433,5 +502,14 @@ public class MinuteKlineFeed implements MinuteKlineListener {
 
     private record PairKey(MarketType market, UUID pairId) {}
 
-    private record Replay(PairKey key, Instant from) {}
+    /** A pair's replay from {@code from}; {@code failures} and {@code firstFailedAt} count a failing streak. */
+    private record Replay(PairKey key, Instant from, int failures, Instant firstFailedAt) {
+
+        Replay(PairKey key, Instant from) {
+            this(key, from, 0, null);
+        }
+    }
+
+    /** A failed replay waiting out its back-off, due at {@code dueNanos} of {@link System#nanoTime()}. */
+    private record Parked(Replay replay, long dueNanos) {}
 }

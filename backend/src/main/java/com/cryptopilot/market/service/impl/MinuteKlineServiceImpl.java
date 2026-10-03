@@ -29,8 +29,8 @@ import org.springframework.stereotype.Service;
  * Fetches one page of a pair's closed 1-minute candles from the exchange's kline endpoint, on the same request gate
  * and weight budget as the backfill of NSF-02: when the venue has used its backfill share of the minute's weight, or
  * the exchange refuses (429, 418, open circuit, outage), the caller gets the instant to ask again instead of an
- * exception. A request the exchange rejects as wrong, or an answer it cannot read, ends the replay of that pair with an
- * empty page and a warning, since asking again would get the same answer.
+ * exception. A request the exchange rejects as wrong, or an answer it cannot read, gives an empty page and a warning;
+ * the replay then counts as failed and asks again with a back-off.
  *
  * <p>Only candles closed at this instant are returned (BR-08): the endpoint also answers the one still forming.
  *

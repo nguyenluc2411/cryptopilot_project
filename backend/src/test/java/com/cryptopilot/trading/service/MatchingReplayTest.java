@@ -301,6 +301,11 @@ class MatchingReplayTest {
         if (loss == Loss.GIVE_UP_THEN_CRASH) {
             failing = ids.get("long98");
         }
+        // Live up to the recording: the stub serves no candle before it, and a replay that cannot reach M0 retries.
+        OffsetDateTime beforeRecording = M0.minus(Duration.ofMinutes(1)).atOffset(ZoneOffset.UTC);
+        jdbc.sql("""
+                        insert into matching_watermark (market_type, pair_id, last_candle_open_time, updated_at)
+                        values ('FUTURES', ?, ?, ?)""").params(pair, beforeRecording, beforeRecording).update();
         feed.start();
         awaitIdle();
 
