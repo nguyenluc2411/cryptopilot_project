@@ -424,6 +424,29 @@ class MatchingWorkerTest {
     }
 
     @Test
+    void NSF07_aCheckedFailureOfOneFill_isRetried_andTheOtherEntriesOfTheRangeAreStillFilled() throws Exception {
+        UUID failing = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        doAnswer(call -> {
+                    throw new IOException("connection reset");
+                })
+                .doReturn(true)
+                .when(matching)
+                .fill(failing, AT);
+        worker = started(1, 100);
+        worker.onActivated(activated(failing, EntryType.LIMIT, "100"));
+        worker.onActivated(activated(other, EntryType.LIMIT, "100"));
+
+        worker.submit(range("99", "101", AT));
+        worker.submit(range("150", "160", AT.plusSeconds(60)));
+
+        verify(matching, timeout(WAIT).times(2)).fill(failing, AT);
+        verify(matching, timeout(WAIT)).fill(other, AT);
+        assertThat(logs.list)
+                .noneSatisfy(event -> assertThat(event.getFormattedMessage()).contains("carries on"));
+    }
+
+    @Test
     void NSF07_aCommandLostToAnInterrupt_doesNotHoldBackItsPairsRanges() throws InterruptedException {
         TrackedEntry holder = entry(UUID.randomUUID(), Direction.LONG, "100");
         TrackedEntry waiting = entry(UUID.randomUUID(), Direction.LONG, "98");

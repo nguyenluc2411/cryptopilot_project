@@ -377,7 +377,8 @@ public class MatchingWorker {
                 if (!matching.fill(entry.planId(), at)) {
                     log.debug("NSF-07 plan {} was no longer ACTIVE", entry.planId());
                 }
-            } catch (RuntimeException failure) {
+            } catch (Exception failure) {
+                // Any failure, checked ones included: the entry has left the books, so it must not be lost.
                 log.error("NSF-07 plan {} fill failed; retried on the next range of its pair", entry.planId(), failure);
                 retries.computeIfAbsent(key, ignored -> new ArrayList<>()).add(new PendingFill(entry, at));
             }
