@@ -814,8 +814,9 @@ class MatchingWorkerTest {
         verify(matching).advanceWatermark(MarketType.SPOT, PAIR, AT);
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, AT.plusSeconds(60));
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, AT.plusSeconds(120));
-        assertThat(logs.list)
-                .anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("watermark is held"));
+        assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
+                .contains("watermark is held")
+                .contains("A restart is required within replay.max-window (PT24H)"));
     }
 
     @Test

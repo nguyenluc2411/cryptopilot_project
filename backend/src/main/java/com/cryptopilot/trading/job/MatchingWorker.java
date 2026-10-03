@@ -554,10 +554,12 @@ public class MatchingWorker {
                     watermarkHeld.add(key);
                     log.error(
                             "NSF-07 plan {} fill failed {} times since {}; no longer retried, the plan stays ACTIVE"
-                                    + " and the pair's watermark is held until a restart replays it",
+                                    + " and the pair's watermark is held. A restart is required within"
+                                    + " replay.max-window ({}) to replay the candle that reached it",
                             fill.planId(),
                             failures,
                             firstFailedAt,
+                            properties.replay().maxWindow(),
                             failure);
                     return;
                 }
