@@ -153,7 +153,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     @Override
     @Transactional
     public TradingPlanResponse cancel(UUID userId, UUID planId) {
-        TradingPlan plan = owned(userId, planId);
+        // Row lock: a fill committing first is seen here as EXECUTED, so the loser gets MSG43, not a lost update.
+        TradingPlan plan = plans.findForUpdate(planId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("TradingPlan", planId));
         plan.cancel(clock.instant());
         events.publishEvent(new TradingPlanCancelled(plan.getId(), plan.getMarket(), plan.getPairId()));
         return PlanResponses.detail(plans.save(plan));

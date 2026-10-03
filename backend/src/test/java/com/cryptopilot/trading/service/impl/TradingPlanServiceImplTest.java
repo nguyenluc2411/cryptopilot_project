@@ -418,6 +418,7 @@ class TradingPlanServiceImplTest {
         assertThatThrownBy(() -> service.update(USER, planId, update("100", "96", "120", false)))
                 .isInstanceOf(ResourceNotFoundException.class);
         assertThatThrownBy(() -> service.activate(USER, planId)).isInstanceOf(ResourceNotFoundException.class);
+        when(plans.findForUpdate(planId, USER)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> service.cancel(USER, planId)).isInstanceOf(ResourceNotFoundException.class);
     }
 
@@ -498,7 +499,7 @@ class TradingPlanServiceImplTest {
     @Test
     void UC19_aPlan_isCancelledAtTheInstantOfTheClock() {
         TradingPlan plan = draft();
-        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        when(plans.findForUpdate(plan.getId(), USER)).thenReturn(Optional.of(plan));
 
         TradingPlanResponse cancelled = service.cancel(USER, plan.getId());
 

@@ -2,6 +2,7 @@ package com.cryptopilot.trading.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
@@ -36,7 +37,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Import;
-import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -159,40 +159,42 @@ class MatchingRaceTest {
     }
 
     @RepeatedTest(20)
-    void NSF07_aCancelAndAFillOfTheSamePlan_haveExactlyOneWinner() throws Exception {
+    void NSF07_aCancelAndAFillOfTheSamePlan_haveExactlyOneWinner_andTheLosingCancelIsMsg43() throws Exception {
         UUID id = activePlan(LIMIT);
         CyclicBarrier together = new CyclicBarrier(2);
         Callable<Boolean> fill = () -> {
             together.await();
             return matching.fill(id, FILLED_AT);
         };
-        Callable<Boolean> cancel = () -> {
+        Callable<IllegalPlanStateException> cancel = () -> {
             together.await();
             try {
                 tradingPlans.cancel(SEEDED_ACCOUNT, id);
-                return true;
-            } catch (OptimisticLockingFailureException | IllegalPlanStateException lost) {
-                return false;
+                return null;
+            } catch (IllegalPlanStateException lost) {
+                return lost;
             }
         };
 
         boolean filled;
-        boolean cancelled;
+        IllegalPlanStateException refused;
         try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
             Future<Boolean> filling = pool.submit(fill);
-            Future<Boolean> cancelling = pool.submit(cancel);
+            Future<IllegalPlanStateException> cancelling = pool.submit(cancel);
             filled = filling.get();
-            cancelled = cancelling.get();
+            refused = cancelling.get();
         }
 
-        assertThat(filled ^ cancelled)
-                .as("filled=%s cancelled=%s", filled, cancelled)
-                .isTrue();
         TradingPlan after = plan(id);
         if (filled) {
+            assertThat(refused).as("the cancel lost to the fill").isNotNull();
+            assertThat(refused.errorCode()).isEqualTo(ErrorCode.TRADING_PLAN_STATUS_TRANSITION_INVALID);
+            assertThat(refused.errorCode().messageCode()).isEqualTo("MSG43");
+            assertThat(refused.status()).isEqualTo(PlanStatus.EXECUTED);
             assertThat(after.getStatus()).isEqualTo(PlanStatus.EXECUTED);
             assertThat(after.getCancelledAt()).isNull();
         } else {
+            assertThat(refused).as("the fill lost to the cancel").isNull();
             assertThat(after.getStatus()).isEqualTo(PlanStatus.CANCELLED);
             assertThat(after.getExecutedAt()).isNull();
         }
