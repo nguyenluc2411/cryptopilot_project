@@ -24,7 +24,6 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Fetches one page of a pair's closed 1-minute candles from the exchange's kline endpoint, on the same request gate
@@ -51,8 +50,8 @@ public class MinuteKlineServiceImpl implements MinuteKlineService {
     private final CandleBackfillProperties properties;
     private final Clock clock;
 
+    /** No transaction: the pair is read in the repository's own short one, so no connection is held over HTTP. */
     @Override
-    @Transactional(readOnly = true)
     public MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from) {
         Optional<String> symbol =
                 pairs.findById(pairId).filter(pair -> pair.isEnabledOn(market)).map(CryptoPair::getSymbol);

@@ -30,6 +30,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -92,6 +93,23 @@ class MinuteKlineServiceImplTest {
         assertThat(exchange.requests().getLast().getQuery())
                 .contains("interval=1m")
                 .contains("limit=3");
+    }
+
+    /** R6: no transaction around the exchange call, so no database connection is held while it waits. */
+    @Test
+    void R6_theFetch_runsOutsideAnyTransaction() throws NoSuchMethodException {
+        assertThat(MinuteKlineServiceImpl.class.isAnnotationPresent(Transactional.class))
+                .isFalse();
+        assertThat(MinuteKlineServiceImpl.class
+                        .getMethod("closedMinuteKlines", MarketType.class, UUID.class, Instant.class)
+                        .isAnnotationPresent(Transactional.class))
+                .isFalse();
+        assertThat(CryptoPairRepository.class
+                        .getMethod("findById", UUID.class)
+                        .getAnnotation(Transactional.class)
+                        .readOnly())
+                .as("the pair is read in the repository's own short transaction")
+                .isTrue();
     }
 
     @Test
