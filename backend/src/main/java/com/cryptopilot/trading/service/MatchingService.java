@@ -1,9 +1,8 @@
 package com.cryptopilot.trading.service;
 
+import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.TrackedEntry;
-import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * The storage side of the matching engine: what the books start from and the fills they decide.
@@ -16,11 +15,11 @@ public interface MatchingService {
     List<TrackedEntry> activeEntries();
 
     /**
-     * Fills a plan's entry if it is still ACTIVE.
+     * Fills a plan's entry if it is still ACTIVE: the plan becomes EXECUTED at the fill's time and price. The journal record of
+     * BR-34 is T-048.
      *
-     * @param planId the plan
-     * @param at when the price reached the entry
+     * @param fill the plan, the fill price and the time
      * @return whether this call filled it; {@code false} when the plan was cancelled, expired or filled first
      */
-    boolean fill(UUID planId, Instant at);
+    boolean fill(Fill fill);
 }

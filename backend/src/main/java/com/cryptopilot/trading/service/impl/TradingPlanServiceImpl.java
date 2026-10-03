@@ -20,6 +20,7 @@ import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
+import com.cryptopilot.trading.matching.EntryFillRule;
 import com.cryptopilot.trading.model.CalculatedPlan;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanListQuery;
@@ -39,10 +40,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -65,6 +69,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class TradingPlanServiceImpl implements TradingPlanService {
+
+    private static final Logger log = LoggerFactory.getLogger(TradingPlanServiceImpl.class);
 
     /** How long an unfilled LIMIT plan stays ACTIVE when the Trader sets no expiry (SRS 3.5.1). */
     static final Duration LIMIT_EXPIRY = Duration.ofDays(7);
@@ -108,8 +114,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 userId, request.pairId(), calculated.calculation(), details(request, now), calculated.warnings());
         if (activate) {
             requireRoomForAnActivePlan(userId);
-            plan.activate(calculated.calculation(), calculated.warnings(), now);
-            publishActivated(plan);
+            activate(plan, calculated, now);
         }
         return PlanResponses.detail(plans.save(plan));
     }
@@ -127,8 +132,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         plan.updateDraft(calculated.calculation(), details(request, now), calculated.warnings());
         if (activate) {
             requireRoomForAnActivePlan(userId);
-            plan.activate(calculated.calculation(), calculated.warnings(), now);
-            publishActivated(plan);
+            activate(plan, calculated, now);
         }
         return PlanResponses.detail(plans.save(plan));
     }
@@ -145,8 +149,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         }
         requireRoomForAnActivePlan(userId);
         CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(plan), plan.getId());
-        plan.activate(calculated.calculation(), calculated.warnings(), now);
-        publishActivated(plan);
+        activate(plan, calculated, now);
         return PlanResponses.detail(plans.save(plan));
     }
 
@@ -317,6 +320,34 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return new PlanDetails(request.entryType(), expiresAt, request.note());
     }
 
+    /**
+     * Activates the plan and fills its entry at once at the current last price when it is MARKET or the last price
+     * already reaches it (BR-33); otherwise it waits for the matching engine. The journal record of the fill is T-048.
+     */
+    private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now) {
+        plan.activate(calculated.calculation(), calculated.warnings(), now);
+        Optional<BigDecimal> fillPrice = EntryFillRule.atActivation(
+                plan.getEntryType(), plan.getDirection(), plan.getEntryPrice(), lastPrice(plan));
+        if (fillPrice.isPresent()) {
+            plan.markExecuted(now, fillPrice.get());
+            log.info("NSF-07 plan {} filled at activation at {}", plan.getId(), fillPrice.get());
+        } else {
+            publishActivated(plan);
+        }
+    }
+
+    /**
+     * MARKET: the last price the activation was just calculated with. LIMIT: the current last price, or empty when the
+     * cache holds no current one; the entry then waits for the matching engine.
+     */
+    private Optional<BigDecimal> lastPrice(TradingPlan plan) {
+        if (plan.getEntryType() == EntryType.MARKET) {
+            return Optional.of(plan.getEntryPrice());
+        }
+        return market.tradablePair(plan.getPairId(), plan.getMarket())
+                .flatMap(pair -> market.currentLastPrice(pair.market(), pair.symbol()));
+    }
+
     private void publishActivated(TradingPlan plan) {
         events.publishEvent(new TradingPlanActivated(
                 plan.getId(),
@@ -324,6 +355,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 plan.getPairId(),
                 plan.getDirection(),
                 plan.getEntryType(),
-                plan.getEntryPrice()));
+                plan.getEntryPrice(),
+                plan.getActivatedAt()));
     }
 }

@@ -56,12 +56,22 @@ class MatchingRecordsTest {
     @Test
     void NSF07_anEntry_needsEveryField() {
         assertThatNullPointerException()
-                .isThrownBy(() -> new TrackedEntry(null, MarketType.SPOT, ID, Direction.LONG, P));
-        assertThatNullPointerException().isThrownBy(() -> new TrackedEntry(ID, null, ID, Direction.LONG, P));
+                .isThrownBy(() -> new TrackedEntry(null, MarketType.SPOT, ID, Direction.LONG, P, AT));
+        assertThatNullPointerException().isThrownBy(() -> new TrackedEntry(ID, null, ID, Direction.LONG, P, AT));
         assertThatNullPointerException()
-                .isThrownBy(() -> new TrackedEntry(ID, MarketType.SPOT, null, Direction.LONG, P));
-        assertThatNullPointerException().isThrownBy(() -> new TrackedEntry(ID, MarketType.SPOT, ID, null, P));
+                .isThrownBy(() -> new TrackedEntry(ID, MarketType.SPOT, null, Direction.LONG, P, AT));
+        assertThatNullPointerException().isThrownBy(() -> new TrackedEntry(ID, MarketType.SPOT, ID, null, P, AT));
         assertThatNullPointerException()
-                .isThrownBy(() -> new TrackedEntry(ID, MarketType.SPOT, ID, Direction.LONG, null));
+                .isThrownBy(() -> new TrackedEntry(ID, MarketType.SPOT, ID, Direction.LONG, null, AT));
+        assertThatNullPointerException()
+                .isThrownBy(() -> new TrackedEntry(ID, MarketType.SPOT, ID, Direction.LONG, P, null));
+    }
+
+    @Test
+    void BR33_aFill_needsEveryField() {
+        assertThatNullPointerException().isThrownBy(() -> new Fill(null, P, AT));
+        assertThatNullPointerException().isThrownBy(() -> new Fill(ID, null, AT));
+        assertThatNullPointerException().isThrownBy(() -> new Fill(ID, P, null));
+        assertThat(new Fill(ID, P, AT).executedAt()).isEqualTo(AT);
     }
 }

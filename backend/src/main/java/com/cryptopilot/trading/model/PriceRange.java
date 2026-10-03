@@ -16,7 +16,8 @@ import java.util.UUID;
  * @param pairId the pair
  * @param low the lowest price traded
  * @param high the highest price traded, not below {@code low}
- * @param from when the earliest update in the range was produced; equal to {@code at} for a single update
+ * @param from the open time of the 1-minute candle the prices belong to; a fill reached by the range is recorded at
+ *     this time, so a live update and the closed candle replayed later give the same fill (D-78)
  * @param at when the latest update in the range was produced
  */
 public record PriceRange(MarketType market, UUID pairId, BigDecimal low, BigDecimal high, Instant from, Instant at) {
@@ -36,7 +37,7 @@ public record PriceRange(MarketType market, UUID pairId, BigDecimal low, BigDeci
         }
     }
 
-    /** One update: its time is both the earliest and the latest. */
+    /** One update whose candle opened at {@code at}. */
     public PriceRange(MarketType market, UUID pairId, BigDecimal low, BigDecimal high, Instant at) {
         this(market, pairId, low, high, at, at);
     }

@@ -379,6 +379,7 @@ trading_plan,estimated_liquidation_price,numeric,28,12,YES
 trading_plan,executed_at,timestamp with time zone,,,YES
 trading_plan,expired_at,timestamp with time zone,,,YES
 trading_plan,expires_at,timestamp with time zone,,,YES
+trading_plan,fill_price,numeric,28,12,YES
 trading_plan,initial_margin,numeric,28,8,YES
 trading_plan,leverage,integer,32,0,YES
 trading_plan,maintenance_margin_rate_used,numeric,12,8,YES

@@ -32,6 +32,7 @@ import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -159,6 +160,10 @@ public class TradingPlan extends BaseEntity {
     @Column(name = "executed_at")
     private Instant executedAt;
 
+    /** The price the entry was filled at; set with EXECUTED (BR-33). */
+    @Column(name = "fill_price", precision = 28, scale = 12)
+    private BigDecimal fillPrice;
+
     @Column(name = "cancelled_at")
     private Instant cancelledAt;
 
@@ -235,15 +240,24 @@ public class TradingPlan extends BaseEntity {
         replaceSnapshot(PlanSnapshot.of(calculation));
         replaceWarnings(warnings);
         status = PlanStatus.ACTIVE;
-        activatedAt = now;
+        // The column keeps microseconds; the activation guard (D-77) must see the same instant live and after a
+        // restart.
+        activatedAt = now.truncatedTo(ChronoUnit.MICROS);
     }
 
-    /** The entry was filled (NSF-07); the position is the journal's from here. */
-    public void markExecuted(Instant now) {
+    /**
+     * The entry was filled (NSF-07, BR-33); the position is the journal's from here.
+     *
+     * @param now when the fill counts, kept to the microsecond like the column
+     * @param price the fill price
+     */
+    public void markExecuted(Instant now, BigDecimal price) {
         Objects.requireNonNull(now, "now");
+        Objects.requireNonNull(price, "price");
         requireTransition(PlanStatus.EXECUTED);
         status = PlanStatus.EXECUTED;
-        executedAt = now;
+        executedAt = now.truncatedTo(ChronoUnit.MICROS);
+        fillPrice = price;
     }
 
     /** Cancelled by the Trader (UC-19), from DRAFT or ACTIVE. */
