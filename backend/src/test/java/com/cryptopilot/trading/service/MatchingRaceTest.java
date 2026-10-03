@@ -125,6 +125,9 @@ class MatchingRaceTest {
         TradingPlan filled = plan(id);
         assertThat(filled.getStatus()).isEqualTo(PlanStatus.EXECUTED);
         assertThat(filled.getExecutedAt()).isEqualTo(FILLED_AT);
+        assertThat(filled.getFillPrice())
+                .as("Q1: the candle fill's price, stored")
+                .isEqualByComparingTo("100");
         assertThat(filled.getVersion()).isEqualTo(version + 1);
     }
 

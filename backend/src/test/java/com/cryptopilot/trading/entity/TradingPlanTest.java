@@ -465,7 +465,7 @@ class TradingPlanTest {
     @Test
     void BR32_eachTransition_recordsTheInstantItWasGiven() {
         TradingPlan executed = planIn(PlanStatus.ACTIVE);
-        executed.markExecuted(LATER);
+        executed.markExecuted(LATER, new BigDecimal("99.5"));
         TradingPlan cancelledDraft = planIn(PlanStatus.DRAFT);
         cancelledDraft.cancel(LATER);
         TradingPlan cancelledActive = planIn(PlanStatus.ACTIVE);
@@ -475,6 +475,7 @@ class TradingPlanTest {
 
         assertThat(executed.getActivatedAt()).isEqualTo(NOW);
         assertThat(executed.getExecutedAt()).isEqualTo(LATER);
+        assertThat(executed.getFillPrice()).isEqualByComparingTo("99.5");
         assertThat(cancelledDraft.getActivatedAt()).isNull();
         assertThat(cancelledDraft.getCancelledAt()).isEqualTo(LATER);
         assertThat(cancelledActive.getCancelledAt()).isEqualTo(LATER);
@@ -482,6 +483,31 @@ class TradingPlanTest {
         assertThat(List.of(executed, cancelledDraft, cancelledActive, expired))
                 .as("the audit instants are the listener's, written on save")
                 .allSatisfy(plan -> assertThat(plan.getUpdatedAt()).isNull());
+    }
+
+    /**
+     * The column keeps microseconds: an activation 500 ns after a minute opened is stored as the minute itself, so the
+     * activation guard (D-77) decides the same live and after a restart.
+     */
+    @Test
+    void D77_theActivationInstant_isKeptToTheMicrosecond_likeTheColumn() {
+        TradingPlan plan = planIn(PlanStatus.DRAFT);
+        Instant minute = Instant.parse("2026-10-01T08:01:00Z");
+
+        plan.activate(PlanFixture.futuresLong().build(), List.of(), minute.plusNanos(500));
+        plan.markExecuted(minute.plusSeconds(1).plusNanos(1_999), BigDecimal.ONE);
+
+        assertThat(plan.getActivatedAt()).isEqualTo(minute);
+        assertThat(plan.getExecutedAt()).isEqualTo(minute.plusSeconds(1).plusNanos(1_000));
+    }
+
+    @Test
+    void BR33_aPlanIsExecuted_onlyWithItsFillPrice() {
+        TradingPlan plan = planIn(PlanStatus.ACTIVE);
+
+        assertThatThrownBy(() -> plan.markExecuted(LATER, null)).isInstanceOf(NullPointerException.class);
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(plan.getFillPrice()).isNull();
     }
 
     @Test
@@ -559,7 +585,7 @@ class TradingPlanTest {
         return switch (status) {
             case DRAFT -> throw new IllegalArgumentException("no method leads to DRAFT");
             case ACTIVE -> plan -> plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
-            case EXECUTED -> plan -> plan.markExecuted(LATER);
+            case EXECUTED -> plan -> plan.markExecuted(LATER, BigDecimal.TEN);
             case CANCELLED -> plan -> plan.cancel(LATER);
             case EXPIRED -> plan -> plan.expire(EXPIRY);
         };

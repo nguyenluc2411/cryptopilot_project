@@ -370,6 +370,7 @@ class TradingPlanServiceImplTest {
         assertThat(plan.status()).isEqualTo(PlanStatus.EXECUTED);
         assertThat(saved.getExecutedAt()).isEqualTo(NOW);
         assertThat(saved.getActivatedAt()).isEqualTo(NOW);
+        assertThat(saved.getFillPrice()).as("Q1: the last price, stored").isEqualByComparingTo("100");
         verify(events, never()).publishEvent(any(TradingPlanActivated.class));
     }
 
@@ -382,6 +383,9 @@ class TradingPlanServiceImplTest {
 
             assertThat(plan.status()).as("last price %s", last).isEqualTo(PlanStatus.EXECUTED);
             assertThat(saved.getExecutedAt()).isEqualTo(NOW);
+            assertThat(saved.getFillPrice())
+                    .as("Q1: the last price, not the limit price")
+                    .isEqualByComparingTo(last);
         }
         verify(events, never()).publishEvent(any(TradingPlanActivated.class));
     }
@@ -394,6 +398,7 @@ class TradingPlanServiceImplTest {
 
         assertThat(plan.status()).isEqualTo(PlanStatus.ACTIVE);
         assertThat(saved.getExecutedAt()).isNull();
+        assertThat(saved.getFillPrice()).isNull();
         verify(events).publishEvent(any(TradingPlanActivated.class));
     }
 

@@ -15,7 +15,7 @@ public interface MatchingService {
     List<TrackedEntry> activeEntries();
 
     /**
-     * Fills a plan's entry if it is still ACTIVE: the plan becomes EXECUTED at the fill's time. The journal record of
+     * Fills a plan's entry if it is still ACTIVE: the plan becomes EXECUTED at the fill's time and price. The journal record of
      * BR-34 is T-048.
      *
      * @param fill the plan, the fill price and the time

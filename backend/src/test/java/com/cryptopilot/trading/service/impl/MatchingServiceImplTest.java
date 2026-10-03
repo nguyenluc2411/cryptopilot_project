@@ -28,14 +28,14 @@ class MatchingServiceImplTest {
 
     @Test
     void NSF07_theCompareAndSetThatChangesTheRow_isAFill() {
-        when(plans.executeIfActive(PLAN, AT, NOW)).thenReturn(1);
+        when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), NOW)).thenReturn(1);
 
         assertThat(service.fill(new Fill(PLAN, new BigDecimal("100"), AT))).isTrue();
     }
 
     @Test
     void NSF07_theCompareAndSetThatChangesNothing_isNoFill() {
-        when(plans.executeIfActive(PLAN, AT, NOW)).thenReturn(0);
+        when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), NOW)).thenReturn(0);
 
         assertThat(service.fill(new Fill(PLAN, new BigDecimal("100"), AT))).isFalse();
     }

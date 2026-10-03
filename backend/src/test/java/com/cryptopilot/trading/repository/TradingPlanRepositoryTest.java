@@ -16,6 +16,7 @@ import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.model.enums.WarningType;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -203,7 +204,7 @@ class TradingPlanRepositoryTest {
         inTransaction(() -> {
             TradingPlan plan = plans.findById(id).orElseThrow();
             plan.activate(PlanFixture.futuresLong().build(), List.of(WARNING), NOW);
-            plan.markExecuted(NOW.plusSeconds(60));
+            plan.markExecuted(NOW.plusSeconds(60), new BigDecimal("101.25"));
             return null;
         });
 
@@ -212,6 +213,7 @@ class TradingPlanRepositoryTest {
             assertThat(reread.getStatus()).isEqualTo(PlanStatus.EXECUTED);
             assertThat(reread.getActivatedAt()).isEqualTo(NOW);
             assertThat(reread.getExecutedAt()).isEqualTo(NOW.plusSeconds(60));
+            assertThat(reread.getFillPrice()).isEqualByComparingTo("101.25");
             assertThat(reread.getCancelledAt()).isNull();
             assertThat(reread.getExpiredAt()).isNull();
             return null;
@@ -243,6 +245,31 @@ class TradingPlanRepositoryTest {
                 .as("EXECUTED follows ACTIVE, so it needs an activation instant")
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .hasMessageContaining("ck_trading_plan_activated_at");
+    }
+
+    /** V18: an EXECUTED plan has its fill price, and only an EXECUTED plan has one. */
+    @Test
+    void BR33_theSchema_refusesAnExecutedPlanWithoutItsFillPrice_andAFillPriceWithoutTheStatus() {
+        UUID id = inTransaction(() -> {
+                    TradingPlan plan = TradingPlan.draft(
+                            SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of());
+                    plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
+                    return plans.save(plan);
+                })
+                .getId();
+        OffsetDateTime at = NOW.plusSeconds(60).atOffset(ZoneOffset.UTC);
+
+        assertThatThrownBy(() -> jdbc.sql(
+                                "update trading_plan set plan_status = 'EXECUTED', executed_at = ? where plan_id = ?")
+                        .params(at, id)
+                        .update())
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("ck_trading_plan_fill_price");
+        assertThatThrownBy(() -> jdbc.sql("update trading_plan set fill_price = 100 where plan_id = ?")
+                        .param(id)
+                        .update())
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("ck_trading_plan_fill_price");
     }
 
     @Test

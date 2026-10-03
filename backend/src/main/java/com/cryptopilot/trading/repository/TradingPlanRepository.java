@@ -80,16 +80,16 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
             Pageable pageable);
 
     /**
-     * Compare-and-set ACTIVE to EXECUTED: exactly one of two racing writers sees {@code 1}. The version is raised, so a
+     * Compare-and-set ACTIVE to EXECUTED, with the fill time and price: exactly one of two racing writers sees {@code 1}. The version is raised, so a
      * cancel that loaded the plan before this update fails its optimistic lock instead of overwriting the fill.
      *
      * @return 1 when the plan was ACTIVE and is now EXECUTED, otherwise 0
      */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update TradingPlan p set p.status = com.cryptopilot.trading.model.enums.PlanStatus.EXECUTED,"
-            + " p.executedAt = :at, p.updatedAt = :now, p.version = p.version + 1"
+            + " p.executedAt = :at, p.fillPrice = :price, p.updatedAt = :now, p.version = p.version + 1"
             + " where p.id = :id and p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE")
-    int executeIfActive(UUID id, Instant at, Instant now);
+    int executeIfActive(UUID id, Instant at, BigDecimal price, Instant now);
 
     /** The entries of every ACTIVE LIMIT plan, for the matching books. */
     @Transactional(readOnly = true)

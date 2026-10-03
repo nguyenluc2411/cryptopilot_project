@@ -40,7 +40,7 @@ public class MatchingServiceImpl implements MatchingService {
     @Override
     @Transactional
     public boolean fill(Fill fill) {
-        boolean filled = plans.executeIfActive(fill.planId(), fill.executedAt(), clock.instant()) == 1;
+        boolean filled = plans.executeIfActive(fill.planId(), fill.executedAt(), fill.price(), clock.instant()) == 1;
         if (filled) {
             log.info("NSF-07 plan {} filled at {} ({})", fill.planId(), fill.price(), fill.executedAt());
         }

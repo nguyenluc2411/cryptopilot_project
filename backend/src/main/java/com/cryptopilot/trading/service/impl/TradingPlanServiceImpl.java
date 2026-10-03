@@ -329,7 +329,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         Optional<BigDecimal> fillPrice = EntryFillRule.atActivation(
                 plan.getEntryType(), plan.getDirection(), plan.getEntryPrice(), lastPrice(plan));
         if (fillPrice.isPresent()) {
-            plan.markExecuted(now);
+            plan.markExecuted(now, fillPrice.get());
             log.info("NSF-07 plan {} filled at activation at {}", plan.getId(), fillPrice.get());
         } else {
             publishActivated(plan);
