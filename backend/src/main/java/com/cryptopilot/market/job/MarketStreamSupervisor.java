@@ -1,5 +1,7 @@
 package com.cryptopilot.market.job;
 
+import com.cryptopilot.market.MinuteKline;
+import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.client.BinanceStreamClient;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.BinanceStreamShard;
@@ -11,6 +13,7 @@ import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.model.enums.BinanceVenue;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketUpdateService;
 import com.cryptopilot.market.service.StreamCandleService;
@@ -38,7 +41,7 @@ import org.springframework.stereotype.Component;
  * <h2>Which connections</h2>
  *
  * <p>The pairs of {@link StreamCandleService#targets} — enabled by an administrator and trading — each with its
- * five streams, packed into connections of at most {@code maxStreamsPerConnection} streams (100; TECHNICAL_DESIGN
+ * six streams, packed into connections of at most {@code maxStreamsPerConnection} streams (100; TECHNICAL_DESIGN
  * 7.1 step 1), a pair's streams never split across two. The pairs are read again after every symbol
  * synchronisation of the market and every {@code refreshInterval}; when the set has changed, that market's
  * connections are replaced, and a pair no longer streamed is dropped from the latest prices (BR-07). An unchanged
@@ -47,6 +50,8 @@ import org.springframework.stereotype.Component;
  * <h2>Routing, without blocking a reader</h2>
  *
  * <ul>
+ *   <li>A 1-minute candle, forming or closed, goes to every {@link MinuteKlineListener} (the matching engine) and
+ *       nowhere else: it is not stored, cached or broadcast.
  *   <li>A closed candle of a stored timeframe goes to the {@link ClosedCandlePipeline}; a forming one is not
  *       stored (BR-08).
  *   <li>A Spot ticker or a futures mark price overwrites the pair's entry in {@link LatestMarketData}.
@@ -71,6 +76,7 @@ public class MarketStreamSupervisor {
     private final BinanceStreamProperties properties;
     private final ApplicationEventPublisher events;
     private final MarketUpdateService updates;
+    private final List<MinuteKlineListener> minuteListeners;
     private final Map<MarketType, MarketStreams> running = new EnumMap<>(MarketType.class);
 
     public MarketStreamSupervisor(
@@ -81,7 +87,8 @@ public class MarketStreamSupervisor {
             TaskScheduler scheduler,
             BinanceStreamProperties properties,
             ApplicationEventPublisher events,
-            MarketUpdateService updates) {
+            MarketUpdateService updates,
+            List<MinuteKlineListener> minuteListeners) {
         this.streams = streams;
         this.candles = candles;
         this.latest = latest;
@@ -90,6 +97,7 @@ public class MarketStreamSupervisor {
         this.properties = properties;
         this.events = events;
         this.updates = updates;
+        this.minuteListeners = List.copyOf(minuteListeners);
     }
 
     /** Opens the streams of both markets and schedules the refresh, when enabled. */
@@ -204,6 +212,10 @@ public class MarketStreamSupervisor {
             if (target == null) {
                 return;
             }
+            if (message instanceof KlineMessage kline && kline.interval() == MarketInterval.ONE_MINUTE) {
+                toMinuteListeners(target, kline);
+                return;
+            }
             switch (message) {
                 case KlineMessage kline -> {
                     if (kline.closed()) {
@@ -219,6 +231,24 @@ public class MarketStreamSupervisor {
                 updates.onUpdate(market, message);
             } catch (RuntimeException failure) {
                 log.warn("NSF-03 {} realtime update failed: {}", market, failure.toString());
+            }
+        }
+
+        private void toMinuteListeners(StreamTarget target, KlineMessage kline) {
+            MinuteKline update = new MinuteKline(
+                    market,
+                    target.pairId(),
+                    kline.kline().openTime(),
+                    kline.kline().low(),
+                    kline.kline().high(),
+                    kline.closed(),
+                    kline.eventTime());
+            for (MinuteKlineListener listener : minuteListeners) {
+                try {
+                    listener.onMinuteKline(update);
+                } catch (RuntimeException failure) {
+                    log.warn("NSF-03 {} 1m candle listener failed: {}", market, failure.toString());
+                }
             }
         }
 

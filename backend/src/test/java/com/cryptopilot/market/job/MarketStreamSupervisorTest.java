@@ -3,8 +3,11 @@ package com.cryptopilot.market.job;
 import static com.cryptopilot.market.client.StubStreamServer.await;
 import static com.cryptopilot.market.client.StubStreamServer.signal;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.MinuteKline;
+import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.BinanceStreamClient;
 import com.cryptopilot.market.client.BinanceStreamProperties;
@@ -78,6 +81,8 @@ class MarketStreamSupervisorTest {
     private final List<Duration> refreshes = new CopyOnWriteArrayList<>();
     private final LatestMarketData latest = new LatestMarketData();
     private final List<StreamMessage> realtime = new CopyOnWriteArrayList<>();
+    private final List<MinuteKline> minutes = new CopyOnWriteArrayList<>();
+    private final List<MinuteKlineListener> minuteListeners = new CopyOnWriteArrayList<>(List.of(minutes::add));
     private MarketUpdateService updates = (market, message) -> {
         realtime.add(message);
         signal();
@@ -121,7 +126,7 @@ class MarketStreamSupervisorTest {
         assertThat(server.paths()).isEmpty();
     }
 
-    /** One connection per market, the pair's five streams on each, futures under its route; refresh scheduled. */
+    /** One connection per market, the pair's six streams on each, futures under its route; refresh scheduled. */
     @Test
     void NSF03_start_opensEachMarketsStreams_andSchedulesTheRefresh() {
         supervisor = supervisor(true, 100);
@@ -131,10 +136,10 @@ class MarketStreamSupervisorTest {
 
         assertThat(server.paths())
                 .containsExactlyInAnyOrder(
-                        "/stream?streams=btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h/btcusdt@kline_1d"
-                                + "/btcusdt@ticker",
-                        "/market/stream?streams=btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h"
-                                + "/btcusdt@kline_1d/btcusdt@markPrice@1s");
+                        "/stream?streams=btcusdt@kline_1m/btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h"
+                                + "/btcusdt@kline_1d/btcusdt@ticker",
+                        "/market/stream?streams=btcusdt@kline_1m/btcusdt@kline_15m/btcusdt@kline_1h"
+                                + "/btcusdt@kline_4h/btcusdt@kline_1d/btcusdt@markPrice@1s");
         assertThat(refreshes).containsExactly(Duration.ofMinutes(5));
     }
 
@@ -149,7 +154,7 @@ class MarketStreamSupervisorTest {
 
         assertThat(supervisor.shards(MarketType.SPOT))
                 .extracting(shard -> shard.streams().size())
-                .containsExactly(10, 5);
+                .containsExactly(12, 6);
         assertThat(supervisor.shards(MarketType.SPOT).get(1).streams()).allMatch(name -> name.startsWith("solusdt@"));
     }
 
@@ -190,6 +195,33 @@ class MarketStreamSupervisorTest {
                         .query(Instant.class)
                         .single())
                 .isEqualTo(AT);
+    }
+
+    /**
+     * A 1-minute candle, forming or closed, goes to the minute listeners only: not stored, not cached, not broadcast;
+     * a listener that throws does not stop the next message.
+     */
+    @Test
+    void NSF07_aMinuteCandle_goesToTheMinuteListenersOnly() {
+        minuteListeners.add(kline -> {
+            throw new IllegalStateException("listener down");
+        });
+        supervisor = supervisor(true, 100);
+        supervisor.start();
+        server.awaitConnection(2);
+        Connection spot = connection("/stream");
+
+        spot.send(StreamFrames.kline("BTCUSDT", MarketInterval.ONE_MINUTE, AT, false));
+        spot.send(StreamFrames.kline("BTCUSDT", MarketInterval.ONE_MINUTE, AT, true));
+        spot.send(StreamFrames.kline("DOGEUSDT", MarketInterval.ONE_MINUTE, AT, true));
+        spot.send(StreamFrames.ticker("BTCUSDT", AT));
+
+        await(() -> latest.ticker(btc).isPresent(), "the ticker after the candles");
+        assertThat(minutes)
+                .extracting(MinuteKline::market, MinuteKline::pairId, MinuteKline::openTime, MinuteKline::closed)
+                .containsExactly(tuple(MarketType.SPOT, btc, AT, false), tuple(MarketType.SPOT, btc, AT, true));
+        assertThat(realtime).noneMatch(message -> message instanceof StreamMessage.KlineMessage);
+        assertThat(storedCandles()).isZero();
     }
 
     /** A lost connection that comes back publishes the reconnection; the first opening does not. */
@@ -251,7 +283,7 @@ class MarketStreamSupervisorTest {
 
         await(() -> first.closeCode() != null, "the old connection to be closed");
         server.awaitConnection(2);
-        assertThat(server.paths().getLast()).startsWith("/stream?streams=ethusdt@kline_15m");
+        assertThat(server.paths().getLast()).startsWith("/stream?streams=ethusdt@kline_1m");
         assertThat(latest.ticker(btc)).as("BR-07: no longer collected").isEmpty();
         assertThat(supervisor.shards(MarketType.SPOT).getFirst().streams()).allMatch(s -> s.startsWith("ethusdt"));
         assertThat(eth).isNotNull();
@@ -351,7 +383,8 @@ class MarketStreamSupervisorTest {
                 recordingScheduler(),
                 properties,
                 this::publish,
-                updates);
+                updates,
+                minuteListeners);
     }
 
     private CandleBackfillService backfill() {
