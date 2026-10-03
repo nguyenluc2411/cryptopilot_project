@@ -22,7 +22,7 @@ import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
-import com.cryptopilot.trading.service.impl.MinuteKlineFeed;
+import com.cryptopilot.trading.job.MinuteKlineFeed;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;

@@ -1,9 +1,10 @@
-package com.cryptopilot.trading.service.impl;
+package com.cryptopilot.trading.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -21,7 +22,6 @@ import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
-import com.cryptopilot.trading.job.MatchingWorker;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
@@ -44,8 +44,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * The feed between the {@code kline_1m} stream and the matching engine: what is held, what is replayed and in which
- * order the engine receives it. The engine and the exchange are mocked; the replay thread is joined, so every test is
- * deterministic.
+ * order the engine receives it. The engine and the exchange are mocked, and every test waits until no replay is queued
+ * or running, so it is deterministic.
  *
  * <p>Rule: NSF-07; TECHNICAL_DESIGN 7.7; A-04; D-78; Q-34.
  */
@@ -70,6 +70,9 @@ class MinuteKlineFeedTest {
     private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
     private final Logger feedLogger = (Logger) LoggerFactory.getLogger(MinuteKlineFeed.class);
 
+    /** The closed candles the exchange stub serves, at most three a page. */
+    private final List<MinuteKline> served = new CopyOnWriteArrayList<>();
+
     private MinuteKlineFeed feed;
 
     @BeforeEach
@@ -78,7 +81,14 @@ class MinuteKlineFeedTest {
         feedLogger.addAppender(logs);
         when(worker.isRunning()).thenReturn(true);
         doAnswer(call -> submitted.add(call.getArgument(0))).when(worker).submit(any());
-        when(market.closedMinuteKlines(any(), any(), any())).thenReturn(MinuteKlineBatch.of(List.of()));
+        when(market.closedMinuteKlines(any(), any(), any())).thenAnswer(call -> {
+            Instant from = call.getArgument(2);
+            return MinuteKlineBatch.of(served.stream()
+                    .filter(kline -> kline.market() == call.getArgument(0))
+                    .filter(kline -> !kline.openTime().isBefore(from))
+                    .limit(3)
+                    .toList());
+        });
     }
 
     @AfterEach
@@ -90,7 +100,7 @@ class MinuteKlineFeedTest {
     }
 
     @Test
-    void NSF07_updatesBeforeTheStart_areHeldOneRangePerMinute_andHandedOnInOrderAtTheStart() throws Exception {
+    void NSF07_updatesBeforeTheStart_areHeldOneRangePerMinute_andHandedOnInOrderAtTheStart() {
         feed = feed(replay(true, 3, 1440));
 
         feed.onMinuteKline(update(M0, "100", "101", false, 10));
@@ -98,7 +108,7 @@ class MinuteKlineFeedTest {
         feed.onMinuteKline(update(M0, "99", "102", true, 60));
         feed.onMinuteKline(update(minute(1), "101", "101", false, 5));
         assertThat(submitted).isEmpty();
-        startAndJoin();
+        startAndAwaitIdle();
 
         assertThat(submitted)
                 .containsExactly(range(M0, "99", "102", true, 60), range(minute(1), "101", "101", false, 5));
@@ -106,9 +116,9 @@ class MinuteKlineFeedTest {
     }
 
     @Test
-    void NSF07_afterTheStart_aPairWithoutEntries_isLive_andItsUpdatesAreRangesFromTheCandleOpenTime() throws Exception {
+    void NSF07_afterTheStart_aPairWithoutEntries_isLive_andItsUpdatesAreRangesFromTheCandleOpenTime() {
         feed = feed(replay(true, 3, 1440));
-        startAndJoin();
+        startAndAwaitIdle();
 
         feed.onMinuteKline(update(M0, "99", "101", false, 42));
 
@@ -117,42 +127,65 @@ class MinuteKlineFeedTest {
     }
 
     @Test
-    void A04_aPairWithEntries_isReplayedFromTheCandleAfterItsWatermark_pageByPage() throws Exception {
+    void A04_aPairWithEntries_isReplayedFromTheCandleAfterItsWatermark_pageByPage_upToTheCurrentMinute() {
         activeEntry(PAIR, minute(-30));
         when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
-        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1)))
-                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(1)), closed(minute(2)))));
-        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(3)))
-                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(3)))));
+        serveClosed(1, 9);
         feed = feed(replay(true, 3, 1440));
 
-        startAndJoin();
+        startAndAwaitIdle();
 
         assertThat(submitted)
                 .extracting(PriceRange::from, PriceRange::closed)
-                .containsExactly(tuple(minute(1), true), tuple(minute(2), true), tuple(minute(3), true));
+                .containsExactly(
+                        tuple(minute(1), true),
+                        tuple(minute(2), true),
+                        tuple(minute(3), true),
+                        tuple(minute(4), true),
+                        tuple(minute(5), true),
+                        tuple(minute(6), true),
+                        tuple(minute(7), true),
+                        tuple(minute(8), true),
+                        tuple(minute(9), true));
+        verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(1));
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(4));
+        verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(7));
+        verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(10));
+        assertThat(logs.list).noneMatch(event -> event.getLevel() == Level.WARN);
     }
 
     @Test
-    void A04_withoutAWatermark_theReplayStartsAtTheMinuteOfTheFirstActivation() throws Exception {
+    void R8_withAWatermarkOlderThanTheFirstActivation_theReplayStartsAtTheActivationMinute() {
+        activeEntry(PAIR, minute(5).plusSeconds(40));
+        activeEntry(PAIR, minute(3).plusSeconds(10));
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0.minus(Duration.ofHours(20))));
+        feed = feed(replay(true, 0, 1440));
+
+        startAndAwaitIdle();
+
+        verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(3));
+        assertThat(logs.list).noneMatch(event -> event.getFormattedMessage().contains("replay window"));
+    }
+
+    @Test
+    void A04_withoutAWatermark_theReplayStartsAtTheMinuteOfTheFirstActivation() {
         activeEntry(PAIR, minute(5).plusSeconds(40));
         activeEntry(PAIR, minute(3).plusSeconds(10));
         when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.empty());
-        feed = feed(replay(true, 3, 1440));
+        feed = feed(replay(true, 0, 1440));
 
-        startAndJoin();
+        startAndAwaitIdle();
 
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(3));
     }
 
     @Test
-    void Q34_aWatermarkOlderThanTheWindow_startsTheReplayAtTheWindow_andLogsTheSkippedCandles() throws Exception {
+    void Q34_aStartOlderThanTheWindow_isMovedToTheWindow_andTheSkippedCandlesAreLogged() {
         activeEntry(PAIR, M0.minus(Duration.ofDays(3)));
         when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0.minus(Duration.ofDays(2))));
-        feed = feed(new MatchingProperties.Replay(true, Duration.ofHours(24), Duration.ZERO, 3, 1440));
+        feed = feed(new MatchingProperties.Replay(true, Duration.ofHours(24), Duration.ZERO, 0, 1440));
 
-        startAndJoin();
+        startAndAwaitIdle();
 
         Instant windowStart = minute(10).minus(Duration.ofHours(24));
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, windowStart);
@@ -169,7 +202,7 @@ class MinuteKlineFeedTest {
      * dropped and only minute 3 follows the replayed candles; a late closed update of minute 2 is dropped too.
      */
     @Test
-    void A04_liveUpdatesDuringTheReplay_areHeld_andAMinuteTheReplayCoveredIsNotAppliedTwice() throws Exception {
+    void A04_liveUpdatesDuringTheReplay_areHeld_andAMinuteTheReplayCoveredIsNotAppliedTwice() {
         activeEntry(PAIR, M0);
         when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
         when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1))).thenAnswer(call -> {
@@ -180,7 +213,7 @@ class MinuteKlineFeedTest {
         });
         feed = feed(replay(true, 3, 1440));
 
-        startAndJoin();
+        startAndAwaitIdle();
         feed.onMinuteKline(update(minute(2), "90", "95", true, 60));
         feed.onMinuteKline(update(minute(3), "96", "98", false, 10));
 
@@ -191,7 +224,7 @@ class MinuteKlineFeedTest {
     }
 
     @Test
-    void A04_aCandleThatClosesDuringTheReplay_isFetchedAgainBeforeTheHeldUpdatesGoOn() throws Exception {
+    void A04_aCandleThatClosesDuringTheReplay_isFetchedAgainBeforeTheHeldUpdatesGoOn() {
         activeEntry(PAIR, M0);
         when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
         when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1))).thenAnswer(call -> {
@@ -203,14 +236,32 @@ class MinuteKlineFeedTest {
                 .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(2)))));
         feed = feed(replay(true, 3, 1440));
 
-        startAndJoin();
+        startAndAwaitIdle();
 
         assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1), minute(2), minute(3));
         assertThat(logs.list).noneMatch(event -> event.getLevel() == Level.WARN);
     }
 
+    /** R4: with nothing held, the replay goes on until it has reached the current minute, not the first empty page. */
     @Test
-    void A04_aHoleThatStaysAfterTheCatchUps_isLogged_andThePairGoesLiveWithoutGuessing() throws Exception {
+    void R4_withNothingHeld_aCandleTheExchangeServesLate_isStillReplayedBeforeGoingLive() {
+        activeEntry(PAIR, M0);
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(minute(7)));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(8)))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(8)))));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(9)))
+                .thenReturn(MinuteKlineBatch.of(List.of()))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(9)))));
+        feed = feed(replay(true, 3, 1440));
+
+        startAndAwaitIdle();
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(8), minute(9));
+        assertThat(logs.list).noneMatch(event -> event.getLevel() == Level.WARN);
+    }
+
+    @Test
+    void A04_aHoleThatStaysAfterTheCatchUps_isLogged_andThePairGoesLiveWithoutGuessing() {
         activeEntry(PAIR, M0);
         when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
         when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1))).thenAnswer(call -> {
@@ -219,9 +270,11 @@ class MinuteKlineFeedTest {
         });
         feed = feed(replay(true, 2, 1440));
 
-        startAndJoin();
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(5), "95", "97", true, 60));
+        feed.onMinuteKline(update(minute(6), "96", "97", false, 5));
 
-        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(5));
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(5), minute(5), minute(6));
         verify(market, times(3)).closedMinuteKlines(MarketType.SPOT, PAIR, minute(1));
         assertThat(logs.list).anySatisfy(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
@@ -229,22 +282,107 @@ class MinuteKlineFeedTest {
         });
     }
 
+    /** R1: a stream drop while running sends the pair back to replay the missing minutes, before what follows them. */
     @Test
-    void A04_aRefusalOfTheExchange_isAskedAgainAtItsTime() throws Exception {
-        activeEntry(PAIR, M0);
-        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
-        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1)))
-                .thenReturn(MinuteKlineBatch.refusedUntil(NOW.minusSeconds(1)))
-                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(1)))));
+    void R1_aStreamDropWhileRunning_isReplayed_andNothingAfterTheHoleReachesTheEngineBeforeIt() {
+        serveClosed(2, 3);
         feed = feed(replay(true, 3, 1440));
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", false, 30));
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
 
-        startAndJoin();
+        feed.onMinuteKline(update(minute(4), "1", "2", false, 5));
+        awaitIdle();
+        feed.onMinuteKline(update(minute(4), "1", "2", true, 60));
+
+        assertThat(submitted)
+                .extracting(PriceRange::from, PriceRange::closed)
+                .containsExactly(
+                        tuple(minute(1), false),
+                        tuple(minute(1), true),
+                        tuple(minute(2), true),
+                        tuple(minute(3), true),
+                        tuple(minute(4), false),
+                        tuple(minute(4), true));
+        verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(2));
+    }
+
+    /** R1: a minute whose closed update never comes is replayed once the next minute's updates show it is missing. */
+    @Test
+    void R1_aMinuteWhoseClosedUpdateNeverCame_isReplayedFromTheExchange() {
+        serveClosed(2, 2);
+        feed = feed(replay(true, 3, 1440));
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+        feed.onMinuteKline(update(minute(2), "1", "2", false, 30));
+
+        feed.onMinuteKline(update(minute(3), "1", "2", false, 5));
+        awaitIdle();
+
+        assertThat(submitted)
+                .extracting(PriceRange::from, PriceRange::closed)
+                .containsExactly(
+                        tuple(minute(1), true),
+                        tuple(minute(2), false),
+                        tuple(minute(2), true),
+                        tuple(minute(3), false));
+    }
+
+    /**
+     * R1: after a reconnection the stream resumes minutes later; until the exchange serves the hole, no closed candle
+     * after it reaches the engine, so the watermark cannot pass the hole and a restart replays it.
+     */
+    @Test
+    void R1_afterAReconnection_nothingFollowsTheHoleUntilItIsReplayed_soARestartReplaysIt() {
+        feed = feed(replay(true, 3, 1440));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(2)))
+                .thenReturn(MinuteKlineBatch.refusedUntil(NOW.plus(Duration.ofHours(1))));
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+
+        feed.onMinuteKline(update(minute(6), "1", "2", false, 5));
+        feed.onMinuteKline(update(minute(6), "1", "2", true, 60));
+        feed.onMinuteKline(update(minute(7), "1", "2", false, 5));
+        feed.stop();
 
         assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1));
     }
 
     @Test
-    void A04_aReplayThatFails_letsThePairGoLive_withTheFailureLogged() throws Exception {
+    void R1_withTheReplayOff_aHoleIsOnlyLogged_andTheUpdatesGoOn() {
+        feed = feed(replay(false, 3, 1440));
+        startAndAwaitIdle();
+
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+        feed.onMinuteKline(update(minute(4), "1", "2", false, 1));
+        feed.onMinuteKline(update(minute(4), "1", "2", true, 60));
+        feed.onMinuteKline(update(minute(5), "1", "2", false, 1));
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1), minute(4), minute(4), minute(5));
+        assertThat(logs.list)
+                .filteredOn(event -> event.getFormattedMessage().contains("no candles from"))
+                .singleElement()
+                .satisfies(event -> assertThat(event.getFormattedMessage())
+                        .contains("no candles from " + minute(2) + " to " + minute(4)));
+        verifyNoInteractions(market);
+    }
+
+    @Test
+    void A04_aRefusalOfTheExchange_isAskedAgainAtItsTime() {
+        activeEntry(PAIR, M0);
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(minute(8)));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(9)))
+                .thenReturn(MinuteKlineBatch.refusedUntil(NOW.minusSeconds(1)))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(9)))));
+        feed = feed(replay(true, 3, 1440));
+
+        startAndAwaitIdle();
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(9));
+    }
+
+    @Test
+    void A04_aReplayThatFails_letsThePairGoLive_withTheFailureLogged() {
         activeEntry(PAIR, M0);
         when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
         when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1))).thenAnswer(call -> {
@@ -253,19 +391,19 @@ class MinuteKlineFeedTest {
         });
         feed = feed(replay(true, 3, 1440));
 
-        startAndJoin();
+        startAndAwaitIdle();
 
         assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1));
         assertThat(logs.list).anySatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
     }
 
     @Test
-    void A04_withTheReplayOff_everyPairGoesLiveAtTheStart_andTheExchangeIsNeverAsked() throws Exception {
+    void A04_withTheReplayOff_everyPairGoesLiveAtTheStart_andTheExchangeIsNeverAsked() {
         activeEntry(PAIR, M0);
         feed = feed(replay(false, 3, 1440));
         feed.onMinuteKline(update(minute(9), "96", "97", false, 5));
 
-        startAndJoin();
+        startAndAwaitIdle();
 
         assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(9));
         verifyNoInteractions(market);
@@ -278,14 +416,7 @@ class MinuteKlineFeedTest {
                 worker,
                 matching,
                 market,
-                new MatchingProperties(
-                        false,
-                        1,
-                        1,
-                        new MatchingProperties.Retry(Duration.ZERO, Duration.ZERO, 0, Duration.ofMinutes(10)),
-                        60,
-                        Duration.ofSeconds(1),
-                        replay(true, 3, 1440)),
+                new MatchingProperties(false, 1, 1, RETRY, 60, Duration.ofSeconds(1), replay(true, 3, 1440)),
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 recording);
 
@@ -311,13 +442,13 @@ class MinuteKlineFeedTest {
     }
 
     @Test
-    void NSF07_heldMinutes_areBounded_theOldestDroppedWithAWarning() throws Exception {
-        feed = feed(replay(true, 3, 2));
+    void NSF07_heldMinutes_areBounded_theOldestDroppedWithAWarning() {
+        feed = feed(replay(false, 3, 2));
 
         feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
         feed.onMinuteKline(update(minute(2), "1", "2", true, 60));
         feed.onMinuteKline(update(minute(3), "1", "2", false, 1));
-        startAndJoin();
+        startAndAwaitIdle();
 
         assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(2), minute(3));
         assertThat(logs.list)
@@ -325,22 +456,9 @@ class MinuteKlineFeedTest {
     }
 
     @Test
-    void NSF07_aMissingMinuteInTheLiveFeed_isLogged_andNothingIsGuessedForIt() throws Exception {
+    void NSF07_anUpdateStampedBeforeItsCandleOpened_isTakenAtTheOpenTime() {
         feed = feed(replay(true, 3, 1440));
-        startAndJoin();
-
-        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
-        feed.onMinuteKline(update(minute(4), "1", "2", false, 1));
-
-        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1), minute(4));
-        assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
-                .contains("no candles from " + minute(2) + " to " + minute(4)));
-    }
-
-    @Test
-    void NSF07_anUpdateStampedBeforeItsCandleOpened_isTakenAtTheOpenTime() throws Exception {
-        feed = feed(replay(true, 3, 1440));
-        startAndJoin();
+        startAndAwaitIdle();
 
         feed.onMinuteKline(
                 new MinuteKline(MarketType.SPOT, PAIR, M0, BigDecimal.ONE, BigDecimal.TEN, false, M0.minusMillis(5)));
@@ -349,60 +467,60 @@ class MinuteKlineFeedTest {
     }
 
     @Test
-    void NSF07_aStopThenAStart_replaysAgain_andTheOtherPairsWaitInBetween() throws Exception {
+    void NSF07_aStopThenAStart_replaysAgain_andTheOtherPairsWaitInBetween() {
         activeEntry(PAIR, M0);
-        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(minute(9)));
         feed = feed(replay(true, 0, 1440));
-        startAndJoin();
+        startAndAwaitIdle();
 
         feed.stop();
         feed.onMinuteKline(new MinuteKline(
                 MarketType.SPOT, OTHER_PAIR, minute(7), BigDecimal.ONE, BigDecimal.TEN, false, minute(7)));
         assertThat(submitted).isEmpty();
-        startAndJoin();
+        startAndAwaitIdle();
 
         assertThat(submitted).extracting(PriceRange::pairId).containsExactly(OTHER_PAIR);
-        verify(market, times(2)).closedMinuteKlines(MarketType.SPOT, PAIR, minute(1));
+        verify(market, times(2)).closedMinuteKlines(MarketType.SPOT, PAIR, minute(10));
         verify(worker, times(2)).start();
     }
 
     @Test
-    void A04_anEntryOfAnotherMarket_isReplayedOnItsOwnMarket() throws Exception {
+    void A04_anEntryOfAnotherMarket_isReplayedOnItsOwnMarket() {
         when(matching.activeEntries())
                 .thenReturn(List.of(new TrackedEntry(
                         UUID.randomUUID(), MarketType.FUTURES, PAIR, Direction.SHORT, BigDecimal.TEN, M0)));
         when(matching.watermark(MarketType.FUTURES, PAIR)).thenReturn(Optional.of(M0));
         feed = feed(replay(true, 0, 1440));
 
-        startAndJoin();
+        startAndAwaitIdle();
 
-        verify(market).closedMinuteKlines(MarketType.FUTURES, PAIR, minute(1));
+        verify(market, atLeastOnce()).closedMinuteKlines(MarketType.FUTURES, PAIR, minute(1));
         verify(market, never()).closedMinuteKlines(eq(MarketType.SPOT), any(), any());
     }
+
+    private static final MatchingProperties.Retry RETRY =
+            new MatchingProperties.Retry(Duration.ZERO, Duration.ZERO, 0, Duration.ofMinutes(10));
 
     private MinuteKlineFeed feed(MatchingProperties.Replay replay) {
         return new MinuteKlineFeed(
                 worker,
                 matching,
                 market,
-                new MatchingProperties(
-                        true,
-                        1,
-                        100,
-                        new MatchingProperties.Retry(Duration.ZERO, Duration.ZERO, 0, Duration.ofMinutes(10)),
-                        60,
-                        Duration.ofSeconds(5),
-                        replay),
+                new MatchingProperties(true, 1, 100, RETRY, 60, Duration.ofSeconds(5), replay),
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 recording);
     }
 
-    private void startAndJoin() throws InterruptedException {
-        int before = threads.size();
+    private void startAndAwaitIdle() {
         feed.start();
-        for (Thread thread : new ArrayList<>(threads.subList(before, threads.size()))) {
-            thread.join(Duration.ofSeconds(5));
-            assertThat(thread.isAlive()).isFalse();
+        awaitIdle();
+    }
+
+    private void awaitIdle() {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (!feed.isIdle()) {
+            assertThat(System.nanoTime()).as("the replays end in time").isLessThan(deadline);
+            Thread.onSpinWait();
         }
     }
 
@@ -410,6 +528,13 @@ class MinuteKlineFeedTest {
         entries.add(new TrackedEntry(
                 UUID.randomUUID(), MarketType.SPOT, pair, Direction.LONG, new BigDecimal("100"), activatedAt));
         when(matching.activeEntries()).thenReturn(List.copyOf(entries));
+    }
+
+    /** The exchange serves the closed candles of minutes {@code first} to {@code last}. */
+    private void serveClosed(int first, int last) {
+        for (int n = first; n <= last; n++) {
+            served.add(closed(minute(n)));
+        }
     }
 
     private static MatchingProperties.Replay replay(boolean enabled, int catchUps, int maxHeld) {
