@@ -35,6 +35,8 @@ import com.cryptopilot.trading.dto.response.StatusChangeResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
+import com.cryptopilot.trading.event.TradingPlanActivated;
+import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.exception.PlanActivationBlockedException;
 import com.cryptopilot.trading.model.PlanListQuery;
@@ -66,6 +68,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -91,6 +94,7 @@ class TradingPlanServiceImplTest {
     private final ActivePlanLock lock = mock(ActivePlanLock.class);
     private final RiskProfileApi riskProfiles = mock(RiskProfileApi.class);
     private final EntitlementApi entitlements = mock(EntitlementApi.class);
+    private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
 
     private TradingPlanServiceImpl service;
 
@@ -106,7 +110,8 @@ class TradingPlanServiceImplTest {
                 market,
                 riskProfiles,
                 entitlements,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                events);
         when(market.tradablePair(eq(PAIR), any()))
                 .thenAnswer(call -> Optional.of(new TradablePair(PAIR, "BTCUSDT", call.getArgument(1), FILTERS)));
         when(market.leverageBrackets(PAIR))
@@ -345,6 +350,9 @@ class TradingPlanServiceImplTest {
         order.verify(plans).countActive(USER);
         order.verify(entitlements).requireWithinLimit(USER, Feature.ACTIVE_PLAN_MAX, 2L);
         order.verify(plans).save(any());
+        verify(events)
+                .publishEvent(new TradingPlanActivated(
+                        saved.getId(), MarketType.SPOT, PAIR, Direction.LONG, EntryType.LIMIT, saved.getEntryPrice()));
     }
 
     @Test
@@ -359,6 +367,7 @@ class TradingPlanServiceImplTest {
                 .satisfies(
                         e -> assertThat(((BusinessException) e).errorCode()).isEqualTo(ErrorCode.PLAN_LIMIT_REACHED));
         verify(plans, never()).save(any());
+        verifyNoInteractions(events);
     }
 
     @Test
@@ -397,6 +406,7 @@ class TradingPlanServiceImplTest {
         order.verify(lock).lock(USER);
         order.verify(plans).findByIdAndUserId(plan.getId(), USER);
         order.verify(entitlements).requireWithinLimit(USER, Feature.ACTIVE_PLAN_MAX, 0L);
+        verify(events).publishEvent(any(TradingPlanActivated.class));
     }
 
     @Test
@@ -408,6 +418,7 @@ class TradingPlanServiceImplTest {
         assertThatThrownBy(() -> service.update(USER, planId, update("100", "96", "120", false)))
                 .isInstanceOf(ResourceNotFoundException.class);
         assertThatThrownBy(() -> service.activate(USER, planId)).isInstanceOf(ResourceNotFoundException.class);
+        when(plans.findForUpdate(planId, USER)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> service.cancel(USER, planId)).isInstanceOf(ResourceNotFoundException.class);
     }
 
@@ -427,6 +438,7 @@ class TradingPlanServiceImplTest {
         order.verify(entitlements).requireWithinLimit(USER, Feature.ACTIVE_PLAN_MAX, 1L);
         order.verify(riskProfiles).planDefaultsOf(USER);
         order.verify(plans).save(plan);
+        verify(events).publishEvent(any(TradingPlanActivated.class));
     }
 
     @Test
@@ -453,6 +465,7 @@ class TradingPlanServiceImplTest {
                 .satisfies(
                         e -> assertThat(((BusinessException) e).errorCode()).isEqualTo(ErrorCode.PLAN_LIMIT_REACHED));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        verifyNoInteractions(events);
     }
 
     @ParameterizedTest(name = "{0} at {1} past a stop of {2}")
@@ -486,13 +499,14 @@ class TradingPlanServiceImplTest {
     @Test
     void UC19_aPlan_isCancelledAtTheInstantOfTheClock() {
         TradingPlan plan = draft();
-        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        when(plans.findForUpdate(plan.getId(), USER)).thenReturn(Optional.of(plan));
 
         TradingPlanResponse cancelled = service.cancel(USER, plan.getId());
 
         assertThat(cancelled.status()).isEqualTo(PlanStatus.CANCELLED);
         assertThat(cancelled.editable()).isFalse();
         assertThat(cancelled.statusHistory()).containsExactly(new StatusChangeResponse(PlanStatus.CANCELLED, NOW));
+        verify(events).publishEvent(new TradingPlanCancelled(plan.getId(), plan.getMarket(), plan.getPairId()));
     }
 
     @Test
