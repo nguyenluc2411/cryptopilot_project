@@ -20,15 +20,15 @@ import tools.jackson.databind.json.JsonMapper;
  * <h2>The streams of one pair</h2>
  *
  * <ul>
+ *   <li>{@code <symbol>@kline_1m} on both markets — the high and low the matching engine reads (D-09, Q-32);
+ *       never stored;
  *   <li>{@code <symbol>@kline_15m}, {@code _1h}, {@code _4h}, {@code _1d} on both markets — the timeframes BR-08
  *       stores;
  *   <li>Spot {@code <symbol>@ticker} — last price, best bid and ask and the 24-hour statistics;
  *   <li>futures {@code <symbol>@markPrice@1s} — mark price, index price and the predicted funding rate.
  * </ul>
  *
- * <p>Five streams per pair and market. {@code kline_1m}, which TECHNICAL_DESIGN 7.1 also lists for the
- * matching engine and the alerts, is not opened here: nothing reads it yet, and it is one more name in
- * {@link #streamsOf} when T-042 needs it (D-43).
+ * <p>Six streams per pair and market (D-43; {@code kline_1m} added by T-043).
  *
  * <p>Public market streams only: no listen key, no user data stream, no API key (BR-09).
  *
@@ -65,6 +65,7 @@ public final class BinanceStreamClient implements AutoCloseable {
         String s = symbol.toLowerCase(Locale.ROOT);
         List<String> streams = new ArrayList<>();
         for (MarketInterval timeframe : List.of(
+                MarketInterval.ONE_MINUTE,
                 MarketInterval.FIFTEEN_MINUTES,
                 MarketInterval.ONE_HOUR,
                 MarketInterval.FOUR_HOURS,

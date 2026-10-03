@@ -63,6 +63,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <p>Reference: Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf, ch. 5 (bounded retries).
  * <p>Reference: Metcalfe, R. M. &amp; Boggs, D. R. (1976). Ethernet: distributed packet switching for local computer
  * networks. <i>Communications of the ACM</i>, 19(7), 395-404 (exponential back-off).
+ * <p>Reference: Akidau, T. et al. (2015). The Dataflow Model. <i>PVLDB</i>, 8(12), 1792-1803 (a watermark never passes
+ * event time whose input is not complete).
  */
 @Component
 public class MatchingWorker {
@@ -215,13 +217,7 @@ public class MatchingWorker {
 
     /** Two updates of the same candle as one: the lowest low, the highest high, the earliest and latest time. */
     static PriceRange merge(PriceRange earlier, PriceRange later) {
-        return new PriceRange(
-                earlier.market(),
-                earlier.pairId(),
-                earlier.low().min(later.low()),
-                earlier.high().max(later.high()),
-                earlier.from().isBefore(later.from()) ? earlier.from() : later.from(),
-                earlier.at().isAfter(later.at()) ? earlier.at() : later.at());
+        return earlier.mergedWith(later);
     }
 
     /** Joins the consumers within {@code stopTimeout} in all; forgets those that ended. Guarded by {@code this}. */
@@ -285,6 +281,12 @@ public class MatchingWorker {
          * only when the pair's next price update arrives (about every 2 s on {@code kline_1m}); no timer fires it.
          */
         private final Map<PairKey, List<PendingFill>> retries = new HashMap<>();
+
+        /**
+         * Pairs with a fill given up since the start: their watermark stays before the candle that reached it, so a
+         * restart replays that candle (Akidau et al. 2015: a watermark must not pass input not fully processed).
+         */
+        private final Set<PairKey> watermarkHeld = new HashSet<>();
 
         Partition(int capacity) {
             this.queue = new ArrayBlockingQueue<>(capacity);
@@ -484,6 +486,9 @@ public class MatchingWorker {
             PairKey key = new PairKey(range.market(), range.pairId());
             retryDue(key);
             engine.onRange(range).forEach(fill -> fill(key, fill, null));
+            if (range.closed() && !retries.containsKey(key) && !watermarkHeld.contains(key)) {
+                advanceWatermark(range);
+            }
         }
 
         /** Tries again the pair's failed fills whose back-off has passed; the others keep waiting. */
@@ -508,6 +513,24 @@ public class MatchingWorker {
         }
 
         /**
+         * The candle is closed and every fill it decided is stored: a restart replays from the next candle. Not
+         * advanced while a fill of the pair waits for a retry or was given up, so a restart replays the candle that
+         * reached it.
+         */
+        private void advanceWatermark(PriceRange range) {
+            try {
+                matching.advanceWatermark(range.market(), range.pairId(), range.from());
+            } catch (RuntimeException failure) {
+                log.warn(
+                        "NSF-07 {} {} watermark not advanced to {}: {}",
+                        range.market(),
+                        range.pairId(),
+                        range.from(),
+                        failure.toString());
+            }
+        }
+
+        /**
          * Stores a fill. A failure of any kind keeps it in the retry list with an exponential back-off; once the
          * deadline since its first failure has passed it is logged once as an error and dropped, and the plan stays
          * ACTIVE in the database for a person to handle.
@@ -528,11 +551,15 @@ public class MatchingWorker {
                 int failures = previous == null ? 1 : previous.failures() + 1;
                 Instant firstFailedAt = previous == null ? now : previous.firstFailedAt();
                 if (!now.isBefore(firstFailedAt.plus(properties.retry().deadline()))) {
+                    watermarkHeld.add(key);
                     log.error(
-                            "NSF-07 plan {} fill failed {} times since {}; no longer retried, the plan stays ACTIVE",
+                            "NSF-07 plan {} fill failed {} times since {}; no longer retried, the plan stays ACTIVE"
+                                    + " and the pair's watermark is held. A restart is required within"
+                                    + " replay.max-window ({}) to replay the candle that reached it",
                             fill.planId(),
                             failures,
                             firstFailedAt,
+                            properties.replay().maxWindow(),
                             failure);
                     return;
                 }

@@ -98,6 +98,7 @@ public final class SyntheticKlines {
 
     static Duration intervalOf(String code) {
         return switch (code) {
+            case "1m" -> Duration.ofMinutes(1);
             case "15m" -> Duration.ofMinutes(15);
             case "1h" -> Duration.ofHours(1);
             case "4h" -> Duration.ofHours(4);

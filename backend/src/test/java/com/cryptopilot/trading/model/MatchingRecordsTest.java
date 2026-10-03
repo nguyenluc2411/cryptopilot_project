@@ -68,6 +68,20 @@ class MatchingRecordsTest {
     }
 
     @Test
+    void A04_twoRangesMerged_keepTheExtremesTheEarliestAndLatestTime_andAreClosedWhenEitherIs() {
+        PriceRange forming = new PriceRange(
+                MarketType.SPOT, ID, new BigDecimal("95"), new BigDecimal("105"), AT, AT.plusSeconds(10));
+        PriceRange closed = new PriceRange(
+                MarketType.SPOT, ID, new BigDecimal("97"), new BigDecimal("110"), AT, AT.plusSeconds(59), true);
+
+        PriceRange expected = new PriceRange(
+                MarketType.SPOT, ID, new BigDecimal("95"), new BigDecimal("110"), AT, AT.plusSeconds(59), true);
+        assertThat(forming.mergedWith(closed)).isEqualTo(expected);
+        assertThat(closed.mergedWith(forming)).isEqualTo(expected);
+        assertThat(forming.mergedWith(forming).closed()).isFalse();
+    }
+
+    @Test
     void BR33_aFill_needsEveryField() {
         assertThatNullPointerException().isThrownBy(() -> new Fill(null, P, AT));
         assertThatNullPointerException().isThrownBy(() -> new Fill(ID, null, AT));

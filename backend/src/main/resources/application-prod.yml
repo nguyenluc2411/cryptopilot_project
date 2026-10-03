@@ -46,6 +46,12 @@ cryptopilot:
     futures-metrics:
       # NSF-04 runs in this profile: the futures metrics and funding settlements of the streamed pairs.
       enabled: true
+  trading:
+    matching:
+      replay:
+        # T-043 runs in this profile: after a restart, the closed 1-minute candles missed since the
+        # watermark are fetched from the exchange and replayed (A-04).
+        enabled: true
 
 springdoc:
   # TECHNICAL_DESIGN 8: no API document and no Swagger UI in production.

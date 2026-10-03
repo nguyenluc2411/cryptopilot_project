@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.LeverageTier;
+import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
@@ -15,6 +16,7 @@ import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
+import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -34,7 +36,18 @@ class MarketApiImplTest {
     private final CryptoPairRepository pairs = mock(CryptoPairRepository.class);
     private final LeverageBracketRepository brackets = mock(LeverageBracketRepository.class);
     private final PriceCacheService prices = mock(PriceCacheService.class);
-    private final MarketApiImpl api = new MarketApiImpl(pairs, brackets, prices);
+    private final MinuteKlineService minuteKlines = mock(MinuteKlineService.class);
+    private final MarketApiImpl api = new MarketApiImpl(pairs, brackets, prices, minuteKlines);
+
+    @Test
+    void A04_closedMinuteCandles_areFetchedByTheMinuteKlineService() {
+        UUID pairId = UUID.randomUUID();
+        Instant from = Instant.parse("2026-10-03T08:00:00Z");
+        MinuteKlineBatch batch = MinuteKlineBatch.of(List.of());
+        when(minuteKlines.closedMinuteKlines(MarketType.FUTURES, pairId, from)).thenReturn(batch);
+
+        assertThat(api.closedMinuteKlines(MarketType.FUTURES, pairId, from)).isSameAs(batch);
+    }
 
     @Test
     void BR07_aPairEnabledOnTheMarketWithItsFilters_isTradable() {

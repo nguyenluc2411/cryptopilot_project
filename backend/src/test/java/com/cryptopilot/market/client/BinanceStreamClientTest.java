@@ -17,9 +17,10 @@ import tools.jackson.databind.json.JsonMapper;
 class BinanceStreamClientTest {
 
     @Test
-    void NSF03_aSpotPair_streamsItsFourStoredTimeframesAndItsTicker() {
+    void NSF03_aSpotPair_streamsItsMinuteCandlesItsFourStoredTimeframesAndItsTicker() {
         assertThat(BinanceStreamClient.streamsOf(BinanceVenue.SPOT, "BTCUSDT"))
                 .containsExactly(
+                        "btcusdt@kline_1m",
                         "btcusdt@kline_15m",
                         "btcusdt@kline_1h",
                         "btcusdt@kline_4h",
@@ -28,9 +29,10 @@ class BinanceStreamClientTest {
     }
 
     @Test
-    void NSF03_aFuturesPair_streamsItsFourStoredTimeframesAndItsMarkPrice() {
+    void NSF03_aFuturesPair_streamsItsMinuteCandlesItsFourStoredTimeframesAndItsMarkPrice() {
         assertThat(BinanceStreamClient.streamsOf(BinanceVenue.USD_M_FUTURES, "ETHUSDT"))
                 .containsExactly(
+                        "ethusdt@kline_1m",
                         "ethusdt@kline_15m",
                         "ethusdt@kline_1h",
                         "ethusdt@kline_4h",
