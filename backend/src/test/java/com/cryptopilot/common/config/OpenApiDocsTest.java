@@ -64,9 +64,13 @@ class OpenApiDocsTest {
             "/api/v1/plans/{id}/activate",
             "/api/v1/plans/{id}/cancel",
             "/api/v1/watchlist",
-            "/api/v1/watchlist/{id}");
+            "/api/v1/watchlist/{id}",
+            "/api/v1/alerts",
+            "/api/v1/alerts/{id}",
+            "/api/v1/alerts/{id}/pause",
+            "/api/v1/alerts/{id}/resume");
 
-    private static final int OPERATIONS = 35;
+    private static final int OPERATIONS = 41;
 
     @Autowired
     private MockMvc mvc;
@@ -101,6 +105,22 @@ class OpenApiDocsTest {
                 .isEqualTo("string");
         assertThat((String) JsonPath.read(body, "$.components.schemas.PairResponse.properties.tickSize.format"))
                 .isEqualTo("decimal");
+    }
+
+    /** D-76: a line cross has no threshold, and the MSG26 confirmation may name the count it confirms. */
+    @Test
+    @SuppressWarnings("unchecked") // T-054: the schema object of a JSON document is read as a raw map
+    void D76_theThresholdIsOptional_andTheRemovalTakesAnOptionalExpectedCount() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Object> alert = JsonPath.read(body, "$.components.schemas.AlertResponse");
+        assertThat((Map<String, Object>) alert.get("properties")).containsKey("threshold");
+        assertThat((java.util.List<Object>) alert.getOrDefault("required", java.util.List.of()))
+                .doesNotContain("threshold");
+        java.util.List<Map<String, Object>> parameters = JsonPath.read(
+                body, "$.paths['/api/v1/watchlist/{id}'].delete.parameters[?(@.name == 'expectedAlertCount')]");
+        assertThat(parameters).singleElement().satisfies(p -> assertThat(p.get("required"))
+                .isNotEqualTo(true));
     }
 
     /** The session-only operations name the bearer scheme; sign-in and the market data do not. */

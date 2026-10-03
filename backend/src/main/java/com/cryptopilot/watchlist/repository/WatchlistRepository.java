@@ -27,6 +27,10 @@ public interface WatchlistRepository extends Repository<Watchlist, UUID> {
     @Transactional(readOnly = true)
     boolean existsByUserIdAndPairId(UUID userId, UUID pairId);
 
+    /** The Trader's row for this pair, which an alert hangs on (BR-16). */
+    @Transactional(readOnly = true)
+    Optional<Watchlist> findByUserIdAndPairId(UUID userId, UUID pairId);
+
     /** How many pairs the Trader watches: what {@code WATCHLIST_MAX} counts (BR-15, BR-62). */
     @Transactional(readOnly = true)
     long countByUserId(UUID userId);

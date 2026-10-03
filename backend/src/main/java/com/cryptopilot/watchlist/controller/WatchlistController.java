@@ -86,7 +86,9 @@ public class WatchlistController {
     @ApiResponse(responseCode = "204", description = "Removed")
     @ApiResponse(
             responseCode = "400",
-            description = "MSG26: the pair has alerts and `confirm` is not true; nothing was removed")
+            description =
+                    "MSG26: the pair has alerts and `confirm` is not true, or `expectedAlertCount` is no longer the"
+                            + " number of alerts; nothing was removed")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such row of the caller")
     @DeleteMapping("/{id}")
@@ -96,8 +98,13 @@ public class WatchlistController {
             @PathVariable UUID id,
             @Parameter(description = "true once the Trader confirmed MSG26; default false")
                     @RequestParam(defaultValue = "false")
-                    boolean confirm) {
-        watchlist.remove(callerOf(caller), id, confirm);
+                    boolean confirm,
+            @Parameter(
+                            description = "The {n} of the MSG26 the Trader confirmed; when the row now holds another"
+                                    + " number, MSG26 answers again with it. Optional")
+                    @RequestParam(required = false)
+                    Long expectedAlertCount) {
+        watchlist.remove(callerOf(caller), id, confirm, expectedAlertCount);
     }
 
     private static UUID callerOf(Jwt caller) {

@@ -35,12 +35,14 @@ alert,cooldown_minutes,integer,32,0,YES
 alert,created_at,timestamp with time zone,,,NO
 alert,expires_at,timestamp with time zone,,,YES
 alert,indicator_name,character varying,,,YES
+alert,last_bar_open_time,timestamp with time zone,,,YES
+alert,last_evaluated_value,numeric,28,12,YES
 alert,last_triggered_at,timestamp with time zone,,,YES
 alert,market_type,character varying,,,NO
 alert,notify_email,boolean,,,NO
 alert,notify_in_app,boolean,,,NO
 alert,notify_push,boolean,,,NO
-alert,threshold_value,numeric,28,12,NO
+alert,threshold_value,numeric,28,12,YES
 alert,timeframe,character varying,,,YES
 alert,trigger_count,integer,32,0,NO
 alert,trigger_mode,character varying,,,NO

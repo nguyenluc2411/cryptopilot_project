@@ -29,7 +29,15 @@ public interface WatchlistService {
 
     /**
      * Removes one of the caller's rows and its alerts. A row with alerts needs {@code confirmed}: without it MSG26
-     * answers with the number of alerts and nothing is removed.
+     * answers with the number of alerts and nothing is removed. A confirmation that names the number of alerts the
+     * Trader saw is checked against the count under the D-63 lock; when an alert was added or removed since, MSG26
+     * answers again with the new number and nothing is removed, so a Trader never deletes alerts they were not shown.
+     *
+     * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly, ch. 7 (lost updates;
+     * compare-and-set).
+     *
+     * @param expectedAlertCount the {n} of the MSG26 the Trader confirmed, or {@code null} to confirm whatever the
+     *     row holds
      */
-    void remove(UUID userId, UUID watchlistId, boolean confirmed);
+    void remove(UUID userId, UUID watchlistId, boolean confirmed, Long expectedAlertCount);
 }

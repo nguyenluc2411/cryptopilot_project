@@ -117,13 +117,19 @@ public class WatchlistServiceImpl implements WatchlistService {
 
     @Override
     @Transactional
-    public void remove(UUID userId, UUID watchlistId, boolean confirmed) {
+    public void remove(UUID userId, UUID watchlistId, boolean confirmed, Long expectedAlertCount) {
+        // Alerts are created under this lock, so none can join the row between the count and the delete (BR-16).
+        lock.lock(userId);
         Watchlist row = owned(userId, watchlistId);
         long alerts = watchlist.countAlerts(row.getId());
-        if (alerts > 0 && !confirmed) {
+        boolean unconfirmed = alerts > 0 && !confirmed;
+        // Compare-and-set: the Trader confirmed a number of alerts; if it changed since, ask again with the new one.
+        boolean stale = confirmed && expectedAlertCount != null && expectedAlertCount != alerts;
+        if (unconfirmed || stale) {
             throw new BusinessException(
                     ErrorCode.WATCHLIST_REMOVAL_CONFIRMATION_REQUIRED,
-                    "removing watchlist row " + row.getId() + " deletes " + alerts + " alerts and was not confirmed",
+                    "removing watchlist row " + row.getId() + " deletes " + alerts + " alerts and was not confirmed"
+                            + (stale ? " for that number (expected " + expectedAlertCount + ")" : ""),
                     listingOf(row).symbol(),
                     alerts);
         }

@@ -127,6 +127,70 @@ class SchemaConstraintTest {
                 .update());
     }
 
+    @Test
+    void BR19_aCooldownBelowOneMinute_isRejected() {
+        UUID watchlistId = insertWatchlist();
+        insertAlert(watchlistId, "SPOT", "PRICE", null, null, 1, null);
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertAlert(watchlistId, "SPOT", "PRICE", null, null, 0, null));
+    }
+
+    @Test
+    void UC13_anExpiryMoreThanNinetyDaysAhead_isRejected() {
+        UUID watchlistId = insertWatchlist();
+        insertAlert(watchlistId, "SPOT", "PRICE", null, null, 1, NOW.plusDays(90));
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertAlert(watchlistId, "SPOT", "PRICE", null, null, 1, NOW.plusDays(91)));
+    }
+
+    @Test
+    void A40_aFuturesIndicatorOnSpot_isRejected() {
+        UUID watchlistId = insertWatchlist();
+        insertAlert(watchlistId, "FUTURES", "INDICATOR", "FUNDING_RATE", "1h", 1, null);
+        insertAlert(watchlistId, "SPOT", "INDICATOR", "RSI_14", "4h", 1, null);
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertAlert(watchlistId, "SPOT", "INDICATOR", "FUNDING_RATE", "1h", 1, null));
+    }
+
+    @Test
+    void A40_aFuturesIndicatorOnAnotherTimeframe_isRejected() {
+        UUID watchlistId = insertWatchlist();
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(
+                        () -> insertAlert(watchlistId, "FUTURES", "INDICATOR", "OPEN_INTEREST_CHANGE", "4h", 1, null));
+    }
+
+    @Test
+    void D76_aLineCross_isStoredWithoutAThreshold() {
+        UUID watchlistId = insertWatchlist();
+
+        insertCross(watchlistId, null);
+    }
+
+    @Test
+    void D76_aLineCrossWithAThreshold_isRejected() {
+        UUID watchlistId = insertWatchlist();
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertCross(watchlistId, java.math.BigDecimal.ZERO));
+    }
+
+    @Test
+    void D76_aPriceAlertWithoutAThreshold_isRejected() {
+        UUID watchlistId = insertWatchlist();
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> jdbc.sql("""
+                        insert into alert (alert_id, user_id, watchlist_id, market_type, alert_type,
+                                           condition_operator, trigger_mode, alert_status, created_at, updated_at)
+                        values (?, ?, ?, 'SPOT', 'PRICE', 'CROSS_ABOVE', 'ONCE', 'ACTIVE', ?, ?)""")
+                .params(UUID.randomUUID(), userId, watchlistId, NOW, NOW)
+                .update());
+    }
+
     // ---------------------------------------------------------------- trading plans
 
     @Test
@@ -373,6 +437,46 @@ class SchemaConstraintTest {
                                                created_at, updated_at)
                         values (?, ?, ?, ?, ?, ?)""").params(id, userId, pairId, NOW, NOW, NOW).update();
         return id;
+    }
+
+    private void insertCross(UUID watchlistId, java.math.BigDecimal threshold) {
+        jdbc.sql("""
+                        insert into alert (alert_id, user_id, watchlist_id, market_type, alert_type, indicator_name,
+                                           timeframe, condition_operator, threshold_value, trigger_mode, alert_status,
+                                           created_at, updated_at)
+                        values (?, ?, ?, 'SPOT', 'INDICATOR', 'MACD_CROSS', '1h', 'CROSS_ABOVE',
+                                cast(? as numeric), 'ONCE', 'ACTIVE', ?, ?)""")
+                .params(UUID.randomUUID(), userId, watchlistId, threshold, NOW, NOW)
+                .update();
+    }
+
+    private void insertAlert(
+            UUID watchlistId,
+            String market,
+            String type,
+            String indicator,
+            String timeframe,
+            Integer cooldownMinutes,
+            OffsetDateTime expiresAt) {
+        jdbc.sql("""
+                        insert into alert (alert_id, user_id, watchlist_id, market_type, alert_type, indicator_name,
+                                           timeframe, condition_operator, threshold_value, trigger_mode,
+                                           cooldown_minutes, alert_status, expires_at, created_at, updated_at)
+                        values (?, ?, ?, ?, ?, cast(? as varchar), cast(? as varchar), 'CROSS_ABOVE', 70, 'EVERY_TIME',
+                                cast(? as integer), 'ACTIVE', cast(? as timestamptz), ?, ?)""")
+                .params(
+                        UUID.randomUUID(),
+                        userId,
+                        watchlistId,
+                        market,
+                        type,
+                        indicator,
+                        timeframe,
+                        cooldownMinutes,
+                        expiresAt,
+                        NOW,
+                        NOW)
+                .update();
     }
 
     private UUID insertPlan(String marketType, String direction, Integer leverage) {

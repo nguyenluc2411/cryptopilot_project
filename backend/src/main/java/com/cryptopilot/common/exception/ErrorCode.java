@@ -256,7 +256,14 @@ public enum ErrorCode {
      * number of alerts; the client asks and sends the removal again, confirmed. 400, as
      * {@link #RISK_PROFILE_CONFIRMATION_REQUIRED} (D-65).
      */
-    WATCHLIST_REMOVAL_CONFIRMATION_REQUIRED(HttpStatus.BAD_REQUEST, "MSG26");
+    WATCHLIST_REMOVAL_CONFIRMATION_REQUIRED(HttpStatus.BAD_REQUEST, "MSG26"),
+
+    /**
+     * The alert's status does not allow the action: pausing an alert that is not ACTIVE, resuming one that is not
+     * PAUSED (SRS 3.4.3). SRS section 5.3 has no text for this, so it borrows MSG43 like
+     * {@link #TRADING_PLAN_STATUS_TRANSITION_INVALID} (A-38).
+     */
+    ALERT_STATUS_TRANSITION_INVALID(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;
