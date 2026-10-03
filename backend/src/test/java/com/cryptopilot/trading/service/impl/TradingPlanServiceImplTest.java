@@ -362,6 +362,52 @@ class TradingPlanServiceImplTest {
     }
 
     @Test
+    void BR33_aMarketPlanActivated_isFilledAtOnce_andNeverWaitsInTheBooks() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
+
+        TradingPlanResponse plan = service.create(USER, activating(spotMarket("95", "110")));
+
+        assertThat(plan.status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(saved.getExecutedAt()).isEqualTo(NOW);
+        assertThat(saved.getActivatedAt()).isEqualTo(NOW);
+        verify(events, never()).publishEvent(any(TradingPlanActivated.class));
+    }
+
+    @Test
+    void BR33_aLongLimitTheLastPriceAlreadyReached_isFilledAtActivation_belowAndExactlyAtTheEntry() {
+        for (String last : new String[] {"99.5", "100"}) {
+            when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal(last)));
+
+            TradingPlanResponse plan = service.create(USER, activating(spotLimit("100", "95", "110")));
+
+            assertThat(plan.status()).as("last price %s", last).isEqualTo(PlanStatus.EXECUTED);
+            assertThat(saved.getExecutedAt()).isEqualTo(NOW);
+        }
+        verify(events, never()).publishEvent(any(TradingPlanActivated.class));
+    }
+
+    @Test
+    void BR33_aLongLimitAboveTheLastPrice_waitsForTheMatchingEngine() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.01")));
+
+        TradingPlanResponse plan = service.create(USER, activating(spotLimit("100", "95", "110")));
+
+        assertThat(plan.status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(saved.getExecutedAt()).isNull();
+        verify(events).publishEvent(any(TradingPlanActivated.class));
+    }
+
+    @Test
+    void BR33_aLimitActivatedWithoutACurrentLastPrice_waitsForTheMatchingEngine() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.empty());
+
+        TradingPlanResponse plan = service.create(USER, activating(spotLimit("100", "95", "110")));
+
+        assertThat(plan.status()).isEqualTo(PlanStatus.ACTIVE);
+        verify(events).publishEvent(any(TradingPlanActivated.class));
+    }
+
+    @Test
     void MSG27_saveAndActivate_overThePlanLimit_savesNothing() {
         when(plans.countActive(USER)).thenReturn(3L);
         doThrow(new BusinessException(ErrorCode.PLAN_LIMIT_REACHED, "FREE allows 3", 3, "plans", "FREE"))
