@@ -1,8 +1,12 @@
 package com.cryptopilot.trading.service;
 
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.TrackedEntry;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * The storage side of the matching engine: what the books start from and the fills they decide.
@@ -22,4 +26,13 @@ public interface MatchingService {
      * @return whether this call filled it; {@code false} when the plan was cancelled, expired or filled first
      */
     boolean fill(Fill fill);
+
+    /**
+     * The open time of the pair's last 1-minute candle that was closed and fully matched, from which a restart replays
+     * (A-04); empty when none was recorded.
+     */
+    Optional<Instant> watermark(MarketType market, UUID pairId);
+
+    /** Records that the candle opened at {@code openTime} is closed and fully matched; never moves backwards. */
+    void advanceWatermark(MarketType market, UUID pairId, Instant openTime);
 }

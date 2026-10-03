@@ -1,0 +1,448 @@
+package com.cryptopilot.trading.service.impl;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MinuteKline;
+import com.cryptopilot.market.MinuteKlineBatch;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.config.MatchingProperties;
+import com.cryptopilot.trading.job.MatchingWorker;
+import com.cryptopilot.trading.model.PriceRange;
+import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.enums.Direction;
+import com.cryptopilot.trading.service.MatchingService;
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadFactory;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+
+/**
+ * The feed between the {@code kline_1m} stream and the matching engine: what is held, what is replayed and in which
+ * order the engine receives it. The engine and the exchange are mocked; the replay thread is joined, so every test is
+ * deterministic.
+ *
+ * <p>Rule: NSF-07; TECHNICAL_DESIGN 7.7; A-04; D-78; Q-34.
+ */
+class MinuteKlineFeedTest {
+
+    private static final UUID PAIR = UUID.fromString("019b76da-a800-7000-8000-00000000b001");
+    private static final UUID OTHER_PAIR = UUID.fromString("019b76da-a800-7000-8000-00000000b002");
+    private static final Instant NOW = Instant.parse("2026-10-03T08:10:30Z");
+    private static final Instant M0 = Instant.parse("2026-10-03T08:00:00Z");
+
+    private final MatchingWorker worker = mock(MatchingWorker.class);
+    private final MatchingService matching = mock(MatchingService.class);
+    private final MarketApi market = mock(MarketApi.class);
+    private final List<PriceRange> submitted = new CopyOnWriteArrayList<>();
+    private final List<TrackedEntry> entries = new ArrayList<>();
+    private final List<Thread> threads = new CopyOnWriteArrayList<>();
+    private final ThreadFactory recording = task -> {
+        Thread thread = Thread.ofVirtual().unstarted(task);
+        threads.add(thread);
+        return thread;
+    };
+    private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
+    private final Logger feedLogger = (Logger) LoggerFactory.getLogger(MinuteKlineFeed.class);
+
+    private MinuteKlineFeed feed;
+
+    @BeforeEach
+    void setUp() {
+        logs.start();
+        feedLogger.addAppender(logs);
+        when(worker.isRunning()).thenReturn(true);
+        doAnswer(call -> submitted.add(call.getArgument(0))).when(worker).submit(any());
+        when(market.closedMinuteKlines(any(), any(), any())).thenReturn(MinuteKlineBatch.of(List.of()));
+    }
+
+    @AfterEach
+    void tearDown() {
+        feedLogger.detachAppender(logs);
+        if (feed != null) {
+            feed.stop();
+        }
+    }
+
+    @Test
+    void NSF07_updatesBeforeTheStart_areHeldOneRangePerMinute_andHandedOnInOrderAtTheStart() throws Exception {
+        feed = feed(replay(true, 3, 1440));
+
+        feed.onMinuteKline(update(M0, "100", "101", false, 10));
+        feed.onMinuteKline(update(M0, "99", "101", false, 20));
+        feed.onMinuteKline(update(M0, "99", "102", true, 60));
+        feed.onMinuteKline(update(minute(1), "101", "101", false, 5));
+        assertThat(submitted).isEmpty();
+        startAndJoin();
+
+        assertThat(submitted)
+                .containsExactly(range(M0, "99", "102", true, 60), range(minute(1), "101", "101", false, 5));
+        verify(worker).start();
+    }
+
+    @Test
+    void NSF07_afterTheStart_aPairWithoutEntries_isLive_andItsUpdatesAreRangesFromTheCandleOpenTime() throws Exception {
+        feed = feed(replay(true, 3, 1440));
+        startAndJoin();
+
+        feed.onMinuteKline(update(M0, "99", "101", false, 42));
+
+        assertThat(submitted).containsExactly(range(M0, "99", "101", false, 42));
+        verifyNoInteractions(market);
+    }
+
+    @Test
+    void A04_aPairWithEntries_isReplayedFromTheCandleAfterItsWatermark_pageByPage() throws Exception {
+        activeEntry(PAIR, minute(-30));
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1)))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(1)), closed(minute(2)))));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(3)))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(3)))));
+        feed = feed(replay(true, 3, 1440));
+
+        startAndJoin();
+
+        assertThat(submitted)
+                .extracting(PriceRange::from, PriceRange::closed)
+                .containsExactly(tuple(minute(1), true), tuple(minute(2), true), tuple(minute(3), true));
+        verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(4));
+    }
+
+    @Test
+    void A04_withoutAWatermark_theReplayStartsAtTheMinuteOfTheFirstActivation() throws Exception {
+        activeEntry(PAIR, minute(5).plusSeconds(40));
+        activeEntry(PAIR, minute(3).plusSeconds(10));
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.empty());
+        feed = feed(replay(true, 3, 1440));
+
+        startAndJoin();
+
+        verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(3));
+    }
+
+    @Test
+    void Q34_aWatermarkOlderThanTheWindow_startsTheReplayAtTheWindow_andLogsTheSkippedCandles() throws Exception {
+        activeEntry(PAIR, M0.minus(Duration.ofDays(3)));
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0.minus(Duration.ofDays(2))));
+        feed = feed(new MatchingProperties.Replay(true, Duration.ofHours(24), Duration.ZERO, 3, 1440));
+
+        startAndJoin();
+
+        Instant windowStart = minute(10).minus(Duration.ofHours(24));
+        verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, windowStart);
+        assertThat(logs.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage())
+                    .contains("beyond the replay window")
+                    .contains(PAIR.toString());
+        });
+    }
+
+    /**
+     * Live updates arrive while the replay fetches: they are held. The replay covers minute 2, so the held minute 2 is
+     * dropped and only minute 3 follows the replayed candles; a late closed update of minute 2 is dropped too.
+     */
+    @Test
+    void A04_liveUpdatesDuringTheReplay_areHeld_andAMinuteTheReplayCoveredIsNotAppliedTwice() throws Exception {
+        activeEntry(PAIR, M0);
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1))).thenAnswer(call -> {
+            feed.onMinuteKline(update(minute(2), "90", "95", false, 30));
+            feed.onMinuteKline(update(minute(3), "96", "97", false, 5));
+            assertThat(submitted).as("held while the replay runs").isEmpty();
+            return MinuteKlineBatch.of(List.of(closed(minute(1)), closed(minute(2))));
+        });
+        feed = feed(replay(true, 3, 1440));
+
+        startAndJoin();
+        feed.onMinuteKline(update(minute(2), "90", "95", true, 60));
+        feed.onMinuteKline(update(minute(3), "96", "98", false, 10));
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1), minute(2), minute(3), minute(3));
+        assertThat(submitted.get(1).closed())
+                .as("minute 2 comes from the replay")
+                .isTrue();
+    }
+
+    @Test
+    void A04_aCandleThatClosesDuringTheReplay_isFetchedAgainBeforeTheHeldUpdatesGoOn() throws Exception {
+        activeEntry(PAIR, M0);
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1))).thenAnswer(call -> {
+            feed.onMinuteKline(update(minute(3), "96", "97", false, 5));
+            return MinuteKlineBatch.of(List.of(closed(minute(1))));
+        });
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(2)))
+                .thenReturn(MinuteKlineBatch.of(List.of()))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(2)))));
+        feed = feed(replay(true, 3, 1440));
+
+        startAndJoin();
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1), minute(2), minute(3));
+        assertThat(logs.list).noneMatch(event -> event.getLevel() == Level.WARN);
+    }
+
+    @Test
+    void A04_aHoleThatStaysAfterTheCatchUps_isLogged_andThePairGoesLiveWithoutGuessing() throws Exception {
+        activeEntry(PAIR, M0);
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1))).thenAnswer(call -> {
+            feed.onMinuteKline(update(minute(5), "96", "97", false, 5));
+            return MinuteKlineBatch.of(List.of());
+        });
+        feed = feed(replay(true, 2, 1440));
+
+        startAndJoin();
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(5));
+        verify(market, times(3)).closedMinuteKlines(MarketType.SPOT, PAIR, minute(1));
+        assertThat(logs.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains("no candles from " + minute(1) + " to " + minute(5));
+        });
+    }
+
+    @Test
+    void A04_aRefusalOfTheExchange_isAskedAgainAtItsTime() throws Exception {
+        activeEntry(PAIR, M0);
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1)))
+                .thenReturn(MinuteKlineBatch.refusedUntil(NOW.minusSeconds(1)))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(1)))));
+        feed = feed(replay(true, 3, 1440));
+
+        startAndJoin();
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1));
+    }
+
+    @Test
+    void A04_aReplayThatFails_letsThePairGoLive_withTheFailureLogged() throws Exception {
+        activeEntry(PAIR, M0);
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(1))).thenAnswer(call -> {
+            feed.onMinuteKline(update(minute(1), "96", "97", false, 5));
+            throw new IllegalStateException("market down");
+        });
+        feed = feed(replay(true, 3, 1440));
+
+        startAndJoin();
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1));
+        assertThat(logs.list).anySatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
+    }
+
+    @Test
+    void A04_withTheReplayOff_everyPairGoesLiveAtTheStart_andTheExchangeIsNeverAsked() throws Exception {
+        activeEntry(PAIR, M0);
+        feed = feed(replay(false, 3, 1440));
+        feed.onMinuteKline(update(minute(9), "96", "97", false, 5));
+
+        startAndJoin();
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(9));
+        verifyNoInteractions(market);
+        verify(matching, never()).watermark(any(), any());
+    }
+
+    @Test
+    void NSF07_withMatchingOff_updatesAreIgnored_andNothingStarts() {
+        feed = new MinuteKlineFeed(
+                worker,
+                matching,
+                market,
+                new MatchingProperties(
+                        false,
+                        1,
+                        1,
+                        new MatchingProperties.Retry(Duration.ZERO, Duration.ZERO, 0, Duration.ofMinutes(10)),
+                        60,
+                        Duration.ofSeconds(1),
+                        replay(true, 3, 1440)),
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                recording);
+
+        feed.onMinuteKline(update(M0, "99", "101", false, 1));
+        feed.start();
+
+        verify(worker, never()).start();
+        assertThat(submitted).isEmpty();
+        assertThat(threads).isEmpty();
+    }
+
+    @Test
+    void NSF07_whenTheEngineDoesNotStart_nothingIsReplayedOrHandedOn() {
+        when(worker.isRunning()).thenReturn(false);
+        feed = feed(replay(true, 3, 1440));
+        feed.onMinuteKline(update(M0, "99", "101", false, 1));
+
+        feed.start();
+
+        assertThat(threads).isEmpty();
+        assertThat(submitted).isEmpty();
+        assertThat(logs.list).anySatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
+    }
+
+    @Test
+    void NSF07_heldMinutes_areBounded_theOldestDroppedWithAWarning() throws Exception {
+        feed = feed(replay(true, 3, 2));
+
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+        feed.onMinuteKline(update(minute(2), "1", "2", true, 60));
+        feed.onMinuteKline(update(minute(3), "1", "2", false, 1));
+        startAndJoin();
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(2), minute(3));
+        assertThat(logs.list)
+                .anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("dropped"));
+    }
+
+    @Test
+    void NSF07_aMissingMinuteInTheLiveFeed_isLogged_andNothingIsGuessedForIt() throws Exception {
+        feed = feed(replay(true, 3, 1440));
+        startAndJoin();
+
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+        feed.onMinuteKline(update(minute(4), "1", "2", false, 1));
+
+        assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1), minute(4));
+        assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
+                .contains("no candles from " + minute(2) + " to " + minute(4)));
+    }
+
+    @Test
+    void NSF07_anUpdateStampedBeforeItsCandleOpened_isTakenAtTheOpenTime() throws Exception {
+        feed = feed(replay(true, 3, 1440));
+        startAndJoin();
+
+        feed.onMinuteKline(
+                new MinuteKline(MarketType.SPOT, PAIR, M0, BigDecimal.ONE, BigDecimal.TEN, false, M0.minusMillis(5)));
+
+        assertThat(submitted.getFirst().at()).isEqualTo(M0);
+    }
+
+    @Test
+    void NSF07_aStopThenAStart_replaysAgain_andTheOtherPairsWaitInBetween() throws Exception {
+        activeEntry(PAIR, M0);
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
+        feed = feed(replay(true, 0, 1440));
+        startAndJoin();
+
+        feed.stop();
+        feed.onMinuteKline(new MinuteKline(
+                MarketType.SPOT, OTHER_PAIR, minute(7), BigDecimal.ONE, BigDecimal.TEN, false, minute(7)));
+        assertThat(submitted).isEmpty();
+        startAndJoin();
+
+        assertThat(submitted).extracting(PriceRange::pairId).containsExactly(OTHER_PAIR);
+        verify(market, times(2)).closedMinuteKlines(MarketType.SPOT, PAIR, minute(1));
+        verify(worker, times(2)).start();
+    }
+
+    @Test
+    void A04_anEntryOfAnotherMarket_isReplayedOnItsOwnMarket() throws Exception {
+        when(matching.activeEntries())
+                .thenReturn(List.of(new TrackedEntry(
+                        UUID.randomUUID(), MarketType.FUTURES, PAIR, Direction.SHORT, BigDecimal.TEN, M0)));
+        when(matching.watermark(MarketType.FUTURES, PAIR)).thenReturn(Optional.of(M0));
+        feed = feed(replay(true, 0, 1440));
+
+        startAndJoin();
+
+        verify(market).closedMinuteKlines(MarketType.FUTURES, PAIR, minute(1));
+        verify(market, never()).closedMinuteKlines(eq(MarketType.SPOT), any(), any());
+    }
+
+    private MinuteKlineFeed feed(MatchingProperties.Replay replay) {
+        return new MinuteKlineFeed(
+                worker,
+                matching,
+                market,
+                new MatchingProperties(
+                        true,
+                        1,
+                        100,
+                        new MatchingProperties.Retry(Duration.ZERO, Duration.ZERO, 0, Duration.ofMinutes(10)),
+                        60,
+                        Duration.ofSeconds(5),
+                        replay),
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                recording);
+    }
+
+    private void startAndJoin() throws InterruptedException {
+        int before = threads.size();
+        feed.start();
+        for (Thread thread : new ArrayList<>(threads.subList(before, threads.size()))) {
+            thread.join(Duration.ofSeconds(5));
+            assertThat(thread.isAlive()).isFalse();
+        }
+    }
+
+    private void activeEntry(UUID pair, Instant activatedAt) {
+        entries.add(new TrackedEntry(
+                UUID.randomUUID(), MarketType.SPOT, pair, Direction.LONG, new BigDecimal("100"), activatedAt));
+        when(matching.activeEntries()).thenReturn(List.copyOf(entries));
+    }
+
+    private static MatchingProperties.Replay replay(boolean enabled, int catchUps, int maxHeld) {
+        return new MatchingProperties.Replay(enabled, Duration.ofHours(24), Duration.ZERO, catchUps, maxHeld);
+    }
+
+    private static Instant minute(long n) {
+        return M0.plus(Duration.ofMinutes(n));
+    }
+
+    private static MinuteKline update(Instant open, String low, String high, boolean closed, long seconds) {
+        return new MinuteKline(
+                MarketType.SPOT,
+                PAIR,
+                open,
+                new BigDecimal(low),
+                new BigDecimal(high),
+                closed,
+                open.plusSeconds(seconds).minusMillis(closed ? 1 : 0));
+    }
+
+    private static MinuteKline closed(Instant open) {
+        return update(open, "100", "101", true, 60);
+    }
+
+    private static PriceRange range(Instant open, String low, String high, boolean closed, long seconds) {
+        return new PriceRange(
+                MarketType.SPOT,
+                PAIR,
+                new BigDecimal(low),
+                new BigDecimal(high),
+                open,
+                open.plusSeconds(seconds).minusMillis(closed ? 1 : 0),
+                closed);
+    }
+}

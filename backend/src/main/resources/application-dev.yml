@@ -57,3 +57,9 @@ cryptopilot:
       # Q-16, dev only: activate the seed symbols above on every market where the exchange trades them, once
       # after the first symbol synchronisation, so NSF-03 has pairs to stream. Never set in prod (BR-07).
       activate-seed-symbols: true
+  trading:
+    matching:
+      replay:
+        # T-043 runs in this profile: after a restart, the closed 1-minute candles missed since the
+        # watermark are fetched from the exchange and replayed (A-04).
+        enabled: true

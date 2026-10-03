@@ -19,8 +19,10 @@ import java.util.UUID;
  * @param from the open time of the 1-minute candle the prices belong to; a fill reached by the range is recorded at
  *     this time, so a live update and the closed candle replayed later give the same fill (D-78)
  * @param at when the latest update in the range was produced
+ * @param closed whether the range holds the candle's final low and high: the candle is closed
  */
-public record PriceRange(MarketType market, UUID pairId, BigDecimal low, BigDecimal high, Instant from, Instant at) {
+public record PriceRange(
+        MarketType market, UUID pairId, BigDecimal low, BigDecimal high, Instant from, Instant at, boolean closed) {
 
     public PriceRange {
         Objects.requireNonNull(market, "market");
@@ -37,8 +39,28 @@ public record PriceRange(MarketType market, UUID pairId, BigDecimal low, BigDeci
         }
     }
 
-    /** One update whose candle opened at {@code at}. */
+    /** Updates of a candle still forming. */
+    public PriceRange(MarketType market, UUID pairId, BigDecimal low, BigDecimal high, Instant from, Instant at) {
+        this(market, pairId, low, high, from, at, false);
+    }
+
+    /** One update whose candle opened at {@code at}, still forming. */
     public PriceRange(MarketType market, UUID pairId, BigDecimal low, BigDecimal high, Instant at) {
-        this(market, pairId, low, high, at, at);
+        this(market, pairId, low, high, at, at, false);
+    }
+
+    /**
+     * This range and another of the same pair as one: the lowest low, the highest high, the earliest and the latest
+     * time, closed when either is. Every price either reached is still reached.
+     */
+    public PriceRange mergedWith(PriceRange other) {
+        return new PriceRange(
+                market,
+                pairId,
+                low.min(other.low),
+                high.max(other.high),
+                from.isBefore(other.from) ? from : other.from,
+                at.isAfter(other.at) ? at : other.at,
+                closed || other.closed);
     }
 }

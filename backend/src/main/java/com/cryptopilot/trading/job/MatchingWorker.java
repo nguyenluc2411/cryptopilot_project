@@ -215,13 +215,7 @@ public class MatchingWorker {
 
     /** Two updates of the same candle as one: the lowest low, the highest high, the earliest and latest time. */
     static PriceRange merge(PriceRange earlier, PriceRange later) {
-        return new PriceRange(
-                earlier.market(),
-                earlier.pairId(),
-                earlier.low().min(later.low()),
-                earlier.high().max(later.high()),
-                earlier.from().isBefore(later.from()) ? earlier.from() : later.from(),
-                earlier.at().isAfter(later.at()) ? earlier.at() : later.at());
+        return earlier.mergedWith(later);
     }
 
     /** Joins the consumers within {@code stopTimeout} in all; forgets those that ended. Guarded by {@code this}. */
@@ -484,6 +478,9 @@ public class MatchingWorker {
             PairKey key = new PairKey(range.market(), range.pairId());
             retryDue(key);
             engine.onRange(range).forEach(fill -> fill(key, fill, null));
+            if (range.closed() && !retries.containsKey(key)) {
+                advanceWatermark(range);
+            }
         }
 
         /** Tries again the pair's failed fills whose back-off has passed; the others keep waiting. */
@@ -505,6 +502,23 @@ public class MatchingWorker {
                 retries.remove(key);
             }
             due.forEach(retry -> fill(key, retry.fill(), retry));
+        }
+
+        /**
+         * The candle is closed and every fill it decided is stored: a restart replays from the next candle. Not
+         * advanced while a fill of the pair waits for a retry, so a restart replays the candle that reached it.
+         */
+        private void advanceWatermark(PriceRange range) {
+            try {
+                matching.advanceWatermark(range.market(), range.pairId(), range.from());
+            } catch (RuntimeException failure) {
+                log.warn(
+                        "NSF-07 {} {} watermark not advanced to {}: {}",
+                        range.market(),
+                        range.pairId(),
+                        range.from(),
+                        failure.toString());
+            }
         }
 
         /**

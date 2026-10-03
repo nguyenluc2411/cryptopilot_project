@@ -1,11 +1,16 @@
 package com.cryptopilot.trading.service.impl;
 
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.repository.MatchingWatermarkRepository;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import com.cryptopilot.trading.service.MatchingService;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -29,6 +34,7 @@ public class MatchingServiceImpl implements MatchingService {
     private static final Logger log = LoggerFactory.getLogger(MatchingServiceImpl.class);
 
     private final TradingPlanRepository plans;
+    private final MatchingWatermarkRepository watermarks;
     private final Clock clock;
 
     @Override
@@ -45,5 +51,17 @@ public class MatchingServiceImpl implements MatchingService {
             log.info("NSF-07 plan {} filled at {} ({})", fill.planId(), fill.price(), fill.executedAt());
         }
         return filled;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Instant> watermark(MarketType market, UUID pairId) {
+        return watermarks.lastCandleOpenTime(market.name(), pairId);
+    }
+
+    @Override
+    @Transactional
+    public void advanceWatermark(MarketType market, UUID pairId, Instant openTime) {
+        watermarks.advance(market.name(), pairId, openTime, clock.instant());
     }
 }

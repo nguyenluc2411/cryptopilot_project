@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -63,6 +64,9 @@ class MatchingWorkerTest {
     private static final MatchingProperties.Retry RETRY_AT_ONCE =
             new MatchingProperties.Retry(Duration.ZERO, Duration.ZERO, 0, Duration.ofMinutes(10));
 
+    private static final MatchingProperties.Replay REPLAY =
+            new MatchingProperties.Replay(false, Duration.ofHours(24), Duration.ZERO, 3, 1440);
+
     private final MatchingService matching = mock(MatchingService.class);
     private final MutableTestClock clock = new MutableTestClock(AT);
     private final List<Thread> started = new CopyOnWriteArrayList<>();
@@ -97,7 +101,7 @@ class MatchingWorkerTest {
     void NSF07_whenDisabled_nothingStartsAndNothingIsQueued() {
         worker = new MatchingWorker(
                 matching,
-                new MatchingProperties(false, 1, 1, RETRY_AT_ONCE, 60, Duration.ofSeconds(5)),
+                new MatchingProperties(false, 1, 1, RETRY_AT_ONCE, 60, Duration.ofSeconds(5), REPLAY),
                 clock,
                 recording,
                 () -> 0.0);
@@ -657,7 +661,7 @@ class MatchingWorkerTest {
         doAnswer(held::pass).when(matching).fill(filledPlan(holder.planId()));
         worker = new MatchingWorker(
                 matching,
-                new MatchingProperties(true, 1, 1, RETRY_AT_ONCE, 3, Duration.ofSeconds(5)),
+                new MatchingProperties(true, 1, 1, RETRY_AT_ONCE, 3, Duration.ofSeconds(5), REPLAY),
                 clock,
                 recording,
                 () -> 0.0);
@@ -736,7 +740,7 @@ class MatchingWorkerTest {
                 .fill(any());
         worker = new MatchingWorker(
                 matching,
-                new MatchingProperties(true, 1, 100, RETRY_AT_ONCE, 60, Duration.ofMillis(200)),
+                new MatchingProperties(true, 1, 100, RETRY_AT_ONCE, 60, Duration.ofMillis(200), REPLAY),
                 clock,
                 recording,
                 () -> 0.0);
@@ -760,6 +764,54 @@ class MatchingWorkerTest {
 
         assertThat(started).hasSize(2);
         assertThat(worker.isRunning()).isTrue();
+    }
+
+    @Test
+    void A04_aClosedCandleFullyMatched_advancesThePairsWatermarkToItsOpenTime_aFormingOneDoesNot() {
+        UUID plan = UUID.randomUUID();
+        worker = started(1, 100);
+        worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
+
+        worker.submit(closed("150", "160", AT));
+        worker.submit(range("99", "101", AT.plusSeconds(60)));
+        worker.submit(closed("99", "101", AT.plusSeconds(60)));
+
+        verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, AT.plusSeconds(60));
+        verify(matching).advanceWatermark(MarketType.SPOT, PAIR, AT);
+        verify(matching, times(2)).advanceWatermark(any(), any(), any());
+    }
+
+    @Test
+    void A04_aClosedCandleWhosePairWaitsToRetryAFill_doesNotAdvanceTheWatermark() {
+        UUID plan = UUID.randomUUID();
+        when(matching.fill(filled(plan, AT)))
+                .thenThrow(new IllegalStateException("database down"))
+                .thenReturn(true);
+        worker = started(1, 100);
+        worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
+
+        worker.submit(closed("99", "101", AT));
+        worker.submit(closed("150", "160", AT.plusSeconds(60)));
+
+        verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, AT.plusSeconds(60));
+        verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, AT);
+    }
+
+    @Test
+    void A04_aWatermarkThatCannotBeWritten_isLogged_andMatchingCarriesOn() {
+        UUID plan = UUID.randomUUID();
+        doThrow(new IllegalStateException("database down")).when(matching).advanceWatermark(MarketType.SPOT, PAIR, AT);
+        worker = started(1, 100);
+        worker.submit(closed("150", "160", AT));
+
+        worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
+        worker.submit(range("99", "101", AT.plusSeconds(60)));
+
+        verify(matching, timeout(WAIT)).fill(filled(plan, AT.plusSeconds(60)));
+        assertThat(logs.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains("watermark");
+        });
     }
 
     @Test
@@ -854,7 +906,8 @@ class MatchingWorkerTest {
                 100,
                 new MatchingProperties.Retry(Duration.ofSeconds(1), Duration.ofSeconds(1), 0, deadline),
                 60,
-                Duration.ofSeconds(5));
+                Duration.ofSeconds(5),
+                REPLAY);
     }
 
     /** Returns once every command queued so far is handled: a marker of another pair is filled after them. */
@@ -867,7 +920,7 @@ class MatchingWorkerTest {
     }
 
     private static MatchingProperties properties(int partitions, int capacity) {
-        return new MatchingProperties(true, partitions, capacity, RETRY_AT_ONCE, 60, Duration.ofSeconds(5));
+        return new MatchingProperties(true, partitions, capacity, RETRY_AT_ONCE, 60, Duration.ofSeconds(5), REPLAY);
     }
 
     private static TrackedEntry entry(UUID planId, Direction direction, String price) {
@@ -902,6 +955,18 @@ class MatchingWorkerTest {
 
     private static TradingPlanCancelled cancelled(UUID planId) {
         return new TradingPlanCancelled(planId, MarketType.SPOT, PAIR);
+    }
+
+    /** The closed candle that opened at {@code open}. */
+    private static PriceRange closed(String low, String high, Instant open) {
+        return new PriceRange(
+                MarketType.SPOT,
+                PAIR,
+                new BigDecimal(low),
+                new BigDecimal(high),
+                open,
+                open.plusSeconds(60).minusMillis(1),
+                true);
     }
 
     private static PriceRange range(String low, String high, Instant at) {

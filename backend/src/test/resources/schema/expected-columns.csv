@@ -156,6 +156,10 @@ leverage_bracket,notional_floor,numeric,28,8,NO
 leverage_bracket,pair_id,uuid,,,NO
 leverage_bracket,updated_at,timestamp with time zone,,,NO
 leverage_bracket,updated_by,uuid,,,YES
+matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
+matching_watermark,market_type,character varying,,,NO
+matching_watermark,pair_id,uuid,,,NO
+matching_watermark,updated_at,timestamp with time zone,,,NO
 news_article,ai_summary,text,,,YES
 news_article,article_id,uuid,,,NO
 news_article,collected_at,timestamp with time zone,,,NO

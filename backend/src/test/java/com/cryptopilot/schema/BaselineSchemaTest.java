@@ -102,10 +102,11 @@ class BaselineSchemaTest {
     @Test
     void schema_holdsTheTechnicalTablesAndNothingElse() {
         assertThat(tableNames())
-                .as("event_publication, flyway_schema_history and binance_ban (V7, the exchange IP ban that must"
-                        + " survive a restart) are technical tables, not business entities")
-                .contains("event_publication", "flyway_schema_history", "binance_ban")
-                .hasSize(BUSINESS_TABLES.size() + 3);
+                .as("event_publication, flyway_schema_history, binance_ban (V7, the exchange IP ban that must"
+                        + " survive a restart) and matching_watermark (V19, where the matching engine stopped) are"
+                        + " technical tables, not business entities")
+                .contains("event_publication", "flyway_schema_history", "binance_ban", "matching_watermark")
+                .hasSize(BUSINESS_TABLES.size() + 4);
     }
 
     @Test
