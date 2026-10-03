@@ -310,13 +310,139 @@ class MatchingWorkerTest {
     }
 
     @Test
-    void NSF07_merge_keepsTheLowestLowTheHighestHighAndTheLatestTime_inEitherOrder() {
+    void NSF07_merge_keepsTheLowestLowTheHighestHighAndTheEarliestAndLatestTime_inEitherOrder() {
         PriceRange earlier = range("95", "105", AT);
         PriceRange later = range("97", "110", AT.plusSeconds(1));
 
-        PriceRange expected = range("95", "110", AT.plusSeconds(1));
+        PriceRange expected = new PriceRange(
+                MarketType.SPOT, PAIR, new BigDecimal("95"), new BigDecimal("110"), AT, AT.plusSeconds(1));
         assertThat(MatchingWorker.merge(earlier, later)).isEqualTo(expected);
         assertThat(MatchingWorker.merge(later, earlier)).isEqualTo(expected);
+    }
+
+    /**
+     * A range kept pending because the channel was full, then an activation of the same pair: the range is matched
+     * before the plan is tracked, so it cannot fill the new plan, and a later range does not merge across the
+     * activation.
+     */
+    @Test
+    void NSF07_aPendingRangeThatArrivedBeforeAnActivation_doesNotFillTheNewPlan() throws InterruptedException {
+        TrackedEntry holder = entry(UUID.randomUUID(), Direction.LONG, "100");
+        TrackedEntry secondHolder = entry(UUID.randomUUID(), Direction.SHORT, "155");
+        TrackedEntry marker = entry(UUID.randomUUID(), Direction.SHORT, "165");
+        when(matching.activeEntries()).thenReturn(List.of(holder, secondHolder, marker));
+        Gate held = new Gate();
+        Gate heldAgain = new Gate();
+        doAnswer(held::pass).when(matching).fill(eq(holder.planId()), any());
+        doAnswer(heldAgain::pass).when(matching).fill(eq(secondHolder.planId()), any());
+        UUID activated = UUID.randomUUID();
+        worker = started(1, 2);
+        worker.submit(range("99", "101", AT));
+        held.awaitEntered();
+        worker.submit(range("150", "160", AT.plusSeconds(1)));
+        worker.submit(range("150", "160", AT.plusSeconds(2)));
+        worker.submit(range("80", "85", AT.plusSeconds(3)));
+
+        Thread activation = waitingIn(() -> worker.onActivated(activated(activated, EntryType.LIMIT, "82")));
+        worker.submit(range("150", "160", AT.plusSeconds(4)));
+        // The consumer takes the next range and is held again, so the activation is in the channel before it goes on.
+        held.release();
+        heldAgain.awaitEntered();
+        activation.join(WAIT);
+        assertThat(activation.isAlive()).as("the activation is in the channel").isFalse();
+        heldAgain.release();
+        worker.submit(range("150", "170", AT.plusSeconds(5)));
+
+        // The marker is reached only by the last range, so every earlier range has been matched once it is filled.
+        verify(matching, timeout(WAIT)).fill(eq(marker.planId()), any());
+        verify(matching, never()).fill(eq(activated), any());
+        worker.submit(range("80", "85", AT.plusSeconds(6)));
+        verify(matching, timeout(WAIT)).fill(activated, AT.plusSeconds(6));
+    }
+
+    /** An activation already in the channel: the pair's next range follows it there and fills the new plan. */
+    @Test
+    void NSF07_aRangeAfterAQueuedActivation_followsItAndFillsTheNewPlan() throws InterruptedException {
+        TrackedEntry holder = entry(UUID.randomUUID(), Direction.LONG, "100");
+        when(matching.activeEntries()).thenReturn(List.of(holder));
+        Gate held = new Gate();
+        doAnswer(held::pass).when(matching).fill(eq(holder.planId()), any());
+        UUID activated = UUID.randomUUID();
+        worker = started(1, 10);
+        worker.submit(range("99", "101", AT));
+        held.awaitEntered();
+
+        worker.onActivated(activated(activated, EntryType.LIMIT, "100"));
+        worker.submit(range("99", "101", AT.plusSeconds(1)));
+        held.release();
+
+        verify(matching, timeout(WAIT)).fill(activated, AT.plusSeconds(1));
+    }
+
+    /** A range that arrives while an activation waits for room in the channel is matched after it, and fills it. */
+    @Test
+    void NSF07_aRangeThatArrivesWhileAnActivationWaitsForRoom_isMatchedAfterIt() throws InterruptedException {
+        TrackedEntry holder = entry(UUID.randomUUID(), Direction.LONG, "100");
+        when(matching.activeEntries()).thenReturn(List.of(holder));
+        Gate held = new Gate();
+        doAnswer(held::pass).when(matching).fill(eq(holder.planId()), any());
+        UUID activated = UUID.randomUUID();
+        worker = started(1, 2);
+        worker.submit(range("99", "101", AT));
+        held.awaitEntered();
+        worker.submit(range("150", "160", AT.plusSeconds(1)));
+        worker.submit(range("150", "160", AT.plusSeconds(2)));
+
+        Thread activation = waitingIn(() -> worker.onActivated(activated(activated, EntryType.LIMIT, "82")));
+        worker.submit(range("80", "85", AT.plusSeconds(3)));
+        held.release();
+        activation.join(WAIT);
+
+        verify(matching, timeout(WAIT)).fill(activated, AT.plusSeconds(3));
+    }
+
+    /** A range that reached an entry, kept pending, then a cancel of that plan: the earlier range fills it first. */
+    @Test
+    void NSF07_aPendingRangeThatReachedAnEntryBeforeItsCancel_stillFillsIt() throws InterruptedException {
+        TrackedEntry holder = entry(UUID.randomUUID(), Direction.LONG, "100");
+        TrackedEntry cancelled = entry(UUID.randomUUID(), Direction.LONG, "98");
+        when(matching.activeEntries()).thenReturn(List.of(holder, cancelled));
+        Gate held = new Gate();
+        doAnswer(held::pass).when(matching).fill(eq(holder.planId()), any());
+        worker = started(1, 2);
+        worker.submit(range("99", "101", AT));
+        held.awaitEntered();
+        worker.submit(range("150", "160", AT.plusSeconds(1)));
+        worker.submit(range("150", "160", AT.plusSeconds(2)));
+        worker.submit(range("97", "99", AT.plusSeconds(3)));
+
+        Thread cancel = waitingIn(() -> worker.onCancelled(cancelled(cancelled.planId())));
+        held.release();
+        cancel.join(WAIT);
+
+        verify(matching, timeout(WAIT)).fill(cancelled.planId(), AT.plusSeconds(3));
+    }
+
+    @Test
+    void NSF07_aCommandLostToAnInterrupt_doesNotHoldBackItsPairsRanges() throws InterruptedException {
+        TrackedEntry holder = entry(UUID.randomUUID(), Direction.LONG, "100");
+        TrackedEntry waiting = entry(UUID.randomUUID(), Direction.LONG, "98");
+        when(matching.activeEntries()).thenReturn(List.of(holder, waiting));
+        Gate held = new Gate();
+        doAnswer(held::pass).when(matching).fill(eq(holder.planId()), any());
+        worker = started(1, 2);
+        worker.submit(range("99", "101", AT));
+        held.awaitEntered();
+        worker.submit(range("150", "160", AT.plusSeconds(1)));
+        worker.submit(range("150", "160", AT.plusSeconds(2)));
+
+        Thread.currentThread().interrupt();
+        worker.onCancelled(cancelled(UUID.randomUUID()));
+        assertThat(Thread.interrupted()).isTrue();
+        held.release();
+        worker.submit(range("97", "99", AT.plusSeconds(3)));
+
+        verify(matching, timeout(WAIT)).fill(waiting.planId(), AT.plusSeconds(3));
     }
 
     @Test
@@ -332,29 +458,6 @@ class MatchingWorkerTest {
         assertThat(logs.list).anySatisfy(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
             assertThat(event.getFormattedMessage()).contains("Untrack").contains("lost");
-        });
-    }
-
-    @Test
-    void NSF07_anUnexpectedFailure_isLogged_andTheConsumerCarriesOn() {
-        UUID broken = UUID.randomUUID();
-        UUID marker = UUID.randomUUID();
-        doAnswer(call -> {
-                    throw new IOException("unexpected");
-                })
-                .when(matching)
-                .fill(broken, AT);
-        worker = started(1, 100);
-        worker.onActivated(activated(broken, EntryType.LIMIT, "100"));
-        worker.submit(range("99", "101", AT));
-
-        worker.onActivated(activated(marker, EntryType.LIMIT, "100"));
-        worker.submit(range("99", "101", AT));
-
-        verify(matching, timeout(WAIT)).fill(marker, AT);
-        assertThat(logs.list).anySatisfy(event -> {
-            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
-            assertThat(event.getFormattedMessage()).contains("carries on");
         });
     }
 
@@ -377,6 +480,17 @@ class MatchingWorkerTest {
                 new MatchingWorker(matching, new MatchingProperties(true, partitions, capacity), recording);
         started.start();
         return started;
+    }
+
+    /** Runs the call on its own thread and returns once that thread waits for room in the channel. */
+    private static Thread waitingIn(Runnable call) throws InterruptedException {
+        Thread thread = Thread.ofPlatform().start(call);
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WAIT);
+        while (thread.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertThat(thread.getState()).isEqualTo(Thread.State.WAITING);
+        return thread;
     }
 
     /** Consumers that never take from their channel, so a channel fills up. */

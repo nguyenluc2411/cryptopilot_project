@@ -30,7 +30,22 @@ class MatchingRecordsTest {
     }
 
     @Test
+    void NSF07_aRangeThatStartsAfterItEnds_isRejected() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new PriceRange(MarketType.SPOT, ID, P, P, AT.plusSeconds(1), AT));
+    }
+
+    @Test
+    void NSF07_aSingleUpdate_startsAndEndsAtItsTime() {
+        PriceRange range = new PriceRange(MarketType.SPOT, ID, P, P, AT);
+
+        assertThat(range.from()).isEqualTo(AT);
+        assertThat(range.at()).isEqualTo(AT);
+    }
+
+    @Test
     void NSF07_aRange_needsEveryField() {
+        assertThatNullPointerException().isThrownBy(() -> new PriceRange(MarketType.SPOT, ID, P, P, null, AT));
         assertThatNullPointerException().isThrownBy(() -> new PriceRange(null, ID, P, P, AT));
         assertThatNullPointerException().isThrownBy(() -> new PriceRange(MarketType.SPOT, null, P, P, AT));
         assertThatNullPointerException().isThrownBy(() -> new PriceRange(MarketType.SPOT, ID, null, P, AT));
