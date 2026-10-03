@@ -17,6 +17,8 @@ import com.cryptopilot.trading.dto.response.PlanCalculationResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
+import com.cryptopilot.trading.event.TradingPlanActivated;
+import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.model.CalculatedPlan;
 import com.cryptopilot.trading.model.PlanDetails;
@@ -41,6 +43,7 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -84,6 +87,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     private final RiskProfileApi riskProfiles;
     private final EntitlementApi entitlements;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional(readOnly = true)
@@ -105,6 +109,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         if (activate) {
             requireRoomForAnActivePlan(userId);
             plan.activate(calculated.calculation(), calculated.warnings(), now);
+            publishActivated(plan);
         }
         return PlanResponses.detail(plans.save(plan));
     }
@@ -123,6 +128,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         if (activate) {
             requireRoomForAnActivePlan(userId);
             plan.activate(calculated.calculation(), calculated.warnings(), now);
+            publishActivated(plan);
         }
         return PlanResponses.detail(plans.save(plan));
     }
@@ -140,6 +146,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         requireRoomForAnActivePlan(userId);
         CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(plan), plan.getId());
         plan.activate(calculated.calculation(), calculated.warnings(), now);
+        publishActivated(plan);
         return PlanResponses.detail(plans.save(plan));
     }
 
@@ -148,6 +155,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     public TradingPlanResponse cancel(UUID userId, UUID planId) {
         TradingPlan plan = owned(userId, planId);
         plan.cancel(clock.instant());
+        events.publishEvent(new TradingPlanCancelled(plan.getId()));
         return PlanResponses.detail(plans.save(plan));
     }
 
@@ -305,5 +313,15 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             expiresAt = now.plus(LIMIT_EXPIRY);
         }
         return new PlanDetails(request.entryType(), expiresAt, request.note());
+    }
+
+    private void publishActivated(TradingPlan plan) {
+        events.publishEvent(new TradingPlanActivated(
+                plan.getId(),
+                plan.getMarket(),
+                plan.getPairId(),
+                plan.getDirection(),
+                plan.getEntryType(),
+                plan.getEntryPrice()));
     }
 }
