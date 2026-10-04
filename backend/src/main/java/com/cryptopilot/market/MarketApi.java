@@ -26,6 +26,12 @@ public interface MarketApi {
     /** The last traded price, when the cache holds a current one; empty when it is missing, old or unreadable. */
     Optional<BigDecimal> currentLastPrice(MarketType market, String symbol);
 
+    /**
+     * The Futures mark price, when the cache holds a current one; empty when it is missing, old or unreadable. The
+     * Futures streams carry the mark price and no last trade price, so this is the current price of a Futures pair.
+     */
+    Optional<BigDecimal> currentMarkPrice(String symbol);
+
     /** The predicted funding rate of the coming Futures settlement, when the cache holds a current one. */
     Optional<BigDecimal> currentFundingRate(String symbol);
 
