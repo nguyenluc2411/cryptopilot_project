@@ -37,6 +37,10 @@ spring:
       demo_password_hash: ${DEMO_PASSWORD_HASH:!DEMO_PASSWORD_HASH_NOT_SET}
 
 cryptopilot:
+  web:
+    # Reverse proxies whose X-Forwarded-For is believed: addresses or CIDR ranges, comma-separated. Empty trusts none,
+    # so the direct peer is the client. Set wherever Nginx sits in front.
+    trusted-proxies: ${TRUSTED_PROXIES:}
   realtime:
     # TD 9: the STOMP endpoint's transport limits, so one slow client cannot hold the others (Spring's per-session
     # decorator buffers up to the limit, then closes that session), and the origins a browser may open it from.
@@ -232,6 +236,9 @@ springdoc:
 
 server:
   port: 8080
+  # The client address is resolved once, by ClientAddressFilter, from cryptopilot.web.trusted-proxies. The container
+  # must not apply its own forwarded-header handling on top (R-11).
+  forward-headers-strategy: none
 
 management:
   endpoints:

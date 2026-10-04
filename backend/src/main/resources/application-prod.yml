@@ -10,6 +10,9 @@ logging:
       console: ecs
 
 cryptopilot:
+  web:
+    # From the environment only: the Nginx address or network. No default, so nothing is trusted until it is set.
+    trusted-proxies: ${TRUSTED_PROXIES:}
   auth:
     token-sweep:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
