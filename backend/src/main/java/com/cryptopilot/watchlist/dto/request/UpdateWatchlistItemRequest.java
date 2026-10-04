@@ -12,14 +12,14 @@ import jakarta.validation.constraints.Size;
  *
  * @param label up to 100 characters; empty to remove
  * @param note up to 1000 characters; empty to remove
- * @param sortOrder the new position, 0 to {@link #MAX_SORT_ORDER}; rows with the same position keep the order they
- *     were added in
+ * @param sortOrder the new position, 0 to {@link #MAX_SORT_ORDER} (MSG15 outside that range); rows with the same
+ *     position keep the order they were added in
  */
 public record UpdateWatchlistItemRequest(
         @Size(max = 100, message = "MSG01") String label,
         @Size(max = 1000, message = "MSG01") String note,
 
-        @Min(value = 0, message = "MSG01") @Max(value = MAX_SORT_ORDER, message = "MSG01")
+        @Min(value = 0, message = "MSG15") @Max(value = MAX_SORT_ORDER, message = "MSG15")
         Integer sortOrder) {
 
     /**
