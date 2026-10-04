@@ -296,6 +296,7 @@ class UserTokenRepositoryTest {
                         "findTopByUserIdAndTokenTypeOrderByCreatedAtDesc",
                         "countIssuedSince",
                         "countUnusedInSession",
+                        "deleteExpiredRefreshTokens",
                         "invalidateUnused",
                         "markUsedIfUnused",
                         "revokeFamily",
@@ -395,6 +396,51 @@ class UserTokenRepositoryTest {
         assertThat(usedAtOf(kept)).as("the caller's own session").isNull();
         assertThat(usedAtOf(resetLink)).as("not a session").isNull();
         assertThat(usedAtOf(strangers)).as("another account").isNull();
+    }
+
+    /**
+     * RFC 9700 4.14: a used refresh token stays stored until its own expiry, so that a replay of it is still
+     * recognised as reuse; once expired it is deleted. Only refresh tokens are swept: the other kinds are counted
+     * by the resend cap.
+     */
+    @Test
+    void TD715_expiredRefreshTokens_areDeletedAndUnexpiredOnesKept() {
+        UUID account = persistedAccount("sweep@cryptopilot.invalid");
+        UserToken expiredUsed = persistedToken(account, TokenType.REFRESH, digest('1'), ISSUED, FAMILY);
+        expiredUsed.markUsed(ISSUED.minusSeconds(60));
+        UserToken expiredUnused = persistedToken(account, TokenType.REFRESH, digest('2'), ISSUED, FAMILY);
+        UserToken liveUsed = persistedToken(account, TokenType.REFRESH, digest('3'), EXPIRES, FAMILY);
+        liveUsed.markUsed(ISSUED.minusSeconds(30));
+        UserToken expiredLink = persistedToken(account, TokenType.EMAIL_VERIFICATION, digest('4'), ISSUED);
+        em.flush();
+        em.clear();
+
+        int deleted = tokens.deleteExpiredRefreshTokens(ISSUED.plusSeconds(1));
+        em.clear();
+
+        assertThat(deleted).isEqualTo(2);
+        assertThat(tokens.findByTokenHash(expiredUsed.getTokenHash()))
+                .as("used and expired")
+                .isEmpty();
+        assertThat(tokens.findByTokenHash(expiredUnused.getTokenHash()))
+                .as("unused and expired")
+                .isEmpty();
+        assertThat(tokens.findByTokenHash(liveUsed.getTokenHash()))
+                .as("used but not yet expired: kept for reuse detection")
+                .isPresent();
+        assertThat(tokens.findByTokenHash(expiredLink.getTokenHash()))
+                .as("not a refresh token")
+                .isPresent();
+    }
+
+    /** A token expiring exactly at the cutoff is still within its window and is kept. */
+    @Test
+    void TD715_aRefreshTokenExpiringAtTheCutoff_isKept() {
+        UUID account = persistedAccount("sweep-edge@cryptopilot.invalid");
+        persistedToken(account, TokenType.REFRESH, digest('5'), EXPIRES, FAMILY);
+        em.clear();
+
+        assertThat(tokens.deleteExpiredRefreshTokens(EXPIRES)).isZero();
     }
 
     @Test

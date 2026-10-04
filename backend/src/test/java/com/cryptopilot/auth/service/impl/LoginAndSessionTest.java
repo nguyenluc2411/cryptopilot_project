@@ -9,6 +9,7 @@ import com.cryptopilot.auth.config.TokenProperties;
 import com.cryptopilot.auth.model.IssuedSession;
 import com.cryptopilot.auth.repository.UserTokenRepository;
 import com.cryptopilot.auth.service.AuthService;
+import com.cryptopilot.auth.service.TokenRetentionService;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.support.MutableTestClock;
@@ -93,6 +94,9 @@ class LoginAndSessionTest {
 
     @Autowired
     private JdbcClient sql;
+
+    @Autowired
+    private TokenRetentionService retention;
 
     @Autowired
     private MutableTestClock clock;
@@ -505,6 +509,43 @@ class LoginAndSessionTest {
         assertThat(refusalOfRefresh(second.refreshToken()).errorCode())
                 .as("and it no longer works")
                 .isEqualTo(ErrorCode.SESSION_EXPIRED);
+    }
+
+    /**
+     * RFC 9700 4.14 with the strict policy: the retention sweep keeps a used token until its own expiry, so a replay
+     * after a sweep is still recognised and still ends the family.
+     */
+    @Test
+    void TD715_aRetiredTokenKeptByTheSweep_stillRevokesTheFamilyWhenReplayed() {
+        verifiedAccount("sweep-reuse");
+        IssuedSession first = authService.login("sweep-reuse" + TEST_DOMAIN, PASSWORD, false);
+        IssuedSession second = authService.refresh(first.refreshToken());
+        clock.set(NOW.plus(tokenProperties.refreshTokenTtl()).minusSeconds(60));
+
+        assertThat(retention.removeExpiredRefreshTokens())
+                .as("nothing of this sign-in has expired")
+                .isZero();
+
+        assertThat(refusalOfRefresh(first.refreshToken()).errorCode()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+        assertThat(usedAtOf(second.refreshToken()))
+                .as("the replay of the kept token revoked the family")
+                .isNotNull();
+    }
+
+    /** Past its original expiry, a used token is deleted by the sweep; it could not be redeemed anyway. */
+    @Test
+    void TD715_aRetiredTokenPastItsExpiry_isDeletedByTheSweep() {
+        verifiedAccount("sweep-expired");
+        IssuedSession first = authService.login("sweep-expired" + TEST_DOMAIN, PASSWORD, false);
+        clock.set(NOW.plusSeconds(3600));
+        authService.refresh(first.refreshToken());
+        clock.set(NOW.plus(tokenProperties.refreshTokenTtl()).plusSeconds(1));
+
+        assertThat(retention.removeExpiredRefreshTokens()).isEqualTo(1);
+
+        assertThat(tokens.findByTokenHash(refreshTokens.digestOf(first.refreshToken())))
+                .isEmpty();
+        assertThat(refusalOfRefresh(first.refreshToken()).errorCode()).isEqualTo(ErrorCode.SESSION_EXPIRED);
     }
 
     /** Revoking one family does not touch another sign-in of the same account. */

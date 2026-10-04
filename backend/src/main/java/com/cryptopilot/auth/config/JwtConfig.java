@@ -62,7 +62,7 @@ import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
  * (always validate the expiry).
  */
 @Configuration
-@EnableConfigurationProperties(TokenProperties.class)
+@EnableConfigurationProperties({TokenProperties.class, TokenSweepProperties.class})
 public class JwtConfig {
 
     /**
