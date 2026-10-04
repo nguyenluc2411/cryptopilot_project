@@ -245,15 +245,16 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * MARKET: the current last price (BR-33); LIMIT: the price entered, rounded to the tick when {@code roundPrice}
-     * (BR-30).
+     * MARKET: the current reference price (BR-33), see {@link #currentReferencePrice}; LIMIT: the price entered, rounded
+     * to the tick when {@code roundPrice} (BR-30).
      */
     private BigDecimal entryPrice(TradablePair pair, PlanTerms terms, boolean roundPrice) {
         if (terms.entryType() == EntryType.MARKET) {
-            return market.currentLastPrice(pair.market(), pair.symbol())
+            return currentReferencePrice(pair)
                     .orElseThrow(() -> new BusinessException(
                             ErrorCode.MARKET_PRICE_UNAVAILABLE,
-                            "no current last price for " + pair.symbol() + " on " + pair.market()));
+                            "no current " + (pair.market() == MarketType.FUTURES ? "mark" : "last") + " price for "
+                                    + pair.symbol() + " on " + pair.market()));
         }
         if (terms.entryPrice() == null) {
             throw new FieldValidationException("a LIMIT plan needs an entry price", Map.of("entryPrice", "MSG01"));
@@ -363,6 +364,17 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         }
         return market.tradablePair(plan.getPairId(), plan.getMarket())
                 .flatMap(pair -> market.currentLastPrice(pair.market(), pair.symbol()));
+    }
+
+    /**
+     * The price a MARKET entry executes at: the last trade price on Spot, the mark price on Futures, each only while the
+     * cache holds a current one. Futures uses the mark price because no Futures stream carries a last trade price
+     * (D-84, A-41).
+     */
+    private Optional<BigDecimal> currentReferencePrice(TradablePair pair) {
+        return pair.market() == MarketType.FUTURES
+                ? market.currentMarkPrice(pair.symbol())
+                : market.currentLastPrice(pair.market(), pair.symbol());
     }
 
     private void publishActivated(TradingPlan plan) {
