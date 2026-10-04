@@ -16,6 +16,9 @@ logging:
     com.cryptopilot: DEBUG
 
 cryptopilot:
+  web:
+    # A local proxy (e.g. a dev server forwarding /api) may pass the browser's address.
+    trusted-proxies: ${TRUSTED_PROXIES:127.0.0.1,::1}
   auth:
     token-sweep:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
