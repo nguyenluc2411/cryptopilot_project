@@ -1,6 +1,10 @@
 package com.cryptopilot.market.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.client.BinanceClientProperties;
 import com.cryptopilot.market.client.BinanceRestClient;
@@ -12,9 +16,11 @@ import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.CandleBackfillJob.Outcome;
+import com.cryptopilot.market.model.BackfillRun;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
+import com.cryptopilot.market.service.CandleBackfillService;
 import com.cryptopilot.market.service.SyntheticKlines;
 import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
@@ -28,6 +34,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.AfterEach;
@@ -36,6 +43,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.Trigger;
@@ -159,6 +167,35 @@ class CandleBackfillJobTest {
         CandleBackfillJob broken = new CandleBackfillJob(null, recordingScheduler(), properties(true), clock);
 
         assertThat(broken.run(MarketType.SPOT)).isEqualTo(Outcome.WAIT_FOR_NEXT_RUN);
+    }
+
+    /**
+     * A queued gap whose fill keeps failing with an error that is not the exchange's (a write the database refuses)
+     * must not hold up the market's backfill run after run.
+     */
+    @Test
+    void NSF02_aGapThatAlwaysFails_doesNotBlockTheBackfill() {
+        CandleBackfillService backfill = mock(CandleBackfillService.class);
+        GapDetected gap = gap(Instant.parse("2026-09-23T00:00:00Z"), Instant.parse("2026-09-23T05:00:00Z"));
+        when(backfill.fillGap(gap)).thenThrow(new DataIntegrityViolationException("candle refused"));
+        when(backfill.backfill(MarketType.SPOT))
+                .thenReturn(new BackfillRun(MarketType.SPOT, 0, 0, Optional.empty(), List.of()));
+        CandleBackfillJob job = new CandleBackfillJob(backfill, recordingScheduler(), properties(true), clock);
+        job.onGapDetected(gap);
+
+        job.run(MarketType.SPOT);
+        job.run(MarketType.SPOT);
+
+        verify(backfill, atLeastOnce()).backfill(MarketType.SPOT);
+        assertThat(job.queuedGaps(MarketType.SPOT))
+                .as("kept for another attempt")
+                .containsExactly(gap);
+
+        job.run(MarketType.SPOT);
+
+        assertThat(job.queuedGaps(MarketType.SPOT))
+                .as("dropped after %d failures", CandleBackfillJob.MAX_GAP_ATTEMPTS)
+                .isEmpty();
     }
 
     /** After a symbol synchronisation of a market, that market's backfill is scheduled at once. */
