@@ -15,6 +15,7 @@ import com.cryptopilot.user.repository.UserProfileRepository;
 import com.cryptopilot.user.service.DeviceService;
 import com.cryptopilot.user.service.UserService;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -22,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 /**
  * The module's own use cases, and the implementation of what it publishes to other modules.
@@ -86,6 +88,7 @@ public class UserServiceImpl implements UserService {
     private final UserProfileRepository profiles;
     private final FailedLoginRecorder failedLogins;
     private final DeviceService devices;
+    private final TransactionOperations transactions;
 
     @Override
     @Transactional
@@ -125,15 +128,22 @@ public class UserServiceImpl implements UserService {
                 .map(account -> new LoginCredentials(account.getId(), account.getPasswordHash()));
     }
 
+    /**
+     * Applies BR-03 to one sign-in attempt and records it on the account.
+     *
+     * <p>No transaction is open on entry. A wrong password goes straight to {@link FailedLoginRecorder},
+     * which commits in a transaction of its own; holding a second connection here while it waits would
+     * let a burst of concurrent wrong passwords take every connection in the pool. A matching password
+     * is recorded in one transaction on the row-locked account, so it waits for a concurrent failure
+     * instead of losing a version check to it.
+     *
+     * <p>Rule: BR-01, BR-03, BR-06.
+     *
+     * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly,
+     * ch. 7 ("Preventing Lost Updates": explicit locking).
+     */
     @Override
-    @Transactional
     public UserSummary recordLoginAttempt(UUID userId, boolean passwordMatched, Instant at) {
-        UserAccount account =
-                accounts.findById(userId).orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
-
-        if (account.isLockedOutAt(at)) {
-            throw lockedOut(account, at);
-        }
         if (!passwordMatched) {
             throw failedLogins
                     .record(userId, at)
@@ -145,9 +155,16 @@ public class UserServiceImpl implements UserService {
                             new BusinessException(ErrorCode.INVALID_CREDENTIALS, UserApi.WRONG_CREDENTIALS_DETAIL));
         }
 
-        account.recordLogin(at);
-        accounts.save(account);
-        return summaryOf(account);
+        return Objects.requireNonNull(transactions.execute(status -> {
+            UserAccount account = accounts.findByIdForUpdate(userId)
+                    .orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
+            if (account.isLockedOutAt(at)) {
+                throw lockedOut(account, at);
+            }
+            account.recordLogin(at);
+            accounts.save(account);
+            return summaryOf(account);
+        }));
     }
 
     @Override

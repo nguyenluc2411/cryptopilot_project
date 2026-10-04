@@ -17,7 +17,15 @@ import com.cryptopilot.user.model.enums.UserRole;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -64,6 +72,9 @@ class LoginAndSessionTest {
     private static final String PASSWORD = "Abcdefg1";
 
     private static final String WRONG_PASSWORD = "Abcdefg2";
+
+    /** Requests released together by the concurrency tests. */
+    private static final int PARALLEL_REQUESTS = 10;
 
     @Autowired
     private AuthService authService;
@@ -280,6 +291,27 @@ class LoginAndSessionTest {
         assertThat(fifth.messageArgs()).containsExactly("15");
         assertThat(failedCountOf(userId)).isEqualTo(5);
         assertThat(lockedUntilOf(userId)).isEqualTo(NOW.plus(Duration.ofMinutes(15)));
+    }
+
+    /**
+     * Ten wrong passwords for one account released at the same moment. Each must be counted once, so
+     * the first four are ordinary refusals, the fifth locks the account and the other five are refused
+     * because it is locked; none may surface as a write conflict.
+     */
+    @Test
+    void BR03_parallelWrongPasswords_areAllCounted() throws Exception {
+        UUID userId = verifiedAccount("parallel");
+
+        List<Object> outcomes = concurrently(
+                PARALLEL_REQUESTS, () -> authService.login("parallel" + TEST_DOMAIN, WRONG_PASSWORD, false));
+
+        assertThat(outcomes)
+                .as("every attempt is refused as a sign-in, never as a conflict")
+                .containsOnly(ErrorCode.INVALID_CREDENTIALS, ErrorCode.LOGIN_TEMPORARILY_LOCKED);
+        assertThat(outcomes).filteredOn(ErrorCode.INVALID_CREDENTIALS::equals).hasSize(4);
+        assertThat(failedCountOf(userId)).isEqualTo(5);
+        assertThat(lockedUntilOf(userId)).isEqualTo(NOW.plus(Duration.ofMinutes(15)));
+        assertThat(refusalOf("parallel", PASSWORD).errorCode()).isEqualTo(ErrorCode.LOGIN_TEMPORARILY_LOCKED);
     }
 
     /** And the right password does not open a locked-out account, which is what a lockout means. */
@@ -627,6 +659,38 @@ class LoginAndSessionTest {
             throw new AssertionError("the sign-in was expected to be refused");
         } catch (BusinessException refused) {
             return refused;
+        }
+    }
+
+    /**
+     * Runs the call on {@code count} threads released by one latch, and answers each outcome: the
+     * result, the {@link ErrorCode} of a {@link BusinessException}, or the class of any other failure.
+     */
+    private List<Object> concurrently(int count, Callable<?> call) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(count);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<Object>> futures = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        return call.call();
+                    } catch (BusinessException refused) {
+                        return refused.errorCode();
+                    } catch (RuntimeException failed) {
+                        return failed.getClass();
+                    }
+                }));
+            }
+            start.countDown();
+            List<Object> outcomes = new ArrayList<>();
+            for (Future<Object> future : futures) {
+                outcomes.add(future.get(60, TimeUnit.SECONDS));
+            }
+            return outcomes;
+        } finally {
+            pool.shutdownNow();
         }
     }
 

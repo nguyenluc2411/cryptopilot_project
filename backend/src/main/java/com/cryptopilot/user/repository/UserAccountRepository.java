@@ -1,8 +1,10 @@
 package com.cryptopilot.user.repository;
 
 import com.cryptopilot.user.entity.UserAccount;
+import jakarta.persistence.LockModeType;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
@@ -93,6 +95,23 @@ public interface UserAccountRepository extends Repository<UserAccount, UUID> {
     /** The account with this identifier, or empty. Backed by the primary key. */
     @Transactional(readOnly = true)
     Optional<UserAccount> findById(UUID id);
+
+    /**
+     * The account with this identifier, row-locked until the caller's transaction ends
+     * ({@code select ... for update}), or empty.
+     *
+     * <p>Sign-in attempts on one account read and rewrite its failure counter. Locking the row makes
+     * concurrent attempts wait for each other, so each one sees the count the previous one wrote
+     * instead of failing the version check and going uncounted.
+     *
+     * <p>Rule: BR-03.
+     *
+     * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly,
+     * ch. 7 ("Preventing Lost Updates": explicit locking).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from UserAccount a where a.id = :id")
+    Optional<UserAccount> findByIdForUpdate(@Param("id") UUID id);
 
     /**
      * Writes an account, inserting it when it is new and updating it otherwise.

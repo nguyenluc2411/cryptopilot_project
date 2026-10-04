@@ -1,5 +1,7 @@
 package com.cryptopilot.user.service.impl;
 
+import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.user.entity.UserAccount;
 import com.cryptopilot.user.repository.UserAccountRepository;
 import java.time.Instant;
 import java.util.Optional;
@@ -53,24 +55,37 @@ class FailedLoginRecorder {
      * the caller belongs to the caller's persistence context, and writing it here would either change
      * nothing or write through a context this transaction does not own.
      *
-     * <p>An account that has disappeared between the two reads is not an error worth raising. The
-     * attempt was going to be refused either way, and the only thing lost is a counter on a row that
-     * no longer exists.
+     * <p>The row is locked for the length of this transaction, so concurrent wrong passwords for one
+     * account are counted one after another and none is lost to a failed version check. An account
+     * that is already locked when the lock is obtained (a concurrent attempt locked it) counts nothing
+     * and is refused as locked, as it would have been had the attempts arrived in sequence. The caller
+     * must not hold a connection of its own while it waits here, or concurrent attempts exhaust the
+     * pool.
      *
-     * <p>Answers the minutes MSG09 should name when this attempt was the one that locked the account,
-     * and nothing when it was not. The number comes from the account that was just updated rather than
-     * from the rule's constant: the two are equal at this instant, but reading it from the entity is
-     * what keeps the answer right if the lockout is ever computed from anything other than a fixed
-     * window, and it keeps the duration a fact of the account rather than a number the caller knows.
+     * <p>Answers the minutes MSG09 should name when the account is locked after this attempt, and
+     * nothing when it is not. The number comes from the account rather than from the rule's constant:
+     * the two are equal at the attempt that locks, but reading it from the entity is what keeps the
+     * answer right if the lockout is ever computed from anything other than a fixed window, and it
+     * keeps the duration a fact of the account rather than a number the caller knows.
+     *
+     * <p>Rule: BR-03.
+     *
+     * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly,
+     * ch. 7 ("Preventing Lost Updates": explicit locking).
+     * <p>Reference: OWASP Foundation. <i>Authentication Cheat Sheet</i> ("Account Lockout").
      *
      * @return the minutes still to wait, or empty when the account is not locked (BR-03)
+     * @throws ResourceNotFoundException when no account has this identifier
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     Optional<Long> record(UUID userId, Instant at) {
-        return accounts.findById(userId).flatMap(account -> {
-            boolean nowLocked = account.recordFailedLogin(at);
-            accounts.save(account);
-            return nowLocked ? Optional.of(account.lockoutMinutesRemainingAt(at)) : Optional.empty();
-        });
+        UserAccount account = accounts.findByIdForUpdate(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
+        if (account.isLockedOutAt(at)) {
+            return Optional.of(account.lockoutMinutesRemainingAt(at));
+        }
+        boolean nowLocked = account.recordFailedLogin(at);
+        accounts.save(account);
+        return nowLocked ? Optional.of(account.lockoutMinutesRemainingAt(at)) : Optional.empty();
     }
 }

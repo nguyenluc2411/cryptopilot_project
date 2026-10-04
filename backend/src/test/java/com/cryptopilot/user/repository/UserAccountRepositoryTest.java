@@ -334,14 +334,20 @@ class UserAccountRepositoryTest {
      * assigns its own key, so {@code save} sends no statement and the unique index on the address
      * would otherwise refuse the row at commit, where the service that turns that refusal into
      * MSG04 can no longer see it. It decides when a write is sent, never what is read, so the rule
-     * this test exists for is untouched.
+     * this test exists for is untouched. {@code findByIdForUpdate} joined it with BR-03 under
+     * concurrency: it reads one row by its key, as {@code findById} does, and only adds the row lock.
      */
     @Test
     void theRepository_offersNoUnboundedReadOfATableThatGrowsWithUsers() {
         assertThat(UserAccountRepository.class.getMethods())
                 .extracting(java.lang.reflect.Method::getName)
                 .containsExactlyInAnyOrder(
-                        "existsByEmailIgnoringCase", "findByEmailIgnoringCase", "findById", "save", "flush");
+                        "existsByEmailIgnoringCase",
+                        "findByEmailIgnoringCase",
+                        "findById",
+                        "findByIdForUpdate",
+                        "save",
+                        "flush");
 
         assertThatThrownBy(() -> UserAccountRepository.class.getMethod("findAll"))
                 .isInstanceOf(NoSuchMethodException.class);
