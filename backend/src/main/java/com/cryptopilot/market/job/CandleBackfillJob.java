@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -66,6 +67,9 @@ public class CandleBackfillJob {
 
     private static final Logger log = LoggerFactory.getLogger(CandleBackfillJob.class);
 
+    /** Runs a gap may fail for a reason other than the exchange before it is dropped from the queue. */
+    static final int MAX_GAP_ATTEMPTS = 3;
+
     /** What one run of one market came to. */
     public enum Outcome {
 
@@ -85,6 +89,9 @@ public class CandleBackfillJob {
     private final Clock clock;
     private final Map<MarketType, ScheduledFuture<?>> pending = new EnumMap<>(MarketType.class);
     private final Map<MarketType, Deque<GapDetected>> gaps = new EnumMap<>(MarketType.class);
+    /** Consecutive failures of a queued gap that were not the exchange's; guarded by {@code gaps}. */
+    private final Map<GapDetected, Integer> gapFailures = new HashMap<>();
+
     private final ReentrantLock running = new ReentrantLock();
 
     public CandleBackfillJob(
@@ -211,7 +218,19 @@ public class CandleBackfillJob {
         }
     }
 
-    /** Fills the market's queued gaps in order; the instant to continue at when the weight share stopped one. */
+    /**
+     * Fills the market's queued gaps in order; the instant to continue at when the weight share stopped one.
+     *
+     * <p>A refusal of the exchange propagates as before. Any other failure ends the gap filling of this run without
+     * ending the run, so the market's own backfill still happens; the gap stays at the head for the next run and is
+     * dropped, with an error log, after {@link #MAX_GAP_ATTEMPTS} such failures in a row, so one gap that can never be
+     * written does not hold up NSF-02 for the market.
+     *
+     * <p>Rule: NSF-02, NSF-03.
+     *
+     * <p>Reference: Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf, ch. 5 (a poison message
+     * must not block the work queued behind it).
+     */
     private Optional<Instant> fillGaps(MarketType market) {
         while (true) {
             GapDetected gap;
@@ -221,8 +240,17 @@ public class CandleBackfillJob {
             if (gap == null) {
                 return Optional.empty();
             }
-            GapFill fill = backfill.fillGap(gap);
+            GapFill fill;
+            try {
+                fill = backfill.fillGap(gap);
+            } catch (BinanceClientException refusal) {
+                throw refusal;
+            } catch (RuntimeException failure) {
+                giveUpOnFailure(market, gap, failure);
+                return Optional.empty();
+            }
             synchronized (gaps) {
+                gapFailures.remove(gap);
                 Deque<GapDetected> queue = gaps.get(market);
                 queue.removeFirst();
                 fill.remaining().ifPresent(queue::addFirst);
@@ -238,6 +266,37 @@ public class CandleBackfillJob {
                     gap.from(),
                     gap.to(),
                     fill.rowsInserted());
+        }
+    }
+
+    /** Counts a failure of the head gap that was not the exchange's, and drops the gap at the last attempt. */
+    private void giveUpOnFailure(MarketType market, GapDetected gap, RuntimeException failure) {
+        synchronized (gaps) {
+            int failures = gapFailures.merge(gap, 1, Integer::sum);
+            if (failures < MAX_GAP_ATTEMPTS) {
+                log.warn(
+                        "NSF-02 {} gap {} {} {} -> {} failed ({} of {}); retried on the next run",
+                        market,
+                        gap.symbol(),
+                        gap.timeframe(),
+                        gap.from(),
+                        gap.to(),
+                        failures,
+                        MAX_GAP_ATTEMPTS,
+                        failure);
+                return;
+            }
+            gapFailures.remove(gap);
+            gaps.get(market).remove(gap);
+            log.error(
+                    "NSF-02 {} gap {} {} {} -> {} dropped after {} failures",
+                    market,
+                    gap.symbol(),
+                    gap.timeframe(),
+                    gap.from(),
+                    gap.to(),
+                    failures,
+                    failure);
         }
     }
 
