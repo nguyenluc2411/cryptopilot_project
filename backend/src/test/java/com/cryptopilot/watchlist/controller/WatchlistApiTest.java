@@ -461,7 +461,10 @@ class WatchlistApiTest {
         as(trader, patch(WATCHLIST + "/" + row), "{\"sortOrder\": " + UpdateWatchlistItemRequest.MAX_SORT_ORDER + "}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sortOrder").value(UpdateWatchlistItemRequest.MAX_SORT_ORDER));
-        as(trader, patch(WATCHLIST + "/" + row), "{\"sortOrder\": " + (UpdateWatchlistItemRequest.MAX_SORT_ORDER + 1) + "}")
+        as(
+                        trader,
+                        patch(WATCHLIST + "/" + row),
+                        "{\"sortOrder\": " + (UpdateWatchlistItemRequest.MAX_SORT_ORDER + 1) + "}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.sortOrder").value("MSG15"));
         as(trader, patch(WATCHLIST + "/" + row), "{\"sortOrder\": -1}")
