@@ -41,11 +41,13 @@ cryptopilot:
     # Reverse proxies whose X-Forwarded-For is believed: addresses or CIDR ranges, comma-separated. Empty trusts none,
     # so the direct peer is the client. Set wherever Nginx sits in front.
     trusted-proxies: ${TRUSTED_PROXIES:}
+    cors:
+      # TD 5.3: the browser origins that may call the REST API and open /ws, one list for both, comma-separated
+      # (scheme://host[:port]). Empty allows no cross-origin caller.
+      allowed-origins: ${CORS_ALLOWED_ORIGINS:}
   realtime:
     # TD 9: the STOMP endpoint's transport limits, so one slow client cannot hold the others (Spring's per-session
-    # decorator buffers up to the limit, then closes that session), and the origins a browser may open it from.
-    allowed-origin-patterns:
-      - "http://localhost:*"
+    # decorator buffers up to the limit, then closes that session). Its origins are cryptopilot.web.cors above.
     send-time-limit: 10s
     send-buffer-size-limit: 512KB
   auth:

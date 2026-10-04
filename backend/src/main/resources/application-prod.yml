@@ -13,6 +13,10 @@ cryptopilot:
   web:
     # From the environment only: the Nginx address or network. No default, so nothing is trusted until it is set.
     trusted-proxies: ${TRUSTED_PROXIES:}
+    cors:
+      # From the environment only, exact origins (https://app.example.com). No default: until it is set, every
+      # cross-origin caller is refused.
+      allowed-origins: ${CORS_ALLOWED_ORIGINS:}
   auth:
     token-sweep:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
