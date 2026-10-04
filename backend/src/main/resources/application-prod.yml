@@ -17,6 +17,12 @@ cryptopilot:
       # From the environment only, exact origins (https://app.example.com). No default: until it is set, every
       # cross-origin caller is refused.
       allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+    rate-limit:
+      # ADR-014: always on here; the defaults are the TECHNICAL_DESIGN 5.3 limits, per minute.
+      enabled: true
+      login: ${RATE_LIMIT_LOGIN:10}
+      auth: ${RATE_LIMIT_AUTH:20}
+      api: ${RATE_LIMIT_API:120}
   auth:
     token-sweep:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.

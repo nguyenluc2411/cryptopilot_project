@@ -45,6 +45,14 @@ cryptopilot:
       # TD 5.3: the browser origins that may call the REST API and open /ws, one list for both, comma-separated
       # (scheme://host[:port]). Empty allows no cross-origin caller.
       allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+    rate-limit:
+      # ADR-014: requests per one-minute window and subject (login and the other public auth calls per client address,
+      # authenticated calls per account). Off here so a test context is not limited; on in the dev and prod profiles.
+      enabled: false
+      window: 1m
+      login: ${RATE_LIMIT_LOGIN:10}
+      auth: ${RATE_LIMIT_AUTH:20}
+      api: ${RATE_LIMIT_API:120}
   realtime:
     # TD 9: the STOMP endpoint's transport limits, so one slow client cannot hold the others (Spring's per-session
     # decorator buffers up to the limit, then closes that session). Its origins are cryptopilot.web.cors above.
