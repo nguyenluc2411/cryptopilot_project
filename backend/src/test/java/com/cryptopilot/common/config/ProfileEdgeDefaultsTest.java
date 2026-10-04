@@ -35,6 +35,25 @@ class ProfileEdgeDefaultsTest {
         assertThat(proxies(prod).trustedProxies()).isEmpty();
     }
 
+    /** ADR-014: production always limits, at the TECHNICAL_DESIGN 5.3 values unless the environment says otherwise. */
+    @Test
+    void TD53_production_limitsRequestsAtTheDesignedRates() throws IOException {
+        RateLimitProperties limits = rateLimits(binder("prod"));
+
+        assertThat(limits.enabled()).isTrue();
+        assertThat(limits.window()).hasMinutes(1);
+        assertThat(limits.login()).isEqualTo(10);
+        assertThat(limits.auth()).isEqualTo(20);
+        assertThat(limits.api()).isEqualTo(120);
+    }
+
+    @Test
+    void TD53_development_limitsTooButLoosely_andATestContextDoesNot() throws IOException {
+        assertThat(rateLimits(binder("dev")).enabled()).isTrue();
+        assertThat(rateLimits(binder("dev")).login()).isEqualTo(100);
+        assertThat(rateLimits(binder()).enabled()).isFalse();
+    }
+
     @Test
     void TD53_withoutAProfile_nothingIsAllowedOrTrustedEither() throws IOException {
         Binder base = binder();
@@ -53,6 +72,10 @@ class ProfileEdgeDefaultsTest {
 
     static CorsProperties cors(Binder binder) {
         return binder.bindOrCreate("cryptopilot.web.cors", Bindable.of(CorsProperties.class));
+    }
+
+    static RateLimitProperties rateLimits(Binder binder) {
+        return binder.bindOrCreate("cryptopilot.web.rate-limit", Bindable.of(RateLimitProperties.class));
     }
 
     static TrustedProxyProperties proxies(Binder binder) {

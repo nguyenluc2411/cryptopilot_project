@@ -214,6 +214,15 @@ public enum ErrorCode {
     AI_DAILY_QUOTA_EXHAUSTED(HttpStatus.TOO_MANY_REQUESTS, "MSG30"),
 
     /**
+     * Too many requests from one client address or one account in the current window (ADR-014). MSG50 takes the
+     * seconds until the window ends, the same number as the {@code Retry-After} header.
+     *
+     * <p>429, like {@link #LOGIN_TEMPORARILY_LOCKED}: the same request succeeds once the window turns. MSG50 is new;
+     * SRS 5.3 had no message for a request limit (A-42).
+     */
+    RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "MSG50"),
+
+    /**
      * The Trader switches to the AGGRESSIVE risk profile without confirming MSG48's warning (BR-66, SRS 3.2.5). The
      * client shows MSG48 and sends the choice again, confirmed.
      *
