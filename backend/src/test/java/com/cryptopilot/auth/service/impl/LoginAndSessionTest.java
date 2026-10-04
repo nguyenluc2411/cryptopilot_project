@@ -459,6 +459,35 @@ class LoginAndSessionTest {
         assertThat(usedAtOf(second.refreshToken())).isNotNull();
     }
 
+    /**
+     * Ten refreshes of one token released at the same moment. Exactly one redeems it; every other is
+     * a reuse of a retired token and answers MSG44, never a write conflict, and the reuse ends the
+     * family, including the successor the winner was issued.
+     */
+    @Test
+    void UC05_concurrentRefreshOfOneToken_neverAnswers409() throws Exception {
+        verifiedAccount("parallel-refresh");
+        IssuedSession signIn = authService.login("parallel-refresh" + TEST_DOMAIN, PASSWORD, false);
+
+        List<Object> outcomes = concurrently(PARALLEL_REQUESTS, () -> authService.refresh(signIn.refreshToken()));
+
+        assertThat(outcomes).filteredOn(IssuedSession.class::isInstance).hasSize(1);
+        assertThat(outcomes)
+                .filteredOn(outcome -> !(outcome instanceof IssuedSession))
+                .as("every other refresh is refused as an ended session, never as a conflict")
+                .hasSize(PARALLEL_REQUESTS - 1)
+                .containsOnly(ErrorCode.SESSION_EXPIRED);
+        IssuedSession winner = outcomes.stream()
+                .filter(IssuedSession.class::isInstance)
+                .map(IssuedSession.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertThat(usedAtOf(winner.refreshToken()))
+                .as("the reuse revoked the family")
+                .isNotNull();
+        assertThat(refusalOfRefresh(winner.refreshToken()).errorCode()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+    }
+
     /** A retired token presented again ends the whole family, both the copy and the original. */
     @Test
     void TD715_presentingARetiredToken_revokesTheEntireFamily() {
