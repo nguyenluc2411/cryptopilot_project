@@ -28,11 +28,12 @@ import org.springframework.transaction.annotation.Transactional;
  * <h2>What is deliberately not here</h2>
  *
  * <p>No {@code findAll}, no {@code deleteAll}: this table grows with every sign-in and every reset
- * request, and an unbounded read of it has no legitimate caller. The retention sweep of NSF-17 still
- * belongs to the task that owns it; the family revocation arrived with the rotation that needs it and
- * is {@link #revokeFamily}, written as one bulk update over the index its access pattern needs.
+ * request, and an unbounded read of it has no legitimate caller. The refresh-token part of the NSF-17
+ * sweep is {@link #deleteExpiredRefreshTokens}; the family revocation arrived with the rotation that
+ * needs it and is {@link #revokeFamily}, written as one bulk update over the index its access pattern
+ * needs.
  *
- * <p>Nothing filters on expiry either. Whether a token may still be used is
+ * <p>No lookup filters on expiry either; only the sweep deletes by it. Whether a token may still be used is
  * {@link UserToken#isUsableAt(java.time.Instant)}, decided against the injected clock by the caller
  * that holds it; a repository predicate on {@code expires_at} would be a second copy of that rule,
  * evaluated against the database's clock instead, and the two would eventually disagree.
@@ -230,6 +231,25 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
     @Query("select count(t) from UserToken t where t.tokenFamilyId = :familyId and t.userId = :userId"
             + " and t.tokenType = com.cryptopilot.auth.model.enums.TokenType.REFRESH and t.usedAt is null")
     int countUnusedInSession(@Param("familyId") UUID familyId, @Param("userId") UUID userId);
+
+    /**
+     * Deletes the refresh tokens whose own expiry lies before this instant, used or not, and answers how many.
+     *
+     * <p>A used refresh token is kept until it expires, so that a replay of it is still seen as reuse and ends its
+     * family; after that it can no longer be redeemed and the row is only weight. The other kinds are left alone
+     * because the resend cap counts them. The instant is the caller's clock, not the database's.
+     *
+     * <p>Backed by {@code idx_user_token_expires_at}.
+     *
+     * <p>Rule: NSF-17; TECHNICAL_DESIGN 7.15.
+     *
+     * <p>Reference: Lodderstedt, T. et al. (2025). RFC 9700: OAuth 2.0 Security Best Current Practice, section
+     * 4.14. IETF.
+     */
+    @Modifying
+    @Query("delete from UserToken t where t.tokenType = com.cryptopilot.auth.model.enums.TokenType.REFRESH"
+            + " and t.expiresAt < :now")
+    int deleteExpiredRefreshTokens(@Param("now") Instant now);
 
     /**
      * Writes a token, inserting it when it is new and updating it otherwise.

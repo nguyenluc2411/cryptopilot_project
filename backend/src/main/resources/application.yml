@@ -57,6 +57,13 @@ cryptopilot:
       # be a session on any deployment that forgot to override it. An environment that supplies
       # nothing fails at start-up, which is the only safe way for this particular value to be missing.
       secret: ${JWT_SECRET}
+    token-sweep:
+      # NSF-17, refresh tokens: daily, deletes those past their own expiry; used ones are kept until then so a
+      # replay still revokes the family. Off here, on in the dev and prod profiles, so a test context schedules
+      # nothing.
+      enabled: false
+      cron: "0 15 0 * * *"
+      zone: UTC
   market:
     binance:
       # The public market data API only (BR-09): no key, no account, no order endpoint. Hosts and
