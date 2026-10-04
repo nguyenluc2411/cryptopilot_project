@@ -9,6 +9,7 @@ import com.cryptopilot.market.model.BackfillRun;
 import com.cryptopilot.market.model.GapFill;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.CandleBackfillService;
+import com.cryptopilot.market.service.DroppedGapService;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -60,6 +61,9 @@ import org.springframework.stereotype.Component;
  * the recent window ({@code gapScanWindow}, 7 days) are scanned for holes, and each is queued again; a hole behind
  * the latest candle is also reported by the stream's first closed candle of the series.
  *
+ * <p>A gap dropped after {@link #MAX_GAP_ATTEMPTS} failures is recorded through {@link DroppedGapService}, and a
+ * gap inside a recorded range is not queued again, whether the stream or the start-up scan reports it.
+ *
  * <p>Rule: NSF-02, NSF-03; TECHNICAL_DESIGN 7.1.2 (the caller contract), 7.1 step 4, and 10; D-41, D-42; A-33.
  */
 @Component
@@ -84,6 +88,7 @@ public class CandleBackfillJob {
     }
 
     private final CandleBackfillService backfill;
+    private final DroppedGapService droppedGaps;
     private final TaskScheduler scheduler;
     private final CandleBackfillProperties properties;
     private final Clock clock;
@@ -95,8 +100,13 @@ public class CandleBackfillJob {
     private final ReentrantLock running = new ReentrantLock();
 
     public CandleBackfillJob(
-            CandleBackfillService backfill, TaskScheduler scheduler, CandleBackfillProperties properties, Clock clock) {
+            CandleBackfillService backfill,
+            DroppedGapService droppedGaps,
+            TaskScheduler scheduler,
+            CandleBackfillProperties properties,
+            Clock clock) {
         this.backfill = backfill;
+        this.droppedGaps = droppedGaps;
         this.scheduler = scheduler;
         this.properties = properties;
         this.clock = clock;
@@ -126,9 +136,12 @@ public class CandleBackfillJob {
     public int scanForStoredGaps() {
         try {
             List<GapDetected> found = backfill.storedGaps();
-            found.forEach(this::onGapDetected);
-            log.info("NSF-02 start-up scan: {} holes inside the stored series queued", found.size());
-            return found.size();
+            int queued = (int) found.stream().filter(this::queue).count();
+            log.info(
+                    "NSF-02 start-up scan: {} holes inside the stored series queued, {} inside dropped gaps",
+                    queued,
+                    found.size() - queued);
+            return queued;
         } catch (RuntimeException failure) {
             log.error("NSF-02 start-up gap scan failed; the stream and the hourly runs still find new gaps", failure);
             return 0;
@@ -143,16 +156,42 @@ public class CandleBackfillJob {
         }
     }
 
-    /** The stream found candles missing: queue the gap and run its market now. */
+    /** The stream found candles missing: queue the gap and run its market now, unless the gap was dropped. */
     @EventListener
     public void onGapDetected(GapDetected gap) {
-        if (!properties.enabled()) {
-            return;
+        queue(gap);
+    }
+
+    /** Queues a gap and runs its market now; false when disabled or the gap lies inside a dropped one. */
+    private boolean queue(GapDetected gap) {
+        if (!properties.enabled() || wasDropped(gap)) {
+            return false;
         }
         synchronized (gaps) {
             gaps.computeIfAbsent(gap.market(), market -> new ArrayDeque<>()).addLast(gap);
         }
         continueAt(gap.market(), clock.instant());
+        return true;
+    }
+
+    /** Whether the gap lies inside one given up on; when that cannot be read, it is queued as it was before. */
+    private boolean wasDropped(GapDetected gap) {
+        try {
+            if (droppedGaps.isDropped(gap)) {
+                log.info(
+                        "NSF-02 {} gap {} {} {} -> {} lies inside a dropped gap; not queued",
+                        gap.market(),
+                        gap.symbol(),
+                        gap.timeframe(),
+                        gap.from(),
+                        gap.to());
+                return true;
+            }
+            return false;
+        } catch (RuntimeException failure) {
+            log.warn("NSF-02 could not read the dropped gaps; queuing the gap", failure);
+            return false;
+        }
     }
 
     /** A stream connection came back after a loss: bring the market up to date now. */
@@ -223,8 +262,9 @@ public class CandleBackfillJob {
      *
      * <p>A refusal of the exchange propagates as before. Any other failure ends the gap filling of this run without
      * ending the run, so the market's own backfill still happens; the gap stays at the head for the next run and is
-     * dropped, with an error log, after {@link #MAX_GAP_ATTEMPTS} such failures in a row, so one gap that can never be
-     * written does not hold up NSF-02 for the market.
+     * dropped, with an error log and a record in {@link DroppedGapService}, after {@link #MAX_GAP_ATTEMPTS} such
+     * failures in a row, so one gap that can never be written does not hold up NSF-02 for the market. The gaps queued
+     * behind a dropped one are filled in the same run.
      *
      * <p>Rule: NSF-02, NSF-03.
      *
@@ -246,7 +286,9 @@ public class CandleBackfillJob {
             } catch (BinanceClientException refusal) {
                 throw refusal;
             } catch (RuntimeException failure) {
-                giveUpOnFailure(market, gap, failure);
+                if (giveUpOnFailure(market, gap, failure)) {
+                    continue;
+                }
                 return Optional.empty();
             }
             synchronized (gaps) {
@@ -269,10 +311,17 @@ public class CandleBackfillJob {
         }
     }
 
-    /** Counts a failure of the head gap that was not the exchange's, and drops the gap at the last attempt. */
-    private void giveUpOnFailure(MarketType market, GapDetected gap, RuntimeException failure) {
+    /**
+     * Counts a failure of the head gap that was not the exchange's, and drops the gap at the last attempt. A dropped
+     * gap is recorded through {@link DroppedGapService}, outside the queue's lock; when that write fails the gap is
+     * still dropped and the error log is what remains of it.
+     *
+     * @return true when the gap was dropped, so the gaps queued behind it can be filled in the same run
+     */
+    private boolean giveUpOnFailure(MarketType market, GapDetected gap, RuntimeException failure) {
+        int failures;
         synchronized (gaps) {
-            int failures = gapFailures.merge(gap, 1, Integer::sum);
+            failures = gapFailures.merge(gap, 1, Integer::sum);
             if (failures < MAX_GAP_ATTEMPTS) {
                 log.warn(
                         "NSF-02 {} gap {} {} {} -> {} failed ({} of {}); retried on the next run",
@@ -284,7 +333,7 @@ public class CandleBackfillJob {
                         failures,
                         MAX_GAP_ATTEMPTS,
                         failure);
-                return;
+                return false;
             }
             gapFailures.remove(gap);
             gaps.get(market).remove(gap);
@@ -298,6 +347,17 @@ public class CandleBackfillJob {
                     failures,
                     failure);
         }
+        try {
+            droppedGaps.recordDropped(gap, failures, failure, clock.instant());
+        } catch (RuntimeException notRecorded) {
+            log.error(
+                    "NSF-02 {} could not record the dropped gap {} {}",
+                    market,
+                    gap.symbol(),
+                    gap.timeframe(),
+                    notRecorded);
+        }
+        return true;
     }
 
     private void continueAt(MarketType market, Instant at) {
