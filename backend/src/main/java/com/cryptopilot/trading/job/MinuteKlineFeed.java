@@ -9,6 +9,7 @@ import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.service.MatchingService;
+import com.cryptopilot.trading.service.ReplayLockService;
 import jakarta.annotation.PreDestroy;
 import java.time.Clock;
 import java.time.Duration;
@@ -77,6 +78,7 @@ public class MinuteKlineFeed implements MinuteKlineListener {
     private final MatchingProperties properties;
     private final Clock clock;
     private final ThreadFactory threads;
+    private final ReplayLockService locks;
 
     private final Map<PairKey, PairFeed> feeds = new ConcurrentHashMap<>();
     private final BlockingQueue<Replay> replays = new LinkedBlockingQueue<>();
@@ -98,8 +100,9 @@ public class MinuteKlineFeed implements MinuteKlineListener {
             MatchingService matching,
             MarketApi market,
             MatchingProperties properties,
-            Clock clock) {
-        this(worker, matching, market, properties, clock, Thread.ofVirtual().factory());
+            Clock clock,
+            ReplayLockService locks) {
+        this(worker, matching, market, properties, clock, Thread.ofVirtual().factory(), locks);
     }
 
     MinuteKlineFeed(
@@ -108,13 +111,15 @@ public class MinuteKlineFeed implements MinuteKlineListener {
             MarketApi market,
             MatchingProperties properties,
             Clock clock,
-            ThreadFactory threads) {
+            ThreadFactory threads,
+            ReplayLockService locks) {
         this.worker = worker;
         this.matching = matching;
         this.market = market;
         this.properties = properties;
         this.clock = clock;
         this.threads = threads;
+        this.locks = locks;
     }
 
     @Override
@@ -172,6 +177,8 @@ public class MinuteKlineFeed implements MinuteKlineListener {
         replays.clear();
         outstanding.set(0);
         feeds.clear();
+        // An orderly stop frees the pairs at once; a crash leaves the keys to expire.
+        locks.releaseAll();
     }
 
     /**
@@ -180,6 +187,14 @@ public class MinuteKlineFeed implements MinuteKlineListener {
      */
     public boolean isIdle() {
         return outstanding.get() == 0;
+    }
+
+    /**
+     * Whether a restart replay of the pair is running on any instance, including one waiting to retry after a failure:
+     * the gate D-79 asks for before plans of the pair may expire. Read from the shared Redis key (D-85).
+     */
+    public boolean isReplaying(MarketType market, UUID pairId) {
+        return locks.isReplaying(market, pairId);
     }
 
     /** Where each pair with an ACTIVE LIMIT entry starts its replay. */
@@ -279,9 +294,15 @@ public class MinuteKlineFeed implements MinuteKlineListener {
      * @return the replay to try again from where this one stopped, or {@code null} when done or stopped
      */
     private Replay replay(Replay replay) {
-        PairFeed feed = feeds.get(replay.key());
+        PairKey key = replay.key();
+        PairFeed feed = feeds.get(key);
         if (feed == null) {
+            locks.release(key.market(), key.pairId());
             return null;
+        }
+        // Held from the first attempt until the replay ends; a failed attempt keeps it for the retry (D-79).
+        if (!locks.tryAcquire(key.market(), key.pairId())) {
+            return heldElsewhere(replay);
         }
         Instant cursor = replay.from();
         int catchUps = 0;
@@ -305,6 +326,7 @@ public class MinuteKlineFeed implements MinuteKlineListener {
                     continue;
                 }
                 if (feed.goLiveAfterReplay(cursor)) {
+                    locks.release(key.market(), key.pairId());
                     if (replay.failures() > 0) {
                         log.info(
                                 "NSF-07 {} {} replay resumed after {} failures since {}",
@@ -330,6 +352,19 @@ public class MinuteKlineFeed implements MinuteKlineListener {
     }
 
     /** Logs a failed replay, an error the first time and a warning after, and gives the replay to try again. */
+    /** Another instance is replaying the pair: try again after the retry delay, without counting it as an error. */
+    private Replay heldElsewhere(Replay replay) {
+        log.info(
+                "NSF-07 {} {}: a replay of this pair is running elsewhere; waiting for its lock",
+                replay.key().market(),
+                replay.key().pairId());
+        return new Replay(
+                replay.key(),
+                replay.from(),
+                replay.failures() + 1,
+                replay.failures() == 0 ? clock.instant() : replay.firstFailedAt());
+    }
+
     private Replay failed(Replay replay, Instant cursor, RuntimeException failure) {
         Replay retry = new Replay(
                 replay.key(),
