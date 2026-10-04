@@ -146,6 +146,26 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
             @Param("userId") UUID userId, @Param("tokenType") TokenType tokenType, @Param("now") Instant now);
 
     /**
+     * Retires one token if nothing has retired it yet, and answers whether this call did.
+     *
+     * <p>Rotation redeems a refresh token exactly once. A read followed by a versioned write lets two
+     * concurrent refreshes both see the token unused, and the slower one then fails on the version
+     * instead of being recognised as a reuse. One conditional update decides it in the database: the
+     * second statement waits for the first to commit, finds {@code used_at} set, and changes nothing.
+     *
+     * <p>Rule: TECHNICAL_DESIGN 7.15.
+     *
+     * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly,
+     * ch. 7 ("Preventing Lost Updates": compare-and-set).
+     *
+     * @return 1 when this call retired the token, 0 when it had already been used
+     */
+    @Transactional
+    @Modifying(flushAutomatically = true)
+    @Query("update UserToken t set t.usedAt = :now where t.id = :tokenId and t.usedAt is null")
+    int markUsedIfUnused(@Param("tokenId") UUID tokenId, @Param("now") Instant now);
+
+    /**
      * Stops every unused token of one family from working, and answers how many were stopped.
      *
      * <p>This is the reaction to a replayed refresh token (TECHNICAL_DESIGN 7.15). Rotation retires a

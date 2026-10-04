@@ -283,6 +283,8 @@ class UserTokenRepositoryTest {
      * neither rule this test exists for is touched. {@code revokeOtherSessions} joined it with the
      * password change of SRS 3.2.5 on the same terms: an account and a family in, a count out; and
      * {@code countUnusedInSession}, the liveness question every access token asks (D-33), is a count.
+     * {@code markUsedIfUnused} joined it so that concurrent refreshes of one token cannot both redeem
+     * it: a token identifier in, a count out.
      */
     @Test
     void theRepository_offersOnlyBoundedLookupsAndNamesEveryParameterADigest() {
@@ -295,6 +297,7 @@ class UserTokenRepositoryTest {
                         "countIssuedSince",
                         "countUnusedInSession",
                         "invalidateUnused",
+                        "markUsedIfUnused",
                         "revokeFamily",
                         "revokeOtherSessions",
                         "save");
@@ -341,6 +344,26 @@ class UserTokenRepositoryTest {
         assertThat(usedAtOf(elsewhere))
                 .as("another sign-in of the same account is another family and is untouched")
                 .isNull();
+    }
+
+    /**
+     * TECHNICAL_DESIGN 7.15: a refresh token is redeemed once. The first claim retires it, a second
+     * changes nothing and says so, and the first instant is kept.
+     */
+    @Test
+    void TD715_claimingAToken_succeedsOnlyWhileItIsUnused() {
+        UUID account = persistedAccount("claim@cryptopilot.invalid");
+        UserToken token = persistedToken(account, TokenType.REFRESH, digest('9'), EXPIRES, FAMILY);
+        em.flush();
+        em.clear();
+
+        int first = tokens.markUsedIfUnused(token.getId(), ISSUED.plusSeconds(10));
+        int second = tokens.markUsedIfUnused(token.getId(), ISSUED.plusSeconds(20));
+        em.clear();
+
+        assertThat(first).isEqualTo(1);
+        assertThat(second).isZero();
+        assertThat(usedAtOf(token)).isEqualTo(ISSUED.plusSeconds(10));
     }
 
     /**

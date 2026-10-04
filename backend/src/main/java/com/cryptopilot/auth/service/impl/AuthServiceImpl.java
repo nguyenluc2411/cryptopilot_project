@@ -355,13 +355,7 @@ public class AuthServiceImpl implements AuthService {
                 .orElseThrow(() -> sessionExpired("no refresh token matches the presented value"));
 
         if (token.getUsedAt() != null) {
-            int revoked = familyRevoker.revoke(token.getUserId(), token.getTokenFamilyId(), now);
-            log.warn(
-                    "Refresh token reuse detected for account {}: revoked {} tokens of family {}",
-                    token.getUserId(),
-                    revoked,
-                    token.getTokenFamilyId());
-            throw sessionExpired("a retired refresh token was presented again");
+            throw reuseOf(token, now);
         }
         if (!token.isUsableAt(now)) {
             throw sessionExpired("the refresh token presented has expired");
@@ -370,9 +364,31 @@ public class AuthServiceImpl implements AuthService {
         UserSummary account = users.findForSessionRenewal(token.getUserId())
                 .orElseThrow(() -> sessionExpired("account " + token.getUserId() + " may no longer hold a session"));
 
-        token.markUsed(now);
-        tokens.save(token);
+        // A concurrent refresh redeemed it after the read above: that is a reuse too.
+        if (tokens.markUsedIfUnused(token.getId(), now) == 0) {
+            throw reuseOf(token, now);
+        }
         return issueSession(account, token.getTokenFamilyId(), successorWindowOf(token), now);
+    }
+
+    /**
+     * Revokes the family of a refresh token presented after it was retired, and answers the MSG44
+     * refusal to raise. Covers both a replay of an old token and the losers of concurrent refreshes of
+     * one token, which are indistinguishable from a stolen copy raced against its owner.
+     *
+     * <p>Rule: TECHNICAL_DESIGN 7.15.
+     *
+     * <p>Reference: Lodderstedt, T. et al. (2025). <i>RFC 9700: Best Current Practice for OAuth 2.0
+     * Security</i>, section 4.14 (refresh token rotation and reuse detection). IETF.
+     */
+    private BusinessException reuseOf(UserToken token, Instant now) {
+        int revoked = familyRevoker.revoke(token.getUserId(), token.getTokenFamilyId(), now);
+        log.warn(
+                "Refresh token reuse detected for account {}: revoked {} tokens of family {}",
+                token.getUserId(),
+                revoked,
+                token.getTokenFamilyId());
+        return sessionExpired("a retired refresh token was presented again");
     }
 
     /**
