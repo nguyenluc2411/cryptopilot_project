@@ -432,8 +432,9 @@ class WatchlistApiTest {
     }
 
     /**
-     * A position past the bound is refused with MSG01, and a row that already holds the largest {@code integer} (as a
-     * patch could store before the bound existed) does not stop the next pair from being added after it.
+     * A position past the bound is refused as out of range (MSG15 on the field, under the generic MSG01), and a row
+     * that already holds the largest {@code integer} (as a patch could store before the bound existed) does not stop
+     * the next pair from being added after it.
      */
     @Test
     void UC12_aHugeSortOrder_isRefusedAndAddsStillWork() throws Exception {
@@ -443,12 +444,29 @@ class WatchlistApiTest {
         as(trader, patch(WATCHLIST + "/" + row), "{\"sortOrder\": " + Integer.MAX_VALUE + "}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.messageCode").value("MSG01"))
-                .andExpect(jsonPath("$.errors.sortOrder").exists());
+                .andExpect(jsonPath("$.errors.sortOrder").value("MSG15"));
 
         insertRow(trader, pairs.get(1), Integer.MAX_VALUE);
         as(trader, post(WATCHLIST), add(pairs.get(2), null, null))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.sortOrder").value(UpdateWatchlistItemRequest.MAX_SORT_ORDER));
+    }
+
+    /** The position is a range, 0 to 10 000 inclusive; either side of it is out of range (MSG15), not missing. */
+    @Test
+    void UC12_sortOrderBounds_areInclusiveAndOutsideIsMsg15() throws Exception {
+        UUID trader = trader();
+        String row = id(as(trader, post(WATCHLIST), add(pairs.get(0), null, null)));
+
+        as(trader, patch(WATCHLIST + "/" + row), "{\"sortOrder\": " + UpdateWatchlistItemRequest.MAX_SORT_ORDER + "}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sortOrder").value(UpdateWatchlistItemRequest.MAX_SORT_ORDER));
+        as(trader, patch(WATCHLIST + "/" + row), "{\"sortOrder\": " + (UpdateWatchlistItemRequest.MAX_SORT_ORDER + 1) + "}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.sortOrder").value("MSG15"));
+        as(trader, patch(WATCHLIST + "/" + row), "{\"sortOrder\": -1}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.sortOrder").value("MSG15"));
     }
 
     // ------------------------------------------------------------------------------------------
