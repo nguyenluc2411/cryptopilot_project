@@ -543,6 +543,26 @@ class TradingPlanServiceImplTest {
         assertThat(plan.getEntryPrice()).isEqualByComparingTo("100");
     }
 
+    /**
+     * The draft was saved on a tick of 0.01; the pair's tick has since become 0.1 (NSF-01). Activation checks the
+     * stored stop against the current tick and reports MSG15 on it, without rounding it to a price the Trader never
+     * entered.
+     */
+    @Test
+    void BR31_activateAfterATickSizeChange_isRefusedWithMsg15() {
+        service.create(USER, spotLimit("100", "95.05", "110"));
+        TradingPlan plan = saved;
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        PairFilters coarser = new PairFilters(new BigDecimal("0.1"), new BigDecimal("0.001"), new BigDecimal("5"));
+        when(market.tradablePair(eq(PAIR), any()))
+                .thenAnswer(call -> Optional.of(new TradablePair(PAIR, "BTCUSDT", call.getArgument(1), coarser)));
+
+        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+                .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG15")));
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        assertThat(plan.getStopLoss()).isEqualByComparingTo("95.05");
+    }
+
     @Test
     void BR29_theRiskOfTheOtherActivePlans_raisesTotalOpenRisk() {
         // The plan risks 10; with 35 already at risk the total is 4.5 % of 1,000, above BALANCED's 4 %.
