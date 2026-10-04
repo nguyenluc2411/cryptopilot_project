@@ -19,6 +19,9 @@ cryptopilot:
   web:
     # A local proxy (e.g. a dev server forwarding /api) may pass the browser's address.
     trusted-proxies: ${TRUSTED_PROXIES:127.0.0.1,::1}
+    cors:
+      # Any local port, for the web dev server and Flutter web.
+      allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:*,http://127.0.0.1:*}
   auth:
     token-sweep:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
