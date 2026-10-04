@@ -5,5 +5,5 @@ import org.springframework.context.annotation.Configuration;
 
 /** Binds {@link MatchingProperties}. */
 @Configuration
-@EnableConfigurationProperties(MatchingProperties.class)
+@EnableConfigurationProperties({MatchingProperties.class, ReplayLockProperties.class})
 public class MatchingConfig {}

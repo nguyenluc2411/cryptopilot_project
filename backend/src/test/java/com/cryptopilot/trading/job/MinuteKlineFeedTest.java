@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -27,6 +28,7 @@ import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.service.MatchingService;
+import com.cryptopilot.trading.service.ReplayLockService;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -42,6 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -61,6 +64,7 @@ class MinuteKlineFeedTest {
     private final MatchingWorker worker = mock(MatchingWorker.class);
     private final MatchingService matching = mock(MatchingService.class);
     private final MarketApi market = mock(MarketApi.class);
+    private final ReplayLockService locks = mock(ReplayLockService.class);
     private final List<PriceRange> submitted = new CopyOnWriteArrayList<>();
     private final List<TrackedEntry> entries = new ArrayList<>();
     private final List<Thread> threads = new CopyOnWriteArrayList<>();
@@ -82,6 +86,7 @@ class MinuteKlineFeedTest {
         logs.start();
         feedLogger.addAppender(logs);
         when(worker.isRunning()).thenReturn(true);
+        when(locks.tryAcquire(any(), any())).thenReturn(true);
         doAnswer(call -> submitted.add(call.getArgument(0))).when(worker).submit(any());
         when(market.closedMinuteKlines(any(), any(), any())).thenAnswer(call -> {
             Instant from = call.getArgument(2);
@@ -463,6 +468,82 @@ class MinuteKlineFeedTest {
         assertThat(logs.list).noneMatch(event -> event.getFormattedMessage().contains("not matched"));
     }
 
+    /** D-85: the pair's lock is taken before the exchange is asked and released once the replay has caught up. */
+    @Test
+    void D85_aReplay_takesThePairsLockFirst_andReleasesItWhenItEnds() {
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(2)))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(2)), closed(minute(3)))));
+        feed = feed(replay(true, 0, 1440), RETRY);
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+
+        feed.onMinuteKline(update(minute(4), "1", "2", false, 5));
+        awaitSubmitted(4);
+
+        verify(locks, timeout(5_000)).release(MarketType.SPOT, PAIR);
+        InOrder order = inOrder(locks, market);
+        order.verify(locks).tryAcquire(MarketType.SPOT, PAIR);
+        order.verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(2));
+        order.verify(locks).release(MarketType.SPOT, PAIR);
+    }
+
+    /**
+     * D-79: a failed attempt keeps the lock, so the pair still counts as replaying while it waits; the retry reuses
+     * it and the lock is released only when the replay succeeds.
+     */
+    @Test
+    void D79_aFailedReplay_keepsItsLockUntilTheRetrySucceeds() {
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(2)))
+                .thenThrow(new IllegalStateException("pair lookup failed"))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(2)), closed(minute(3)))));
+        feed = feed(replay(true, 0, 1440), RETRY);
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+
+        feed.onMinuteKline(update(minute(4), "1", "2", false, 5));
+        awaitSubmitted(4);
+
+        verify(locks, timeout(5_000)).release(MarketType.SPOT, PAIR);
+        InOrder order = inOrder(locks, market);
+        order.verify(locks).tryAcquire(MarketType.SPOT, PAIR);
+        order.verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(2));
+        order.verify(locks).tryAcquire(MarketType.SPOT, PAIR);
+        order.verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(2));
+        order.verify(locks).release(MarketType.SPOT, PAIR);
+        verify(locks, times(1)).release(MarketType.SPOT, PAIR);
+    }
+
+    /** D-85: while another instance holds the pair, the exchange is not asked; the replay runs once the lock is free. */
+    @Test
+    void D85_aReplayWhoseLockIsHeldElsewhere_waitsForIt_withoutAnError() {
+        when(locks.tryAcquire(MarketType.SPOT, PAIR)).thenReturn(false, true);
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(2)))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(2)), closed(minute(3)))));
+        feed = feed(replay(true, 0, 1440), RETRY);
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+
+        feed.onMinuteKline(update(minute(4), "1", "2", false, 5));
+        awaitSubmitted(4);
+
+        InOrder order = inOrder(locks, market);
+        order.verify(locks, times(2)).tryAcquire(MarketType.SPOT, PAIR);
+        order.verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(2));
+        assertThat(errors()).isEmpty();
+    }
+
+    @Test
+    void D85_stoppingTheFeed_releasesItsLocks_andTheSharedStateAnswersIsReplaying() {
+        when(locks.isReplaying(MarketType.SPOT, PAIR)).thenReturn(true);
+        feed = feed(replay(true, 3, 1440));
+        feed.start();
+
+        assertThat(feed.isReplaying(MarketType.SPOT, PAIR)).isTrue();
+        assertThat(feed.isReplaying(MarketType.SPOT, OTHER_PAIR)).isFalse();
+        feed.stop();
+        verify(locks).releaseAll();
+    }
+
     @Test
     void A04_withTheReplayOff_everyPairGoesLiveAtTheStart_andTheExchangeIsNeverAsked() {
         activeEntry(PAIR, M0);
@@ -484,7 +565,8 @@ class MinuteKlineFeedTest {
                 market,
                 new MatchingProperties(false, 1, 1, RETRY, 60, Duration.ofSeconds(1), replay(true, 3, 1440)),
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                recording);
+                recording,
+                locks);
 
         feed.onMinuteKline(update(M0, "99", "101", false, 1));
         feed.start();
@@ -585,7 +667,8 @@ class MinuteKlineFeedTest {
                 market,
                 new MatchingProperties(true, 1, 100, retry, 60, Duration.ofSeconds(5), replay),
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                recording);
+                recording,
+                locks);
     }
 
     private void startAndAwaitIdle() {
