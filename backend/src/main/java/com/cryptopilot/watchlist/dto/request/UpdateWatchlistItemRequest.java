@@ -1,5 +1,6 @@
 package com.cryptopilot.watchlist.dto.request;
 
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 
@@ -11,9 +12,19 @@ import jakarta.validation.constraints.Size;
  *
  * @param label up to 100 characters; empty to remove
  * @param note up to 1000 characters; empty to remove
- * @param sortOrder the new position, 0 or more; rows with the same position keep the order they were added in
+ * @param sortOrder the new position, 0 to {@link #MAX_SORT_ORDER}; rows with the same position keep the order they
+ *     were added in
  */
 public record UpdateWatchlistItemRequest(
         @Size(max = 100, message = "MSG01") String label,
         @Size(max = 1000, message = "MSG01") String note,
-        @Min(value = 0, message = "MSG01") Integer sortOrder) {}
+
+        @Min(value = 0, message = "MSG01") @Max(value = MAX_SORT_ORDER, message = "MSG01")
+        Integer sortOrder) {
+
+    /**
+     * The largest position a row can be given. Bounded so that the position after the last row, which an add
+     * computes, cannot overflow the column's {@code integer}.
+     */
+    public static final int MAX_SORT_ORDER = 10_000;
+}

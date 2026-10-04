@@ -15,6 +15,7 @@ import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.cryptopilot.watchlist.dto.request.AddWatchlistItemRequest;
+import com.cryptopilot.watchlist.dto.request.UpdateWatchlistItemRequest;
 import com.cryptopilot.watchlist.service.WatchlistService;
 import com.jayway.jsonpath.JsonPath;
 import java.sql.Timestamp;
@@ -428,6 +429,26 @@ class WatchlistApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.sortOrder").exists())
                 .andExpect(jsonPath("$.errors.note").exists());
+    }
+
+    /**
+     * A position past the bound is refused with MSG01, and a row that already holds the largest {@code integer} (as a
+     * patch could store before the bound existed) does not stop the next pair from being added after it.
+     */
+    @Test
+    void UC12_aHugeSortOrder_isRefusedAndAddsStillWork() throws Exception {
+        UUID trader = trader();
+        String row = id(as(trader, post(WATCHLIST), add(pairs.get(0), null, null)));
+
+        as(trader, patch(WATCHLIST + "/" + row), "{\"sortOrder\": " + Integer.MAX_VALUE + "}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG01"))
+                .andExpect(jsonPath("$.errors.sortOrder").exists());
+
+        insertRow(trader, pairs.get(1), Integer.MAX_VALUE);
+        as(trader, post(WATCHLIST), add(pairs.get(2), null, null))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.sortOrder").value(UpdateWatchlistItemRequest.MAX_SORT_ORDER));
     }
 
     // ------------------------------------------------------------------------------------------

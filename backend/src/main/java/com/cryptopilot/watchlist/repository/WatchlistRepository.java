@@ -35,9 +35,14 @@ public interface WatchlistRepository extends Repository<Watchlist, UUID> {
     @Transactional(readOnly = true)
     long countByUserId(UUID userId);
 
-    /** The position after the Trader's last row, so a new pair is added at the end of the list. */
+    /**
+     * The position after the Trader's last row, so a new pair is added at the end of the list. Capped at
+     * {@code UpdateWatchlistItemRequest.MAX_SORT_ORDER} (10 000): a row stored with a larger position, before that
+     * bound existed, would otherwise make {@code max + 1} overflow {@code integer} and refuse every add.
+     */
     @Transactional(readOnly = true)
-    @Query("select coalesce(max(w.sortOrder) + 1, 0) from Watchlist w where w.userId = :userId")
+    @Query("select coalesce(case when max(w.sortOrder) >= 10000 then 10000 else max(w.sortOrder) + 1 end, 0)"
+            + " from Watchlist w where w.userId = :userId")
     int nextSortOrder(@Param("userId") UUID userId);
 
     /** All alerts of a watched pair, whatever their status: what MSG26 tells the Trader will be deleted. */
