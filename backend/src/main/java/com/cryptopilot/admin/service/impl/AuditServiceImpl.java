@@ -57,7 +57,8 @@ public class AuditServiceImpl implements AuditService {
     }
 
     private String toJson(Map<String, Object> values) {
-        return values == null ? null : json.writeValueAsString(AuditValueRedactor.redact(values));
+        // Through the tree, so records, beans and arrays inside the values are redacted too.
+        return values == null ? null : json.writeValueAsString(AuditValueRedactor.redact(json.valueToTree(values)));
     }
 
     private static String clientAddress() {

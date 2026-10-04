@@ -9,8 +9,12 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 class AuditValueRedactorTest {
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     @ParameterizedTest
     @ValueSource(
@@ -37,6 +41,12 @@ class AuditValueRedactorTest {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"sessionId", "sid", "cookie", "authorization", "bearerToken", "bearer", "jwt", "hash"})
+    void NSF18_sessionAndAuthorizationKeys_areRedacted(String field) {
+        assertThat(AuditValueRedactor.isSecret(field)).isTrue();
+    }
+
+    @ParameterizedTest
     @ValueSource(
             strings = {"accountStatus", "role", "key", "settingKey", "setting_key", "footprint", "email", "keyword", ""
             })
@@ -53,14 +63,15 @@ class AuditValueRedactorTest {
         values.put("nested", Map.of("password", "hunter2", "limit", 5));
         values.put("items", List.of(Map.of("token", "abc"), "plain"));
 
-        Map<String, Object> redacted = AuditValueRedactor.redact(values);
+        JsonNode redacted = AuditValueRedactor.redact(JSON.valueToTree(values));
 
-        assertThat(redacted)
-                .containsEntry("model", "configured-model")
-                .containsEntry("apiKey", REDACTED)
-                .containsEntry("previous", null)
-                .containsEntry("nested", Map.of("password", REDACTED, "limit", 5))
-                .containsEntry("items", List.of(Map.of("token", REDACTED), "plain"));
+        Map<String, Object> expected = new HashMap<>();
+        expected.put("model", "configured-model");
+        expected.put("apiKey", REDACTED);
+        expected.put("previous", null);
+        expected.put("nested", Map.of("password", REDACTED, "limit", 5));
+        expected.put("items", List.of(Map.of("token", REDACTED), "plain"));
+        assertThat(redacted).isEqualTo(JSON.valueToTree(expected));
     }
 
     @Test
