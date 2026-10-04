@@ -130,6 +130,23 @@ class AuditServiceImplTest {
                 .contains("passwordHash", "apiKey", "resetToken", AuditValueRedactor.REDACTED, "LOCKED");
     }
 
+    /**
+     * A snapshot passed as a record, with an array inside it, is serialised field by field; its secrets are redacted
+     * as those of a map are.
+     */
+    @Test
+    void NSF18_aRecordWithAPasswordHash_isRedacted() {
+        AccountSnapshot snapshot = new AccountSnapshot(
+                "trader@cryptopilot.invalid", "$2a$12$recordhashrecordhashre", new Session[] {new Session("s3ss10n")});
+
+        transaction.executeWithoutResult(status -> admin.audit(entry(ADMIN, null, Map.of("account", snapshot))));
+
+        String stored = String.valueOf(auditRows().getFirst().get("new_value"));
+        assertThat(stored)
+                .doesNotContain("$2a$12$recordhashrecordhashre", "s3ss10n")
+                .contains("passwordHash", "sessionId", AuditValueRedactor.REDACTED, "trader@cryptopilot.invalid");
+    }
+
     @Test
     void NSF18_anEntryWrittenDuringARequest_recordsTheClientAddress_andOneFromAJobRecordsNone() {
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -159,6 +176,11 @@ class AuditServiceImplTest {
         return new AuditEntry(
                 actor, AuditAction.CONFIGURATION_CHANGED, AuditedEntity.SYSTEM_SETTING, target, oldValue, newValue);
     }
+
+    /** The shape of an account snapshot an administration command may audit. */
+    private record AccountSnapshot(String email, String passwordHash, Session[] sessions) {}
+
+    private record Session(String sessionId) {}
 
     private void changeSetting() {
         sql.sql("""
