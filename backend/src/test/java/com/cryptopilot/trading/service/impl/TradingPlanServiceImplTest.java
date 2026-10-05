@@ -200,6 +200,57 @@ class TradingPlanServiceImplTest {
         assertThat(panel.entryPrice()).isEqualByComparingTo("101");
     }
 
+    /** Futures has no last trade price in the cache: a MARKET plan there is priced at the current mark price. */
+    @Test
+    void BR33_aFuturesMarketPlan_isCalculatedAtTheCurrentMarkPrice() {
+        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.5")));
+
+        PlanCalculationResponse panel = service.calculate(USER, futuresMarket());
+
+        assertThat(panel.entryPrice()).isEqualByComparingTo("100.5");
+        verify(market, never()).currentLastPrice(eq(MarketType.FUTURES), any());
+    }
+
+    /** No current mark price: the existing 503 MSG43 path, whatever else the pair has. */
+    @Test
+    void BR33_withoutACurrentMarkPrice_aFuturesMarketPlanCannotBeCalculated() {
+        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.empty());
+        when(market.leverageBrackets(PAIR)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.calculate(USER, futuresMarket()))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    assertThat(((BusinessException) e).errorCode()).isEqualTo(ErrorCode.MARKET_PRICE_UNAVAILABLE);
+                    assertThat(ErrorCode.MARKET_PRICE_UNAVAILABLE.status().value())
+                            .isEqualTo(503);
+                    assertThat(ErrorCode.MARKET_PRICE_UNAVAILABLE.messageCode()).isEqualTo("MSG43");
+                });
+    }
+
+    /**
+     * Pricing does not need leverage brackets (T-085): with none stored, a Futures MARKET plan is priced at the mark
+     * price and stops only at the bracket step, on the leverage field.
+     */
+    @Test
+    void BR33_aFuturesMarketPlan_isPricedWithoutLeverageBrackets() {
+        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.5")));
+        when(market.leverageBrackets(PAIR)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.calculate(USER, futuresMarket()))
+                .satisfies(e -> assertFields(e, Map.of("leverage", "MSG15")));
+        verify(market).currentMarkPrice("BTCUSDT");
+    }
+
+    /** Spot is unchanged: the last price, never the mark price. */
+    @Test
+    void BR33_aSpotMarketPlan_neverReadsAMarkPrice() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("101")));
+
+        service.calculate(USER, spotMarket("95", "110"));
+
+        verify(market, never()).currentMarkPrice(any());
+    }
+
     @Test
     void BR33_withoutACurrentLastPrice_aMarketPlanCannotBeCalculated() {
         when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.empty());
@@ -529,18 +580,38 @@ class TradingPlanServiceImplTest {
     @CsvSource({"LONG, 94, 95, 110", "SHORT, 106, 105, 90"})
     void MSG16_aMarketPlanRepricedPastItsStop_isRefusedAtActivationOnTheStopLoss(
             Direction direction, String lastPrice, String stop, String takeProfit) {
-        when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
+        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
         service.create(
                 USER,
                 create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, stop, takeProfit, null, null, 5));
         TradingPlan plan = saved;
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
-        when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal(lastPrice)));
+        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal(lastPrice)));
 
         assertThatThrownBy(() -> service.activate(USER, plan.getId()))
                 .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
         assertThat(plan.getEntryPrice()).isEqualByComparingTo("100");
+    }
+
+    /**
+     * The draft was saved on a tick of 0.01; the pair's tick has since become 0.1 (NSF-01). Activation checks the
+     * stored stop against the current tick and reports MSG15 on it, without rounding it to a price the Trader never
+     * entered.
+     */
+    @Test
+    void BR31_activateAfterATickSizeChange_isRefusedWithMsg15() {
+        service.create(USER, spotLimit("100", "95.05", "110"));
+        TradingPlan plan = saved;
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        PairFilters coarser = new PairFilters(new BigDecimal("0.1"), new BigDecimal("0.001"), new BigDecimal("5"));
+        when(market.tradablePair(eq(PAIR), any()))
+                .thenAnswer(call -> Optional.of(new TradablePair(PAIR, "BTCUSDT", call.getArgument(1), coarser)));
+
+        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+                .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG15")));
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        assertThat(plan.getStopLoss()).isEqualByComparingTo("95.05");
     }
 
     @Test
@@ -667,6 +738,10 @@ class TradingPlanServiceImplTest {
     private static CreateTradingPlanRequest spotMarket(String stop, String takeProfit) {
         return create(
                 PAIR, MarketType.SPOT, Direction.LONG, EntryType.MARKET, null, stop, takeProfit, null, null, null);
+    }
+
+    private static CreateTradingPlanRequest futuresMarket() {
+        return create(PAIR, MarketType.FUTURES, Direction.LONG, EntryType.MARKET, null, "95", "110", null, null, 5);
     }
 
     private static CreateTradingPlanRequest futuresLimit(int leverage) {

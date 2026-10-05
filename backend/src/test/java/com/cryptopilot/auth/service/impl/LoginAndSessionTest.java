@@ -9,6 +9,7 @@ import com.cryptopilot.auth.config.TokenProperties;
 import com.cryptopilot.auth.model.IssuedSession;
 import com.cryptopilot.auth.repository.UserTokenRepository;
 import com.cryptopilot.auth.service.AuthService;
+import com.cryptopilot.auth.service.TokenRetentionService;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.support.MutableTestClock;
@@ -17,7 +18,15 @@ import com.cryptopilot.user.model.enums.UserRole;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -65,6 +74,9 @@ class LoginAndSessionTest {
 
     private static final String WRONG_PASSWORD = "Abcdefg2";
 
+    /** Requests released together by the concurrency tests. */
+    private static final int PARALLEL_REQUESTS = 10;
+
     @Autowired
     private AuthService authService;
 
@@ -82,6 +94,9 @@ class LoginAndSessionTest {
 
     @Autowired
     private JdbcClient sql;
+
+    @Autowired
+    private TokenRetentionService retention;
 
     @Autowired
     private MutableTestClock clock;
@@ -282,6 +297,27 @@ class LoginAndSessionTest {
         assertThat(lockedUntilOf(userId)).isEqualTo(NOW.plus(Duration.ofMinutes(15)));
     }
 
+    /**
+     * Ten wrong passwords for one account released at the same moment. Each must be counted once, so
+     * the first four are ordinary refusals, the fifth locks the account and the other five are refused
+     * because it is locked; none may surface as a write conflict.
+     */
+    @Test
+    void BR03_parallelWrongPasswords_areAllCounted() throws Exception {
+        UUID userId = verifiedAccount("parallel");
+
+        List<Object> outcomes = concurrently(
+                PARALLEL_REQUESTS, () -> authService.login("parallel" + TEST_DOMAIN, WRONG_PASSWORD, false));
+
+        assertThat(outcomes)
+                .as("every attempt is refused as a sign-in, never as a conflict")
+                .containsOnly(ErrorCode.INVALID_CREDENTIALS, ErrorCode.LOGIN_TEMPORARILY_LOCKED);
+        assertThat(outcomes).filteredOn(ErrorCode.INVALID_CREDENTIALS::equals).hasSize(4);
+        assertThat(failedCountOf(userId)).isEqualTo(5);
+        assertThat(lockedUntilOf(userId)).isEqualTo(NOW.plus(Duration.ofMinutes(15)));
+        assertThat(refusalOf("parallel", PASSWORD).errorCode()).isEqualTo(ErrorCode.LOGIN_TEMPORARILY_LOCKED);
+    }
+
     /** And the right password does not open a locked-out account, which is what a lockout means. */
     @Test
     void BR03_theCorrectPasswordDuringTheLockout_isStillRefused() {
@@ -427,6 +463,35 @@ class LoginAndSessionTest {
         assertThat(usedAtOf(second.refreshToken())).isNotNull();
     }
 
+    /**
+     * Ten refreshes of one token released at the same moment. Exactly one redeems it; every other is
+     * a reuse of a retired token and answers MSG44, never a write conflict, and the reuse ends the
+     * family, including the successor the winner was issued.
+     */
+    @Test
+    void UC05_concurrentRefreshOfOneToken_neverAnswers409() throws Exception {
+        verifiedAccount("parallel-refresh");
+        IssuedSession signIn = authService.login("parallel-refresh" + TEST_DOMAIN, PASSWORD, false);
+
+        List<Object> outcomes = concurrently(PARALLEL_REQUESTS, () -> authService.refresh(signIn.refreshToken()));
+
+        assertThat(outcomes).filteredOn(IssuedSession.class::isInstance).hasSize(1);
+        assertThat(outcomes)
+                .filteredOn(outcome -> !(outcome instanceof IssuedSession))
+                .as("every other refresh is refused as an ended session, never as a conflict")
+                .hasSize(PARALLEL_REQUESTS - 1)
+                .containsOnly(ErrorCode.SESSION_EXPIRED);
+        IssuedSession winner = outcomes.stream()
+                .filter(IssuedSession.class::isInstance)
+                .map(IssuedSession.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertThat(usedAtOf(winner.refreshToken()))
+                .as("the reuse revoked the family")
+                .isNotNull();
+        assertThat(refusalOfRefresh(winner.refreshToken()).errorCode()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+    }
+
     /** A retired token presented again ends the whole family, both the copy and the original. */
     @Test
     void TD715_presentingARetiredToken_revokesTheEntireFamily() {
@@ -444,6 +509,43 @@ class LoginAndSessionTest {
         assertThat(refusalOfRefresh(second.refreshToken()).errorCode())
                 .as("and it no longer works")
                 .isEqualTo(ErrorCode.SESSION_EXPIRED);
+    }
+
+    /**
+     * RFC 9700 4.14 with the strict policy: the retention sweep keeps a used token until its own expiry, so a replay
+     * after a sweep is still recognised and still ends the family.
+     */
+    @Test
+    void TD715_aRetiredTokenKeptByTheSweep_stillRevokesTheFamilyWhenReplayed() {
+        verifiedAccount("sweep-reuse");
+        IssuedSession first = authService.login("sweep-reuse" + TEST_DOMAIN, PASSWORD, false);
+        IssuedSession second = authService.refresh(first.refreshToken());
+        clock.set(NOW.plus(tokenProperties.refreshTokenTtl()).minusSeconds(60));
+
+        assertThat(retention.removeExpiredRefreshTokens())
+                .as("nothing of this sign-in has expired")
+                .isZero();
+
+        assertThat(refusalOfRefresh(first.refreshToken()).errorCode()).isEqualTo(ErrorCode.SESSION_EXPIRED);
+        assertThat(usedAtOf(second.refreshToken()))
+                .as("the replay of the kept token revoked the family")
+                .isNotNull();
+    }
+
+    /** Past its original expiry, a used token is deleted by the sweep; it could not be redeemed anyway. */
+    @Test
+    void TD715_aRetiredTokenPastItsExpiry_isDeletedByTheSweep() {
+        verifiedAccount("sweep-expired");
+        IssuedSession first = authService.login("sweep-expired" + TEST_DOMAIN, PASSWORD, false);
+        clock.set(NOW.plusSeconds(3600));
+        authService.refresh(first.refreshToken());
+        clock.set(NOW.plus(tokenProperties.refreshTokenTtl()).plusSeconds(1));
+
+        assertThat(retention.removeExpiredRefreshTokens()).isEqualTo(1);
+
+        assertThat(tokens.findByTokenHash(refreshTokens.digestOf(first.refreshToken())))
+                .isEmpty();
+        assertThat(refusalOfRefresh(first.refreshToken()).errorCode()).isEqualTo(ErrorCode.SESSION_EXPIRED);
     }
 
     /** Revoking one family does not touch another sign-in of the same account. */
@@ -627,6 +729,38 @@ class LoginAndSessionTest {
             throw new AssertionError("the sign-in was expected to be refused");
         } catch (BusinessException refused) {
             return refused;
+        }
+    }
+
+    /**
+     * Runs the call on {@code count} threads released by one latch, and answers each outcome: the
+     * result, the {@link ErrorCode} of a {@link BusinessException}, or the class of any other failure.
+     */
+    private List<Object> concurrently(int count, Callable<?> call) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(count);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<Object>> futures = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        return call.call();
+                    } catch (BusinessException refused) {
+                        return refused.errorCode();
+                    } catch (RuntimeException failed) {
+                        return failed.getClass();
+                    }
+                }));
+            }
+            start.countDown();
+            List<Object> outcomes = new ArrayList<>();
+            for (Future<Object> future : futures) {
+                outcomes.add(future.get(60, TimeUnit.SECONDS));
+            }
+            return outcomes;
+        } finally {
+            pool.shutdownNow();
         }
     }
 

@@ -23,8 +23,8 @@ import tools.jackson.databind.ObjectMapper;
  * after commit or an asynchronous writer would each break one of those two guarantees, which is why none is used here.
  * The entity is flushed with the command, so an insert that fails rolls the command back with it.
  *
- * <p>The client address is read from the current HTTP request, as the servlet container reports it; a scheduled job
- * has no request and records none.
+ * <p>The client address is read from the current HTTP request, as {@code common.web.ClientAddressFilter} resolved it
+ * (forwarded headers count only from trusted proxies); a scheduled job has no request and records none.
  *
  * <p>Rule: BR-57, NSF-18; TECHNICAL_DESIGN section 10 (the audit call is inside the command transaction).
  *
@@ -57,7 +57,8 @@ public class AuditServiceImpl implements AuditService {
     }
 
     private String toJson(Map<String, Object> values) {
-        return values == null ? null : json.writeValueAsString(AuditValueRedactor.redact(values));
+        // Through the tree, so records, beans and arrays inside the values are redacted too.
+        return values == null ? null : json.writeValueAsString(AuditValueRedactor.redact(json.valueToTree(values)));
     }
 
     private static String clientAddress() {

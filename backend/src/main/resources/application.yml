@@ -37,11 +37,25 @@ spring:
       demo_password_hash: ${DEMO_PASSWORD_HASH:!DEMO_PASSWORD_HASH_NOT_SET}
 
 cryptopilot:
+  web:
+    # Reverse proxies whose X-Forwarded-For is believed: addresses or CIDR ranges, comma-separated. Empty trusts none,
+    # so the direct peer is the client. Set wherever Nginx sits in front.
+    trusted-proxies: ${TRUSTED_PROXIES:}
+    cors:
+      # TD 5.3: the browser origins that may call the REST API and open /ws, one list for both, comma-separated
+      # (scheme://host[:port]). Empty allows no cross-origin caller.
+      allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+    rate-limit:
+      # ADR-014: requests per one-minute window and subject (login and the other public auth calls per client address,
+      # authenticated calls per account). Off here so a test context is not limited; on in the dev and prod profiles.
+      enabled: false
+      window: 1m
+      login: ${RATE_LIMIT_LOGIN:10}
+      auth: ${RATE_LIMIT_AUTH:20}
+      api: ${RATE_LIMIT_API:120}
   realtime:
     # TD 9: the STOMP endpoint's transport limits, so one slow client cannot hold the others (Spring's per-session
-    # decorator buffers up to the limit, then closes that session), and the origins a browser may open it from.
-    allowed-origin-patterns:
-      - "http://localhost:*"
+    # decorator buffers up to the limit, then closes that session). Its origins are cryptopilot.web.cors above.
     send-time-limit: 10s
     send-buffer-size-limit: 512KB
   auth:
@@ -57,6 +71,13 @@ cryptopilot:
       # be a session on any deployment that forgot to override it. An environment that supplies
       # nothing fails at start-up, which is the only safe way for this particular value to be missing.
       secret: ${JWT_SECRET}
+    token-sweep:
+      # NSF-17, refresh tokens: daily, deletes those past their own expiry; used ones are kept until then so a
+      # replay still revokes the family. Off here, on in the dev and prod profiles, so a test context schedules
+      # nothing.
+      enabled: false
+      cron: "0 15 0 * * *"
+      zone: UTC
   market:
     binance:
       # The public market data API only (BR-09): no key, no account, no order endpoint. Hosts and
@@ -225,6 +246,9 @@ springdoc:
 
 server:
   port: 8080
+  # The client address is resolved once, by ClientAddressFilter, from cryptopilot.web.trusted-proxies. The container
+  # must not apply its own forwarded-header handling on top (R-11).
+  forward-headers-strategy: none
 
 management:
   endpoints:

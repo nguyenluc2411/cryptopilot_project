@@ -148,7 +148,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             throw new IllegalPlanStateException(plan.getId(), plan.getStatus(), "move to " + PlanStatus.ACTIVE);
         }
         requireRoomForAnActivePlan(userId);
-        CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(plan), plan.getId());
+        // Stored prices are checked against the current tick, not rounded to it (BR-30, BR-31).
+        CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(plan), plan.getId(), false);
         activate(plan, calculated, now);
         return PlanResponses.detail(plans.save(plan));
     }
@@ -205,6 +206,19 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * the last price for a MARKET entry, the risk profile, the other open risk.
      */
     private CalculatedPlan calculate(UUID userId, UUID pairId, PlanTerms terms, UUID excludedPlan) {
+        return calculate(userId, pairId, terms, excludedPlan, true);
+    }
+
+    /**
+     * The plan calculated as above. With {@code roundPrices} the prices are rounded to the pair's tick, as for values
+     * just entered (BR-30); without it they are passed as stored, so a price that is no longer a multiple of the
+     * current tick is refused by the calculation on its field (MSG15) instead of being moved to a price the Trader
+     * never entered.
+     *
+     * <p>Rule: BR-30, BR-31.
+     */
+    private CalculatedPlan calculate(
+            UUID userId, UUID pairId, PlanTerms terms, UUID excludedPlan, boolean roundPrices) {
         if (terms.market() == MarketType.FUTURES) {
             entitlements.requireFeature(userId, Feature.FUTURES_ANALYSIS);
         }
@@ -218,9 +232,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         RiskInput input = new RiskInput(
                 terms.market(),
                 terms.direction(),
-                entryPrice(pair, terms),
-                tick(pair, terms.stopLoss()),
-                tick(pair, terms.takeProfit()),
+                entryPrice(pair, terms, roundPrices),
+                roundPrices ? tick(pair, terms.stopLoss()) : terms.stopLoss(),
+                roundPrices ? tick(pair, terms.takeProfit()) : terms.takeProfit(),
                 capital,
                 riskPercent(terms, defaults),
                 terms.leverage() == null ? 1 : terms.leverage(),
@@ -230,18 +244,22 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return calculations.calculate(pair, input);
     }
 
-    /** MARKET: the current last price (BR-33); LIMIT: the price entered, rounded to the tick (BR-30). */
-    private BigDecimal entryPrice(TradablePair pair, PlanTerms terms) {
+    /**
+     * MARKET: the current reference price (BR-33), see {@link #currentReferencePrice}; LIMIT: the price entered, rounded
+     * to the tick when {@code roundPrice} (BR-30).
+     */
+    private BigDecimal entryPrice(TradablePair pair, PlanTerms terms, boolean roundPrice) {
         if (terms.entryType() == EntryType.MARKET) {
-            return market.currentLastPrice(pair.market(), pair.symbol())
+            return currentReferencePrice(pair)
                     .orElseThrow(() -> new BusinessException(
                             ErrorCode.MARKET_PRICE_UNAVAILABLE,
-                            "no current last price for " + pair.symbol() + " on " + pair.market()));
+                            "no current " + (pair.market() == MarketType.FUTURES ? "mark" : "last") + " price for "
+                                    + pair.symbol() + " on " + pair.market()));
         }
         if (terms.entryPrice() == null) {
             throw new FieldValidationException("a LIMIT plan needs an entry price", Map.of("entryPrice", "MSG01"));
         }
-        return tick(pair, terms.entryPrice());
+        return roundPrice ? tick(pair, terms.entryPrice()) : terms.entryPrice();
     }
 
     /** The risk % entered, else the profile screen's default, else the risk per trade of the risk profile. */
@@ -321,8 +339,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * Activates the plan and fills its entry at once at the current last price when it is MARKET or the last price
-     * already reaches it (BR-33); otherwise it waits for the matching engine. The journal record of the fill is T-048.
+     * Activates the plan and fills its entry at once when it is MARKET, or when it is LIMIT and the current last price
+     * already reaches it (BR-33); otherwise it waits for the matching engine. A MARKET entry fills at the price the
+     * activation was calculated with: the last price on Spot, the mark price on Futures (D-84). The journal record of
+     * the fill is T-048.
      */
     private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now) {
         plan.activate(calculated.calculation(), calculated.warnings(), now);
@@ -346,6 +366,17 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         }
         return market.tradablePair(plan.getPairId(), plan.getMarket())
                 .flatMap(pair -> market.currentLastPrice(pair.market(), pair.symbol()));
+    }
+
+    /**
+     * The price a MARKET entry executes at: the last trade price on Spot, the mark price on Futures, each only while the
+     * cache holds a current one. Futures uses the mark price because no Futures stream carries a last trade price
+     * (D-84, A-41).
+     */
+    private Optional<BigDecimal> currentReferencePrice(TradablePair pair) {
+        return pair.market() == MarketType.FUTURES
+                ? market.currentMarkPrice(pair.symbol())
+                : market.currentLastPrice(pair.market(), pair.symbol());
     }
 
     private void publishActivated(TradingPlan plan) {

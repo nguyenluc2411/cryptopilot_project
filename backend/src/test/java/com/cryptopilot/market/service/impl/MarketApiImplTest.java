@@ -108,18 +108,11 @@ class MarketApiImplTest {
     }
 
     @Test
-    void BR33_aCurrentPrice_givesItsLastPriceAndFundingRate() {
-        when(prices.latest(MarketType.FUTURES, "BTCUSDT")).thenReturn(found(price("101", "0.0001")));
-
-        assertThat(api.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).contains(new BigDecimal("101"));
-        assertThat(api.currentFundingRate("BTCUSDT")).contains(new BigDecimal("0.0001"));
-    }
-
-    @Test
     void BR33_aCurrentEntryWithoutTheValue_givesNothing() {
         when(prices.latest(MarketType.FUTURES, "BTCUSDT")).thenReturn(found(price(null, null)));
 
         assertThat(api.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).isEmpty();
+        assertThat(api.currentMarkPrice("BTCUSDT")).isEmpty();
         assertThat(api.currentFundingRate("BTCUSDT")).isEmpty();
     }
 

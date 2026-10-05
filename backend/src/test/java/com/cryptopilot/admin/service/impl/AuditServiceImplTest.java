@@ -9,7 +9,9 @@ import com.cryptopilot.admin.AuditEntry;
 import com.cryptopilot.admin.model.enums.AuditAction;
 import com.cryptopilot.admin.model.enums.AuditedEntity;
 import com.cryptopilot.common.util.UuidV7;
+import com.cryptopilot.common.web.ClientAddressFilter;
 import com.cryptopilot.support.TestcontainersConfig;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -21,6 +23,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -130,6 +133,23 @@ class AuditServiceImplTest {
                 .contains("passwordHash", "apiKey", "resetToken", AuditValueRedactor.REDACTED, "LOCKED");
     }
 
+    /**
+     * A snapshot passed as a record, with an array inside it, is serialised field by field; its secrets are redacted
+     * as those of a map are.
+     */
+    @Test
+    void NSF18_aRecordWithAPasswordHash_isRedacted() {
+        AccountSnapshot snapshot = new AccountSnapshot(
+                "trader@cryptopilot.invalid", "$2a$12$recordhashrecordhashre", new Session[] {new Session("s3ss10n")});
+
+        transaction.executeWithoutResult(status -> admin.audit(entry(ADMIN, null, Map.of("account", snapshot))));
+
+        String stored = String.valueOf(auditRows().getFirst().get("new_value"));
+        assertThat(stored)
+                .doesNotContain("$2a$12$recordhashrecordhashre", "s3ss10n")
+                .contains("passwordHash", "sessionId", AuditValueRedactor.REDACTED, "trader@cryptopilot.invalid");
+    }
+
     @Test
     void NSF18_anEntryWrittenDuringARequest_recordsTheClientAddress_andOneFromAJobRecordsNone() {
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -144,6 +164,22 @@ class AuditServiceImplTest {
                 .containsExactlyInAnyOrder(tuple(ADMIN, "203.0.113.7"), tuple(null, null));
     }
 
+    /** Behind a trusted proxy the entry records the forwarded client, through the one resolution every reader uses. */
+    @Test
+    void NSF18_behindATrustedProxy_theEntryRecordsTheForwardedClient() throws Exception {
+        recordThroughTheFilter("10.0.0.5", "203.0.113.7");
+
+        assertThat(auditRows().getFirst()).containsEntry("ip_address", "203.0.113.7");
+    }
+
+    /** A forwarded address from a peer that is not a trusted proxy is ignored; the peer is recorded. */
+    @Test
+    void NSF18_aSpoofedForwardedAddress_isNotRecorded() throws Exception {
+        recordThroughTheFilter("198.51.100.20", "203.0.113.7");
+
+        assertThat(auditRows().getFirst()).containsEntry("ip_address", "198.51.100.20");
+    }
+
     @Test
     void NSF18_aClientAddressLongerThanTheColumn_isCutToFit() {
         String scopedIpv6 = "fe80:0000:0000:0000:0204:61ff:fe9d:f156%ethernet-adapter-0";
@@ -155,10 +191,27 @@ class AuditServiceImplTest {
         assertThat(auditRows().getFirst()).containsEntry("ip_address", scopedIpv6.substring(0, 45));
     }
 
+    private void recordThroughTheFilter(String peer, String forwardedFor) throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRemoteAddr(peer);
+        request.addHeader("X-Forwarded-For", forwardedFor);
+        new ClientAddressFilter(List.of("10.0.0.5"))
+                .doFilter(request, new MockHttpServletResponse(), (filtered, response) -> {
+                    RequestContextHolder.setRequestAttributes(
+                            new ServletRequestAttributes((HttpServletRequest) filtered));
+                    transaction.executeWithoutResult(status -> admin.audit(entry(ADMIN, null, Map.of("value", "2"))));
+                });
+    }
+
     private AuditEntry entry(UUID actor, Map<String, Object> oldValue, Map<String, Object> newValue) {
         return new AuditEntry(
                 actor, AuditAction.CONFIGURATION_CHANGED, AuditedEntity.SYSTEM_SETTING, target, oldValue, newValue);
     }
+
+    /** The shape of an account snapshot an administration command may audit. */
+    private record AccountSnapshot(String email, String passwordHash, Session[] sessions) {}
+
+    private record Session(String sessionId) {}
 
     private void changeSetting() {
         sql.sql("""

@@ -151,6 +151,36 @@ class OpenApiDocsTest {
         assertThat((String) responses.get("400").get("description")).contains("MSG48");
     }
 
+    /** ADR-014: the 429 of the request limits is documented with Retry-After and the MSG50 problem body. */
+    @Test
+    void ADR014_everyApiOperation_documentsTheRateLimited429() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Object> plans = JsonPath.read(body, "$.paths['/api/v1/plans'].post.responses['429']");
+        assertThat((String) plans.get("description")).contains("MSG50");
+        assertThat((String) JsonPath.read(
+                        body, "$.paths['/api/v1/plans'].post.responses['429'].headers['Retry-After'].schema.type"))
+                .isEqualTo("integer");
+        assertThat((String) JsonPath.read(
+                        body,
+                        "$.paths['/api/v1/plans'].post.responses['429'].content['application/problem+json'].schema"
+                                + "['$ref']"))
+                .isEqualTo("#/components/schemas/" + OpenApiConfig.RATE_LIMITED_PROBLEM);
+        assertThat((String)
+                        JsonPath.read(body, "$.components.schemas.RateLimitedProblem.properties.messageCode.example"))
+                .isEqualTo("MSG50");
+        List<String> missing = new ArrayList<>();
+        Map<String, Map<String, Object>> paths = JsonPath.read(body, "$.paths");
+        paths.forEach((path, operations) -> operations.forEach((method, operation) -> {
+            if (operation instanceof Map<?, ?> op
+                    && op.get("responses") instanceof Map<?, ?> responses
+                    && !responses.containsKey("429")) {
+                missing.add(method + " " + path);
+            }
+        }));
+        assertThat(missing).isEmpty();
+    }
+
     /** Swagger UI is reachable for reading where the document is. */
     @Test
     void TD8_swaggerUi_isReachable() throws Exception {

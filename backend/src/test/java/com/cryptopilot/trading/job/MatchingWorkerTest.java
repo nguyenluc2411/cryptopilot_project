@@ -578,7 +578,7 @@ class MatchingWorkerTest {
 
         verify(matching, timeout(WAIT).times(2)).fill(filled(failing, AT));
         verify(matching, timeout(WAIT)).fill(filled(other, AT));
-        assertThat(logs.list)
+        assertThat(logged())
                 .noneSatisfy(event -> assertThat(event.getFormattedMessage()).contains("carries on"));
     }
 
@@ -628,15 +628,13 @@ class MatchingWorkerTest {
 
         verify(matching, times(3)).fill(filled(plan, AT));
         verify(matching, never()).fill(filled(plan, AT.plusSeconds(180)));
-        assertThat(logs.list)
+        assertThat(logged())
                 .filteredOn(event -> event.getLevel() == Level.ERROR)
                 .singleElement()
                 .satisfies(event -> assertThat(event.getFormattedMessage())
                         .contains(plan.toString())
                         .contains("stays ACTIVE"));
-        assertThat(logs.list)
-                .filteredOn(event -> event.getLevel() == Level.WARN)
-                .hasSize(2);
+        assertThat(logged()).filteredOn(event -> event.getLevel() == Level.WARN).hasSize(2);
     }
 
     @Test
@@ -674,7 +672,7 @@ class MatchingWorkerTest {
         }
         held.release();
 
-        assertThat(logs.list)
+        assertThat(logged())
                 .filteredOn(event -> event.getFormattedMessage().contains("pending ranges"))
                 .singleElement()
                 .satisfies(event -> {
@@ -753,7 +751,7 @@ class MatchingWorkerTest {
 
         assertThat(started).hasSize(1);
         assertThat(worker.isRunning()).isFalse();
-        assertThat(logs.list).anySatisfy(event -> {
+        assertThat(logged()).anySatisfy(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.ERROR);
             assertThat(event.getFormattedMessage()).contains("not started");
         });
@@ -814,7 +812,7 @@ class MatchingWorkerTest {
         verify(matching).advanceWatermark(MarketType.SPOT, PAIR, AT);
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, AT.plusSeconds(60));
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, AT.plusSeconds(120));
-        assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
+        assertThat(logged()).anySatisfy(event -> assertThat(event.getFormattedMessage())
                 .contains("watermark is held")
                 .contains("A restart is required within replay.max-window (PT24H)"));
     }
@@ -830,7 +828,7 @@ class MatchingWorkerTest {
         worker.submit(range("99", "101", AT.plusSeconds(60)));
 
         verify(matching, timeout(WAIT)).fill(filled(plan, AT.plusSeconds(60)));
-        assertThat(logs.list).anySatisfy(event -> {
+        assertThat(logged()).anySatisfy(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
             assertThat(event.getFormattedMessage()).contains("watermark");
         });
@@ -868,7 +866,7 @@ class MatchingWorkerTest {
         worker.onCancelled(cancelled(UUID.randomUUID()));
 
         assertThat(Thread.interrupted()).isTrue();
-        assertThat(logs.list).anySatisfy(event -> {
+        assertThat(logged()).anySatisfy(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
             assertThat(event.getFormattedMessage()).contains("Untrack").contains("lost");
         });
@@ -939,6 +937,13 @@ class MatchingWorkerTest {
                 marker, MarketType.SPOT, MARKER_PAIR, Direction.LONG, EntryType.LIMIT, BigDecimal.ONE, ACTIVATED));
         worker.submit(new PriceRange(MarketType.SPOT, MARKER_PAIR, new BigDecimal("0.5"), new BigDecimal("1.5"), AT));
         verify(matching, timeout(WAIT)).fill(filledPlan(marker));
+    }
+
+    /** A copy of the captured events, taken under the appender's lock: the consumers may still be logging. */
+    private List<ILoggingEvent> logged() {
+        synchronized (logs) {
+            return List.copyOf(logs.list);
+        }
     }
 
     private static MatchingProperties properties(int partitions, int capacity) {

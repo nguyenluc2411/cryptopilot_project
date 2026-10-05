@@ -1,6 +1,12 @@
 package com.cryptopilot.market.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.client.BinanceClientProperties;
 import com.cryptopilot.market.client.BinanceRestClient;
@@ -12,9 +18,13 @@ import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.CandleBackfillJob.Outcome;
+import com.cryptopilot.market.model.BackfillRun;
+import com.cryptopilot.market.model.GapFill;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.OhlcvRepository;
+import com.cryptopilot.market.service.CandleBackfillService;
+import com.cryptopilot.market.service.DroppedGapService;
 import com.cryptopilot.market.service.SyntheticKlines;
 import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
@@ -28,6 +38,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.AfterEach;
@@ -36,6 +47,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.Trigger;
@@ -69,6 +81,9 @@ class CandleBackfillJobTest {
     @Autowired
     private JdbcClient sql;
 
+    @Autowired
+    private DroppedGapService droppedGaps;
+
     private final MutableTestClock clock = new MutableTestClock(NOW);
     private final SyntheticKlines exchangeKlines = new SyntheticKlines(NOW);
     private final List<Scheduled> scheduled = new ArrayList<>();
@@ -90,6 +105,7 @@ class CandleBackfillJobTest {
         client.close();
         exchange.close();
         sql.sql("delete from ohlcv").update();
+        sql.sql("delete from dropped_backfill_gap").update();
         sql.sql("delete from crypto_pair").update();
         sql.sql("delete from coin").update();
     }
@@ -156,9 +172,125 @@ class CandleBackfillJobTest {
     /** An unexpected failure waits for the next run rather than escaping into the scheduler. */
     @Test
     void NSF02_anUnexpectedFailure_waitsForTheNextRun() {
-        CandleBackfillJob broken = new CandleBackfillJob(null, recordingScheduler(), properties(true), clock);
+        CandleBackfillJob broken =
+                new CandleBackfillJob(null, droppedGaps, recordingScheduler(), properties(true), clock);
 
         assertThat(broken.run(MarketType.SPOT)).isEqualTo(Outcome.WAIT_FOR_NEXT_RUN);
+    }
+
+    /**
+     * A queued gap whose fill keeps failing with an error that is not the exchange's (a write the database refuses)
+     * must not hold up the market's backfill run after run.
+     */
+    @Test
+    void NSF02_aGapThatAlwaysFails_doesNotBlockTheBackfill() {
+        CandleBackfillService backfill = mock(CandleBackfillService.class);
+        GapDetected gap = gap(Instant.parse("2026-09-23T00:00:00Z"), Instant.parse("2026-09-23T05:00:00Z"));
+        when(backfill.fillGap(gap)).thenThrow(new DataIntegrityViolationException("candle refused"));
+        when(backfill.backfill(MarketType.SPOT))
+                .thenReturn(new BackfillRun(MarketType.SPOT, 0, 0, Optional.empty(), List.of()));
+        CandleBackfillJob job =
+                new CandleBackfillJob(backfill, droppedGaps, recordingScheduler(), properties(true), clock);
+        job.onGapDetected(gap);
+
+        job.run(MarketType.SPOT);
+        job.run(MarketType.SPOT);
+
+        verify(backfill, atLeastOnce()).backfill(MarketType.SPOT);
+        assertThat(job.queuedGaps(MarketType.SPOT))
+                .as("kept for another attempt")
+                .containsExactly(gap);
+
+        job.run(MarketType.SPOT);
+
+        assertThat(job.queuedGaps(MarketType.SPOT))
+                .as("dropped after %d failures", CandleBackfillJob.MAX_GAP_ATTEMPTS)
+                .isEmpty();
+    }
+
+    /**
+     * A gap dropped after its third failure is stored with its range, how many times it failed, a one-line summary of
+     * the last error and when it was dropped, so the drop can be queried and not only read from the log.
+     */
+    @Test
+    void NSF02_aGapDroppedAfterThreeFailures_isStoredWithItsFields() {
+        CandleBackfillService backfill = completingBackfill();
+        GapDetected gap = gap(Instant.parse("2026-09-23T00:00:00Z"), Instant.parse("2026-09-23T05:00:00Z"));
+        when(backfill.fillGap(gap))
+                .thenThrow(new DataIntegrityViolationException("candle refused\n  Detail: Key (open_time) exists"));
+        CandleBackfillJob job = jobOver(backfill);
+        job.onGapDetected(gap);
+
+        job.run(MarketType.SPOT);
+        job.run(MarketType.SPOT);
+        assertThat(droppedGaps.droppedGaps(MarketType.SPOT))
+                .as("not dropped before the last attempt")
+                .isEmpty();
+        clock.set(NOW.plusSeconds(7200));
+        job.run(MarketType.SPOT);
+
+        assertThat(droppedGaps.droppedGaps(MarketType.SPOT)).singleElement().satisfies(dropped -> {
+            assertThat(dropped.gap()).isEqualTo(gap);
+            assertThat(dropped.failureCount()).isEqualTo(CandleBackfillJob.MAX_GAP_ATTEMPTS);
+            assertThat(dropped.lastError()).isEqualTo("DataIntegrityViolationException: candle refused");
+            assertThat(dropped.droppedAt()).isEqualTo(NOW.plusSeconds(7200));
+        });
+        assertThat(droppedGaps.droppedGaps(MarketType.FUTURES)).isEmpty();
+    }
+
+    /**
+     * A dropped gap is not retried on its own: reported again by the stream, or found again (or a part of it) by the
+     * start-up scan, it is not queued, and its fill is never attempted again.
+     */
+    @Test
+    void NSF02_aDroppedGap_isNotRetried() {
+        CandleBackfillService backfill = completingBackfill();
+        GapDetected gap = gap(Instant.parse("2026-09-23T00:00:00Z"), Instant.parse("2026-09-23T05:00:00Z"));
+        GapDetected inside = gap(Instant.parse("2026-09-23T02:00:00Z"), Instant.parse("2026-09-23T05:00:00Z"));
+        when(backfill.fillGap(gap)).thenThrow(new IllegalStateException("cannot be written"));
+        when(backfill.storedGaps()).thenReturn(List.of(inside));
+        CandleBackfillJob job = jobOver(backfill);
+        job.onGapDetected(gap);
+        for (int attempt = 0; attempt < CandleBackfillJob.MAX_GAP_ATTEMPTS; attempt++) {
+            job.run(MarketType.SPOT);
+        }
+
+        job.onGapDetected(gap);
+        CandleBackfillJob restarted = jobOver(backfill);
+
+        assertThat(job.queuedGaps(MarketType.SPOT))
+                .as("reported again by the stream")
+                .isEmpty();
+        assertThat(restarted.scanForStoredGaps()).as("found again at start-up").isZero();
+        assertThat(restarted.queuedGaps(MarketType.SPOT)).isEmpty();
+        job.run(MarketType.SPOT);
+        restarted.run(MarketType.SPOT);
+        verify(backfill, times(CandleBackfillJob.MAX_GAP_ATTEMPTS)).fillGap(gap);
+        verify(backfill, never()).fillGap(inside);
+    }
+
+    /** The gaps queued behind a dropped one are filled in the run that drops it, and so are the series. */
+    @Test
+    void NSF02_otherGaps_continueToBackfillAfterADrop() {
+        CandleBackfillService backfill = completingBackfill();
+        GapDetected broken = gap(Instant.parse("2026-09-23T00:00:00Z"), Instant.parse("2026-09-23T05:00:00Z"));
+        GapDetected healthy = gap(Instant.parse("2026-09-22T00:00:00Z"), Instant.parse("2026-09-22T05:00:00Z"));
+        when(backfill.fillGap(broken)).thenThrow(new IllegalStateException("cannot be written"));
+        when(backfill.fillGap(healthy)).thenReturn(new GapFill(6, Optional.empty(), Optional.empty()));
+        CandleBackfillJob job = jobOver(backfill);
+        job.onGapDetected(broken);
+        job.onGapDetected(healthy);
+
+        for (int attempt = 0; attempt < CandleBackfillJob.MAX_GAP_ATTEMPTS; attempt++) {
+            assertThat(job.run(MarketType.SPOT)).isEqualTo(Outcome.COMPLETED);
+        }
+
+        verify(backfill).fillGap(healthy);
+        verify(backfill, times(CandleBackfillJob.MAX_GAP_ATTEMPTS)).backfill(MarketType.SPOT);
+        assertThat(job.queuedGaps(MarketType.SPOT)).isEmpty();
+        assertThat(droppedGaps.droppedGaps(MarketType.SPOT))
+                .extracting(dropped -> dropped.gap())
+                .containsExactly(broken);
     }
 
     /** After a symbol synchronisation of a market, that market's backfill is scheduled at once. */
@@ -283,7 +415,8 @@ class CandleBackfillJobTest {
         job(true).run(MarketType.SPOT);
 
         assertThat(job(true).scanForStoredGaps()).isZero();
-        assertThat(new CandleBackfillJob(null, recordingScheduler(), properties(true), clock).scanForStoredGaps())
+        assertThat(new CandleBackfillJob(null, droppedGaps, recordingScheduler(), properties(true), clock)
+                        .scanForStoredGaps())
                 .isZero();
     }
 
@@ -308,6 +441,17 @@ class CandleBackfillJobTest {
         assertThat(job.queuedGaps(MarketType.SPOT)).isEmpty();
     }
 
+    private static CandleBackfillService completingBackfill() {
+        CandleBackfillService backfill = mock(CandleBackfillService.class);
+        when(backfill.backfill(MarketType.SPOT))
+                .thenReturn(new BackfillRun(MarketType.SPOT, 0, 0, Optional.empty(), List.of()));
+        return backfill;
+    }
+
+    private CandleBackfillJob jobOver(CandleBackfillService backfill) {
+        return new CandleBackfillJob(backfill, droppedGaps, recordingScheduler(), properties(true), clock);
+    }
+
     private long storedRows() {
         return sql.sql("select count(*) from ohlcv").query(Long.class).single();
     }
@@ -323,6 +467,7 @@ class CandleBackfillJobTest {
         CandleBackfillProperties properties = properties(enabled);
         return new CandleBackfillJob(
                 new CandleBackfillServiceImpl(client, pairs, candles, properties, transactions, clock),
+                droppedGaps,
                 recordingScheduler(),
                 properties,
                 clock);

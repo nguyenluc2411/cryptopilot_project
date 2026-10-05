@@ -38,6 +38,10 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
  * A session that cannot keep up is buffered up to {@code sendBufferSizeLimit} and for up to {@code sendTimeLimit}, then
  * closed by Spring's session decorator; the others are not held.
  *
+ * <h2>Origins</h2>
+ *
+ * <p>A browser may open {@code /ws} only from an origin of {@link CorsProperties}, the same list the REST API uses.
+ *
  * <p>Rule: TECHNICAL_DESIGN 5.3 and 9; ADR-005; D-50.
  * <p>Reference: Spring Framework reference documentation, "WebSocket &gt; STOMP" (simple broker, channel
  * interceptors, {@code setPreservePublishOrder}, send time and buffer limits).
@@ -51,15 +55,17 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     static final Pattern PUBLIC_TOPICS = Pattern.compile("/topic/(ticker|kline|overview)\\.[A-Za-z0-9._]+");
 
     private final RealtimeProperties properties;
+    private final CorsProperties origins;
 
-    public WebSocketConfig(RealtimeProperties properties) {
+    public WebSocketConfig(RealtimeProperties properties, CorsProperties origins) {
         this.properties = properties;
+        this.origins = origins;
     }
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns(properties.allowedOriginPatterns().toArray(String[]::new));
+                .setAllowedOriginPatterns(origins.allowedOrigins().toArray(String[]::new));
     }
 
     @Override

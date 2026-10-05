@@ -95,6 +95,15 @@ crypto_pair,spot_tick_size,numeric,28,12,YES
 crypto_pair,symbol,character varying,,,NO
 crypto_pair,updated_at,timestamp with time zone,,,NO
 crypto_pair,version,bigint,64,0,NO
+dropped_backfill_gap,dropped_at,timestamp with time zone,,,NO
+dropped_backfill_gap,failure_count,integer,32,0,NO
+dropped_backfill_gap,gap_from,timestamp with time zone,,,NO
+dropped_backfill_gap,gap_to,timestamp with time zone,,,NO
+dropped_backfill_gap,last_error,character varying,,,NO
+dropped_backfill_gap,market_type,character varying,,,NO
+dropped_backfill_gap,pair_id,uuid,,,NO
+dropped_backfill_gap,symbol,character varying,,,NO
+dropped_backfill_gap,timeframe,character varying,,,NO
 engagement,action_type,character varying,,,NO
 engagement,comment_id,uuid,,,YES
 engagement,created_at,timestamp with time zone,,,NO

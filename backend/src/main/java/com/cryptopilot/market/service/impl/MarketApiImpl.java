@@ -66,6 +66,11 @@ public class MarketApiImpl implements MarketApi {
     }
 
     @Override
+    public Optional<BigDecimal> currentMarkPrice(String symbol) {
+        return current(MarketType.FUTURES, symbol, CachedPrice::markPrice);
+    }
+
+    @Override
     public Optional<BigDecimal> currentFundingRate(String symbol) {
         return current(MarketType.FUTURES, symbol, CachedPrice::fundingRate);
     }
