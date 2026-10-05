@@ -158,7 +158,7 @@ class MinuteKlineFeedTest {
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(4));
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(7));
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(10));
-        assertThat(logs.list).noneMatch(event -> event.getLevel() == Level.WARN);
+        assertThat(logged()).noneMatch(event -> event.getLevel() == Level.WARN);
     }
 
     @Test
@@ -171,7 +171,7 @@ class MinuteKlineFeedTest {
         startAndAwaitIdle();
 
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(3));
-        assertThat(logs.list).noneMatch(event -> event.getFormattedMessage().contains("replay window"));
+        assertThat(logged()).noneMatch(event -> event.getFormattedMessage().contains("replay window"));
     }
 
     @Test
@@ -196,7 +196,7 @@ class MinuteKlineFeedTest {
 
         Instant windowStart = minute(10).minus(Duration.ofHours(24));
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, windowStart);
-        assertThat(logs.list).anySatisfy(event -> {
+        assertThat(logged()).anySatisfy(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
             assertThat(event.getFormattedMessage())
                     .contains("beyond the replay window")
@@ -246,7 +246,7 @@ class MinuteKlineFeedTest {
         startAndAwaitIdle();
 
         assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1), minute(2), minute(3));
-        assertThat(logs.list).noneMatch(event -> event.getLevel() == Level.WARN);
+        assertThat(logged()).noneMatch(event -> event.getLevel() == Level.WARN);
     }
 
     /** R4: with nothing held, the replay goes on until it has reached the current minute, not the first empty page. */
@@ -264,7 +264,7 @@ class MinuteKlineFeedTest {
         startAndAwaitIdle();
 
         assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(8), minute(9));
-        assertThat(logs.list).noneMatch(event -> event.getLevel() == Level.WARN);
+        assertThat(logged()).noneMatch(event -> event.getLevel() == Level.WARN);
     }
 
     @Test
@@ -287,13 +287,14 @@ class MinuteKlineFeedTest {
         awaitSubmitted(5);
         feed.onMinuteKline(update(minute(5), "95", "97", true, 60));
         feed.onMinuteKline(update(minute(6), "96", "97", false, 5));
+        feed.stop();
 
         assertThat(submitted)
                 .extracting(PriceRange::from)
                 .containsExactly(minute(1), minute(2), minute(3), minute(4), minute(5), minute(5), minute(6));
         verify(market, times(4)).closedMinuteKlines(MarketType.SPOT, PAIR, minute(1));
         assertThat(errors()).hasSize(1);
-        assertThat(logs.list).noneMatch(event -> event.getFormattedMessage().contains("not matched"));
+        assertThat(logged()).noneMatch(event -> event.getFormattedMessage().contains("not matched"));
     }
 
     /** R1: a stream drop while running sends the pair back to replay the missing minutes, before what follows them. */
@@ -373,7 +374,7 @@ class MinuteKlineFeedTest {
         feed.onMinuteKline(update(minute(5), "1", "2", false, 1));
 
         assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(1), minute(4), minute(4), minute(5));
-        assertThat(logs.list)
+        assertThat(logged())
                 .filteredOn(event -> event.getFormattedMessage().contains("no candles from"))
                 .singleElement()
                 .satisfies(event -> assertThat(event.getFormattedMessage())
@@ -414,7 +415,7 @@ class MinuteKlineFeedTest {
                 .extracting(PriceRange::from)
                 .containsExactly(minute(1));
         assertThat(errors()).hasSize(1);
-        assertThat(logs.list).noneMatch(event -> event.getFormattedMessage().contains("not matched"));
+        assertThat(logged()).noneMatch(event -> event.getFormattedMessage().contains("not matched"));
     }
 
     /** F1: a pair lookup that throws once; the retry replays the hole before anything after it reaches the engine. */
@@ -430,6 +431,7 @@ class MinuteKlineFeedTest {
         feed.onMinuteKline(update(minute(4), "1", "2", false, 5));
         awaitSubmitted(4);
         feed.onMinuteKline(update(minute(4), "1", "2", true, 60));
+        feed.stop();
 
         assertThat(submitted)
                 .extracting(PriceRange::from, PriceRange::closed)
@@ -440,7 +442,7 @@ class MinuteKlineFeedTest {
                         tuple(minute(4), false),
                         tuple(minute(4), true));
         assertThat(errors()).hasSize(1);
-        assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
+        assertThat(logged()).anySatisfy(event -> assertThat(event.getFormattedMessage())
                 .contains("replay resumed after 1 failures"));
     }
 
@@ -460,12 +462,14 @@ class MinuteKlineFeedTest {
         feed.onMinuteKline(update(minute(4), "1", "2", true, 60));
         feed.onMinuteKline(update(minute(5), "1", "2", false, 5));
         verify(market, timeout(5_000).atLeast(5)).closedMinuteKlines(MarketType.SPOT, PAIR, minute(2));
+        // The replay thread keeps retrying and logging; stop it before reading what it logged.
+        feed.stop();
 
         assertThat(submitted).extracting(PriceRange::from, PriceRange::closed).containsExactly(tuple(minute(1), true));
         assertThat(errors()).hasSize(1);
-        assertThat(logs.list)
+        assertThat(logged())
                 .anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("again"));
-        assertThat(logs.list).noneMatch(event -> event.getFormattedMessage().contains("not matched"));
+        assertThat(logged()).noneMatch(event -> event.getFormattedMessage().contains("not matched"));
     }
 
     /** D-85: the pair's lock is taken before the exchange is asked and released once the replay has caught up. */
@@ -525,6 +529,7 @@ class MinuteKlineFeedTest {
 
         feed.onMinuteKline(update(minute(4), "1", "2", false, 5));
         awaitSubmitted(4);
+        feed.stop();
 
         InOrder order = inOrder(locks, market);
         order.verify(locks, times(2)).tryAcquire(MarketType.SPOT, PAIR);
@@ -586,7 +591,7 @@ class MinuteKlineFeedTest {
 
         assertThat(threads).isEmpty();
         assertThat(submitted).isEmpty();
-        assertThat(logs.list).anySatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
+        assertThat(logged()).anySatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
     }
 
     @Test
@@ -599,7 +604,7 @@ class MinuteKlineFeedTest {
         startAndAwaitIdle();
 
         assertThat(submitted).extracting(PriceRange::from).containsExactly(minute(2), minute(3));
-        assertThat(logs.list)
+        assertThat(logged())
                 .anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("dropped"));
     }
 
@@ -693,8 +698,15 @@ class MinuteKlineFeedTest {
         }
     }
 
+    /** A copy of the captured events, taken under the appender's lock: the replay thread may still be logging. */
+    private List<ILoggingEvent> logged() {
+        synchronized (logs) {
+            return List.copyOf(logs.list);
+        }
+    }
+
     private List<ILoggingEvent> errors() {
-        return logs.list.stream()
+        return logged().stream()
                 .filter(event -> event.getLevel() == Level.ERROR)
                 .toList();
     }
