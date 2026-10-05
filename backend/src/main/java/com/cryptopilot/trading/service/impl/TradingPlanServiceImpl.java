@@ -339,8 +339,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * Activates the plan and fills its entry at once at the current last price when it is MARKET or the last price
-     * already reaches it (BR-33); otherwise it waits for the matching engine. The journal record of the fill is T-048.
+     * Activates the plan and fills its entry at once when it is MARKET, or when it is LIMIT and the current last price
+     * already reaches it (BR-33); otherwise it waits for the matching engine. A MARKET entry fills at the price the
+     * activation was calculated with: the last price on Spot, the mark price on Futures (D-84). The journal record of
+     * the fill is T-048.
      */
     private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now) {
         plan.activate(calculated.calculation(), calculated.warnings(), now);
