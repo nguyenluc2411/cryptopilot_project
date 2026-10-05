@@ -537,6 +537,54 @@ class MinuteKlineFeedTest {
         assertThat(errors()).isEmpty();
     }
 
+    /**
+     * D-85: a lock held elsewhere is asked again after the same fixed wait each time. Ten waits of 5 ms end well within
+     * the five seconds {@code awaitSubmitted} allows; a doubling back-off would need over five seconds for them.
+     */
+    @Test
+    void D85_aLockHeldElsewhereManyTimes_isAskedAgainWithoutGrowingDelay_andCountsNoFailure() {
+        when(locks.tryAcquire(MarketType.SPOT, PAIR))
+                .thenReturn(false, false, false, false, false, false, false, false, false, false, true);
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(2)))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(2)), closed(minute(3)))));
+        feed = feed(
+                replay(true, 0, 1440),
+                new MatchingProperties.Retry(Duration.ofMillis(5), Duration.ofHours(1), 0, Duration.ofMinutes(10)));
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+
+        feed.onMinuteKline(update(minute(4), "1", "2", false, 5));
+        awaitSubmitted(4);
+        feed.stop();
+
+        verify(locks, times(11)).tryAcquire(MarketType.SPOT, PAIR);
+        assertThat(errors()).isEmpty();
+        assertThat(logged()).noneMatch(event -> event.getFormattedMessage().contains("replay failed"));
+        assertThat(logged()).noneMatch(event -> event.getFormattedMessage().contains("resumed after"));
+    }
+
+    /** D-85: waits for a lock held elsewhere are not failures, so the resumed log counts only the real one. */
+    @Test
+    void D85_theResumedLog_countsOnlyRealFailures_notLockWaits() {
+        when(locks.tryAcquire(MarketType.SPOT, PAIR)).thenReturn(false, false, true);
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(2)))
+                .thenThrow(new IllegalStateException("pair lookup failed"))
+                .thenReturn(MinuteKlineBatch.of(List.of(closed(minute(2)), closed(minute(3)))));
+        feed = feed(replay(true, 0, 1440), RETRY);
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+
+        feed.onMinuteKline(update(minute(4), "1", "2", false, 5));
+        awaitSubmitted(4);
+        feed.stop();
+
+        assertThat(errors()).hasSize(1);
+        assertThat(logged())
+                .filteredOn(event -> event.getFormattedMessage().contains("resumed after"))
+                .singleElement()
+                .satisfies(event -> assertThat(event.getFormattedMessage()).contains("resumed after 1 failures"));
+    }
+
     @Test
     void D85_stoppingTheFeed_releasesItsLocks_andTheSharedStateAnswersIsReplaying() {
         when(locks.isReplaying(MarketType.SPOT, PAIR)).thenReturn(true);

@@ -83,7 +83,7 @@ public class MinuteKlineFeed implements MinuteKlineListener {
     private final Map<PairKey, PairFeed> feeds = new ConcurrentHashMap<>();
     private final BlockingQueue<Replay> replays = new LinkedBlockingQueue<>();
 
-    /** Replays queued or running for the first time; one retried after a failure is not counted. */
+    /** Replays queued or running for the first time; one retried after a failure or a lock wait is not counted. */
     private final AtomicInteger outstanding = new AtomicInteger();
 
     /** Whether a pair seen for the first time goes live at once; until the first start, every pair waits. */
@@ -251,14 +251,17 @@ public class MinuteKlineFeed implements MinuteKlineListener {
             try {
                 Replay retry = replay(replay);
                 if (retry != null) {
-                    Duration wait = MatchingWorker.backoff(
-                            properties.retry(),
-                            retry.failures(),
-                            ThreadLocalRandom.current().nextDouble());
+                    // Only a new failure backs off; a lock held elsewhere is asked again after a fixed wait.
+                    Duration wait = retry.failures() > replay.failures()
+                            ? MatchingWorker.backoff(
+                                    properties.retry(),
+                                    retry.failures(),
+                                    ThreadLocalRandom.current().nextDouble())
+                            : lockWait();
                     parked.add(new Parked(retry, System.nanoTime() + wait.toNanos()));
                 }
             } finally {
-                if (replay.failures() == 0) {
+                if (!replay.retried()) {
                     outstanding.decrementAndGet();
                 }
             }
@@ -351,26 +354,39 @@ public class MinuteKlineFeed implements MinuteKlineListener {
         return null;
     }
 
-    /** Logs a failed replay, an error the first time and a warning after, and gives the replay to try again. */
-    /** Another instance is replaying the pair: try again after the retry delay, without counting it as an error. */
+    /**
+     * Another instance is replaying the pair: try again after {@link #lockWait()}. Not a failure, so the failing
+     * streak and its back-off are left as they were.
+     */
     private Replay heldElsewhere(Replay replay) {
         log.info(
                 "NSF-07 {} {}: a replay of this pair is running elsewhere; waiting for its lock",
                 replay.key().market(),
                 replay.key().pairId());
-        return new Replay(
-                replay.key(),
-                replay.from(),
-                replay.failures() + 1,
-                replay.failures() == 0 ? clock.instant() : replay.firstFailedAt());
+        return new Replay(replay.key(), replay.from(), replay.failures(), replay.firstFailedAt(), true);
     }
 
+    /**
+     * The fixed wait before asking again for a lock another instance holds: the first delay of the retry back-off.
+     * Waiting on a healthy peer is not a failure, so it does not grow like the back-off of a failing call.
+     *
+     * <p>Rule: NSF-07; D-85.
+     *
+     * <p>Reference: Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf, ch. 5 "Stability
+     * Patterns" (back off on failures; a busy resource is not one).
+     */
+    private Duration lockWait() {
+        return properties.retry().initialDelay();
+    }
+
+    /** Logs a failed replay, an error the first time and a warning after, and gives the replay to try again. */
     private Replay failed(Replay replay, Instant cursor, RuntimeException failure) {
         Replay retry = new Replay(
                 replay.key(),
                 cursor,
                 replay.failures() + 1,
-                replay.failures() == 0 ? clock.instant() : replay.firstFailedAt());
+                replay.failures() == 0 ? clock.instant() : replay.firstFailedAt(),
+                true);
         if (retry.failures() == 1) {
             log.error(
                     "NSF-07 {} {} replay failed at {}; the watermark is held and the replay retried until it succeeds",
@@ -537,11 +553,14 @@ public class MinuteKlineFeed implements MinuteKlineListener {
 
     private record PairKey(MarketType market, UUID pairId) {}
 
-    /** A pair's replay from {@code from}; {@code failures} and {@code firstFailedAt} count a failing streak. */
-    private record Replay(PairKey key, Instant from, int failures, Instant firstFailedAt) {
+    /**
+     * A pair's replay from {@code from}; {@code failures} and {@code firstFailedAt} count a failing streak, and
+     * {@code retried} marks any later try, after a failure or a lock held elsewhere.
+     */
+    private record Replay(PairKey key, Instant from, int failures, Instant firstFailedAt, boolean retried) {
 
         Replay(PairKey key, Instant from) {
-            this(key, from, 0, null);
+            this(key, from, 0, null, false);
         }
     }
 
