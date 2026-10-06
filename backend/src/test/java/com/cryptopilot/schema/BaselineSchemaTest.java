@@ -29,7 +29,10 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 @Import(TestcontainersConfig.class)
 class BaselineSchemaTest {
 
-    /** The 38 business tables of the logical model, in the order the model lists them. */
+    /**
+     * The business tables of the logical model, in the order the model lists them: 39, and the 11 of paper
+     * trading (V21, TR-02) after them.
+     */
     private static final List<String> BUSINESS_TABLES = List.of(
             "user_account",
             "user_profile",
@@ -69,7 +72,18 @@ class BaselineSchemaTest {
             "news_article_coin",
             "leverage_bracket",
             "system_setting",
-            "audit_log");
+            "audit_log",
+            "paper_account",
+            "paper_balance",
+            "paper_transfer",
+            "paper_ledger_entry",
+            "paper_futures_setting",
+            "paper_order_list",
+            "paper_order",
+            "paper_fill",
+            "paper_position",
+            "paper_funding_payment",
+            "paper_equity_snapshot");
 
     @Autowired
     private JdbcClient jdbc;
@@ -94,9 +108,9 @@ class BaselineSchemaTest {
     }
 
     @Test
-    void schema_holdsTheThirtyNineBusinessTables() {
+    void schema_holdsTheFiftyBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(39);
+        assertThat(BUSINESS_TABLES).hasSize(50);
     }
 
     @Test
@@ -104,15 +118,17 @@ class BaselineSchemaTest {
         assertThat(tableNames())
                 .as("event_publication, flyway_schema_history, binance_ban (V7, the exchange IP ban that must"
                         + " survive a restart), matching_watermark (V19, where the matching engine stopped) and"
-                        + " dropped_backfill_gap (V20, the gaps the backfill gave up on) are technical tables, not"
+                        + " dropped_backfill_gap (V20, the gaps the backfill gave up on) and paper_matching_watermark"
+                        + " (V21, where the paper matching engine stopped) are technical tables, not"
                         + " business entities")
                 .contains(
                         "event_publication",
                         "flyway_schema_history",
                         "binance_ban",
                         "matching_watermark",
-                        "dropped_backfill_gap")
-                .hasSize(BUSINESS_TABLES.size() + 5);
+                        "dropped_backfill_gap",
+                        "paper_matching_watermark")
+                .hasSize(BUSINESS_TABLES.size() + 6);
     }
 
     @Test

@@ -242,6 +242,157 @@ ohlcv,pair_id,uuid,,,NO
 ohlcv,quote_volume,numeric,28,12,NO
 ohlcv,timeframe,character varying,,,NO
 ohlcv,trade_count,integer,32,0,YES
+paper_account,account_id,uuid,,,NO
+paper_account,created_at,timestamp with time zone,,,NO
+paper_account,position_mode,character varying,,,NO
+paper_account,updated_at,timestamp with time zone,,,NO
+paper_account,user_id,uuid,,,NO
+paper_account,version,bigint,64,0,NO
+paper_balance,account_id,uuid,,,NO
+paper_balance,balance_id,uuid,,,NO
+paper_balance,coin_id,uuid,,,NO
+paper_balance,created_at,timestamp with time zone,,,NO
+paper_balance,free_amount,numeric,28,8,NO
+paper_balance,locked_amount,numeric,28,8,NO
+paper_balance,updated_at,timestamp with time zone,,,NO
+paper_balance,version,bigint,64,0,NO
+paper_balance,wallet_type,character varying,,,NO
+paper_equity_snapshot,account_id,uuid,,,NO
+paper_equity_snapshot,created_at,timestamp with time zone,,,NO
+paper_equity_snapshot,futures_equity_amount,numeric,28,8,NO
+paper_equity_snapshot,snapshot_date,date,,,NO
+paper_equity_snapshot,snapshot_id,uuid,,,NO
+paper_equity_snapshot,spot_equity_amount,numeric,28,8,NO
+paper_equity_snapshot,total_equity_amount,numeric,28,8,NO
+paper_equity_snapshot,updated_at,timestamp with time zone,,,NO
+paper_equity_snapshot,version,bigint,64,0,NO
+paper_fill,account_id,uuid,,,NO
+paper_fill,created_at,timestamp with time zone,,,NO
+paper_fill,fee_amount,numeric,28,8,NO
+paper_fill,fee_coin_id,uuid,,,NO
+paper_fill,fill_id,uuid,,,NO
+paper_fill,fill_price,numeric,28,12,NO
+paper_fill,fill_quantity,numeric,28,12,NO
+paper_fill,fill_source,character varying,,,NO
+paper_fill,liquidity,character varying,,,NO
+paper_fill,market_type,character varying,,,NO
+paper_fill,order_id,uuid,,,NO
+paper_fill,pair_id,uuid,,,NO
+paper_fill,position_side,character varying,,,YES
+paper_fill,quote_amount,numeric,28,8,NO
+paper_fill,realized_pnl_amount,numeric,28,8,YES
+paper_fill,side,character varying,,,NO
+paper_fill,traded_at,timestamp with time zone,,,NO
+paper_fill,updated_at,timestamp with time zone,,,NO
+paper_fill,version,bigint,64,0,NO
+paper_funding_payment,account_id,uuid,,,NO
+paper_funding_payment,amount,numeric,28,8,NO
+paper_funding_payment,created_at,timestamp with time zone,,,NO
+paper_funding_payment,funding_rate,numeric,12,8,NO
+paper_funding_payment,funding_time,timestamp with time zone,,,NO
+paper_funding_payment,mark_price,numeric,28,12,NO
+paper_funding_payment,pair_id,uuid,,,NO
+paper_funding_payment,payment_id,uuid,,,NO
+paper_funding_payment,position_id,uuid,,,NO
+paper_funding_payment,position_quantity,numeric,28,12,NO
+paper_funding_payment,updated_at,timestamp with time zone,,,NO
+paper_funding_payment,version,bigint,64,0,NO
+paper_futures_setting,account_id,uuid,,,NO
+paper_futures_setting,created_at,timestamp with time zone,,,NO
+paper_futures_setting,leverage,integer,32,0,NO
+paper_futures_setting,margin_mode,character varying,,,NO
+paper_futures_setting,pair_id,uuid,,,NO
+paper_futures_setting,setting_id,uuid,,,NO
+paper_futures_setting,updated_at,timestamp with time zone,,,NO
+paper_futures_setting,version,bigint,64,0,NO
+paper_ledger_entry,account_id,uuid,,,NO
+paper_ledger_entry,amount,numeric,28,8,NO
+paper_ledger_entry,balance_after_amount,numeric,28,8,NO
+paper_ledger_entry,coin_id,uuid,,,NO
+paper_ledger_entry,created_at,timestamp with time zone,,,NO
+paper_ledger_entry,entry_id,uuid,,,NO
+paper_ledger_entry,entry_type,character varying,,,NO
+paper_ledger_entry,ref_id,uuid,,,YES
+paper_ledger_entry,ref_type,character varying,,,YES
+paper_ledger_entry,updated_at,timestamp with time zone,,,NO
+paper_ledger_entry,version,bigint,64,0,NO
+paper_ledger_entry,wallet_type,character varying,,,NO
+paper_matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
+paper_matching_watermark,market_type,character varying,,,NO
+paper_matching_watermark,pair_id,uuid,,,NO
+paper_matching_watermark,updated_at,timestamp with time zone,,,NO
+paper_order,account_id,uuid,,,NO
+paper_order,activation_price,numeric,28,12,YES
+paper_order,avg_price,numeric,28,12,YES
+paper_order,callback_rate,numeric,12,8,YES
+paper_order,client_order_id,character varying,,,NO
+paper_order,close_position,boolean,,,NO
+paper_order,closed_at,timestamp with time zone,,,YES
+paper_order,created_at,timestamp with time zone,,,NO
+paper_order,cum_quote_amount,numeric,28,8,NO
+paper_order,executed_quantity,numeric,28,12,NO
+paper_order,limit_price,numeric,28,12,YES
+paper_order,list_id,uuid,,,YES
+paper_order,market_type,character varying,,,NO
+paper_order,order_id,uuid,,,NO
+paper_order,order_status,character varying,,,NO
+paper_order,order_type,character varying,,,NO
+paper_order,orig_quantity,numeric,28,12,YES
+paper_order,pair_id,uuid,,,NO
+paper_order,position_side,character varying,,,YES
+paper_order,quote_order_amount,numeric,28,8,YES
+paper_order,reduce_only,boolean,,,NO
+paper_order,side,character varying,,,NO
+paper_order,status_reason,character varying,,,YES
+paper_order,stop_price,numeric,28,12,YES
+paper_order,time_in_force,character varying,,,YES
+paper_order,trailing_extreme_price,numeric,28,12,YES
+paper_order,trigger_condition,character varying,,,YES
+paper_order,triggered_at,timestamp with time zone,,,YES
+paper_order,updated_at,timestamp with time zone,,,NO
+paper_order,version,bigint,64,0,NO
+paper_order,working_type,character varying,,,YES
+paper_order_list,account_id,uuid,,,NO
+paper_order_list,created_at,timestamp with time zone,,,NO
+paper_order_list,list_id,uuid,,,NO
+paper_order_list,list_status,character varying,,,NO
+paper_order_list,list_type,character varying,,,NO
+paper_order_list,market_type,character varying,,,NO
+paper_order_list,pair_id,uuid,,,NO
+paper_order_list,updated_at,timestamp with time zone,,,NO
+paper_order_list,version,bigint,64,0,NO
+paper_position,account_id,uuid,,,NO
+paper_position,close_reason,character varying,,,YES
+paper_position,closed_at,timestamp with time zone,,,YES
+paper_position,created_at,timestamp with time zone,,,NO
+paper_position,direction,character varying,,,NO
+paper_position,entry_price,numeric,28,12,NO
+paper_position,exit_price,numeric,28,12,YES
+paper_position,fee_amount,numeric,28,8,NO
+paper_position,funding_amount,numeric,28,8,NO
+paper_position,isolated_margin_amount,numeric,28,8,YES
+paper_position,leverage,integer,32,0,NO
+paper_position,margin_mode,character varying,,,NO
+paper_position,max_quantity,numeric,28,12,NO
+paper_position,opened_at,timestamp with time zone,,,NO
+paper_position,pair_id,uuid,,,NO
+paper_position,position_id,uuid,,,NO
+paper_position,position_quantity,numeric,28,12,NO
+paper_position,position_side,character varying,,,NO
+paper_position,position_status,character varying,,,NO
+paper_position,realized_pnl_amount,numeric,28,8,NO
+paper_position,updated_at,timestamp with time zone,,,NO
+paper_position,version,bigint,64,0,NO
+paper_transfer,account_id,uuid,,,NO
+paper_transfer,amount,numeric,28,8,NO
+paper_transfer,client_transfer_id,character varying,,,NO
+paper_transfer,coin_id,uuid,,,NO
+paper_transfer,created_at,timestamp with time zone,,,NO
+paper_transfer,from_wallet,character varying,,,NO
+paper_transfer,to_wallet,character varying,,,NO
+paper_transfer,transfer_id,uuid,,,NO
+paper_transfer,updated_at,timestamp with time zone,,,NO
+paper_transfer,version,bigint,64,0,NO
 post_coin,coin_id,uuid,,,NO
 post_coin,post_id,uuid,,,NO
 post_media,created_at,timestamp with time zone,,,NO

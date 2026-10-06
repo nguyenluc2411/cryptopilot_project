@@ -63,7 +63,8 @@ class EnumCheckConstraintTest {
      * one, an engagement points at exactly one target, a subscription ends after it starts, a paid
      * package has its tier's rank, a price and a duration (BR-62), a feed
      * is polled at most every fifteen minutes (BR-49), an indicator alert names an indicator, and every
-     * alert but a line cross has a threshold (D-76).
+     * alert but a line cross has a threshold (D-76), a paper transfer moves between two different wallets
+     * and a paper order has a size (TR-02).
      * A new cross-column rule that this map does not know about does not pass silently: the row is
      * refused by the wrong constraint and the test says so.
      */
@@ -86,7 +87,9 @@ class EnumCheckConstraintTest {
                             true),
             "news_source", Map.of("crawl_interval_minutes", 15),
             "alert", Map.of("threshold_value", 70),
-            "alert.timeframe", Map.of("alert_type", "INDICATOR", "indicator_name", "RSI_14"));
+            "alert.timeframe", Map.of("alert_type", "INDICATOR", "indicator_name", "RSI_14"),
+            "paper_transfer", Map.of("to_wallet", "FUTURES"),
+            "paper_order", Map.of("orig_quantity", java.math.BigDecimal.ONE));
 
     @Autowired
     private DataSource dataSource;
