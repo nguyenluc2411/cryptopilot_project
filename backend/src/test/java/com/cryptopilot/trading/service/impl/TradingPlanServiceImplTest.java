@@ -20,6 +20,7 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
@@ -91,7 +92,7 @@ class TradingPlanServiceImplTest {
     private final TradingPlanRepository plans = mock(TradingPlanRepository.class);
     private final MarketApi market = mock(MarketApi.class);
     private final SystemSettingApi settings = mock(SystemSettingApi.class);
-    private final ActivePlanLock lock = mock(ActivePlanLock.class);
+    private final UserLock lock = mock(UserLock.class);
     private final RiskProfileApi riskProfiles = mock(RiskProfileApi.class);
     private final EntitlementApi entitlements = mock(EntitlementApi.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);

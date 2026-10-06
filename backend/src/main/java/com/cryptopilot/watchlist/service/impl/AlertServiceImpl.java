@@ -2,9 +2,10 @@ package com.cryptopilot.watchlist.service.impl;
 
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
-import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.common.web.PageResponse;
+import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
@@ -24,7 +25,6 @@ import com.cryptopilot.watchlist.repository.WatchlistRepository;
 import com.cryptopilot.watchlist.service.AlertService;
 import com.cryptopilot.watchlist.service.WatchlistService;
 import java.time.Clock;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -33,7 +33,6 @@ import java.util.stream.Collectors;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -48,7 +47,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Each request is checked in the same order: the rule's fields (400), the plan's features (MSG29, 403), the pair on
  * the chosen market (MSG41, 404), then the limits under the lock (MSG27, 409). Every path that adds an ACTIVE alert —
  * create, resume, and an edit that brings a TRIGGERED or EXPIRED alert back — counts the ACTIVE alerts and writes
- * under {@link WatchlistLock}, so two requests at {@code max − 1} cannot both pass {@code ACTIVE_ALERT_MAX} (D-63).
+ * under {@link UserLock}, so two requests at {@code max − 1} cannot both pass {@code ACTIVE_ALERT_MAX} (D-63).
  * A create on a pair not yet watched adds the watchlist row first, in the same transaction and under the same lock,
  * which is the one the watchlist add takes: one key per Trader, so no lock order can deadlock. If either limit
  * refuses, the transaction rolls back and nothing is created (BR-16).
@@ -66,15 +65,12 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class AlertServiceImpl implements AlertService {
 
-    /** Rows per page of the alert list (CR-04). */
-    static final int DEFAULT_PAGE_SIZE = 20;
-
     private static final Sort NEWEST_FIRST = Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
 
     private final AlertRepository alerts;
     private final WatchlistRepository watchlist;
     private final WatchlistService watchlistItems;
-    private final WatchlistLock lock;
+    private final UserLock lock;
     private final MarketApi market;
     private final EntitlementApi entitlements;
     private final Clock clock;
@@ -83,17 +79,7 @@ public class AlertServiceImpl implements AlertService {
     @Transactional(readOnly = true)
     public PageResponse<AlertResponse> list(
             UUID userId, AlertStatus status, AlertType type, Integer page, Integer pageSize) {
-        int number = page == null ? 1 : page;
-        int size = pageSize == null ? DEFAULT_PAGE_SIZE : pageSize;
-        if (number < 1) {
-            throw new FieldValidationException("page must be at least 1, was " + number, Map.of("page", "MSG15"));
-        }
-        if (size < 1 || size > PageResponse.MAX_PAGE_SIZE) {
-            throw new FieldValidationException(
-                    "pageSize must be between 1 and " + PageResponse.MAX_PAGE_SIZE + ", was " + size,
-                    Map.of("pageSize", "MSG15"));
-        }
-        Pageable request = PageRequest.of(number - 1, size, NEWEST_FIRST);
+        Pageable request = Paging.of(page, pageSize, NEWEST_FIRST);
         Page<Alert> found;
         if (status == null && type == null) {
             found = alerts.findByUserId(userId, request);
@@ -108,13 +94,10 @@ public class AlertServiceImpl implements AlertService {
                 .collect(Collectors.toMap(Watchlist::getId, Watchlist::getPairId));
         Map<UUID, PairListing> pairs = market.pairListings(Set.copyOf(pairOfRow.values())).stream()
                 .collect(Collectors.toMap(PairListing::pairId, Function.identity()));
-        List<AlertResponse> items = found.getContent().stream()
-                .map(alert -> {
-                    UUID pairId = pairOfRow.get(alert.getWatchlistId());
-                    return toResponse(alert, pairId, pairs.get(pairId).symbol());
-                })
-                .toList();
-        return new PageResponse<>(items, number, size, found.getTotalElements());
+        return PageResponse.of(found, alert -> {
+            UUID pairId = pairOfRow.get(alert.getWatchlistId());
+            return toResponse(alert, pairId, pairs.get(pairId).symbol());
+        });
     }
 
     @Override

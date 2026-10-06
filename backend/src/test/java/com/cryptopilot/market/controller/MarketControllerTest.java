@@ -140,6 +140,20 @@ class MarketControllerTest {
         assertMsg01(mvc.perform(get(BASE + "/pairs").param("market", "spot").param("pageSize", "101")));
     }
 
+    /**
+     * CR-04: the page check every list shares (Paging) keeps MSG01 and names the rejected parameter as well, the same
+     * shape as every other list endpoint. The `errors` property is an addition; nothing the response held before moved.
+     */
+    @Test
+    void CR04_pairs_aPageOutOfRange_namesTheRejectedParameter() throws Exception {
+        mvc.perform(get(BASE + "/pairs").param("market", "spot").param("page", "0"))
+                .andExpect(jsonPath("$.messageCode").value("MSG01"))
+                .andExpect(jsonPath("$.errors.page").value("MSG15"));
+        mvc.perform(get(BASE + "/pairs").param("market", "spot").param("pageSize", "101"))
+                .andExpect(jsonPath("$.messageCode").value("MSG01"))
+                .andExpect(jsonPath("$.errors.pageSize").value("MSG15"));
+    }
+
     // ------------------------------------------------------------------ candles
 
     /** BR-08: the latest closed candles, oldest first, at most the limit, every decimal as a string. */

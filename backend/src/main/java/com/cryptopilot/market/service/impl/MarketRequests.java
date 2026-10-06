@@ -3,6 +3,7 @@ package com.cryptopilot.market.service.impl;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -61,9 +62,7 @@ class MarketRequests {
         if (to.isAfter(now)) {
             throw invalid("to must not be in the future, was " + to);
         }
-        if (from != null && !from.isBefore(to)) {
-            throw invalid("from must be before to, was " + from + " and " + to);
-        }
+        TimeBounds.requireOrdered(from, to);
     }
 
     static BusinessException invalid(String detail) {

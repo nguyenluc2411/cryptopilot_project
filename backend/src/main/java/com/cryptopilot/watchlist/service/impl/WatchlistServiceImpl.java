@@ -5,6 +5,7 @@ import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.watchlist.dto.request.AddWatchlistItemRequest;
@@ -33,7 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Ownership is part of every query: a row is looked up by its key <em>and</em> the caller, so another Trader's row
  * is "not found" (MSG41) rather than "forbidden", which would confirm that the key exists.
  *
- * <p>An add counts the caller's rows and inserts the new one in one transaction under {@link WatchlistLock}, so two
+ * <p>An add counts the caller's rows and inserts the new one in one transaction under {@link UserLock}, so two
  * concurrent adds at {@code max − 1} cannot both pass {@code WATCHLIST_MAX} (D-63). A pair is watched once:
  * {@code uq_watchlist_user_pair} enforces it, and a violation that slips past the check is answered MSG45 like the
  * check itself. Rows above a lowered limit are kept; only new adds are refused (BR-64).
@@ -49,7 +50,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class WatchlistServiceImpl implements WatchlistService {
 
     private final WatchlistRepository watchlist;
-    private final WatchlistLock lock;
+    private final UserLock lock;
     private final MarketApi market;
     private final EntitlementApi entitlements;
     private final Clock clock;

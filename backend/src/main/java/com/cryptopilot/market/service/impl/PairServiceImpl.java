@@ -1,6 +1,7 @@
 package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.common.web.PageResponse;
+import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.dto.response.PairResponse;
 import com.cryptopilot.market.entity.Coin;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,9 +31,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class PairServiceImpl implements PairService {
 
-    /** The page size when the request names none (TECHNICAL_DESIGN 8). */
-    static final int DEFAULT_PAGE_SIZE = 20;
-
     private final CryptoPairRepository pairs;
     private final CoinRepository coins;
 
@@ -44,15 +43,9 @@ public class PairServiceImpl implements PairService {
     @Transactional(readOnly = true)
     public PageResponse<PairResponse> enabledPairs(String market, Integer page, Integer pageSize) {
         MarketType type = MarketRequests.market(market);
-        int number = page == null ? 1 : page;
-        int size = pageSize == null ? DEFAULT_PAGE_SIZE : pageSize;
-        if (number < 1) {
-            throw MarketRequests.invalid("page must be at least 1, was " + number);
-        }
-        if (size < 1 || size > PageResponse.MAX_PAGE_SIZE) {
-            throw MarketRequests.invalid(
-                    "pageSize must be between 1 and " + PageResponse.MAX_PAGE_SIZE + ", was " + size);
-        }
+        PageRequest request = Paging.of(page, pageSize);
+        int number = request.getPageNumber() + 1;
+        int size = request.getPageSize();
         List<CryptoPair> enabled = pairs.findEnabledOn(type);
         long first = (long) (number - 1) * size;
         List<CryptoPair> slice = first >= enabled.size()

@@ -6,7 +6,10 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.lock.UserLock;
+import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.common.web.PageResponse;
+import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -75,20 +78,12 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     /** How long an unfilled LIMIT plan stays ACTIVE when the Trader sets no expiry (SRS 3.5.1). */
     static final Duration LIMIT_EXPIRY = Duration.ofDays(7);
 
-    /** Rows per page of the plan list (CR-04). */
-    static final int DEFAULT_PAGE_SIZE = 20;
-
     /** Excludes no plan from the other open risk, and stands for "any pair" in the list: no row has this key. */
     private static final UUID NO_PLAN = new UUID(0L, 0L);
 
-    /** The bounds of an unfiltered period: before any plan and after any plan. */
-    private static final Instant EARLIEST = Instant.parse("2000-01-01T00:00:00Z");
-
-    private static final Instant LATEST = Instant.parse("9999-01-01T00:00:00Z");
-
     private final TradingPlanRepository plans;
     private final PlanCalculationAssembler calculations;
-    private final ActivePlanLock activePlanLock;
+    private final UserLock activePlanLock;
     private final MarketApi market;
     private final RiskProfileApi riskProfiles;
     private final EntitlementApi entitlements;
@@ -174,16 +169,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     @Override
     @Transactional(readOnly = true)
     public PageResponse<TradingPlanSummaryResponse> list(UUID userId, PlanListQuery query) {
-        int page = query.page() == null ? 1 : query.page();
-        int pageSize = query.pageSize() == null ? DEFAULT_PAGE_SIZE : query.pageSize();
-        if (page < 1) {
-            throw new FieldValidationException("page must be at least 1, was " + page, Map.of("page", "MSG15"));
-        }
-        if (pageSize < 1 || pageSize > PageResponse.MAX_PAGE_SIZE) {
-            throw new FieldValidationException(
-                    "pageSize must be between 1 and " + PageResponse.MAX_PAGE_SIZE + ", was " + pageSize,
-                    Map.of("pageSize", "MSG15"));
-        }
+        PageRequest request = Paging.of(query.page(), query.pageSize());
         Set<PlanStatus> statuses = query.tab() == null
                 ? EnumSet.allOf(PlanStatus.class)
                 : query.tab().statuses();
@@ -194,11 +180,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 markets,
                 query.pairId() == null,
                 query.pairId() == null ? NO_PLAN : query.pairId(),
-                query.from() == null ? EARLIEST : query.from(),
-                query.to() == null ? LATEST : query.to(),
-                PageRequest.of(page - 1, pageSize));
-        return new PageResponse<>(
-                found.map(PlanResponses::summary).getContent(), page, pageSize, found.getTotalElements());
+                TimeBounds.fromOrEarliest(query.from()),
+                TimeBounds.toOrLatest(query.to()),
+                request);
+        return PageResponse.of(found, PlanResponses::summary);
     }
 
     /**

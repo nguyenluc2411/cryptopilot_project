@@ -2,6 +2,8 @@ package com.cryptopilot.common.web;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
+import org.springframework.data.domain.Page;
 
 /**
  * The response shape of every paged endpoint: the page of items plus the numbers a client needs to
@@ -38,5 +40,16 @@ public record PageResponse<T>(List<T> items, int page, int pageSize, long total)
             throw new IllegalArgumentException("total must not be negative, was " + total);
         }
         items = List.copyOf(items);
+    }
+
+    /**
+     * The response of a page a repository returned, its rows mapped to the response items; the page number becomes
+     * one-based.
+     */
+    public static <S, T> PageResponse<T> of(Page<S> page, Function<? super S, ? extends T> mapper) {
+        Objects.requireNonNull(page, "page must not be null");
+        Objects.requireNonNull(mapper, "mapper must not be null");
+        List<T> items = page.getContent().stream().<T>map(mapper).toList();
+        return new PageResponse<>(items, page.getNumber() + 1, page.getSize(), page.getTotalElements());
     }
 }
