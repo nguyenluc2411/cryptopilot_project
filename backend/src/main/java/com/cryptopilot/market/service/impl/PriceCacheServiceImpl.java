@@ -15,12 +15,18 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
@@ -163,6 +169,45 @@ public class PriceCacheServiceImpl implements PriceCacheService {
             log.warn("Latest-price cache read failed: {}", failure.toString());
             return PriceLookup.unavailable();
         }
+        return lookup(market, symbol, fields);
+    }
+
+    @Override
+    public Map<String, PriceLookup> latest(MarketType market, Collection<String> symbols) {
+        List<String> ordered = List.copyOf(new LinkedHashSet<>(symbols));
+        Map<String, PriceLookup> found = new LinkedHashMap<>();
+        if (ordered.isEmpty()) {
+            return found;
+        }
+        List<Object> replies;
+        try {
+            // Through the template, so the keys are written by its own serializer, as every other read writes them.
+            replies = redis.executePipelined(new SessionCallback<Object>() {
+                @Override
+                public <K, V> Object execute(RedisOperations<K, V> operations) {
+                    for (String symbol : ordered) {
+                        redis.opsForHash().entries(key(market, symbol));
+                    }
+                    return null;
+                }
+            });
+        } catch (RuntimeException failure) {
+            failures.increment();
+            log.warn("Latest-price cache read failed: {}", failure.toString());
+            ordered.forEach(symbol -> found.put(symbol, PriceLookup.unavailable()));
+            return found;
+        }
+        for (int i = 0; i < ordered.size(); i++) {
+            Map<Object, Object> fields = new HashMap<>();
+            if (i < replies.size() && replies.get(i) instanceof Map<?, ?> reply) {
+                reply.forEach(fields::put);
+            }
+            found.put(ordered.get(i), lookup(market, ordered.get(i), fields));
+        }
+        return found;
+    }
+
+    private PriceLookup lookup(MarketType market, String symbol, Map<Object, Object> fields) {
         if (fields == null || fields.get("updatedAt") == null) {
             return PriceLookup.missing();
         }

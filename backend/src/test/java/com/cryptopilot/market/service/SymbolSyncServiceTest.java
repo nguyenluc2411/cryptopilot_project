@@ -239,6 +239,25 @@ class SymbolSyncServiceTest {
     }
 
     /**
+     * TR-04: the paper accounts store coins too. A coin another writer stored before the synchronisation is the one
+     * the seed pair is registered with, and the synchronisation does not fail on {@code uq_coin_symbol}.
+     */
+    @Test
+    void TR04_aCoinStoredByAnotherWriter_isReused() {
+        UUID usdt = UUID.randomUUID();
+        sql.sql("insert into coin (coin_id, symbol, coin_name, created_at, updated_at)"
+                        + " values (?, 'USDT', 'USDT', now(), now())")
+                .param(usdt)
+                .update();
+
+        SyncReport report = service(List.of("XRPUSDT")).sync(MarketType.SPOT);
+
+        assertThat(report.created()).containsExactly("XRPUSDT");
+        assertThat(pair("XRPUSDT").getQuoteCoinId()).isEqualTo(usdt);
+        assertThat(coins.findBySymbol("XRP")).isPresent();
+    }
+
+    /**
      * The universe: a seed symbol missing from the table is created INACTIVE with both markets off and its
      * coins; a symbol that is neither registered nor seeded is ignored however many the exchange lists.
      */

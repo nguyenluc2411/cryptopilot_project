@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,8 +24,27 @@ public interface MarketApi {
     /** The stored pairs among these ids, listed or not, in no particular order; an unknown id is left out. */
     List<PairListing> pairListings(Collection<UUID> pairIds);
 
+    /** The stored coins with these symbols, e.g. {@code USDT}; an unknown symbol is left out (TR-04). */
+    List<CoinListing> coinsBySymbol(Collection<String> symbols);
+
+    /** The stored coins with these keys; an unknown key is left out (TR-04). */
+    List<CoinListing> coins(Collection<UUID> coinIds);
+
+    /**
+     * The coins with these symbols, storing any not stored yet, so a caller that must hold a balance in a coin (the
+     * virtual funds of a paper account, TR-04) never depends on the symbol synchronisation having run. Every symbol
+     * asked for is in the result. Joins the caller's transaction, or runs in its own.
+     */
+    List<CoinListing> ensureCoins(Collection<String> symbols);
+
     /** The last traded price, when the cache holds a current one; empty when it is missing, old or unreadable. */
     Optional<BigDecimal> currentLastPrice(MarketType market, String symbol);
+
+    /**
+     * The current last prices of several pairs of one market, read in one round trip; a pair without a current price
+     * is left out.
+     */
+    Map<String, BigDecimal> currentLastPrices(MarketType market, Collection<String> symbols);
 
     /**
      * The Futures mark price, when the cache holds a current one; empty when it is missing, old or unreadable. The

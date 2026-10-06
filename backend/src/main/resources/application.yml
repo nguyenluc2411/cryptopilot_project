@@ -235,6 +235,18 @@ cryptopilot:
           max-futures-leverage: 10
           max-total-open-risk-percent: 6
           min-setup-score-to-alert: 55
+  paper:
+    account:
+      # TR-04, Q-T5: the virtual funds a paper account is opened with, granted once; there is no reset. Keys in lower
+      # case, the form an environment variable binds to, so CRYPTOPILOT_PAPER_ACCOUNT_SPOTGRANT_USDT replaces usdt
+      # here instead of adding a second key. At most 8 decimals; the Futures wallet holds USDT only (USDⓈ-M).
+      spot-grant:
+        usdt: 10000
+        btc: 0.1
+        eth: 1
+        bnb: 10
+      futures-grant:
+        usdt: 5000
 
 springdoc:
   # TECHNICAL_DESIGN 8: the OpenAPI document and Swagger UI at their standard paths; off in the prod profile.

@@ -272,7 +272,14 @@ public enum ErrorCode {
      * PAUSED (SRS 3.4.3). SRS section 5.3 has no text for this, so it borrows MSG43 like
      * {@link #TRADING_PLAN_STATUS_TRANSITION_INVALID} (A-38).
      */
-    ALERT_STATUS_TRANSITION_INVALID(HttpStatus.CONFLICT, "MSG43");
+    ALERT_STATUS_TRANSITION_INVALID(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A paper wallet does not hold the free amount a transfer or an order needs (TR-04). SRS 5.3 has no message for
+     * it yet, so it borrows MSG01; the stable code tells the client which text to show, and the message arguments
+     * carry the coin, the amount needed and the amount free.
+     */
+    PAPER_INSUFFICIENT_BALANCE(HttpStatus.BAD_REQUEST, "MSG01");
 
     private final HttpStatus status;
     private final String messageCode;

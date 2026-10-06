@@ -73,6 +73,7 @@ public class SymbolSyncWriter {
 
     private final CryptoPairRepository pairs;
     private final CoinRepository coins;
+    private final CoinWriter coinWriter;
 
     /** Applies one market's exchange information to the table, all of it or none of it. */
     @Transactional
@@ -186,8 +187,19 @@ public class SymbolSyncWriter {
         return created;
     }
 
+    /**
+     * The coin of an asset, stored if it is not yet. The paper accounts store coins too (TR-04), so the insert is the
+     * one that cannot collide, and it commits by itself ({@link CoinWriter}): if another writer stored the symbol
+     * between the lookup and the insert, the insert does nothing and the lookup after it reads that writer's row,
+     * instead of failing on {@code uq_coin_symbol}; and no coin lock is held across the synchronisation, so it cannot
+     * deadlock with an opening that stores coins in another order.
+     */
     private Coin coinFor(String asset) {
-        return coins.findBySymbol(asset).orElseGet(() -> coins.save(Coin.fromExchange(asset)));
+        return coins.findBySymbol(asset).orElseGet(() -> {
+            coinWriter.storeIfAbsent(asset);
+            return coins.findBySymbol(asset)
+                    .orElseThrow(() -> new IllegalStateException("coin " + asset + " was stored but is not read back"));
+        });
     }
 
     private static void flag(MarketType market, CryptoPair pair, String reason, List<String> flagged) {

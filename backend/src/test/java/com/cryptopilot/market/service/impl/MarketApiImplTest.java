@@ -2,18 +2,23 @@ package com.cryptopilot.market.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
+import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
 import com.cryptopilot.market.service.MinuteKlineService;
@@ -21,7 +26,9 @@ import com.cryptopilot.market.service.PriceCacheService;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -34,10 +41,80 @@ class MarketApiImplTest {
             new PairFilters(new BigDecimal("0.01"), new BigDecimal("0.001"), new BigDecimal("5"));
 
     private final CryptoPairRepository pairs = mock(CryptoPairRepository.class);
+    private final CoinRepository coins = mock(CoinRepository.class);
+    private final CoinWriter coinWriter = mock(CoinWriter.class);
     private final LeverageBracketRepository brackets = mock(LeverageBracketRepository.class);
     private final PriceCacheService prices = mock(PriceCacheService.class);
     private final MinuteKlineService minuteKlines = mock(MinuteKlineService.class);
-    private final MarketApiImpl api = new MarketApiImpl(pairs, brackets, prices, minuteKlines);
+    private final MarketApiImpl api = new MarketApiImpl(pairs, coins, brackets, prices, minuteKlines, coinWriter);
+
+    @Test
+    void TR04_coins_areNamedBySymbol_andAnUnknownSymbolIsLeftOut() {
+        Coin usdt = Coin.fromExchange("USDT");
+        when(coins.findAllBySymbolIn(List.of("USDT", "NOPE"))).thenReturn(List.of(usdt));
+
+        assertThat(api.coinsBySymbol(List.of("USDT", "NOPE")))
+                .containsExactly(new CoinListing(usdt.getId(), "USDT", usdt.getCoinName()));
+    }
+
+    @Test
+    void TR04_ensuringCoins_storesOnlyTheMissingOnes_andReturnsEveryOne() {
+        Coin usdt = Coin.fromExchange("USDT");
+        Coin btc = Coin.fromExchange("BTC");
+        when(coins.findAllBySymbolIn(Set.of("BTC", "USDT")))
+                .thenReturn(List.of(usdt))
+                .thenReturn(List.of(usdt, btc));
+
+        assertThat(api.ensureCoins(List.of("USDT", "BTC")))
+                .extracting(CoinListing::symbol)
+                .containsExactlyInAnyOrder("USDT", "BTC");
+        verify(coinWriter).storeIfAbsent("BTC");
+        verify(coinWriter, never()).storeIfAbsent("USDT");
+    }
+
+    @Test
+    void TR04_batchPrices_keepOnlyTheCurrentOnes() {
+        CachedPrice btc = new CachedPrice(
+                MarketType.SPOT,
+                "BTCUSDT",
+                new BigDecimal("60000"),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Instant.parse("2026-10-07T00:00:00Z"));
+        when(prices.latest(MarketType.SPOT, List.of("BTCUSDT", "ETHUSDT")))
+                .thenReturn(Map.of(
+                        "BTCUSDT",
+                        new PriceLookup(PriceLookup.Status.FOUND, Optional.of(btc)),
+                        "ETHUSDT",
+                        PriceLookup.missing()));
+
+        assertThat(api.currentLastPrices(MarketType.SPOT, List.of("BTCUSDT", "ETHUSDT")))
+                .containsOnlyKeys("BTCUSDT")
+                .containsEntry("BTCUSDT", new BigDecimal("60000"));
+    }
+
+    @Test
+    void TR04_ensuringCoinsAlreadyStored_readsOnce_andStoresNothing() {
+        Coin usdt = Coin.fromExchange("USDT");
+        when(coins.findAllBySymbolIn(Set.of("USDT"))).thenReturn(List.of(usdt));
+
+        assertThat(api.ensureCoins(List.of("USDT")))
+                .extracting(CoinListing::symbol)
+                .containsExactly("USDT");
+        verify(coins).findAllBySymbolIn(Set.of("USDT"));
+        verifyNoInteractions(coinWriter);
+    }
+
+    @Test
+    void TR04_noSymbols_readNothing() {
+        assertThat(api.coinsBySymbol(List.of())).isEmpty();
+        assertThat(api.coins(List.of())).isEmpty();
+        verifyNoInteractions(coins);
+    }
 
     @Test
     void A04_closedMinuteCandles_areFetchedByTheMinuteKlineService() {

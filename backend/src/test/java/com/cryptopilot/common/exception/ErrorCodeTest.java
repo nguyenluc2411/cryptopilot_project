@@ -49,7 +49,8 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.MARKET_PRICE_UNAVAILABLE, "MSG43 503"),
             Map.entry(ErrorCode.WATCHLIST_PAIR_ALREADY_WATCHED, "MSG45 409"),
             Map.entry(ErrorCode.WATCHLIST_REMOVAL_CONFIRMATION_REQUIRED, "MSG26 400"),
-            Map.entry(ErrorCode.ALERT_STATUS_TRANSITION_INVALID, "MSG43 409"));
+            Map.entry(ErrorCode.ALERT_STATUS_TRANSITION_INVALID, "MSG43 409"),
+            Map.entry(ErrorCode.PAPER_INSUFFICIENT_BALANCE, "MSG01 400"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

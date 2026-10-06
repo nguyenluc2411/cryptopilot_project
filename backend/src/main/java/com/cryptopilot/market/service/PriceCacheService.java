@@ -3,6 +3,9 @@ package com.cryptopilot.market.service;
 import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.MarketType;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * The latest-price cache of T-022; implemented by {@link com.cryptopilot.market.service.impl.PriceCacheServiceImpl}.
@@ -27,4 +30,17 @@ public interface PriceCacheService {
 
     /** The cached price of a pair, with the state that says whether it may be used as current. */
     PriceLookup latest(MarketType market, String symbol);
+
+    /**
+     * The cached prices of several pairs of one market. Every symbol asked for has an entry, with the same states as
+     * {@link #latest(MarketType, String)}. This default reads one pair at a time; the Redis implementation reads them
+     * all in one round trip.
+     */
+    default Map<String, PriceLookup> latest(MarketType market, Collection<String> symbols) {
+        Map<String, PriceLookup> found = new LinkedHashMap<>();
+        for (String symbol : symbols) {
+            found.putIfAbsent(symbol, latest(market, symbol));
+        }
+        return found;
+    }
 }
