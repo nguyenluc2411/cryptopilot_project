@@ -69,6 +69,11 @@ cryptopilot:
         # T-043 runs in this profile: after a restart, the closed 1-minute candles missed since the
         # watermark are fetched from the exchange and replayed (A-04).
         enabled: true
+  alert:
+    # NSF-06 runs in this profile: PRICE alerts on the 1-minute candle updates, and the expiry sweep.
+    enabled: true
+    expiry-sweep:
+      enabled: true
 
 springdoc:
   # TECHNICAL_DESIGN 8: no API document and no Swagger UI in production.
