@@ -661,8 +661,8 @@ class MinuteKlineFeedTest {
         feed = feed(replay(true, 3, 1440));
         startAndAwaitIdle();
 
-        feed.onMinuteKline(
-                new MinuteKline(MarketType.SPOT, PAIR, M0, BigDecimal.ONE, BigDecimal.TEN, false, M0.minusMillis(5)));
+        feed.onMinuteKline(new MinuteKline(
+                MarketType.SPOT, PAIR, M0, BigDecimal.ONE, BigDecimal.TEN, BigDecimal.TEN, false, M0.minusMillis(5)));
 
         assertThat(submitted.getFirst().at()).isEqualTo(M0);
     }
@@ -676,7 +676,14 @@ class MinuteKlineFeedTest {
 
         feed.stop();
         feed.onMinuteKline(new MinuteKline(
-                MarketType.SPOT, OTHER_PAIR, minute(7), BigDecimal.ONE, BigDecimal.TEN, false, minute(7)));
+                MarketType.SPOT,
+                OTHER_PAIR,
+                minute(7),
+                BigDecimal.ONE,
+                BigDecimal.TEN,
+                BigDecimal.TEN,
+                false,
+                minute(7)));
         assertThat(submitted).isEmpty();
         startAndAwaitIdle();
 
@@ -786,6 +793,7 @@ class MinuteKlineFeedTest {
                 PAIR,
                 open,
                 new BigDecimal(low),
+                new BigDecimal(high),
                 new BigDecimal(high),
                 closed,
                 open.plusSeconds(seconds).minusMillis(closed ? 1 : 0));

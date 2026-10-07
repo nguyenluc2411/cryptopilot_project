@@ -87,7 +87,14 @@ public class MinuteKlineServiceImpl implements MinuteKlineService {
                 .filter(kline -> kline.isClosedAt(now))
                 .filter(kline -> !kline.openTime().isBefore(from))
                 .map(kline -> new MinuteKline(
-                        market, pairId, kline.openTime(), kline.low(), kline.high(), true, kline.closeTime()))
+                        market,
+                        pairId,
+                        kline.openTime(),
+                        kline.low(),
+                        kline.high(),
+                        kline.close(),
+                        true,
+                        kline.closeTime()))
                 .toList());
     }
 
