@@ -9,6 +9,7 @@ import com.cryptopilot.watchlist.AlertTriggeredRecorder;
 import com.cryptopilot.watchlist.model.PriceAlert;
 import com.cryptopilot.watchlist.model.PriceAlertHit;
 import com.cryptopilot.watchlist.model.enums.ConditionOperator;
+import com.cryptopilot.watchlist.repository.AlertRepository;
 import com.cryptopilot.watchlist.service.AlertExpiryService;
 import com.cryptopilot.watchlist.service.AlertService;
 import com.cryptopilot.watchlist.service.AlertTriggerService;
@@ -57,6 +58,9 @@ class AlertTriggerServiceImplTest {
 
     @Autowired
     private AlertTriggeredRecorder recorder;
+
+    @Autowired
+    private AlertRepository repository;
 
     @Autowired
     private JdbcClient sql;
@@ -236,6 +240,19 @@ class AlertTriggerServiceImplTest {
         assertThat(data.status(paused)).isEqualTo("EXPIRED");
         assertThat(data.status(triggered)).isEqualTo("TRIGGERED");
         assertThat(data.status(later)).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void BR19_theSweepSelection_takesAnExpiryAtTheInstantItself_andNothingLater() {
+        Instant at = Instant.now().minus(Duration.ofMinutes(1)).truncatedTo(ChronoUnit.MILLIS);
+        UUID atInstant = data.priceAlert(trader, row, "SPOT", "GREATER_THAN", "1", "ONCE", null, "ACTIVE", at);
+        UUID justAfter =
+                data.priceAlert(trader, row, "SPOT", "GREATER_THAN", "1", "ONCE", null, "PAUSED", at.plusMillis(1));
+        UUID triggered = data.priceAlert(trader, row, "SPOT", "GREATER_THAN", "1", "ONCE", null, "TRIGGERED", at);
+
+        List<UUID> due = transactions.execute(status -> repository.lockDueForExpiry(at));
+
+        assertThat(due).contains(atInstant).doesNotContain(justAfter, triggered);
     }
 
     private PriceAlert loaded(UUID alertId) {
