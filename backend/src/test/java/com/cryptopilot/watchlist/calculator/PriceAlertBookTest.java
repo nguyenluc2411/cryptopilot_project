@@ -304,6 +304,28 @@ class PriceAlertBookTest {
     }
 
     @Test
+    void D89_aRemoveUpToTheRefusedVersion_blocksAStaleReadOfIt() {
+        PriceAlert alert = atVersion(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME), 3);
+        book.put(alert);
+
+        assertThat(book.removeIfVersionAtMost(alert.alertId(), 3)).isTrue();
+
+        assertThat(book.put(alert)).as("the refused version, read again").isFalse();
+        assertThat(book.put(atVersion(alert, 2))).as("older").isFalse();
+        assertThat(book.put(atVersion(alert, 4))).as("the row moved on").isTrue();
+    }
+
+    @Test
+    void D89_anEvaluationInstant_isCutToMicroseconds_likeTheStoredTriggerTime() {
+        book.put(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME));
+        clock.set(T0.plusNanos(1_234_567));
+        book.offer(new BigDecimal("101"), T0.plusNanos(1_234_567));
+
+        assertThat(book.evaluate()).singleElement().satisfies(hit -> assertThat(hit.at())
+                .isEqualTo(T0.plusNanos(1_234_000)));
+    }
+
+    @Test
     void NSF06_aTriggerOfAnOlderVersion_doesNotOverwriteANewerRule() {
         PriceAlert alert = alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME);
         book.put(alert);

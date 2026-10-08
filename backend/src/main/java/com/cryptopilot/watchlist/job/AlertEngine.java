@@ -49,7 +49,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *   <li>One thread per partition evaluates its pairs, at most once per {@code throttle} each, on the latest price.
  *   <li>At start the books are loaded from the ACTIVE PRICE alerts; INDICATOR alerts are not evaluated yet. After each
  *       committed change of an alert ({@link AlertsChanged}) the alert is read again and added, replaced or removed.
- *       A trigger the database refuses also reads the alert again, so a book never stays wrong.
+ *       A trigger the database refuses drops that rule from the book that fired it, then reads the alert again;
+ *       {@code located} may lag behind the books, so it never decides which book to clean.
  *   <li>When a market's stream reconnects, previous prices older than {@code staleness} are forgotten.
  * </ul>
  *
@@ -64,6 +65,7 @@ public class AlertEngine implements MinuteKlineListener {
 
     private static final Logger log = LoggerFactory.getLogger(AlertEngine.class);
     private static final long WARN_EVERY_NANOS = TimeUnit.MINUTES.toNanos(1);
+    private static final int REFUSALS_BEFORE_WARN = 3;
 
     private final AlertTriggerService triggers;
     private final AlertEngineProperties properties;
@@ -74,6 +76,9 @@ public class AlertEngine implements MinuteKlineListener {
 
     /** Which book holds each alert, so a change can find it even when the alert has left the database. */
     private final Map<UUID, PairKey> located = new ConcurrentHashMap<>();
+
+    /** Refusals in a row per alert, for the warning of {@link #countRefusal}. */
+    private final Map<UUID, Refusals> refusals = new ConcurrentHashMap<>();
 
     private final AtomicLong lastOverflowWarning = new AtomicLong(System.nanoTime() - WARN_EVERY_NANOS);
 
@@ -135,6 +140,7 @@ public class AlertEngine implements MinuteKlineListener {
         }
         books.clear();
         located.clear();
+        refusals.clear();
     }
 
     public boolean isRunning() {
@@ -191,6 +197,9 @@ public class AlertEngine implements MinuteKlineListener {
                     located.remove(alertId, before);
                 }
             }
+            if (stored.isEmpty()) {
+                refusals.remove(alertId);
+            }
             stored.ifPresent(this::hold);
         } catch (RuntimeException failure) {
             log.warn("NSF-06 alert {} could not be read again: {}", alertId, failure.toString());
@@ -212,16 +221,33 @@ public class AlertEngine implements MinuteKlineListener {
         for (PriceAlertHit hit : book.evaluate()) {
             try {
                 if (triggers.tryTrigger(hit)) {
+                    refusals.remove(hit.alert().alertId());
                     book.triggered(hit);
                     if (!book.contains(hit.alert().alertId())) {
                         located.remove(hit.alert().alertId(), key);
                     }
                 } else {
+                    countRefusal(hit.alert().alertId());
+                    // The row has moved on from this version: drop it here, even if located points elsewhere.
+                    book.removeIfVersionAtMost(
+                            hit.alert().alertId(), hit.alert().version());
                     refresh(hit.alert().alertId());
                 }
             } catch (RuntimeException failure) {
                 log.warn("NSF-06 alert {} trigger failed: {}", hit.alert().alertId(), failure.toString());
             }
+        }
+    }
+
+    /** Warns, at most once a minute per alert, when the database keeps refusing an alert's triggers. */
+    private void countRefusal(UUID alertId) {
+        Instant now = clock.instant();
+        Refusals next = refusals.merge(
+                alertId, new Refusals(1, null), (old, one) -> new Refusals(old.count() + 1, old.warnedAt()));
+        if (next.count() >= REFUSALS_BEFORE_WARN
+                && (next.warnedAt() == null || !now.isBefore(next.warnedAt().plus(Duration.ofMinutes(1))))) {
+            refusals.put(alertId, new Refusals(next.count(), now));
+            log.warn("NSF-06 alert {} refused by the database {} times in a row", alertId, next.count());
         }
     }
 
@@ -325,6 +351,8 @@ public class AlertEngine implements MinuteKlineListener {
             }
         }
     }
+
+    private record Refusals(int count, Instant warnedAt) {}
 
     /** A pair on one market. */
     record PairKey(MarketType market, UUID pairId) {

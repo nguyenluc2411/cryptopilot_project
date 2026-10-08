@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -126,7 +127,13 @@ public final class PriceAlertBook {
     }
 
     /**
-     * Removes the alert only if the version held is not above {@code version}: a newer rule put meanwhile stays.
+     * Removes the alert only if the version held is not above {@code version}, and remembers it like {@link #remove}:
+     * a newer rule put meanwhile stays, and a stale read of the removed one cannot put it back. The check and the
+     * removal are one action on the same state.
+     *
+     * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, §2.3 (a
+     * check-then-act is atomic on one state). Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>.
+     * O'Reilly, ch. 7 (compare-and-set on a version discards a stale copy).
      *
      * @return whether it was removed
      */
@@ -180,7 +187,8 @@ public final class PriceAlertBook {
      * @return the alerts the price meets and their trigger mode lets fire, in threshold order
      */
     public synchronized List<PriceAlertHit> evaluate() {
-        Instant now = clock.instant();
+        // The database keeps microseconds: both sides then judge a cooldown on the same instant.
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         if (latest == null || (evaluatedAt != null && now.isBefore(evaluatedAt.plus(throttle)))) {
             return List.of();
         }

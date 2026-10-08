@@ -37,6 +37,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -317,6 +318,59 @@ class AlertEngineTest {
     }
 
     @Test
+    void D89_aStaleRuleLeftInAnotherBook_isDroppedAfterOneRefusal_andNotTriedAgain() {
+        UUID id = UUID.randomUUID();
+        PriceAlert spot1 = spotAt(id, 1);
+        PriceAlert futures2 = onFutures(spot1);
+        PriceAlert spot3 = spotAt(id, 3);
+        startWith(spot1);
+        when(triggers.tryTrigger(argThat(hitOf(spot1)))).thenReturn(false);
+        AtomicInteger reads = new AtomicInteger();
+        when(triggers.activePriceAlert(id)).thenAnswer(invocation -> switch (reads.incrementAndGet()) {
+            case 1 -> {
+                // The refresh of the move to FUTURES read v2; the move back to SPOT (v3) is applied before it.
+                engine.onAlertsChanged(AlertsChanged.of(id));
+                yield Optional.of(futures2);
+            }
+            case 2 -> Optional.of(spot3);
+            default -> Optional.empty(); // paused at v4
+        });
+        engine.onAlertsChanged(AlertsChanged.of(id));
+        engine.onAlertsChanged(AlertsChanged.of(id));
+        assertThat(engine.holds(id)).as("located lost the SPOT rule").isFalse();
+
+        price("101");
+        verify(triggers, timeout(WAIT))
+                .tryTrigger(
+                        argThat(hit -> hitOf(spot1).matches(hit) && hit.alert().version() == 3));
+        price("102");
+        price("103");
+
+        verify(triggers, times(1)).tryTrigger(argThat(hitOf(spot1)));
+    }
+
+    @Test
+    void NSF06_repeatedRefusals_warnFromTheThird_atMostOnceAMinutePerAlert() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        when(triggers.activePriceAlerts()).thenReturn(List.of(held));
+        when(triggers.tryTrigger(any())).thenReturn(false);
+        AtomicLong version = new AtomicLong(1);
+        // Every read finds a newer ACTIVE row, so the rule comes back and is refused again.
+        when(triggers.activePriceAlert(held.alertId()))
+                .thenAnswer(invocation -> Optional.of(spotAt(held.alertId(), version.incrementAndGet())));
+        engine = new AlertEngine(triggers, properties(1000), clock, recordingThreads());
+        engine.start();
+
+        for (int refusal = 1; refusal <= 5; refusal++) {
+            refuseOnce(held, refusal, Duration.ofSeconds(1));
+        }
+        assertThat(refusalWarnings()).isEqualTo(1);
+
+        refuseOnce(held, 6, Duration.ofMinutes(1));
+        assertThat(refusalWarnings()).isEqualTo(2);
+    }
+
+    @Test
     void NSF06_aCommittedPauseOrDelete_takesTheAlertOutOfTheBook() {
         PriceAlert held =
                 alert(UUID.randomUUID(), PAIR, ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME, 1);
@@ -453,6 +507,32 @@ class AlertEngineTest {
         clock.advance(Duration.ofMinutes(1));
         engine.onMinuteKline(kline(PAIR, close, now()));
         verify(triggers, timeout(WAIT).times(++probed)).tryTrigger(argThat(hitOf(probe)));
+    }
+
+    /** Moves the clock, sends a price that meets the alert, and returns once the refusal has been handled. */
+    private void refuseOnce(PriceAlert alert, int nth, Duration later) {
+        clock.advance(later);
+        engine.onMinuteKline(kline(alert.pairId(), "101", now()));
+        verify(triggers, timeout(WAIT).times(nth)).activePriceAlert(alert.alertId());
+    }
+
+    private long refusalWarnings() {
+        return logs.list.stream()
+                .filter(event -> event.getLevel() == Level.WARN)
+                .filter(event -> event.getFormattedMessage().contains("refused by the database"))
+                .count();
+    }
+
+    private static PriceAlert spotAt(UUID alertId, long version) {
+        return alert(
+                alertId,
+                PAIR,
+                MarketType.SPOT,
+                ConditionOperator.GREATER_THAN,
+                "100",
+                TriggerMode.EVERY_TIME,
+                1,
+                version);
     }
 
     private Instant now() {
