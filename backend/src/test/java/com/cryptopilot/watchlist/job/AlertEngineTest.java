@@ -36,6 +36,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -254,6 +255,65 @@ class AlertEngineTest {
                 .tryTrigger(argThat(hit -> hitOf(held).matches(hit)
                         && hit.alert().version() == edited.version()
                         && hit.observedValue().compareTo(new BigDecimal("201")) == 0));
+    }
+
+    @Test
+    void NSF06_anEditCommittedDuringTheStartLoad_winsOverTheOlderSnapshot() {
+        PriceAlert loaded =
+                alert(UUID.randomUUID(), PAIR, ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME, 1);
+        PriceAlert edited = withThreshold(loaded, "200");
+        when(triggers.activePriceAlert(loaded.alertId())).thenReturn(Optional.of(edited));
+        when(triggers.tryTrigger(any())).thenReturn(true);
+        engine = new AlertEngine(triggers, properties(1000), clock, recordingThreads());
+        // The edit's refresh runs while the snapshot is read, so the snapshot is applied after it.
+        when(triggers.activePriceAlerts()).thenAnswer(invocation -> {
+            engine.onAlertsChanged(AlertsChanged.of(loaded.alertId()));
+            return List.of(loaded, probe);
+        });
+        engine.start();
+
+        price("150");
+        price("201");
+
+        verify(triggers).tryTrigger(argThat(hit -> hitOf(loaded).matches(hit)));
+        verify(triggers)
+                .tryTrigger(argThat(hit -> hitOf(loaded).matches(hit)
+                        && hit.alert().version() == edited.version()
+                        && hit.observedValue().compareTo(new BigDecimal("201")) == 0));
+    }
+
+    @Test
+    void NSF06_aStaleReadOfAPausedAlert_doesNotRemoveTheResumedRuleReadAfterIt() {
+        PriceAlert held =
+                alert(UUID.randomUUID(), PAIR, ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME, 1);
+        // Paused at the next version, resumed at the one after.
+        PriceAlert resumed = alert(
+                held.alertId(),
+                PAIR,
+                MarketType.SPOT,
+                ConditionOperator.GREATER_THAN,
+                "100",
+                TriggerMode.EVERY_TIME,
+                1,
+                held.version() + 2);
+        startWith(held);
+        AtomicInteger reads = new AtomicInteger();
+        // The first read sees the pause; before it is applied, the resume commits and its refresh completes.
+        when(triggers.activePriceAlert(held.alertId())).thenAnswer(invocation -> {
+            if (reads.incrementAndGet() == 1) {
+                engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+                return Optional.empty();
+            }
+            return Optional.of(resumed);
+        });
+
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+        price("101");
+
+        assertThat(engine.holds(held.alertId())).isTrue();
+        verify(triggers)
+                .tryTrigger(
+                        argThat(hit -> hitOf(held).matches(hit) && hit.alert().version() == resumed.version()));
     }
 
     @Test

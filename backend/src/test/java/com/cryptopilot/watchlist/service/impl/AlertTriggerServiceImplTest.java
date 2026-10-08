@@ -255,6 +255,28 @@ class AlertTriggerServiceImplTest {
         assertThat(due).contains(atInstant).doesNotContain(justAfter, triggered);
     }
 
+    /** A trigger just before the expiry racing the sweep: the alert ends EXPIRED and count and events agree. */
+    @Test
+    void BR19_aTriggerRacingTheSweep_endsExpired_withOneConsistentCount() throws Exception {
+        Instant expiresAt = Instant.now().minusSeconds(1).truncatedTo(ChronoUnit.MILLIS);
+        UUID alert = data.priceAlert(trader, row, "SPOT", "GREATER_THAN", "100", "EVERY_TIME", 5, "ACTIVE", expiresAt);
+        PriceAlertHit hit = hitAt(loaded(alert), "101", expiresAt.minusMillis(1));
+        CyclicBarrier start = new CyclicBarrier(2);
+
+        List<Boolean> results = race(2, () -> {
+            if (start.await() == 0) {
+                return triggers.tryTrigger(hit);
+            }
+            expiry.expireDue();
+            return null;
+        });
+
+        boolean triggered = results.contains(true);
+        assertThat(data.status(alert)).isEqualTo("EXPIRED");
+        assertThat(data.triggerCount(alert)).isEqualTo(triggered ? 1 : 0);
+        assertThat(recorder.of(alert)).hasSize(triggered ? 1 : 0);
+    }
+
     private PriceAlert loaded(UUID alertId) {
         return triggers.activePriceAlert(alertId).orElseThrow();
     }

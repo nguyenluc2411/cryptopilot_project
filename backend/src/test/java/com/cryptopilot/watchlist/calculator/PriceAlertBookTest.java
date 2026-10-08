@@ -11,8 +11,15 @@ import com.cryptopilot.watchlist.model.enums.TriggerMode;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -27,7 +34,7 @@ class PriceAlertBookTest {
     private static final UUID PAIR = UUID.fromString("019b76da-a800-7000-8000-00000000c001");
 
     private final MutableTestClock clock = new MutableTestClock(T0);
-    private final PriceAlertBook book = new PriceAlertBook(clock, Duration.ofSeconds(1));
+    private final PriceAlertBook book = new PriceAlertBook(clock, Duration.ofSeconds(1), Duration.ofMinutes(5));
 
     @Test
     void BR20_crossAbove_firesWhenThePreviousIsBelowAndTheCurrentReachesTheThreshold() {
@@ -246,6 +253,126 @@ class PriceAlertBookTest {
         assertThat(book.size()).isEqualTo(1);
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Row versions: the book only moves forward
+
+    @Test
+    void NSF06_anOlderVersionPutAfterANewerOne_isIgnored() {
+        PriceAlert alert = alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME);
+        PriceAlert newer = withThreshold(atVersion(alert, 2), "200");
+
+        assertThat(book.put(newer)).isTrue();
+        assertThat(book.put(atVersion(alert, 1))).isFalse();
+
+        assertThat(book.alerts()).singleElement().isEqualTo(newer);
+        assertThat(evaluate("150", 0)).as("the old threshold does not fire").isEmpty();
+    }
+
+    @Test
+    void NSF06_anOlderOrEqualVersionPutAfterARemove_doesNotComeBack() {
+        PriceAlert alert = atVersion(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME), 3);
+        book.put(alert);
+        book.remove(alert.alertId());
+
+        assertThat(book.put(alert)).as("same version").isFalse();
+        assertThat(book.put(atVersion(alert, 2))).as("older").isFalse();
+
+        assertThat(book.contains(alert.alertId())).isFalse();
+        assertThat(evaluate("101", 0)).isEmpty();
+    }
+
+    @Test
+    void NSF06_aNewerVersionPutAfterARemove_isTaken_likeAResumedAlert() {
+        PriceAlert alert = atVersion(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME), 3);
+        book.put(alert);
+        book.remove(alert.alertId());
+
+        assertThat(book.put(atVersion(alert, 5))).isTrue();
+
+        assertThat(book.versionOf(alert.alertId())).hasValue(5);
+        assertThat(evaluate("101", 0)).hasSize(1);
+    }
+
+    @Test
+    void NSF06_aRemoveUpToAnOlderVersion_keepsTheNewerRule() {
+        PriceAlert alert = atVersion(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME), 4);
+        book.put(alert);
+
+        assertThat(book.removeIfVersionAtMost(alert.alertId(), 3)).isFalse();
+        assertThat(book.removeIfVersionAtMost(alert.alertId(), 4)).isTrue();
+        assertThat(book.contains(alert.alertId())).isFalse();
+    }
+
+    @Test
+    void NSF06_aTriggerOfAnOlderVersion_doesNotOverwriteANewerRule() {
+        PriceAlert alert = alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME);
+        book.put(alert);
+        List<PriceAlertHit> hits = evaluate("101", 0);
+        PriceAlert edited = withThreshold(atVersion(alert, 2), "200");
+        book.put(edited);
+
+        book.triggered(hits.getFirst());
+
+        assertThat(book.alerts()).singleElement().isEqualTo(edited);
+    }
+
+    @Test
+    void NSF06_putRemoveAndEvaluateOnManyThreads_endOnTheHighestVersionOfEveryAlert() throws Exception {
+        int alerts = 20;
+        int versions = 50;
+        List<PriceAlert> base = new ArrayList<>();
+        for (int i = 0; i < alerts; i++) {
+            base.add(alert(ConditionOperator.GREATER_THAN, String.valueOf(100 + i), TriggerMode.EVERY_TIME));
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        try {
+            for (int round = 0; round < 20; round++) {
+                PriceAlertBook shared = new PriceAlertBook(clock, Duration.ZERO, Duration.ofMinutes(5));
+                List<Runnable> work = new ArrayList<>();
+                for (PriceAlert alert : base) {
+                    for (int v = 1; v <= versions; v++) {
+                        PriceAlert version = atVersion(alert, v);
+                        work.add(() -> shared.put(version));
+                        // Never removes the highest version, whatever runs first.
+                        long below = v - 1;
+                        work.add(() -> shared.removeIfVersionAtMost(alert.alertId(), below));
+                    }
+                }
+                for (int i = 0; i < 200; i++) {
+                    Instant at = T0.plusMillis(round * 1000L + i + 1);
+                    String price = String.valueOf(90 + i % 40);
+                    work.add(() -> {
+                        shared.offer(new BigDecimal(price), at);
+                        shared.evaluate();
+                    });
+                }
+                Collections.shuffle(work);
+                CountDownLatch go = new CountDownLatch(1);
+                List<Future<?>> done = new ArrayList<>();
+                for (Runnable task : work) {
+                    done.add(pool.submit(() -> {
+                        go.await();
+                        task.run();
+                        return null;
+                    }));
+                }
+                go.countDown();
+                for (Future<?> future : done) {
+                    future.get(10, TimeUnit.SECONDS);
+                }
+
+                for (PriceAlert alert : base) {
+                    assertThat(shared.versionOf(alert.alertId()))
+                            .as("round %d", round)
+                            .hasValue(versions);
+                }
+                assertThat(shared.size()).isEqualTo(alerts);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     /** Offers a price stamped {@code seconds} after T0, moves the clock there and evaluates. */
     private List<PriceAlertHit> evaluate(String price, long seconds) {
         Instant at = T0.plusSeconds(seconds);
@@ -296,5 +423,35 @@ class PriceAlertBookTest {
                 null,
                 null,
                 0);
+    }
+
+    private static PriceAlert atVersion(PriceAlert alert, long version) {
+        return copy(alert, alert.threshold(), version);
+    }
+
+    private static PriceAlert withThreshold(PriceAlert alert, String threshold) {
+        return copy(alert, new BigDecimal(threshold), alert.version());
+    }
+
+    private static PriceAlert copy(PriceAlert alert, BigDecimal threshold, long version) {
+        return new PriceAlert(
+                alert.alertId(),
+                alert.userId(),
+                alert.watchlistId(),
+                alert.pairId(),
+                alert.symbol(),
+                alert.market(),
+                alert.condition(),
+                threshold,
+                alert.triggerMode(),
+                alert.cooldownMinutes(),
+                alert.expiresAt(),
+                alert.notifyInApp(),
+                alert.notifyEmail(),
+                alert.notifyPush(),
+                alert.triggerCount(),
+                alert.lastTriggeredAt(),
+                alert.lastBarOpenTime(),
+                version);
     }
 }

@@ -179,12 +179,17 @@ public class AlertEngine implements MinuteKlineListener {
 
     private void refresh(UUID alertId) {
         try {
-            Optional<PriceAlert> stored = triggers.activePriceAlert(alertId);
             PairKey before = located.get(alertId);
-            if (before != null
+            PriceAlertBook held = before == null ? null : books.get(before);
+            // Taken before the read: a rule another refresh puts meanwhile is newer and must not be removed.
+            long seen = held == null ? -1 : held.versionOf(alertId).orElse(-1);
+            Optional<PriceAlert> stored = triggers.activePriceAlert(alertId);
+            if (held != null
                     && stored.map(alert -> !keyOf(alert).equals(before)).orElse(true)) {
-                books.get(before).remove(alertId);
-                located.remove(alertId);
+                long removable = stored.map(alert -> alert.version() - 1).orElse(seen);
+                if (held.removeIfVersionAtMost(alertId, removable)) {
+                    located.remove(alertId, before);
+                }
             }
             stored.ifPresent(this::hold);
         } catch (RuntimeException failure) {
@@ -194,8 +199,9 @@ public class AlertEngine implements MinuteKlineListener {
 
     private void hold(PriceAlert alert) {
         PairKey key = keyOf(alert);
-        books.computeIfAbsent(key, this::newBook).put(alert);
-        located.put(alert.alertId(), key);
+        if (books.computeIfAbsent(key, this::newBook).put(alert)) {
+            located.put(alert.alertId(), key);
+        }
     }
 
     private void evaluate(PairKey key) {
@@ -208,7 +214,7 @@ public class AlertEngine implements MinuteKlineListener {
                 if (triggers.tryTrigger(hit)) {
                     book.triggered(hit);
                     if (!book.contains(hit.alert().alertId())) {
-                        located.remove(hit.alert().alertId());
+                        located.remove(hit.alert().alertId(), key);
                     }
                 } else {
                     refresh(hit.alert().alertId());
@@ -220,7 +226,7 @@ public class AlertEngine implements MinuteKlineListener {
     }
 
     private PriceAlertBook newBook(PairKey ignored) {
-        return new PriceAlertBook(clock, properties.throttle());
+        return new PriceAlertBook(clock, properties.throttle(), properties.staleness());
     }
 
     private Partition partitionOf(PairKey key) {

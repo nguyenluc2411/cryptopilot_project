@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
+import org.hibernate.validator.constraints.time.DurationMin;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
@@ -21,7 +22,7 @@ import org.springframework.validation.annotation.Validated;
  *     its latest price kept, and nothing blocks the stream
  * @param throttle the shortest time between two evaluations of one pair (SRS 3.4.4: at most once per second)
  * @param staleness how old the previous price of a pair may be when its stream reconnects before a cross is no
- *     longer measured from it
+ *     longer measured from it; also how long a removed alert's version is remembered against stale reads
  * @param stopTimeout how long a stop waits for the partitions to end
  * @param expirySweep the job that sets alerts past their expiry EXPIRED
  */
@@ -31,8 +32,13 @@ public record AlertEngineProperties(
         @DefaultValue("false") boolean enabled,
         @Min(1) @Max(64) @DefaultValue("2") int partitions,
         @Min(1) @DefaultValue("1000") int queueCapacity,
-        @NotNull @DefaultValue("1s") Duration throttle,
-        @NotNull @DefaultValue("5m") Duration staleness,
+
+        @NotNull @DurationMin(millis = 1) @DefaultValue("1s")
+        Duration throttle,
+
+        @NotNull @DurationMin(millis = 1) @DefaultValue("5m")
+        Duration staleness,
+
         @NotNull @DefaultValue("5s") Duration stopTimeout,
         @NotNull @Valid @DefaultValue ExpirySweep expirySweep) {
 

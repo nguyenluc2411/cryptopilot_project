@@ -9,11 +9,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.TreeMap;
 import java.util.UUID;
 
@@ -34,7 +36,8 @@ import java.util.UUID;
  * dropped, so a late or repeated update never moves {@code p₀} back. A pair is evaluated at most once per
  * {@code throttle}, on the latest price received (SRS 3.4.4); prices in between are kept only as the latest.
  *
- * <p>Thread-safe: the engine's partition thread evaluates while listener threads add and remove alerts.
+ * <p>Thread-safe: the engine's partition thread evaluates while listener threads add and remove alerts. An alert only
+ * moves forward to a newer row version: a stale read that arrives late is ignored (see {@link #put}).
  *
  * <p>Rule: NSF-06, BR-18, BR-19, BR-20; SRS 3.4.4; TECHNICAL_DESIGN 7.9.
  *
@@ -47,12 +50,16 @@ public final class PriceAlertBook {
 
     private final Clock clock;
     private final Duration throttle;
+    private final Duration tombstoneTtl;
 
     private final NavigableMap<BigDecimal, Map<UUID, PriceAlert>> crossAbove = new TreeMap<>();
     private final NavigableMap<BigDecimal, Map<UUID, PriceAlert>> crossBelow = new TreeMap<>();
     private final NavigableMap<BigDecimal, Map<UUID, PriceAlert>> greaterThan = new TreeMap<>();
     private final NavigableMap<BigDecimal, Map<UUID, PriceAlert>> lessThan = new TreeMap<>();
     private final Map<UUID, PriceAlert> byId = new HashMap<>();
+
+    /** The version each alert was removed at, oldest first, kept for {@code tombstoneTtl}. */
+    private final LinkedHashMap<UUID, Tombstone> removed = new LinkedHashMap<>();
 
     /** The last price evaluated, and when the exchange produced it; {@code null} until there is one. */
     private BigDecimal previous;
@@ -67,33 +74,71 @@ public final class PriceAlertBook {
     /** When the last evaluation ran, by the engine's clock. */
     private Instant evaluatedAt;
 
-    public PriceAlertBook(Clock clock, Duration throttle) {
+    /**
+     * @param tombstoneTtl how long a removed alert's version blocks a stale read of it; a read in flight takes far
+     *     less, and the bound keeps the memory to the alerts removed within it
+     */
+    public PriceAlertBook(Clock clock, Duration throttle, Duration tombstoneTtl) {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.throttle = Objects.requireNonNull(throttle, "throttle");
+        this.tombstoneTtl = Objects.requireNonNull(tombstoneTtl, "tombstoneTtl");
     }
 
-    /** Adds the alert, or replaces the one with its key. */
-    public synchronized void put(PriceAlert alert) {
-        remove(alert.alertId());
+    /**
+     * Adds the alert, or replaces the one with its key, only if it is newer: a version not above the one held, or
+     * the one it was removed at, is a stale read and is ignored, so the book only moves forward.
+     *
+     * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, §2.3 (the
+     * check-then-act is one atomic action). Lamport, L. (1978). Time, Clocks, and the Ordering of Events in a
+     * Distributed System. <i>Communications of the ACM</i>, 21(7) (a monotonic number orders the states).
+     *
+     * @return whether the alert was taken
+     */
+    public synchronized boolean put(PriceAlert alert) {
+        PriceAlert held = byId.get(alert.alertId());
+        Tombstone gone = removed.get(alert.alertId());
+        if ((held != null && held.version() >= alert.version())
+                || (gone != null && gone.version() >= alert.version())) {
+            return false;
+        }
+        removed.remove(alert.alertId());
+        unindex(alert.alertId());
         byId.put(alert.alertId(), alert);
         mapOf(alert)
                 .computeIfAbsent(alert.threshold(), ignored -> new LinkedHashMap<>())
                 .put(alert.alertId(), alert);
+        return true;
     }
 
-    /** Removes the alert; whether it was here. */
+    /**
+     * Removes the alert and remembers the version it held, so a stale read of that version cannot put it back
+     * ({@link #put}).
+     *
+     * @return whether it was here
+     */
     public synchronized boolean remove(UUID alertId) {
-        PriceAlert held = byId.remove(alertId);
+        PriceAlert held = unindex(alertId);
         if (held == null) {
             return false;
         }
-        NavigableMap<BigDecimal, Map<UUID, PriceAlert>> map = mapOf(held);
-        Map<UUID, PriceAlert> atThreshold = map.get(held.threshold());
-        atThreshold.remove(alertId);
-        if (atThreshold.isEmpty()) {
-            map.remove(held.threshold());
-        }
+        bury(alertId, held.version());
         return true;
+    }
+
+    /**
+     * Removes the alert only if the version held is not above {@code version}: a newer rule put meanwhile stays.
+     *
+     * @return whether it was removed
+     */
+    public synchronized boolean removeIfVersionAtMost(UUID alertId, long version) {
+        PriceAlert held = byId.get(alertId);
+        return held != null && held.version() <= version && remove(alertId);
+    }
+
+    /** The version of the alert held, if any. */
+    public synchronized OptionalLong versionOf(UUID alertId) {
+        PriceAlert held = byId.get(alertId);
+        return held == null ? OptionalLong.empty() : OptionalLong.of(held.version());
     }
 
     public synchronized boolean contains(UUID alertId) {
@@ -174,7 +219,8 @@ public final class PriceAlertBook {
      */
     public synchronized void triggered(PriceAlertHit hit) {
         PriceAlert alert = byId.get(hit.alert().alertId());
-        if (alert == null) {
+        // A newer row read meanwhile already carries the stored trigger.
+        if (alert == null || alert.version() != hit.alert().version()) {
             return;
         }
         switch (alert.triggerMode()) {
@@ -194,6 +240,31 @@ public final class PriceAlertBook {
         }
     }
 
+    private PriceAlert unindex(UUID alertId) {
+        PriceAlert held = byId.remove(alertId);
+        if (held != null) {
+            NavigableMap<BigDecimal, Map<UUID, PriceAlert>> map = mapOf(held);
+            Map<UUID, PriceAlert> atThreshold = map.get(held.threshold());
+            atThreshold.remove(alertId);
+            if (atThreshold.isEmpty()) {
+                map.remove(held.threshold());
+            }
+        }
+        return held;
+    }
+
+    private void bury(UUID alertId, long version) {
+        Instant now = clock.instant();
+        // Re-inserted at the end, so the map stays oldest first and the expired ones are at its head.
+        removed.remove(alertId);
+        removed.put(alertId, new Tombstone(version, now));
+        Instant cutoff = now.minus(tombstoneTtl);
+        for (Iterator<Tombstone> it = removed.values().iterator();
+                it.hasNext() && it.next().at().isBefore(cutoff); ) {
+            it.remove();
+        }
+    }
+
     private NavigableMap<BigDecimal, Map<UUID, PriceAlert>> mapOf(PriceAlert alert) {
         return switch (alert.condition()) {
             case CROSS_ABOVE -> crossAbove;
@@ -202,4 +273,6 @@ public final class PriceAlertBook {
             case LESS_THAN -> lessThan;
         };
     }
+
+    private record Tombstone(long version, Instant at) {}
 }
