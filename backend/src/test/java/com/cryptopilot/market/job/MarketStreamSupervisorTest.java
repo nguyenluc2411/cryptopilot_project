@@ -220,6 +220,8 @@ class MarketStreamSupervisorTest {
         assertThat(minutes)
                 .extracting(MinuteKline::market, MinuteKline::pairId, MinuteKline::openTime, MinuteKline::closed)
                 .containsExactly(tuple(MarketType.SPOT, btc, AT, false), tuple(MarketType.SPOT, btc, AT, true));
+        // The candle's close is the last traded price that price alerts read (BR-18).
+        assertThat(minutes).allSatisfy(kline -> assertThat(kline.close()).isEqualByComparingTo("101.20"));
         assertThat(realtime).noneMatch(message -> message instanceof StreamMessage.KlineMessage);
         assertThat(storedCandles()).isZero();
     }

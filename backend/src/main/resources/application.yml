@@ -235,6 +235,22 @@ cryptopilot:
           max-futures-leverage: 10
           max-total-open-risk-percent: 6
           min-setup-score-to-alert: 55
+  alert:
+    # NSF-06, T-055: PRICE alerts evaluated on the 1-minute candle updates. Off here, on in the dev and prod
+    # profiles, so a test context starts no engine.
+    enabled: false
+    partitions: 2
+    queue-capacity: 1000
+    # SRS 3.4.4: at most one evaluation per second per pair.
+    throttle: 1s
+    # After a stream reconnects, a cross is not measured from a previous price older than this.
+    staleness: 5m
+    stop-timeout: 5s
+    expiry-sweep:
+      # BR-19: alerts past their expiry become EXPIRED. Off here, on in the dev and prod profiles.
+      enabled: false
+      cron: "0 * * * * *"
+      zone: UTC
 
 springdoc:
   # TECHNICAL_DESIGN 8: the OpenAPI document and Swagger UI at their standard paths; off in the prod profile.

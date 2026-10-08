@@ -12,6 +12,8 @@ import com.cryptopilot.watchlist.dto.request.UpdateWatchlistItemRequest;
 import com.cryptopilot.watchlist.dto.response.WatchlistItemResponse;
 import com.cryptopilot.watchlist.dto.response.WatchlistResponse;
 import com.cryptopilot.watchlist.entity.Watchlist;
+import com.cryptopilot.watchlist.model.AlertsChanged;
+import com.cryptopilot.watchlist.repository.AlertRepository;
 import com.cryptopilot.watchlist.repository.WatchlistRepository;
 import com.cryptopilot.watchlist.service.WatchlistService;
 import java.time.Clock;
@@ -23,6 +25,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,6 +56,8 @@ public class WatchlistServiceImpl implements WatchlistService {
     private final MarketApi market;
     private final EntitlementApi entitlements;
     private final Clock clock;
+    private final AlertRepository alertRows;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional(readOnly = true)
@@ -133,6 +138,8 @@ public class WatchlistServiceImpl implements WatchlistService {
                     listingOf(row).symbol(),
                     alerts);
         }
+        // The cascade deletes the row's alerts; the engine drops them after the commit.
+        events.publishEvent(new AlertsChanged(Set.copyOf(alertRows.findIdsByWatchlistId(row.getId()))));
         watchlist.delete(row);
     }
 
