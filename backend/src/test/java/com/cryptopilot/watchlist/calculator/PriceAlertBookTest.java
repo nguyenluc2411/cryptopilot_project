@@ -316,6 +316,23 @@ class PriceAlertBookTest {
     }
 
     @Test
+    void D89_aDiscardAfterARefusal_removesUpToItsVersion_andLeavesNoTombstone() {
+        PriceAlert alert = atVersion(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME), 3);
+        book.put(alert);
+
+        assertThat(book.discardIfVersionAtMost(alert.alertId(), 2))
+                .as("newer rule held")
+                .isFalse();
+        assertThat(book.discardIfVersionAtMost(alert.alertId(), 3)).isTrue();
+        assertThat(book.contains(alert.alertId())).isFalse();
+
+        assertThat(book.put(alert))
+                .as("the same version, still ACTIVE in the database")
+                .isTrue();
+        assertThat(evaluate("101", 0)).hasSize(1);
+    }
+
+    @Test
     void D89_anEvaluationInstant_isCutToMicroseconds_likeTheStoredTriggerTime() {
         book.put(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME));
         clock.set(T0.plusNanos(1_234_567));

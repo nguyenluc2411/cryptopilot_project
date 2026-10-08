@@ -228,8 +228,8 @@ public class AlertEngine implements MinuteKlineListener {
                     }
                 } else {
                     countRefusal(hit.alert().alertId());
-                    // The row has moved on from this version: drop it here, even if located points elsewhere.
-                    book.removeIfVersionAtMost(
+                    // Drop it here, even if located points elsewhere; the read below puts it back if still ACTIVE.
+                    book.discardIfVersionAtMost(
                             hit.alert().alertId(), hit.alert().version());
                     refresh(hit.alert().alertId());
                 }

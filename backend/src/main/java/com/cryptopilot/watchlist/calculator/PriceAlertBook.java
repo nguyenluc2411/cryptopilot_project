@@ -142,6 +142,22 @@ public final class PriceAlertBook {
         return held != null && held.version() <= version && remove(alertId);
     }
 
+    /**
+     * Removes the alert only if the version held is not above {@code version}, without a tombstone: for a trigger
+     * the database refused. The read that follows is the newest and decides; if the row is still ACTIVE at this
+     * version it must be able to come back, while a tombstone only guards against reads older than a removal.
+     *
+     * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly, ch. 7
+     * (compare-and-set; the database is the source of truth). Goetz, B. et al. (2006). <i>Java Concurrency in
+     * Practice</i>. Addison-Wesley, §2.3 (a check-then-act is atomic on one state).
+     *
+     * @return whether it was removed
+     */
+    public synchronized boolean discardIfVersionAtMost(UUID alertId, long version) {
+        PriceAlert held = byId.get(alertId);
+        return held != null && held.version() <= version && unindex(alertId) != null;
+    }
+
     /** The version of the alert held, if any. */
     public synchronized OptionalLong versionOf(UUID alertId) {
         PriceAlert held = byId.get(alertId);

@@ -350,6 +350,21 @@ class AlertEngineTest {
     }
 
     @Test
+    void D89_aRefusalWhileTheRowStaysActiveAtTheSameVersion_keepsTheAlert_andItIsTriedAgain() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        startWith(held);
+        when(triggers.tryTrigger(argThat(hitOf(held)))).thenReturn(false, true);
+        when(triggers.activePriceAlert(held.alertId())).thenReturn(Optional.of(held));
+
+        price("101");
+        verify(triggers, timeout(WAIT)).activePriceAlert(held.alertId());
+        price("102");
+
+        assertThat(engine.holds(held.alertId())).isTrue();
+        verify(triggers, timeout(WAIT).times(2)).tryTrigger(argThat(hitOf(held)));
+    }
+
+    @Test
     void NSF06_repeatedRefusals_warnFromTheThird_atMostOnceAMinutePerAlert() {
         PriceAlert held = spotAt(UUID.randomUUID(), 1);
         when(triggers.activePriceAlerts()).thenReturn(List.of(held));
