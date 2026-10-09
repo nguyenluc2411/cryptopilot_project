@@ -1,4 +1,13 @@
 spring:
+  datasource:
+    hikari:
+      # TR-02: every order placement holds a connection for its whole transaction, so the pool is what many Traders
+      # placing at once wait on. The default of 10 is too few; a deployment sets DB_POOL_SIZE to what its Postgres
+      # (max_connections) can spare. Waiting longer than the timeout answers 5xx rather than hanging.
+      maximum-pool-size: ${DB_POOL_SIZE:30}
+      # Opened on demand above this: an idle instance, or one of the many contexts a test run keeps, holds only these.
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      connection-timeout: ${DB_POOL_TIMEOUT_MS:10000}
   data:
     redis:
       # The latest-price cache (TD 5.6, ADR-005). Local defaults; a deployment sets REDIS_HOST/PORT/PASSWORD.
