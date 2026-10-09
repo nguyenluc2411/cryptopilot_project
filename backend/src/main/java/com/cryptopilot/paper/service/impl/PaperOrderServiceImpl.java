@@ -288,6 +288,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             return order;
         }
         // An order that ends now still needs what it would have locked, as the exchange checks the balance first.
+        wallets.preload(account, WalletType.SPOT, lockedCoin(order, coins));
         wallets.lock(account, WalletType.SPOT, lockedCoin(order, coins), order.lockedAmount());
         if (reached || decidedNow) {
             wallets.unlock(account, WalletType.SPOT, lockedCoin(order, coins), order.lockedAmount());

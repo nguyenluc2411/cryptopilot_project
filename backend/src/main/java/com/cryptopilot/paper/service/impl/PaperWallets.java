@@ -10,11 +10,19 @@ import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.PaperBalanceRepository;
 import com.cryptopilot.paper.repository.PaperLedgerEntryRepository;
 import java.math.BigDecimal;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * The only writer of paper balances. Every change of a balance's total is written with its ledger entry in the same
@@ -30,6 +38,9 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class PaperWallets {
 
+    /** The key the balances read in a transaction are bound to. */
+    private static final Object LOADED = new Object();
+
     private final PaperBalanceRepository balances;
     private final PaperLedgerEntryRepository ledger;
 
@@ -39,7 +50,7 @@ public class PaperWallets {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public PaperBalance grant(PaperAccount account, WalletType wallet, CoinListing coin, BigDecimal amount, Ref ref) {
-        PaperBalance balance = balances.save(PaperBalance.empty(account.getId(), wallet, coin.coinId()));
+        PaperBalance balance = remember(balances.save(PaperBalance.empty(account.getId(), wallet, coin.coinId())));
         balance.credit(amount);
         record(balance, LedgerEntryType.INITIAL_GRANT, amount, ref);
         return balance;
@@ -54,8 +65,8 @@ public class PaperWallets {
             BigDecimal amount,
             LedgerEntryType type,
             Ref ref) {
-        PaperBalance balance = balances.findByAccountIdAndWalletTypeAndCoinId(account.getId(), wallet, coin.coinId())
-                .orElseGet(() -> balances.save(PaperBalance.empty(account.getId(), wallet, coin.coinId())));
+        PaperBalance balance = find(account, wallet, coin)
+                .orElseGet(() -> remember(balances.save(PaperBalance.empty(account.getId(), wallet, coin.coinId()))));
         balance.credit(amount);
         record(balance, type, amount, ref);
         return balance;
@@ -77,8 +88,8 @@ public class PaperWallets {
             Ref ref) {
         // A wallet that never held the coin has nothing free: the refusal comes from an empty balance that is never
         // stored, so a refused debit leaves no row behind.
-        PaperBalance balance = balances.findByAccountIdAndWalletTypeAndCoinId(account.getId(), wallet, coin.coinId())
-                .orElseGet(() -> PaperBalance.empty(account.getId(), wallet, coin.coinId()));
+        PaperBalance balance =
+                find(account, wallet, coin).orElseGet(() -> PaperBalance.empty(account.getId(), wallet, coin.coinId()));
         balance.debit(amount, coin.symbol());
         record(balance, type, amount.negate(), ref);
         return balance;
@@ -93,8 +104,8 @@ public class PaperWallets {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public PaperBalance lock(PaperAccount account, WalletType wallet, CoinListing coin, BigDecimal amount) {
-        PaperBalance balance = balances.findByAccountIdAndWalletTypeAndCoinId(account.getId(), wallet, coin.coinId())
-                .orElseGet(() -> PaperBalance.empty(account.getId(), wallet, coin.coinId()));
+        PaperBalance balance =
+                find(account, wallet, coin).orElseGet(() -> PaperBalance.empty(account.getId(), wallet, coin.coinId()));
         balance.lock(amount, coin.symbol());
         return balance;
     }
@@ -124,10 +135,75 @@ public class PaperWallets {
 
     // An amount was locked in this balance, so it exists; a missing one is a defect.
     private PaperBalance held(PaperAccount account, WalletType wallet, CoinListing coin) {
-        return balances.findByAccountIdAndWalletTypeAndCoinId(account.getId(), wallet, coin.coinId())
+        return find(account, wallet, coin)
                 .orElseThrow(() -> new IllegalStateException(
                         wallet + " " + coin.symbol() + " of account " + account.getId() + " holds nothing locked"));
     }
+
+    /**
+     * Reads the balances of these coins in one query and keeps them for the rest of the transaction, so the changes
+     * that follow neither read them again nor make Hibernate flush the writes queued so far before each read: the
+     * writes of an order then go to the database together, at commit.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void preload(PaperAccount account, WalletType wallet, CoinListing... coins) {
+        Map<Key, Optional<PaperBalance>> held = loaded();
+        List<UUID> unread = Arrays.stream(coins)
+                .map(CoinListing::coinId)
+                .distinct()
+                .filter(coinId -> !held.containsKey(new Key(account.getId(), wallet, coinId)))
+                .toList();
+        if (unread.isEmpty()) {
+            return;
+        }
+        // A coin the wallet has never held is remembered as absent, so it is not looked for again.
+        unread.forEach(coinId -> held.put(new Key(account.getId(), wallet, coinId), Optional.empty()));
+        balances.findByAccountIdAndWalletTypeAndCoinIdIn(account.getId(), wallet, unread)
+                .forEach(this::remember);
+    }
+
+    /**
+     * A balance this transaction already read, else one read now. Only stored balances are kept: an empty one made up
+     * for a refusal never is.
+     */
+    private Optional<PaperBalance> find(PaperAccount account, WalletType wallet, CoinListing coin) {
+        Optional<PaperBalance> kept = loaded().get(new Key(account.getId(), wallet, coin.coinId()));
+        if (kept != null) {
+            return kept;
+        }
+        Optional<PaperBalance> found =
+                balances.findByAccountIdAndWalletTypeAndCoinId(account.getId(), wallet, coin.coinId());
+        found.ifPresent(this::remember);
+        return found;
+    }
+
+    private PaperBalance remember(PaperBalance balance) {
+        loaded().put(
+                        new Key(balance.getAccountId(), balance.getWalletType(), balance.getCoinId()),
+                        Optional.of(balance));
+        return balance;
+    }
+
+    /** The balances read in the current transaction, empty for a coin known to be absent; dropped when it ends. */
+    @SuppressWarnings("unchecked")
+    private static Map<Key, Optional<PaperBalance>> loaded() {
+        Map<Key, Optional<PaperBalance>> held =
+                (Map<Key, Optional<PaperBalance>>) TransactionSynchronizationManager.getResource(LOADED);
+        if (held == null) {
+            Map<Key, Optional<PaperBalance>> fresh = new HashMap<>();
+            TransactionSynchronizationManager.bindResource(LOADED, fresh);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    TransactionSynchronizationManager.unbindResourceIfPossible(LOADED);
+                }
+            });
+            held = fresh;
+        }
+        return held;
+    }
+
+    private record Key(UUID accountId, WalletType wallet, UUID coinId) {}
 
     private void record(PaperBalance balance, LedgerEntryType type, BigDecimal amount, Ref ref) {
         ledger.save(PaperLedgerEntry.of(balance, type, amount, ref));

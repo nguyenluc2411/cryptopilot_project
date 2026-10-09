@@ -69,6 +69,7 @@ public class SpotSettlement {
             FillSource source,
             Instant tradedAt,
             boolean fromLocked) {
+        wallets.preload(account, WalletType.SPOT, coins.base(), coins.quote());
         boolean buy = order.getSide() == OrderSide.BUY;
         BigDecimal quoteAmount = buy ? PaperOrder.buyCost(price, quantity) : PaperOrder.saleProceeds(price, quantity);
         CoinListing paid = buy ? coins.quote() : coins.base();

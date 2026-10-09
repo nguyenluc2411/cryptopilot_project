@@ -29,6 +29,16 @@ spring:
     # The persistence context ends with the transaction. Leaving it open across the view would let
     # a controller trigger a lazy load, which the layer rules of the design forbid.
     open-in-view: false
+    properties:
+      hibernate:
+        # TR-02: a paper order writes the order, its fill, two to three ledger entries and two balances at commit.
+        # Sent as one batch per table instead of one round trip per row; the keys are UUID v7 generated in the
+        # application, so nothing waits for the database to return an id.
+        jdbc:
+          batch_size: 50
+          batch_versioned_data: true
+        order_inserts: true
+        order_updates: true
   flyway:
     # The production migration path, and only it. Sample data lives in classpath:db/demo, which the
     # dev profile adds; nothing here reaches it, so a staging or production database cannot acquire
