@@ -32,7 +32,7 @@
 		     (2026-09-25) and is itself built on spring-boot-starter-parent 4.1.0. Not part of the Spring Boot BOM. -->
 		<springdoc-openapi.version>3.1.1</springdoc-openapi.version>
 		<!-- The JUnit tags the default test run leaves out; see the Surefire configuration. -->
-		<surefire.excludedGroups>live</surefire.excludedGroups>
+		<surefire.excludedGroups>live,load</surefire.excludedGroups>
 	</properties>
 
 	<dependencyManagement>
@@ -236,7 +236,8 @@
 					</systemPropertyVariables>
 					<!-- Tests tagged "live" call the real exchange. They never run in the default build:
 					     a CI runner may be geo-blocked (HTTP 451) and a live market is not deterministic.
-					     Run them on purpose with: ./mvnw test -Dgroups=live -Dsurefire.excludedGroups=none -->
+					     Run them on purpose with: ./mvnw test -Dgroups=live -Dsurefire.excludedGroups=none
+					     Tests tagged "load" measure this machine for minutes and are left out the same way. -->
 					<excludedGroups>${surefire.excludedGroups}</excludedGroups>
 				</configuration>
 			</plugin>
