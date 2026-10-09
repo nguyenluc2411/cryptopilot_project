@@ -1,6 +1,7 @@
 package com.cryptopilot.market.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -10,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MinuteKlineBatch;
+import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
@@ -176,6 +178,41 @@ class MarketApiImplTest {
                 .containsExactlyInAnyOrder(
                         new PairListing(spotOnly.getId(), "BTCUSDT", true, false),
                         new PairListing(unlisted.getId(), "ETHUSDT", false, false));
+    }
+
+    @Test
+    void TR02_aPairsCoins_areItsBaseAndQuote() {
+        Coin btc = Coin.fromExchange("BTC");
+        Coin usdt = Coin.fromExchange("USDT");
+        CryptoPair pair = CryptoPair.register(btc.getId(), usdt.getId(), "BTCUSDT");
+        when(pairs.findById(pair.getId())).thenReturn(Optional.of(pair));
+        when(coins.findAllByIdIn(Set.of(btc.getId(), usdt.getId()))).thenReturn(List.of(usdt, btc));
+
+        assertThat(api.pairCoins(pair.getId()))
+                .contains(new PairCoins(
+                        pair.getId(),
+                        new CoinListing(btc.getId(), "BTC", btc.getCoinName()),
+                        new CoinListing(usdt.getId(), "USDT", usdt.getCoinName())));
+    }
+
+    @Test
+    void TR02_anUnknownPair_hasNoCoins() {
+        UUID unknown = UUID.randomUUID();
+        when(pairs.findById(unknown)).thenReturn(Optional.empty());
+
+        assertThat(api.pairCoins(unknown)).isEmpty();
+        verifyNoInteractions(coins);
+    }
+
+    /** fk_crypto_pair_base_coin keeps both coins stored, so a pair without one is a defect, not an empty answer. */
+    @Test
+    void TR02_aPairWhoseCoinIsNotStored_isADefect() {
+        Coin usdt = Coin.fromExchange("USDT");
+        CryptoPair pair = CryptoPair.register(UUID.randomUUID(), usdt.getId(), "BTCUSDT");
+        when(pairs.findById(pair.getId())).thenReturn(Optional.of(pair));
+        when(coins.findAllByIdIn(Set.of(pair.getBaseCoinId(), usdt.getId()))).thenReturn(List.of(usdt));
+
+        assertThatIllegalStateException().isThrownBy(() -> api.pairCoins(pair.getId()));
     }
 
     @Test

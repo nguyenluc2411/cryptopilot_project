@@ -24,6 +24,9 @@ public interface MarketApi {
     /** The stored pairs among these ids, listed or not, in no particular order; an unknown id is left out. */
     List<PairListing> pairListings(Collection<UUID> pairIds);
 
+    /** The base and quote coins of a stored pair, listed or not; empty for an unknown pair (TR-02). */
+    Optional<PairCoins> pairCoins(UUID pairId);
+
     /** The stored coins with these symbols, e.g. {@code USDT}; an unknown symbol is left out (TR-04). */
     List<CoinListing> coinsBySymbol(Collection<String> symbols);
 

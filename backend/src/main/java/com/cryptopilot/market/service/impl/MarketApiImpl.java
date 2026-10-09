@@ -4,6 +4,7 @@ import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKlineBatch;
+import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.entity.Coin;
@@ -68,6 +69,23 @@ public class MarketApiImpl implements MarketApi {
                         pair.isEnabledOn(MarketType.SPOT),
                         pair.isEnabledOn(MarketType.FUTURES)))
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<PairCoins> pairCoins(UUID pairId) {
+        return pairs.findById(pairId).map(pair -> {
+            Map<UUID, CoinListing> found =
+                    coins.findAllByIdIn(Set.of(pair.getBaseCoinId(), pair.getQuoteCoinId())).stream()
+                            .collect(Collectors.toMap(Coin::getId, MarketApiImpl::listing));
+            // fk_crypto_pair_base_coin and fk_crypto_pair_quote_coin keep both stored, so a missing one is a defect.
+            CoinListing base = found.get(pair.getBaseCoinId());
+            CoinListing quote = found.get(pair.getQuoteCoinId());
+            if (base == null || quote == null) {
+                throw new IllegalStateException("a coin of pair " + pairId + " is not stored");
+            }
+            return new PairCoins(pair.getId(), base, quote);
+        });
     }
 
     @Override
