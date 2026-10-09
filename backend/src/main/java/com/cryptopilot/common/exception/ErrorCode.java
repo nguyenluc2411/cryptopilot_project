@@ -279,7 +279,14 @@ public enum ErrorCode {
      * it yet, so it borrows MSG01; the stable code tells the client which text to show, and the message arguments
      * carry the coin, the amount needed and the amount free.
      */
-    PAPER_INSUFFICIENT_BALANCE(HttpStatus.BAD_REQUEST, "MSG01");
+    PAPER_INSUFFICIENT_BALANCE(HttpStatus.BAD_REQUEST, "MSG01"),
+
+    /**
+     * The paper order has finished (filled, cancelled or expired), so it cannot be cancelled (TR-02). SRS 5.3 has no
+     * text for this, so it borrows MSG43 like {@link #TRADING_PLAN_STATUS_TRANSITION_INVALID} (A-38). 409: the request
+     * is valid and the order's current status refuses it; the response's message argument is that status.
+     */
+    PAPER_ORDER_NOT_OPEN(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

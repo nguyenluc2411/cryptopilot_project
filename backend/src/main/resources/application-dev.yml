@@ -79,3 +79,9 @@ cryptopilot:
         # T-043 runs in this profile: after a restart, the closed 1-minute candles missed since the
         # watermark are fetched from the exchange and replayed (A-04).
         enabled: true
+  paper:
+    matching:
+      replay:
+        # TR-02, Q-T6 run in this profile: after a restart or a lost stream, the closed 1-minute candles the
+        # paper matching engine missed are fetched from the exchange and replayed.
+        enabled: true

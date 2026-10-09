@@ -247,6 +247,10 @@ cryptopilot:
         bnb: 10
       futures-grant:
         usdt: 5000
+    order:
+      # TR-02: the commission of a Spot fill, taken in the coin it brings in; Binance's standard 0.1% maker and taker.
+      spot-maker-fee-rate: 0.001
+      spot-taker-fee-rate: 0.001
 
 springdoc:
   # TECHNICAL_DESIGN 8: the OpenAPI document and Swagger UI at their standard paths; off in the prod profile.

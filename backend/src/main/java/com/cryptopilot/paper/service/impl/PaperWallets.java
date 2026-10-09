@@ -84,6 +84,51 @@ public class PaperWallets {
         return balance;
     }
 
+    /**
+     * Holds back part of the free amount of a coin for a working order. The total does not change, so no ledger entry
+     * is written.
+     *
+     * @throws com.cryptopilot.common.exception.BusinessException {@code PAPER_INSUFFICIENT_BALANCE} when less is
+     *     free; nothing changes
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public PaperBalance lock(PaperAccount account, WalletType wallet, CoinListing coin, BigDecimal amount) {
+        PaperBalance balance = balances.findByAccountIdAndWalletTypeAndCoinId(account.getId(), wallet, coin.coinId())
+                .orElseGet(() -> PaperBalance.empty(account.getId(), wallet, coin.coinId()));
+        balance.lock(amount, coin.symbol());
+        return balance;
+    }
+
+    /** Gives back an amount a working order held, for an order cancelled or ended. No ledger entry is written. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public PaperBalance unlock(PaperAccount account, WalletType wallet, CoinListing coin, BigDecimal amount) {
+        PaperBalance balance = held(account, wallet, coin);
+        balance.unlock(amount);
+        return balance;
+    }
+
+    /** Takes an amount a working order held, for an order that filled. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public PaperBalance spendLocked(
+            PaperAccount account,
+            WalletType wallet,
+            CoinListing coin,
+            BigDecimal amount,
+            LedgerEntryType type,
+            Ref ref) {
+        PaperBalance balance = held(account, wallet, coin);
+        balance.spendLocked(amount);
+        record(balance, type, amount.negate(), ref);
+        return balance;
+    }
+
+    // An amount was locked in this balance, so it exists; a missing one is a defect.
+    private PaperBalance held(PaperAccount account, WalletType wallet, CoinListing coin) {
+        return balances.findByAccountIdAndWalletTypeAndCoinId(account.getId(), wallet, coin.coinId())
+                .orElseThrow(() -> new IllegalStateException(
+                        wallet + " " + coin.symbol() + " of account " + account.getId() + " holds nothing locked"));
+    }
+
     private void record(PaperBalance balance, LedgerEntryType type, BigDecimal amount, Ref ref) {
         ledger.save(PaperLedgerEntry.of(balance, type, amount, ref));
     }

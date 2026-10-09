@@ -16,6 +16,10 @@ public interface PaperAccountRepository extends Repository<PaperAccount, UUID> {
     @Transactional(readOnly = true)
     Optional<PaperAccount> findByUserId(UUID userId);
 
+    /** An account by its key: for the matching engine, which knows the account of an order and not its Trader. */
+    @Transactional(readOnly = true)
+    Optional<PaperAccount> findById(UUID accountId);
+
     /** Writes an account. Not transactional here; the unit of work is the calling service's. */
     PaperAccount save(PaperAccount account);
 
