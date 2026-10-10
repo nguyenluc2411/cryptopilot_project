@@ -72,6 +72,10 @@ cryptopilot:
       login: ${RATE_LIMIT_LOGIN:10}
       auth: ${RATE_LIMIT_AUTH:20}
       api: ${RATE_LIMIT_API:120}
+      # Placing a paper order is counted apart from the calls above, in a window of its own, as Binance does (50 new
+      # orders in 10 seconds); cancels and reads are not counted.
+      paper-orders: ${RATE_LIMIT_PAPER_ORDERS:50}
+      paper-orders-window: 10s
   realtime:
     # TD 9: the STOMP endpoint's transport limits, so one slow client cannot hold the others (Spring's per-session
     # decorator buffers up to the limit, then closes that session). Its origins are cryptopilot.web.cors above.

@@ -28,6 +28,7 @@ cryptopilot:
       login: ${RATE_LIMIT_LOGIN:100}
       auth: ${RATE_LIMIT_AUTH:200}
       api: ${RATE_LIMIT_API:1200}
+      paper-orders: ${RATE_LIMIT_PAPER_ORDERS:500}
   auth:
     token-sweep:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.

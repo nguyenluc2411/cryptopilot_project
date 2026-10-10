@@ -35,8 +35,13 @@ public class WebEdgeConfig {
             RateLimitProperties properties, StringRedisTemplate redis, Clock clock, ObjectMapper json) {
         RateLimitFilter filter = new RateLimitFilter(
                 new RateLimitFilter.Limits(
-                        properties.enabled(), properties.login(), properties.auth(), properties.api()),
+                        properties.enabled(),
+                        properties.login(),
+                        properties.auth(),
+                        properties.api(),
+                        properties.paperOrders()),
                 new FixedWindowRateLimiter(redis, clock, properties.window()),
+                new FixedWindowRateLimiter(redis, clock, properties.paperOrdersWindow()),
                 json);
         FilterRegistrationBean<RateLimitFilter> registration = new FilterRegistrationBean<>(filter);
         registration.setOrder(RateLimitFilter.ORDER);

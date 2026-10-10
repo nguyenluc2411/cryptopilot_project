@@ -25,6 +25,8 @@ import tools.jackson.databind.ObjectMapper;
  * <ul>
  *   <li>{@code POST /api/v1/auth/login}: rule {@code login}, per client address.
  *   <li>Any other {@code POST /api/v1/auth/**}: rule {@code auth}, per client address.
+ *   <li>{@code POST /api/v1/paper/orders} by an authenticated account: rule {@code paper-order}, per account, in its
+ *       own window and instead of {@code api}, as Binance counts new orders apart from its request weight.
  *   <li>Any other request under {@code /api/v1/} by an authenticated account: rule {@code api}, per account.
  * </ul>
  *
@@ -46,6 +48,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String API = "/api/v1/";
     private static final String AUTH = "/api/v1/auth/";
     private static final String LOGIN = "/api/v1/auth/login";
+    private static final String PAPER_ORDERS = "/api/v1/paper/orders";
     private static final String MESSAGE_ARGS = "messageArgs";
 
     /**
@@ -53,15 +56,25 @@ public class RateLimitFilter extends OncePerRequestFilter {
      *
      * @param enabled false lets every request through (test contexts)
      */
-    public record Limits(boolean enabled, int login, int auth, int api) {}
+    public record Limits(boolean enabled, int login, int auth, int api, int paperOrders) {}
 
     private final Limits limits;
     private final FixedWindowRateLimiter limiter;
+    private final FixedWindowRateLimiter paperOrderLimiter;
     private final ObjectMapper json;
 
-    public RateLimitFilter(Limits limits, FixedWindowRateLimiter limiter, ObjectMapper json) {
+    /**
+     * @param limiter counts the rules {@code login}, {@code auth} and {@code api}
+     * @param paperOrderLimiter counts the rule {@code paper-order}, which has a window of its own
+     */
+    public RateLimitFilter(
+            Limits limits,
+            FixedWindowRateLimiter limiter,
+            FixedWindowRateLimiter paperOrderLimiter,
+            ObjectMapper json) {
         this.limits = limits;
         this.limiter = limiter;
+        this.paperOrderLimiter = paperOrderLimiter;
         this.json = json;
     }
 
@@ -75,7 +88,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         Optional<Limit> limit = limitOf(request);
         if (limit.isPresent()) {
-            FixedWindowRateLimiter.Decision decision = limiter.tryAcquire(
+            FixedWindowRateLimiter counter = limit.get().limiter();
+            FixedWindowRateLimiter.Decision decision = counter.tryAcquire(
                     limit.get().rule(), limit.get().subject(), limit.get().perWindow());
             if (!decision.allowed()) {
                 refuse(response, decision.retryAfterSeconds());
@@ -89,15 +103,19 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String path = request.getRequestURI().substring(request.getContextPath().length());
         if ("POST".equals(request.getMethod()) && path.startsWith(AUTH)) {
             return LOGIN.equals(path)
-                    ? Optional.of(new Limit("login", "ip:" + request.getRemoteAddr(), limits.login()))
-                    : Optional.of(new Limit("auth", "ip:" + request.getRemoteAddr(), limits.auth()));
+                    ? Optional.of(new Limit("login", "ip:" + request.getRemoteAddr(), limits.login(), limiter))
+                    : Optional.of(new Limit("auth", "ip:" + request.getRemoteAddr(), limits.auth(), limiter));
         }
         Authentication caller = SecurityContextHolder.getContext().getAuthentication();
         if (path.startsWith(API)
                 && caller != null
                 && caller.isAuthenticated()
                 && !(caller instanceof AnonymousAuthenticationToken)) {
-            return Optional.of(new Limit("api", "user:" + caller.getName(), limits.api()));
+            if ("POST".equals(request.getMethod()) && PAPER_ORDERS.equals(path)) {
+                return Optional.of(
+                        new Limit("paper-order", "user:" + caller.getName(), limits.paperOrders(), paperOrderLimiter));
+            }
+            return Optional.of(new Limit("api", "user:" + caller.getName(), limits.api(), limiter));
         }
         return Optional.empty();
     }
@@ -115,5 +133,5 @@ public class RateLimitFilter extends OncePerRequestFilter {
         json.writeValue(response.getOutputStream(), body);
     }
 
-    private record Limit(String rule, String subject, int perWindow) {}
+    private record Limit(String rule, String subject, int perWindow, FixedWindowRateLimiter limiter) {}
 }

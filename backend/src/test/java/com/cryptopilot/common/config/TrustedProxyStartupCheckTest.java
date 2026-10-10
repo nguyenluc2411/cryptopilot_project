@@ -71,7 +71,7 @@ class TrustedProxyStartupCheckTest {
         environment.setActiveProfiles(profile);
         return new TrustedProxyStartupCheck(
                 new TrustedProxyProperties(proxies),
-                new RateLimitProperties(limitsOn, Duration.ofMinutes(1), 10, 20, 120),
+                new RateLimitProperties(limitsOn, Duration.ofMinutes(1), 10, 20, 120, 50, Duration.ofSeconds(10)),
                 environment);
     }
 }
