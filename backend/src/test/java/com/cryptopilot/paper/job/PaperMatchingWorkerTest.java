@@ -364,6 +364,7 @@ class PaperMatchingWorkerTest {
                 open,
                 new BigDecimal(low),
                 new BigDecimal(high),
+                new BigDecimal(high),
                 closed,
                 open.plusSeconds(closed ? 59 : 10));
     }

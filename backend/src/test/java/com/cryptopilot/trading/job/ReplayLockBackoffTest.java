@@ -151,6 +151,7 @@ class ReplayLockBackoffTest {
                 open,
                 new BigDecimal("100"),
                 new BigDecimal("101"),
+                new BigDecimal("101"),
                 closed,
                 open.plusSeconds(closed ? 60 : 5).minusMillis(closed ? 1 : 0));
     }

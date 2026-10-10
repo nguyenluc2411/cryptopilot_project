@@ -58,3 +58,7 @@ desktop.ini
 *.log
 logs/
 deploy/data/
+
+# ---- Local review notes (never committed)
+REVIEW_REPORT.md
+reviews/

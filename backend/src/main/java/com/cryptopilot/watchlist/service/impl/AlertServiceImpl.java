@@ -18,6 +18,7 @@ import com.cryptopilot.watchlist.entity.Alert;
 import com.cryptopilot.watchlist.entity.Watchlist;
 import com.cryptopilot.watchlist.exception.IllegalAlertStateException;
 import com.cryptopilot.watchlist.model.AlertDefinition;
+import com.cryptopilot.watchlist.model.AlertsChanged;
 import com.cryptopilot.watchlist.model.enums.AlertStatus;
 import com.cryptopilot.watchlist.model.enums.AlertType;
 import com.cryptopilot.watchlist.repository.AlertRepository;
@@ -32,6 +33,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -53,7 +55,7 @@ import org.springframework.transaction.annotation.Transactional;
  * refuses, the transaction rolls back and nothing is created (BR-16).
  *
  * <p>Pausing and deleting only lower the count and take no lock. TRIGGERED and EXPIRED are never set here: they are the
- * engine's (NSF-06).
+ * engine's (NSF-06). Every change publishes {@link AlertsChanged}, so the engine reads the alert again after the commit.
  *
  * <p>Rule: BR-07, BR-16, BR-17, BR-19, BR-20, BR-62; UC-13, UC-14; SRS 3.4.2, 3.4.3; D-63; A-40.
  *
@@ -74,6 +76,7 @@ public class AlertServiceImpl implements AlertService {
     private final MarketApi market;
     private final EntitlementApi entitlements;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional(readOnly = true)
@@ -118,6 +121,7 @@ public class AlertServiceImpl implements AlertService {
                         .id());
         requireRoomForAnActiveAlert(userId);
         Alert alert = alerts.save(Alert.create(userId, watchlistId, onTick));
+        events.publishEvent(AlertsChanged.of(alert.getId()));
         return toResponse(alert, pair.pairId(), pair.symbol());
     }
 
@@ -135,6 +139,7 @@ public class AlertServiceImpl implements AlertService {
             requireRoomForAnActiveAlert(userId);
         }
         alert.redefine(onTick);
+        events.publishEvent(AlertsChanged.of(alert.getId()));
         return toResponse(alerts.save(alert), pair.pairId(), pair.symbol());
     }
 
@@ -143,6 +148,7 @@ public class AlertServiceImpl implements AlertService {
     public AlertResponse pause(UUID userId, UUID alertId) {
         Alert alert = owned(userId, alertId);
         alert.pause();
+        events.publishEvent(AlertsChanged.of(alert.getId()));
         return toResponse(alerts.save(alert));
     }
 
@@ -161,6 +167,7 @@ public class AlertServiceImpl implements AlertService {
         TradablePair pair = tradable(pairOf(alert), alert.getMarket());
         requireRoomForAnActiveAlert(userId);
         alert.resume();
+        events.publishEvent(AlertsChanged.of(alert.getId()));
         return toResponse(alerts.save(alert), pair.pairId(), pair.symbol());
     }
 
@@ -168,6 +175,7 @@ public class AlertServiceImpl implements AlertService {
     @Transactional
     public void delete(UUID userId, UUID alertId) {
         alerts.delete(owned(userId, alertId));
+        events.publishEvent(AlertsChanged.of(alertId));
     }
 
     private Alert owned(UUID userId, UUID alertId) {

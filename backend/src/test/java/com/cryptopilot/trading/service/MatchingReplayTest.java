@@ -542,7 +542,14 @@ class MatchingReplayTest {
             high = high.max(price);
         }
         return new MinuteKline(
-                MarketType.FUTURES, pair, minute(m), low, high, false, minute(m).plusSeconds(SECONDS[i]));
+                MarketType.FUTURES,
+                pair,
+                minute(m),
+                low,
+                high,
+                high,
+                false,
+                minute(m).plusSeconds(SECONDS[i]));
     }
 
     private MinuteKline closedCandle(int m) {
@@ -553,6 +560,7 @@ class MatchingReplayTest {
                 minute(m),
                 last.low(),
                 last.high(),
+                last.close(),
                 true,
                 minute(m).plusSeconds(60).minusMillis(1));
     }

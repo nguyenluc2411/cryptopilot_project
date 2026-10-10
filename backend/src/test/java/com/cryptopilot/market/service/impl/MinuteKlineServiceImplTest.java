@@ -87,6 +87,7 @@ class MinuteKlineServiceImplTest {
             assertThat(kline.pairId()).isEqualTo(pair.getId());
             assertThat(kline.low()).isEqualByComparingTo("0.00000001");
             assertThat(kline.high()).isEqualByComparingTo("123456.12345678");
+            assertThat(kline.close()).isEqualByComparingTo("123456.12345678");
             assertThat(kline.eventTime())
                     .isEqualTo(kline.openTime().plusSeconds(60).minusMillis(1));
         });

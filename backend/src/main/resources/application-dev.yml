@@ -86,3 +86,8 @@ cryptopilot:
         # TR-02, Q-T6 run in this profile: after a restart or a lost stream, the closed 1-minute candles the
         # paper matching engine missed are fetched from the exchange and replayed.
         enabled: true
+  alert:
+    # NSF-06 runs in this profile: PRICE alerts on the 1-minute candle updates, and the expiry sweep.
+    enabled: true
+    expiry-sweep:
+      enabled: true

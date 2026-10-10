@@ -241,6 +241,7 @@ public class MarketStreamSupervisor {
                     kline.kline().openTime(),
                     kline.kline().low(),
                     kline.kline().high(),
+                    kline.kline().close(),
                     kline.closed(),
                     kline.eventTime());
             for (MinuteKlineListener listener : minuteListeners) {

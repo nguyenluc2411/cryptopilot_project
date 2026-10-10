@@ -331,7 +331,14 @@ class PaperOrderApiTest {
         Instant next = Instant.now().truncatedTo(ChronoUnit.MINUTES).plus(Duration.ofMinutes(1));
 
         worker.onMinuteKline(new MinuteKline(
-                MarketType.SPOT, pair, next, new BigDecimal("89.5"), new BigDecimal("95"), true, next.plusSeconds(59)));
+                MarketType.SPOT,
+                pair,
+                next,
+                new BigDecimal("89.5"),
+                new BigDecimal("95"),
+                new BigDecimal("92"),
+                true,
+                next.plusSeconds(59)));
 
         awaitStatus(trader, id, "FILLED");
         as(trader, get(PAPER + "/orders/" + id), null)
@@ -543,6 +550,7 @@ class PaperOrderApiTest {
                     next,
                     new BigDecimal("89.5"),
                     new BigDecimal("95"),
+                    new BigDecimal("92"),
                     true,
                     next.plusSeconds(59)));
 
