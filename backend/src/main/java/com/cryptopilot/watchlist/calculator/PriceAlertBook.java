@@ -96,6 +96,7 @@ public final class PriceAlertBook {
      * @return whether the alert was taken
      */
     public synchronized boolean put(PriceAlert alert) {
+        forgetTombstonesBefore(clock.instant().minus(tombstoneTtl));
         PriceAlert held = byId.get(alert.alertId());
         Tombstone gone = removed.get(alert.alertId());
         if ((held != null && held.version() >= alert.version())
@@ -282,7 +283,11 @@ public final class PriceAlertBook {
         // Re-inserted at the end, so the map stays oldest first and the expired ones are at its head.
         removed.remove(alertId);
         removed.put(alertId, new Tombstone(version, now));
-        Instant cutoff = now.minus(tombstoneTtl);
+        forgetTombstonesBefore(now.minus(tombstoneTtl));
+    }
+
+    /** Drops the tombstones older than {@code cutoff}; they are oldest first, so the walk stops at the first kept. */
+    private void forgetTombstonesBefore(Instant cutoff) {
         for (Iterator<Tombstone> it = removed.values().iterator();
                 it.hasNext() && it.next().at().isBefore(cutoff); ) {
             it.remove();

@@ -22,7 +22,8 @@ import org.springframework.validation.annotation.Validated;
  *     its latest price kept, and nothing blocks the stream
  * @param throttle the shortest time between two evaluations of one pair (SRS 3.4.4: at most once per second)
  * @param staleness how old the previous price of a pair may be when its stream reconnects before a cross is no
- *     longer measured from it; also how long a removed alert's version is remembered against stale reads
+ *     longer measured from it
+ * @param tombstoneTtl how long a removed alert's version is remembered against stale reads of it
  * @param stopTimeout how long a stop waits for the partitions to end
  * @param expirySweep the job that sets alerts past their expiry EXPIRED
  */
@@ -39,7 +40,12 @@ public record AlertEngineProperties(
         @NotNull @DurationMin(millis = 1) @DefaultValue("5m")
         Duration staleness,
 
-        @NotNull @DefaultValue("5s") Duration stopTimeout,
+        @NotNull @DurationMin(seconds = 1) @DefaultValue("5m")
+        Duration tombstoneTtl,
+
+        @NotNull @DurationMin(millis = 1) @DefaultValue("5s")
+        Duration stopTimeout,
+
         @NotNull @Valid @DefaultValue ExpirySweep expirySweep) {
 
     /**

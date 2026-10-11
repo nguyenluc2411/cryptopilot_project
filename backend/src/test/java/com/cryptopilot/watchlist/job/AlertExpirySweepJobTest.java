@@ -88,6 +88,7 @@ class AlertExpirySweepJobTest {
                 1000,
                 Duration.ofSeconds(1),
                 Duration.ofMinutes(5),
+                Duration.ofMinutes(5),
                 Duration.ofSeconds(5),
                 new AlertEngineProperties.ExpirySweep(sweep, "0 * * * * *", "UTC"));
     }

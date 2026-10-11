@@ -30,6 +30,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -75,7 +76,19 @@ class AlertEngineTest {
     private final PriceAlert probe =
             alert(UUID.randomUUID(), PAIR, ConditionOperator.GREATER_THAN, "0", TriggerMode.EVERY_TIME, 1);
 
+    /** The probe of the FUTURES book of the same pair. */
+    private final PriceAlert futuresProbe = alert(
+            UUID.randomUUID(),
+            PAIR,
+            MarketType.FUTURES,
+            ConditionOperator.GREATER_THAN,
+            "0",
+            TriggerMode.EVERY_TIME,
+            1,
+            1);
+
     private int probed;
+    private int futuresProbed;
     private AlertEngine engine;
 
     @BeforeEach
@@ -318,13 +331,12 @@ class AlertEngineTest {
     }
 
     @Test
-    void D89_aStaleRuleLeftInAnotherBook_isDroppedAfterOneRefusal_andNotTriedAgain() {
+    void NSF06_aMoveAndAMoveBackAppliedOutOfOrder_leaveOneBookAtTheNewestVersion_andAPauseEmptiesIt() {
         UUID id = UUID.randomUUID();
         PriceAlert spot1 = spotAt(id, 1);
         PriceAlert futures2 = onFutures(spot1);
         PriceAlert spot3 = spotAt(id, 3);
         startWith(spot1);
-        when(triggers.tryTrigger(argThat(hitOf(spot1)))).thenReturn(false);
         AtomicInteger reads = new AtomicInteger();
         when(triggers.activePriceAlert(id)).thenAnswer(invocation -> switch (reads.incrementAndGet()) {
             case 1 -> {
@@ -335,18 +347,96 @@ class AlertEngineTest {
             case 2 -> Optional.of(spot3);
             default -> Optional.empty(); // paused at v4
         });
+
         engine.onAlertsChanged(AlertsChanged.of(id));
+        AlertEngine.PairKey spot = new AlertEngine.PairKey(MarketType.SPOT, PAIR);
+        assertThat(engine.locatedAt(id)).as("v2 read late is older than v3").isEqualTo(Map.of(spot, 3L));
+        assertThat(engine.booksHolding(id)).isEqualTo(engine.locatedAt(id));
+
         engine.onAlertsChanged(AlertsChanged.of(id));
-        assertThat(engine.holds(id)).as("located lost the SPOT rule").isFalse();
+        assertThat(engine.locatedAt(id)).isEmpty();
+        assertThat(engine.booksHolding(id)).isEmpty();
 
         price("101");
-        verify(triggers, timeout(WAIT))
-                .tryTrigger(
-                        argThat(hit -> hitOf(spot1).matches(hit) && hit.alert().version() == 3));
-        price("102");
-        price("103");
+        verify(triggers, never()).tryTrigger(argThat(hitOf(spot1)));
+    }
+
+    /** A read that began before a pause and is applied after it can still put a rule in another book (D-89). */
+    @Test
+    void D89_aMoveReadBeforeAPauseAndAppliedAfterIt_isDroppedAfterOneRefusal_andNotTriedAgain() {
+        UUID id = UUID.randomUUID();
+        PriceAlert spot1 = spotAt(id, 1);
+        PriceAlert futures2 = onFutures(spot1);
+        startWith(spot1, futuresProbe);
+        when(triggers.tryTrigger(argThat(hitOf(spot1)))).thenReturn(false);
+        AtomicInteger reads = new AtomicInteger();
+        when(triggers.activePriceAlert(id)).thenAnswer(invocation -> {
+            if (reads.incrementAndGet() == 1) {
+                // The pause (v3) commits and its refresh completes while this read of v2 is in flight.
+                engine.onAlertsChanged(AlertsChanged.of(id));
+                return Optional.of(futures2);
+            }
+            return Optional.empty();
+        });
+        engine.onAlertsChanged(AlertsChanged.of(id));
+        AlertEngine.PairKey futures = new AlertEngine.PairKey(MarketType.FUTURES, PAIR);
+        assertThat(engine.locatedAt(id)).isEqualTo(Map.of(futures, 2L));
+        assertThat(engine.booksHolding(id)).isEqualTo(engine.locatedAt(id));
+
+        futuresPrice("101");
+        verify(triggers, timeout(WAIT).times(3)).activePriceAlert(id);
+        assertThat(engine.holds(id)).isFalse();
+        assertThat(engine.booksHolding(id)).isEmpty();
+        futuresPrice("102");
+        futuresPrice("103");
 
         verify(triggers, times(1)).tryTrigger(argThat(hitOf(spot1)));
+    }
+
+    @Test
+    void NSF06_aRuleMovedWhileItsTriggerIsRecorded_staysInTheBookItMovedTo() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        PriceAlert moved = onFutures(held);
+        startWith(held);
+        when(triggers.activePriceAlert(held.alertId())).thenReturn(Optional.of(moved));
+        when(triggers.tryTrigger(argThat(hitOf(held)))).thenAnswer(invocation -> {
+            // The move to FUTURES commits while the SPOT trigger is being recorded.
+            engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+            return true;
+        });
+
+        price("101");
+        // The next evaluation starts only once the one before has finished.
+        price("102");
+
+        AlertEngine.PairKey futures = new AlertEngine.PairKey(MarketType.FUTURES, PAIR);
+        assertThat(engine.locatedAt(held.alertId())).isEqualTo(Map.of(futures, 2L));
+        assertThat(engine.booksHolding(held.alertId())).isEqualTo(engine.locatedAt(held.alertId()));
+        verify(triggers, times(1)).tryTrigger(argThat(hitOf(held)));
+    }
+
+    @Test
+    void NSF06_aRemovedVersion_blocksAStaleReadForTheTombstoneTtl_andNotForTheStaleness() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        when(triggers.activePriceAlerts()).thenReturn(List.of(held));
+        // Five minutes of staleness, one of tombstone.
+        engine = new AlertEngine(
+                triggers, properties(1000, Duration.ofSeconds(5), Duration.ofMinutes(1)), clock, idleThreads());
+        engine.start();
+        when(triggers.activePriceAlert(held.alertId())).thenReturn(Optional.empty());
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+        // From now on a read that began before the pause arrives.
+        when(triggers.activePriceAlert(held.alertId())).thenReturn(Optional.of(held));
+
+        clock.advance(Duration.ofMinutes(1));
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+        assertThat(engine.holds(held.alertId())).as("at the ttl").isFalse();
+
+        clock.advance(Duration.ofMillis(1));
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+        assertThat(engine.holds(held.alertId()))
+                .as("past the ttl, well inside the staleness")
+                .isTrue();
     }
 
     @Test
@@ -524,6 +614,14 @@ class AlertEngineTest {
         verify(triggers, timeout(WAIT).times(++probed)).tryTrigger(argThat(hitOf(probe)));
     }
 
+    /** A minute later, a FUTURES price for the pair; returns once the engine has evaluated it. */
+    private void futuresPrice(String close) {
+        clock.advance(Duration.ofMinutes(1));
+        BigDecimal price = new BigDecimal(close);
+        engine.onMinuteKline(new MinuteKline(MarketType.FUTURES, PAIR, T0, price, price, price, false, now()));
+        verify(triggers, timeout(WAIT).times(++futuresProbed)).tryTrigger(argThat(hitOf(futuresProbe)));
+    }
+
     /** Moves the clock, sends a price that meets the alert, and returns once the refusal has been handled. */
     private void refuseOnce(PriceAlert alert, int nth, Duration later) {
         clock.advance(later);
@@ -592,12 +690,17 @@ class AlertEngineTest {
     }
 
     private static AlertEngineProperties properties(int queueCapacity, Duration stopTimeout) {
+        return properties(queueCapacity, stopTimeout, Duration.ofMinutes(5));
+    }
+
+    private static AlertEngineProperties properties(int queueCapacity, Duration stopTimeout, Duration tombstoneTtl) {
         return new AlertEngineProperties(
                 true,
                 1,
                 queueCapacity,
                 Duration.ofSeconds(1),
                 Duration.ofMinutes(5),
+                tombstoneTtl,
                 stopTimeout,
                 new AlertEngineProperties.ExpirySweep(false, "0 * * * * *", "UTC"));
     }

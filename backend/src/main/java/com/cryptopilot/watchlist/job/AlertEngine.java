@@ -15,12 +15,14 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -49,15 +51,22 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *   <li>One thread per partition evaluates its pairs, at most once per {@code throttle} each, on the latest price.
  *   <li>At start the books are loaded from the ACTIVE PRICE alerts; INDICATOR alerts are not evaluated yet. After each
  *       committed change of an alert ({@link AlertsChanged}) the alert is read again and added, replaced or removed.
- *       A trigger the database refuses drops that rule from the book that fired it, then reads the alert again;
- *       {@code located} may lag behind the books, so it never decides which book to clean.
+ *       A trigger the database refuses drops that rule from the book that fired it, then reads the alert again.
+ *   <li>An alert is in at most one book, and {@code located} names that book and the version it holds. Every change
+ *       of an alert's place happens inside {@code located.compute} on the alert's entry, so the two agree whenever
+ *       no change is running, and a read older than the version held is ignored even when it names another book.
+ *       A move removes the rule from the old book before it puts it in the new one: for that instant the alert is
+ *       in neither book, never in both. The database read stays outside the critical section.
  *   <li>When a market's stream reconnects, previous prices older than {@code staleness} are forgotten.
  * </ul>
  *
  * <p>Rule: NSF-06, BR-18, BR-19, BR-20; SRS 3.4.4; TECHNICAL_DESIGN 7.9; D-87, D-88, D-89.
  *
- * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3 (bounded
- * producer-consumer queues). Hohpe, G. &amp; Woolf, B. (2003). <i>Enterprise Integration Patterns</i>.
+ * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, §2.3 (compound
+ * actions), §4.4 (adding functionality to thread-safe classes), ch. 5.3 (bounded producer-consumer queues).
+ * Herlihy, M. P. &amp; Wing, J. M. (1990). Linearizability: A Correctness Condition for Concurrent Objects. <i>ACM
+ * TOPLAS</i>, 12(3) (each change of an alert takes effect at one point, inside its compute). Hohpe, G. &amp;
+ * Woolf, B. (2003). <i>Enterprise Integration Patterns</i>.
  * Addison-Wesley, "Aggregator" (only the latest price of a pair is kept while it waits).
  */
 @Component
@@ -74,8 +83,8 @@ public class AlertEngine implements MinuteKlineListener {
 
     private final Map<PairKey, PriceAlertBook> books = new ConcurrentHashMap<>();
 
-    /** Which book holds each alert, so a change can find it even when the alert has left the database. */
-    private final Map<UUID, PairKey> located = new ConcurrentHashMap<>();
+    /** The book that holds each alert and the version it holds; changed only inside {@code compute} on its entry. */
+    private final Map<UUID, Location> located = new ConcurrentHashMap<>();
 
     /** Refusals in a row per alert, for the warning of {@link #countRefusal}. */
     private final Map<UUID, Refusals> refusals = new ConcurrentHashMap<>();
@@ -108,6 +117,9 @@ public class AlertEngine implements MinuteKlineListener {
             fresh.add(new Partition(properties.queueCapacity()));
         }
         partitions = List.copyOf(fresh);
+        // A refresh that ran into the last stop may have left an entry, which would hide its alert from the load.
+        books.clear();
+        located.clear();
         // Before the load, so a change committed during it is applied as well; both read the stored state.
         running = true;
         List<PriceAlert> loaded = triggers.activePriceAlerts();
@@ -152,6 +164,19 @@ public class AlertEngine implements MinuteKlineListener {
         return located.containsKey(alertId);
     }
 
+    /** Where {@code located} puts the alert, with the version; empty when nowhere. For the tests of this package. */
+    Map<PairKey, Long> locatedAt(UUID alertId) {
+        Location location = located.get(alertId);
+        return location == null ? Map.of() : Map.of(location.key(), location.version());
+    }
+
+    /** Every book that holds the alert, with the version it holds. For the tests of this package. */
+    Map<PairKey, Long> booksHolding(UUID alertId) {
+        Map<PairKey, Long> holding = new HashMap<>();
+        books.forEach((key, book) -> book.versionOf(alertId).ifPresent(version -> holding.put(key, version)));
+        return holding;
+    }
+
     /** Called on a stream thread: keeps the close as the pair's latest price and queues the pair. Never blocks. */
     @Override
     public void onMinuteKline(MinuteKline kline) {
@@ -159,7 +184,7 @@ public class AlertEngine implements MinuteKlineListener {
             return;
         }
         PairKey key = new PairKey(kline.market(), kline.pairId());
-        if (books.computeIfAbsent(key, this::newBook).offer(kline.close(), kline.eventTime())) {
+        if (bookOf(key).offer(kline.close(), kline.eventTime())) {
             partitionOf(key).signal(key);
         }
     }
@@ -185,32 +210,56 @@ public class AlertEngine implements MinuteKlineListener {
 
     private void refresh(UUID alertId) {
         try {
-            PairKey before = located.get(alertId);
-            PriceAlertBook held = before == null ? null : books.get(before);
             // Taken before the read: a rule another refresh puts meanwhile is newer and must not be removed.
-            long seen = held == null ? -1 : held.versionOf(alertId).orElse(-1);
+            Location before = located.get(alertId);
+            long seen = before == null ? -1 : before.version();
             Optional<PriceAlert> stored = triggers.activePriceAlert(alertId);
-            if (held != null
-                    && stored.map(alert -> !keyOf(alert).equals(before)).orElse(true)) {
-                long removable = stored.map(alert -> alert.version() - 1).orElse(seen);
-                if (held.removeIfVersionAtMost(alertId, removable)) {
-                    located.remove(alertId, before);
+            if (stored.isPresent()) {
+                hold(stored.get());
+                return;
+            }
+            refusals.remove(alertId);
+            located.computeIfPresent(alertId, (id, current) -> {
+                if (current.version() > seen) {
+                    return current;
                 }
-            }
-            if (stored.isEmpty()) {
-                refusals.remove(alertId);
-            }
-            stored.ifPresent(this::hold);
+                bookOf(current.key()).removeIfVersionAtMost(id, seen);
+                return heldIn(current.key(), id);
+            });
         } catch (RuntimeException failure) {
             log.warn("NSF-06 alert {} could not be read again: {}", alertId, failure.toString());
         }
     }
 
+    /** Puts the alert in its pair's book unless the version held is as new; a move leaves the old book first. */
     private void hold(PriceAlert alert) {
         PairKey key = keyOf(alert);
-        if (books.computeIfAbsent(key, this::newBook).put(alert)) {
-            located.put(alert.alertId(), key);
-        }
+        located.compute(alert.alertId(), (id, current) -> {
+            if (current != null && current.version() >= alert.version()) {
+                return current;
+            }
+            if (current != null && !current.key().equals(key)) {
+                bookOf(current.key()).remove(id);
+            }
+            bookOf(key).put(alert);
+            return heldIn(key, id);
+        });
+    }
+
+    /** What {@code located} says once the book at {@code key} has changed: the version it holds, or nothing. */
+    private Location heldIn(PairKey key, UUID alertId) {
+        PriceAlertBook book = books.get(key);
+        OptionalLong version = book == null ? OptionalLong.empty() : book.versionOf(alertId);
+        return version.isPresent() ? new Location(key, version.getAsLong()) : null;
+    }
+
+    /** A change the partition makes to one book, applied under the alert's entry like every other change. */
+    private void changeInBook(PairKey key, UUID alertId, Runnable change) {
+        located.compute(alertId, (id, current) -> {
+            change.run();
+            // Moved by a refresh meanwhile: this book no longer holds it, so the entry stays as it is.
+            return current != null && !current.key().equals(key) ? current : heldIn(key, id);
+        });
     }
 
     private void evaluate(PairKey key) {
@@ -220,18 +269,19 @@ public class AlertEngine implements MinuteKlineListener {
         }
         for (PriceAlertHit hit : book.evaluate()) {
             try {
+                UUID alertId = hit.alert().alertId();
                 if (triggers.tryTrigger(hit)) {
-                    refusals.remove(hit.alert().alertId());
-                    book.triggered(hit);
-                    if (!book.contains(hit.alert().alertId())) {
-                        located.remove(hit.alert().alertId(), key);
-                    }
+                    refusals.remove(alertId);
+                    changeInBook(key, alertId, () -> book.triggered(hit));
                 } else {
-                    countRefusal(hit.alert().alertId());
-                    // Drop it here, even if located points elsewhere; the read below puts it back if still ACTIVE.
-                    book.discardIfVersionAtMost(
-                            hit.alert().alertId(), hit.alert().version());
-                    refresh(hit.alert().alertId());
+                    countRefusal(alertId);
+                    // The read below puts it back if the row is still ACTIVE.
+                    changeInBook(
+                            key,
+                            alertId,
+                            () -> book.discardIfVersionAtMost(
+                                    alertId, hit.alert().version()));
+                    refresh(alertId);
                 }
             } catch (RuntimeException failure) {
                 log.warn("NSF-06 alert {} trigger failed: {}", hit.alert().alertId(), failure.toString());
@@ -251,8 +301,12 @@ public class AlertEngine implements MinuteKlineListener {
         }
     }
 
+    private PriceAlertBook bookOf(PairKey key) {
+        return books.computeIfAbsent(key, this::newBook);
+    }
+
     private PriceAlertBook newBook(PairKey ignored) {
-        return new PriceAlertBook(clock, properties.throttle(), properties.staleness());
+        return new PriceAlertBook(clock, properties.throttle(), properties.tombstoneTtl());
     }
 
     private Partition partitionOf(PairKey key) {
@@ -353,6 +407,9 @@ public class AlertEngine implements MinuteKlineListener {
     }
 
     private record Refusals(int count, Instant warnedAt) {}
+
+    /** The book that holds an alert and the version it holds there. */
+    private record Location(PairKey key, long version) {}
 
     /** A pair on one market. */
     record PairKey(MarketType market, UUID pairId) {

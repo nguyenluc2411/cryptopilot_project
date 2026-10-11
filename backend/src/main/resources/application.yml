@@ -245,6 +245,8 @@ cryptopilot:
     throttle: 1s
     # After a stream reconnects, a cross is not measured from a previous price older than this.
     staleness: 5m
+    # How long a removed alert's version blocks a stale read of it.
+    tombstone-ttl: 5m
     stop-timeout: 5s
     expiry-sweep:
       # BR-19: alerts past their expiry become EXPIRED. Off here, on in the dev and prod profiles.
