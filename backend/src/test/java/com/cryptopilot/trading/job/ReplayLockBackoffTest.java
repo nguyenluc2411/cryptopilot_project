@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -25,9 +26,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,7 +41,16 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * D-79 with a real Redis lease: a replay that failed waits for its retry longer than the key's TTL, and the key stays
  * alive the whole time, renewed by the heartbeat; it is deleted only when the retry succeeds.
  *
+ * <p>The retry waits on the real clock inside the feed, so the test does not sample the key while it waits: it looks
+ * at the key at the moment the retry asks for the lock again. Only that call could re-create an expired key, so a key
+ * found there, with a TTL no longer than the lease, has been renewed without a gap. The end is awaited with a bound
+ * rather than a sleep loop.
+ *
  * <p>Rule: NSF-07; D-79, D-85.
+ *
+ * <p>Reference: Freeman, S., &amp; Pryce, N. (2009). <i>Growing Object-Oriented Software, Guided by Tests</i>.
+ * Addison-Wesley, ch. 27 (testing asynchronous code); Luo, Q., Hariri, F., Eloussi, L., &amp; Marinov, D. (2014). An
+ * Empirical Analysis of Flaky Tests. FSE 2014.
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
@@ -51,11 +61,11 @@ class ReplayLockBackoffTest {
     private static final Instant M0 = Instant.parse("2026-10-03T08:00:00Z");
     private static final String KEY = "rpl:SPOT:" + PAIR;
 
-    /** The key lives 300 ms without renewal; the retry comes after a full second. */
+    /** The key lives 500 ms without renewal; the retry comes after three times that. */
     private static final ReplayLockProperties LEASE =
-            new ReplayLockProperties(Duration.ofMillis(300), Duration.ofMillis(100));
+            new ReplayLockProperties(Duration.ofMillis(500), Duration.ofMillis(100));
 
-    private static final Duration BACKOFF = Duration.ofSeconds(1);
+    private static final Duration BACKOFF = Duration.ofMillis(1500);
 
     @Autowired
     private StringRedisTemplate redis;
@@ -75,7 +85,17 @@ class ReplayLockBackoffTest {
     @Test
     void D79_aBackoffLongerThanTheTtl_keepsTheKeyAlive_untilTheRetrySucceeds() throws Exception {
         scheduler.initialize();
-        ReplayLockServiceImpl locks = new ReplayLockServiceImpl(redis, LEASE, scheduler);
+        List<LockAsked> asked = new CopyOnWriteArrayList<>();
+        ReplayLockServiceImpl locks = new ReplayLockServiceImpl(redis, LEASE, scheduler) {
+            @Override
+            public boolean tryAcquire(MarketType market, UUID pairId) {
+                asked.add(new LockAsked(
+                        System.nanoTime(),
+                        Boolean.TRUE.equals(redis.hasKey(KEY)),
+                        redis.getExpire(KEY, TimeUnit.MILLISECONDS)));
+                return super.tryAcquire(market, pairId);
+            }
+        };
         locks.startHeartbeat();
 
         MatchingWorker worker = mock(MatchingWorker.class);
@@ -86,13 +106,13 @@ class ReplayLockBackoffTest {
         when(matching.activeEntries()).thenReturn(List.of());
         when(matching.watermark(any(), any())).thenReturn(Optional.empty());
         MarketApi market = mock(MarketApi.class);
-        CountDownLatch firstAttemptFailed = new CountDownLatch(1);
+        AtomicLong failedAt = new AtomicLong();
         AtomicInteger attempts = new AtomicInteger();
         // Nothing is served after the gap; the stream carries on from there.
         when(market.closedMinuteKlines(any(), any(), any())).thenReturn(MinuteKlineBatch.of(List.of()));
         when(market.closedMinuteKlines(MarketType.SPOT, PAIR, minute(2))).thenAnswer(call -> {
             if (attempts.incrementAndGet() == 1) {
-                firstAttemptFailed.countDown();
+                failedAt.set(System.nanoTime());
                 throw new IllegalStateException("exchange unavailable");
             }
             return MinuteKlineBatch.of(List.of(closed(minute(2)), closed(minute(3))));
@@ -116,29 +136,32 @@ class ReplayLockBackoffTest {
         feed.onMinuteKline(update(minute(1), true));
         feed.onMinuteKline(update(minute(4), false));
 
-        assertThat(firstAttemptFailed.await(5, TimeUnit.SECONDS)).isTrue();
-        long until = System.nanoTime() + BACKOFF.minusMillis(150).toNanos();
-        while (System.nanoTime() < until && attempts.get() == 1) {
-            assertThat(redis.hasKey(KEY))
-                    .as("the key outlives its TTL while the retry waits")
-                    .isTrue();
-            assertThat(feed.isReplaying(MarketType.SPOT, PAIR)).isTrue();
-            Thread.sleep(25);
-        }
-        assertThat(attempts.get())
-                .as("still waiting for the retry when sampling ended")
-                .isEqualTo(1);
+        await("the retry succeeds and frees the key")
+                .atMost(Duration.ofSeconds(10))
+                .pollInterval(Duration.ofMillis(25))
+                .until(() -> submitted.size() >= 4 && !Boolean.TRUE.equals(redis.hasKey(KEY)));
 
-        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (Boolean.TRUE.equals(redis.hasKey(KEY)) || submitted.size() < 4) {
-            assertThat(System.nanoTime())
-                    .as("the retry succeeds and frees the key")
-                    .isLessThan(deadline);
-            Thread.sleep(25);
-        }
         assertThat(attempts.get()).isEqualTo(2);
+        assertThat(asked).as("the first attempt and its retry ask for the lock").hasSize(2);
+        assertThat(asked.getFirst().present())
+                .as("no key before the first attempt")
+                .isFalse();
+        LockAsked retry = asked.get(1);
+        assertThat(Duration.ofNanos(retry.atNanos() - failedAt.get()))
+                .as("the retry waited longer than the TTL")
+                .isGreaterThanOrEqualTo(BACKOFF)
+                .isGreaterThan(LEASE.ttl());
+        assertThat(retry.present())
+                .as("the key outlived its TTL while the retry waited")
+                .isTrue();
+        assertThat(retry.ttlMillis())
+                .as("still a lease, renewed")
+                .isBetween(1L, LEASE.ttl().toMillis());
         assertThat(feed.isReplaying(MarketType.SPOT, PAIR)).isFalse();
     }
+
+    /** What the key looked like when the feed asked for the lock. */
+    private record LockAsked(long atNanos, boolean present, Long ttlMillis) {}
 
     private static Instant minute(long n) {
         return M0.plus(Duration.ofMinutes(n));

@@ -42,6 +42,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -681,8 +682,16 @@ class MatchingWorkerTest {
                 });
     }
 
+    /**
+     * Each stop comes while a fill is running: the fill signals that it started and then blocks until the stop
+     * interrupts it, so no iteration depends on how long a sleep lasted.
+     *
+     * <p>Reference: Freeman, S., &amp; Pryce, N. (2009). <i>Growing Object-Oriented Software, Guided by Tests</i>.
+     * Addison-Wesley, ch. 27 (testing asynchronous code); Luo, Q., Hariri, F., Eloussi, L., &amp; Marinov, D. (2014).
+     * An Empirical Analysis of Flaky Tests. FSE 2014.
+     */
     @Test
-    void NSF07_stopThenStart_repeatedly_neverRunsTwoGenerationsOfConsumersTogether() {
+    void NSF07_stopThenStart_repeatedly_neverRunsTwoGenerationsOfConsumersTogether() throws InterruptedException {
         AtomicInteger alive = new AtomicInteger();
         AtomicInteger mostAlive = new AtomicInteger();
         ThreadFactory counting = task -> recording.newThread(() -> {
@@ -695,8 +704,10 @@ class MatchingWorkerTest {
         });
         TrackedEntry entry = entry(UUID.randomUUID(), Direction.LONG, "100");
         when(matching.activeEntries()).thenReturn(List.of(entry));
+        AtomicReference<CountDownLatch> filling = new AtomicReference<>();
         doAnswer(call -> {
-                    Thread.sleep(5);
+                    filling.get().countDown();
+                    new CountDownLatch(1).await();
                     return true;
                 })
                 .when(matching)
@@ -704,8 +715,12 @@ class MatchingWorkerTest {
         worker = new MatchingWorker(matching, properties(2, 100), clock, counting, () -> 0.0);
 
         for (int i = 0; i < 20; i++) {
+            filling.set(new CountDownLatch(1));
             worker.start();
             worker.submit(range("99", "101", AT));
+            assertThat(filling.get().await(WAIT, TimeUnit.MILLISECONDS))
+                    .as("a fill is running")
+                    .isTrue();
             worker.stop();
             assertThat(alive.get())
                     .as("every consumer has ended when stop returns")

@@ -66,6 +66,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.context.ApplicationEventPublisher;
@@ -701,6 +702,18 @@ class TradingPlanServiceImplTest {
                         from,
                         NOW,
                         PageRequest.of(1, 5));
+    }
+
+    /** CR-04: 1 and 100 are the ends of the page size range, both accepted. */
+    @ParameterizedTest(name = "pageSize {0}")
+    @ValueSource(ints = {1, 100})
+    void CR04_thePageSizeAtEitherEndOfItsRange_isAccepted(int pageSize) {
+        when(plans.search(any(), any(), any(), any(boolean.class), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, pageSize), 0));
+
+        assertThat(service.list(USER, new PlanListQuery(null, null, null, null, null, 1, pageSize))
+                        .pageSize())
+                .isEqualTo(pageSize);
     }
 
     @ParameterizedTest(name = "page {0}, pageSize {1}")

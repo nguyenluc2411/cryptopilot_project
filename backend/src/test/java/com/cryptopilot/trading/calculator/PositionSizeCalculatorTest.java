@@ -78,6 +78,16 @@ class PositionSizeCalculatorTest {
         assertThat(c.riskRewardRatio()).isEqualByComparingTo("2");
     }
 
+    /** The TD 11.4 vector: budget 1,000 × 1.5 % = 15; 15 / |27,123.45 − 26,500| = 15 / 623.45 = 0.02406; floor 0.024. */
+    @Test
+    void BR23_theDesignVector_sizes0_024() {
+        RiskCalculation c =
+                sized(input(MarketType.SPOT, Direction.LONG, "27123.45", "26500", "28000", "1000", "1.5", 1));
+
+        assertThat(c.riskBudget()).isEqualByComparingTo("15");
+        assertThat(c.quantity()).isEqualByComparingTo("0.024");
+    }
+
     /** CR-03: the ratio keeps full precision, 1 / 3 is not rounded for display. */
     @Test
     void BR24_theRatio_keepsFullPrecision() {
