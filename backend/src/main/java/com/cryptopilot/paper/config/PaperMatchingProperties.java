@@ -15,8 +15,9 @@ import org.springframework.validation.annotation.Validated;
  * <p>Rule: TR-02, TR-05; NSF-07; Q-T6, Q-T8; A-04.
  *
  * @param enabled whether working LIMIT orders are matched at all
- * @param limitFillMode whether a price equal to a waiting order's own fills it ({@code TOUCH}) or the price must trade
- *     through it ({@code CROSS}, Q-T8)
+ * @param limitFillMode when a trade at exactly a waiting order's price fills it (Q-T8): {@code QUEUE} once the
+ *     quantity ahead of it there is traded, as Binance's price-time priority does; {@code CROSS} never, only a price
+ *     through it; {@code TOUCH} always
  * @param tradeSilence how long after a pair's last market trade its forming 1-minute candles fill orders again: while
  *     its trades flow they fill orders at once, and a lost trade stream falls back to the candles
  * @param retryDelay how long a fill that failed waits before the pair's next price update tries it again
@@ -31,7 +32,7 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties("cryptopilot.paper.matching")
 public record PaperMatchingProperties(
         @DefaultValue("true") boolean enabled,
-        @NotNull @DefaultValue("CROSS") LimitFillMode limitFillMode,
+        @NotNull @DefaultValue("QUEUE") LimitFillMode limitFillMode,
         @NotNull @DefaultValue("5s") Duration tradeSilence,
         @NotNull @DefaultValue("2s") Duration retryDelay,
         @NotNull @DefaultValue("10m") Duration retryDeadline,

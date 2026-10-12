@@ -2,6 +2,7 @@ package com.cryptopilot.paper.matching;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.model.PriceRange;
 import com.cryptopilot.paper.model.RestingOrder;
@@ -14,7 +15,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.Random;
+import java.util.TreeMap;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -195,10 +198,120 @@ class PaperOrderBookTest {
                 false,
                 FillSource.LIVE,
                 PLACED.minusSeconds(1),
-                PLACED.plusSeconds(1));
+                PLACED.plusSeconds(1),
+                new TreeMap<>(),
+                new TreeMap<>());
 
         assertThat(book.onRange(trades)).containsExactly(sell);
         assertThat(book.size()).isEqualTo(1);
+    }
+
+    @Test
+    void QT8_queue_aBuy_fillsAtItsPrice_onceTheTakersSellingThereConsumedTheQuantityAheadOfIt() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder buy = order(OrderSide.BUY, "80000");
+        queue.track(buy, new BigDecimal("2"));
+
+        assertThat(queue.onRange(trade("80000", "1.5", true))).isEmpty();
+        assertThat(queue.queueAhead(buy.orderId())).contains(new BigDecimal("0.5"));
+        assertThat(queue.onRange(trade("80000.00", "0.5", true)))
+                .as("a trade only as large as the queue ahead does not reach the order")
+                .isEmpty();
+        assertThat(queue.onRange(trade("80000", "0.001", true))).containsExactly(buy);
+        assertThat(queue.size()).isZero();
+        assertThat(queue.queueAhead(buy.orderId())).isEmpty();
+    }
+
+    @Test
+    void QT8_queue_aSell_fillsAtItsPrice_onceTheTakersBuyingThereConsumedTheQuantityAheadOfIt() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder sell = order(OrderSide.SELL, "80000");
+        queue.track(sell, new BigDecimal("1"));
+
+        assertThat(queue.onRange(trade("80000", "1", false))).isEmpty();
+        assertThat(queue.onRange(trade("80000", "0.1", false))).containsExactly(sell);
+    }
+
+    @Test
+    void QT8_queue_aTakerOfTheOtherSideAtTheOrdersPrice_fillsItAtOnce() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder buy = order(OrderSide.BUY, "80000");
+        RestingOrder sell = order(OrderSide.SELL, "80000");
+        queue.track(buy, new BigDecimal("100"));
+        queue.track(sell, new BigDecimal("100"));
+
+        assertThat(queue.onRange(trade("80000", "0.001", false)))
+                .as("a taker bought at 80000: no bid was left there, so the paper BUY would have been first")
+                .containsExactly(buy);
+        assertThat(queue.onRange(trade("80000", "0.001", true))).containsExactly(sell);
+    }
+
+    @Test
+    void QT8_queue_aPriceThroughTheOrder_fillsItWhateverIsAheadOfIt() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder buy = order(OrderSide.BUY, "80000");
+        queue.track(buy, new BigDecimal("100"));
+
+        assertThat(queue.onRange(trade("79999", "0.001", true))).containsExactly(buy);
+    }
+
+    @Test
+    void QT8_queue_aQueueNotKnown_isReadFromTheDepthWhenATradeFirstReachesThePrice() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder buy = order(OrderSide.BUY, "80000");
+        RestingOrder unseen = order(OrderSide.BUY, "80000");
+        queue.track(buy);
+        queue.track(unseen);
+        PaperOrderBook.QueueLookup depth =
+                (market, pairId, side, price) -> side == OrderSide.BUY && price.compareTo(new BigDecimal("80000")) == 0
+                        ? Optional.of(new BigDecimal("3"))
+                        : Optional.empty();
+
+        assertThat(queue.onRange(trade("80000", "1", true), depth)).isEmpty();
+        assertThat(queue.queueAhead(buy.orderId())).contains(new BigDecimal("2"));
+        assertThat(queue.onRange(trade("80000", "2.5", true), (market, pairId, side, price) -> Optional.empty()))
+                .containsExactlyInAnyOrder(buy, unseen);
+    }
+
+    @Test
+    void QT8_queue_aCandle_carriesNoVolumeByPrice_andFillsAsCross() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder buy = order(OrderSide.BUY, "100");
+        queue.track(buy, BigDecimal.ZERO);
+
+        assertThat(queue.onRange(range("100", "110", NEXT_MINUTE))).isEmpty();
+        assertThat(queue.onRange(range("99", "110", NEXT_MINUTE))).containsExactly(buy);
+    }
+
+    @Test
+    void D77_queue_aTradeBeforeTheOrderWasPlaced_consumesNothingOfItsQueue() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder buy = order(OrderSide.BUY, "80000");
+        queue.track(buy, new BigDecimal("1"));
+
+        assertThat(queue.onRange(PriceRange.of(new MarketTrade(
+                        MarketType.SPOT,
+                        PAIR,
+                        1,
+                        new BigDecimal("80000"),
+                        new BigDecimal("5"),
+                        PLACED.minusSeconds(1),
+                        true,
+                        PLACED))))
+                .isEmpty();
+        assertThat(queue.queueAhead(buy.orderId())).contains(new BigDecimal("1"));
+    }
+
+    private static PriceRange trade(String price, String quantity, boolean buyerMaker) {
+        return PriceRange.of(new MarketTrade(
+                MarketType.SPOT,
+                PAIR,
+                1,
+                new BigDecimal(price),
+                new BigDecimal(quantity),
+                NEXT_MINUTE,
+                buyerMaker,
+                NEXT_MINUTE));
     }
 
     private static RestingOrder order(OrderSide side, String price) {

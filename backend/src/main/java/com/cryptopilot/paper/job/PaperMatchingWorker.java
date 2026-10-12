@@ -6,6 +6,8 @@ import com.cryptopilot.market.MarketTradeListener;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.MinuteKlineListener;
+import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
@@ -17,6 +19,7 @@ import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import jakarta.annotation.PreDestroy;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -27,6 +30,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -60,7 +64,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *       trade's arrival and the storing of its fill, and the orders behind it in the book are reached by the next
  *       trade. The trades of a pair that arrive while the consumer is busy are merged into one waiting range, with the
  *       lowest and highest price and the time each was traded, and queued once: the stream reader never blocks, and
- *       no price is skipped. An order a trade reached fills at that trade's time.
+ *       no price is skipped. An order a trade reached fills at that trade's time. With {@code limit-fill-mode}
+ *       {@code QUEUE} (Binance's price-time priority) an order starts behind the quantity the exchange's depth shows
+ *       at its price when it starts waiting, which the trades at that price then consume.
  *   <li>The forming candles of a pair fill orders only while the pair's trades are silent for {@code trade-silence}:
  *       Futures, a pair streamed without trades, or a lost trade stream. A closed candle always fills what it reached,
  *       so a trade lost on a reconnection is made up for at the candle's open time (D-78), and it moves the watermark.
@@ -305,7 +311,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     private void handle(Command command) {
         switch (command) {
-            case Command.Track track -> book.track(track.order());
+            case Command.Track track -> book.track(track.order(), queueAhead(track.order()));
             case Command.Untrack untrack -> {
                 book.untrack(untrack.orderId());
                 retries.values()
@@ -374,13 +380,45 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     private void fillReached(BookKey key, PriceRange range) {
         fillAll(
                 key,
-                book.onRange(range).stream()
+                book.onRange(range, this::depthAt).stream()
                         .map(order -> new Fill(
                                 order,
                                 order.side() == OrderSide.BUY ? range.lowAt() : range.highAt(),
                                 range.source(),
                                 null))
                         .toList());
+    }
+
+    /** The quantity the exchange's book shows at an order's price now, ahead of it; {@code null} when not known. */
+    private BigDecimal queueAhead(RestingOrder order) {
+        return depthAt(order.market(), order.pairId(), order.side(), order.limitPrice())
+                .orElse(null);
+    }
+
+    /**
+     * The quantity at {@code price} on the side an order of {@code side} waits, from the pair's current depth: the
+     * level's quantity, zero when the price lies within the levels shown with none at it, empty when it lies beyond
+     * them or no current depth is held.
+     */
+    private Optional<BigDecimal> depthAt(MarketType market, UUID pairId, OrderSide side, BigDecimal price) {
+        Optional<OrderBookDepth> depth = this.market.currentDepth(market, pairId);
+        if (depth.isEmpty()) {
+            return Optional.empty();
+        }
+        List<OrderBookDepth.PriceLevel> levels =
+                side == OrderSide.BUY ? depth.get().bids() : depth.get().asks();
+        if (levels.isEmpty()) {
+            return Optional.empty();
+        }
+        for (OrderBookDepth.PriceLevel level : levels) {
+            if (level.price().compareTo(price) == 0) {
+                return Optional.of(level.quantity());
+            }
+        }
+        // Bids are listed best (highest) first, asks best (lowest) first.
+        BigDecimal worst = levels.getLast().price();
+        boolean within = side == OrderSide.BUY ? price.compareTo(worst) > 0 : price.compareTo(worst) < 0;
+        return within ? Optional.of(BigDecimal.ZERO) : Optional.empty();
     }
 
     /**

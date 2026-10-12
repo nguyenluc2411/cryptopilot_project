@@ -60,6 +60,24 @@ class PaperMatchingRecordsTest {
     }
 
     @Test
+    void TR05_tradesKeepTheVolumeTakersSoldAndBoughtAtEachPrice_addedUpByValue() {
+        PriceRange sold = PriceRange.of(new MarketTrade(
+                MarketType.SPOT, PAIR, 1, new BigDecimal("80000"), new BigDecimal("1.5"), MINUTE, true, MINUTE));
+        PriceRange bought = PriceRange.of(new MarketTrade(
+                MarketType.SPOT, PAIR, 2, new BigDecimal("80001"), new BigDecimal("2"), MINUTE, false, MINUTE));
+        PriceRange soldAgain = PriceRange.of(new MarketTrade(
+                MarketType.SPOT, PAIR, 3, new BigDecimal("80000.00"), new BigDecimal("0.5"), MINUTE, true, MINUTE));
+
+        PriceRange merged = sold.withTrades(bought).withTrades(soldAgain);
+
+        assertThat(sold.boughtAt()).isEmpty();
+        assertThat(merged.soldAt()).hasSize(1);
+        assertThat(merged.soldAt().get(new BigDecimal("80000"))).isEqualByComparingTo("2");
+        assertThat(merged.boughtAt().get(new BigDecimal("80001"))).isEqualByComparingTo("2");
+        assertThat(range("1", "2", MINUTE, true).soldAt()).isEmpty();
+    }
+
+    @Test
     void TR05_aCandle_recordsItsLowAndHighAtItsOpenTime() {
         PriceRange candle = range("100", "105", MINUTE, true);
 

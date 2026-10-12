@@ -15,6 +15,7 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
+import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
@@ -379,6 +380,34 @@ class PaperMatchingWorkerTest {
     }
 
     @Test
+    void QT8_queue_anOrderStartsBehindTheDepthAtItsPrice_andFillsOnceTradesThereConsumedIt() {
+        when(market.currentDepth(MarketType.SPOT, PAIR))
+                .thenReturn(Optional.of(new OrderBookDepth(
+                        MarketType.SPOT,
+                        PAIR,
+                        7,
+                        List.of(
+                                new OrderBookDepth.PriceLevel(new BigDecimal("80001"), BigDecimal.ONE),
+                                new OrderBookDepth.PriceLevel(new BigDecimal("80000"), new BigDecimal("2")),
+                                new OrderBookDepth.PriceLevel(new BigDecimal("79990"), BigDecimal.ONE)),
+                        List.of(new OrderBookDepth.PriceLevel(new BigDecimal("80002"), BigDecimal.ONE)),
+                        MINUTE_1)));
+        worker = started(properties(true, false, Duration.ofMinutes(10), LimitFillMode.QUEUE));
+        RestingOrder atLevel = buy("80000");
+        RestingOrder between = buy("79995");
+        worker.onRested(new PaperOrderRested(atLevel));
+        worker.onRested(new PaperOrderRested(between));
+
+        worker.onTrade(trade("80000", "1.5", true, MINUTE_1));
+        verify(matching, after(200).never()).fill(any(), any(), any());
+        worker.onTrade(trade("80000", "1", true, MINUTE_1.plusSeconds(1)));
+        verify(matching, timeout(WAIT)).fill(atLevel, MINUTE_1.plusSeconds(1), FillSource.LIVE);
+
+        worker.onTrade(trade("79995", "0.001", true, MINUTE_1.plusSeconds(2)));
+        verify(matching, timeout(WAIT)).fill(between, MINUTE_1.plusSeconds(2), FillSource.LIVE);
+    }
+
+    @Test
     void TR05_beforeStartOrWhenDisabled_aTradeIsIgnored() {
         worker = worker(properties(false, false, Duration.ofMinutes(10)));
         worker.start();
@@ -479,6 +508,11 @@ class PaperMatchingWorkerTest {
 
     private static MarketTrade trade(String price, Instant at) {
         return new MarketTrade(MarketType.SPOT, PAIR, 1, new BigDecimal(price), BigDecimal.ONE, at, false, at);
+    }
+
+    private static MarketTrade trade(String price, String quantity, boolean buyerMaker, Instant at) {
+        return new MarketTrade(
+                MarketType.SPOT, PAIR, 1, new BigDecimal(price), new BigDecimal(quantity), at, buyerMaker, at);
     }
 
     private static MinuteKline kline(Instant open, String low, String high, boolean closed) {

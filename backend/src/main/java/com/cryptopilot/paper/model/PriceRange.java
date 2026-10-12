@@ -5,7 +5,10 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.model.enums.FillSource;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.NavigableMap;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.UUID;
 
 /**
@@ -15,9 +18,10 @@ import java.util.UUID;
  *
  * <p>A candle's low and high are recorded at its open time (D-78). A trade's price is recorded at the time it was
  * traded, so the trades merged into one range keep the time of the trade at their low and of the one at their high:
- * a BUY the range reached is filled at the low's time, a SELL at the high's.
+ * a BUY the range reached is filled at the low's time, a SELL at the high's. Trades also keep how much takers sold and
+ * bought at each price, which moves the queue of the orders waiting there (Q-T8); a candle carries no such volume.
  *
- * <p>Rule: TR-02, TR-05; NSF-07; Q-T6; D-77, D-78; ADR-011.
+ * <p>Rule: TR-02, TR-05; NSF-07; Q-T6, Q-T8; D-77, D-78; ADR-011.
  *
  * @param market the market
  * @param pairId the pair
@@ -28,6 +32,8 @@ import java.util.UUID;
  * @param source live or replayed
  * @param lowAt when the low was traded; a candle's open time
  * @param highAt when the high was traded; a candle's open time
+ * @param soldAt the base quantity takers sold at each price: it hit the bids there, ahead of a BUY waiting at it
+ * @param boughtAt the base quantity takers bought at each price: it lifted the asks there, ahead of a SELL waiting at it
  */
 public record PriceRange(
         MarketType market,
@@ -38,7 +44,9 @@ public record PriceRange(
         boolean closed,
         FillSource source,
         Instant lowAt,
-        Instant highAt) {
+        Instant highAt,
+        NavigableMap<BigDecimal, BigDecimal> soldAt,
+        NavigableMap<BigDecimal, BigDecimal> boughtAt) {
 
     public PriceRange {
         Objects.requireNonNull(market, "market");
@@ -49,12 +57,15 @@ public record PriceRange(
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(lowAt, "lowAt");
         Objects.requireNonNull(highAt, "highAt");
+        // Keyed by value, so 80000 and 80000.00 are one price.
+        soldAt = Collections.unmodifiableNavigableMap(new TreeMap<>(soldAt));
+        boughtAt = Collections.unmodifiableNavigableMap(new TreeMap<>(boughtAt));
         if (low.compareTo(high) > 0) {
             throw new IllegalArgumentException("low " + low + " is above high " + high);
         }
     }
 
-    /** A 1-minute candle's range: its low and high both recorded at its open time (D-78). */
+    /** A 1-minute candle's range: its low and high both recorded at its open time (D-78), with no volume by price. */
     public PriceRange(
             MarketType market,
             UUID pairId,
@@ -63,11 +74,14 @@ public record PriceRange(
             Instant from,
             boolean closed,
             FillSource source) {
-        this(market, pairId, low, high, from, closed, source, from, from);
+        this(market, pairId, low, high, from, closed, source, from, from, new TreeMap<>(), new TreeMap<>());
     }
 
-    /** One live market trade, at its price and its trade time. */
+    /** One live market trade, at its price and its trade time, with its quantity on the side its taker took. */
     public static PriceRange of(MarketTrade trade) {
+        NavigableMap<BigDecimal, BigDecimal> volume = new TreeMap<>();
+        volume.put(trade.price(), trade.quantity());
+        NavigableMap<BigDecimal, BigDecimal> none = new TreeMap<>();
         return new PriceRange(
                 trade.market(),
                 trade.pairId(),
@@ -77,7 +91,9 @@ public record PriceRange(
                 false,
                 FillSource.LIVE,
                 trade.tradeTime(),
-                trade.tradeTime());
+                trade.tradeTime(),
+                trade.buyerMaker() ? volume : none,
+                trade.buyerMaker() ? none : volume);
     }
 
     /**
@@ -95,7 +111,7 @@ public record PriceRange(
 
     /**
      * These trades followed by later ones of the same pair, read as one range: the lowest low and the highest high,
-     * each with the time of the earliest trade at it.
+     * each with the time of the earliest trade at it, and the volume sold and bought at each price added up.
      */
     public PriceRange withTrades(PriceRange later) {
         int lower = later.low.compareTo(low);
@@ -111,6 +127,15 @@ public record PriceRange(
                 false,
                 source,
                 laterLow ? later.lowAt : lowAt,
-                laterHigh ? later.highAt : highAt);
+                laterHigh ? later.highAt : highAt,
+                added(soldAt, later.soldAt),
+                added(boughtAt, later.boughtAt));
+    }
+
+    private static NavigableMap<BigDecimal, BigDecimal> added(
+            NavigableMap<BigDecimal, BigDecimal> earlier, NavigableMap<BigDecimal, BigDecimal> later) {
+        NavigableMap<BigDecimal, BigDecimal> sum = new TreeMap<>(earlier);
+        later.forEach((price, quantity) -> sum.merge(price, quantity, BigDecimal::add));
+        return sum;
     }
 }

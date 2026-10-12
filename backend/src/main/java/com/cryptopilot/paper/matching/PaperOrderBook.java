@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -24,9 +25,14 @@ import java.util.UUID;
  * SELL orders above it.
  *
  * <ul>
- *   <li>A BUY order is reached when the price trades below its own, a SELL order above it; with
- *       {@link LimitFillMode#TOUCH} a price equal to its own counts too (Q-T8). Reached, it fills at its own price,
- *       also when the price traded through it (a gap).
+ *   <li>A BUY order is reached when the price trades below its own, a SELL order above it. At exactly its price it
+ *       depends on the {@link LimitFillMode} (Q-T8): with {@code QUEUE}, as Binance matches, once the takers selling
+ *       there (for a BUY) have consumed the quantity that was ahead of it, or as soon as a taker buys there; with
+ *       {@code TOUCH} at once; with {@code CROSS} never. Reached, it fills at its own price, also when the price
+ *       traded through it (a gap).
+ *   <li>The quantity ahead of an order is what the exchange's book showed at its price when the order was tracked, or,
+ *       when that was not known (outside the depth, or rebuilt at a restart), what it shows when a trade first reaches
+ *       that price. The paper orders do not queue behind each other: none of them is in the exchange's book.
  *   <li>A price traded before the order was placed never fills it (D-77): a trade before its placement, or a candle
  *       that opened before it, whose low and high may hold prices traded before the order existed. An order whose
  *       price the market already stood at when it was placed has executed then, as a taker, and never waits here.
@@ -44,7 +50,8 @@ import java.util.UUID;
  * <p>Rule: TR-02, TR-05; NSF-07; Q-T8; D-77, D-78.
  *
  * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges: Market Microstructure for Practitioners</i>. Oxford
- * University Press, ch. 4 (a buy limit executes at or below its price, a sell limit at or above it).
+ * University Press, ch. 4 (a buy limit executes at or below its price, a sell limit at or above it) and ch. 6 (price
+ * priority, then time precedence).
  * <p>Reference: Cormen, T. H. et al. (2009). <i>Introduction to Algorithms</i> (3rd ed.). MIT Press, ch. 13
  * (red-black trees: O(log n) insert, delete and range search).
  */
@@ -61,27 +68,46 @@ public final class PaperOrderBook {
             .thenComparing(RestingOrder::placedAt)
             .thenComparing(RestingOrder::orderId);
 
+    /** Knows nothing of the exchange's book: an order's queue is empty when first reached. */
+    private static final QueueLookup NO_DEPTH = (market, pairId, side, price) -> Optional.empty();
+
     private final LimitFillMode mode;
     private final Map<BookKey, Sides> books = new HashMap<>();
     private final Map<UUID, RestingOrder> tracked = new HashMap<>();
+
+    /** The quantity still ahead of an order at its price ({@code QUEUE}); absent while not known. */
+    private final Map<UUID, BigDecimal> ahead = new HashMap<>();
 
     /** A book whose orders are reached as {@code mode} says. */
     public PaperOrderBook(LimitFillMode mode) {
         this.mode = Objects.requireNonNull(mode, "mode");
     }
 
-    /** Starts tracking an order, replacing an earlier copy of it. */
+    /** Starts tracking an order, replacing an earlier copy of it, with the quantity ahead of it not known. */
     public void track(RestingOrder order) {
+        track(order, null);
+    }
+
+    /**
+     * Starts tracking an order, replacing an earlier copy of it.
+     *
+     * @param queueAhead the quantity the exchange's book showed at its price, ahead of it; {@code null} when not known
+     */
+    public void track(RestingOrder order, BigDecimal queueAhead) {
         untrack(order.orderId());
         books.computeIfAbsent(new BookKey(order.market(), order.pairId()), ignored -> new Sides())
                 .of(order.side())
                 .add(order.limitPrice(), order.orderId());
         tracked.put(order.orderId(), order);
+        if (queueAhead != null) {
+            ahead.put(order.orderId(), queueAhead);
+        }
     }
 
     /** Stops tracking an order; an unknown one is ignored. */
     public void untrack(UUID orderId) {
         RestingOrder order = tracked.remove(orderId);
+        ahead.remove(orderId);
         if (order == null) {
             return;
         }
@@ -98,12 +124,24 @@ public final class PaperOrderBook {
         return books.containsKey(new BookKey(market, pairId));
     }
 
-    /**
-     * The orders the range reached, which leave the book: BUY orders above its low, SELL orders below its high, and
-     * those at it with {@link LimitFillMode#TOUCH}. A BUY placed after the range's low was traded stays, as does a
-     * SELL placed after its high (D-77).
-     */
+    /** The quantity still ahead of an order at its price, when known; for tests. */
+    Optional<BigDecimal> queueAhead(UUID orderId) {
+        return Optional.ofNullable(ahead.get(orderId));
+    }
+
+    /** {@link #onRange(PriceRange, QueueLookup)} knowing nothing of the exchange's book. */
     public List<RestingOrder> onRange(PriceRange range) {
+        return onRange(range, NO_DEPTH);
+    }
+
+    /**
+     * The orders the range reached, which leave the book: BUY orders above its low and SELL orders below its high, and
+     * those at it as the {@link LimitFillMode} says. A BUY placed after the range's low was traded stays, as does a
+     * SELL placed after its high (D-77).
+     *
+     * @param depth the exchange's book now, read for the queue of an order whose queue is not known yet
+     */
+    public List<RestingOrder> onRange(PriceRange range, QueueLookup depth) {
         BookKey key = new BookKey(range.market(), range.pairId());
         Sides pair = books.get(key);
         if (pair == null) {
@@ -112,6 +150,10 @@ public final class PaperOrderBook {
         boolean touch = mode == LimitFillMode.TOUCH;
         List<UUID> ids = new ArrayList<>(pair.buys.fireAbove(range.low(), touch));
         ids.addAll(pair.sells.fireBelow(range.high(), touch));
+        if (mode == LimitFillMode.QUEUE) {
+            ids.addAll(atQueue(key, pair.buys, OrderSide.BUY, range.low(), range.lowAt(), range, depth));
+            ids.addAll(atQueue(key, pair.sells, OrderSide.SELL, range.high(), range.highAt(), range, depth));
+        }
         List<RestingOrder> reached = new ArrayList<>();
         for (UUID id : ids) {
             RestingOrder order = tracked.get(id);
@@ -120,6 +162,7 @@ public final class PaperOrderBook {
                 pair.of(order.side()).add(order.limitPrice(), id);
             } else {
                 tracked.remove(id);
+                ahead.remove(id);
                 reached.add(order);
             }
         }
@@ -128,6 +171,50 @@ public final class PaperOrderBook {
         }
         reached.sort(PRIORITY);
         return reached;
+    }
+
+    /**
+     * The orders waiting at exactly {@code price}, the range's low for BUY orders or its high for SELL orders, that
+     * the trades there reached: all of them when a taker of the other side traded there, otherwise each one whose
+     * queue the takers of its own side consumed; the others keep what is still ahead of them. Removed from the level.
+     */
+    private List<UUID> atQueue(
+            BookKey key,
+            Levels levels,
+            OrderSide side,
+            BigDecimal price,
+            Instant tradedAt,
+            PriceRange range,
+            QueueLookup depth) {
+        Set<UUID> waiting = levels.at(price);
+        if (waiting == null) {
+            return List.of();
+        }
+        boolean buy = side == OrderSide.BUY;
+        if ((buy ? range.boughtAt() : range.soldAt()).containsKey(price)) {
+            // A taker of the other side traded at this price: no exchange order of this side was left at it.
+            return levels.fireAt(price);
+        }
+        BigDecimal traded = (buy ? range.soldAt() : range.boughtAt()).get(price);
+        if (traded == null) {
+            return List.of();
+        }
+        List<UUID> fired = new ArrayList<>();
+        for (UUID id : List.copyOf(waiting)) {
+            if (tradedAt.isBefore(tracked.get(id).placedAt())) {
+                continue;
+            }
+            BigDecimal before =
+                    ahead.computeIfAbsent(id, ignored -> depth.quantityAt(key.market(), key.pairId(), side, price)
+                            .orElse(BigDecimal.ZERO));
+            if (traded.compareTo(before) > 0) {
+                levels.remove(price, id);
+                fired.add(id);
+            } else {
+                ahead.put(id, before.subtract(traded));
+            }
+        }
+        return fired;
     }
 
     /** How many orders are tracked. */
@@ -142,6 +229,14 @@ public final class PaperOrderBook {
      * @param pairId the pair
      */
     public record BookKey(MarketType market, UUID pairId) {}
+
+    /** The quantity the exchange's book shows now at a price, on the side an order of {@code side} would wait. */
+    @FunctionalInterface
+    public interface QueueLookup {
+
+        /** The quantity, zero when the price is inside the known depth with nothing at it; empty when not known. */
+        Optional<BigDecimal> quantityAt(MarketType market, UUID pairId, OrderSide side, BigDecimal price);
+    }
 
     private static final class Sides {
 
@@ -173,6 +268,11 @@ public final class PaperOrderBook {
             }
         }
 
+        /** The ids waiting at exactly {@code level}, or {@code null}. */
+        Set<UUID> at(BigDecimal level) {
+            return levels.get(level);
+        }
+
         /** Removes and returns the ids at levels above {@code low}, or at it too: the buys a price down to it reached. */
         List<UUID> fireAbove(BigDecimal low, boolean inclusive) {
             return fire(levels.tailMap(low, inclusive));
@@ -181,6 +281,11 @@ public final class PaperOrderBook {
         /** Removes and returns the ids at levels below {@code high}, or at it too: the sells a price up to it reached. */
         List<UUID> fireBelow(BigDecimal high, boolean inclusive) {
             return fire(levels.headMap(high, inclusive));
+        }
+
+        /** Removes and returns the ids at exactly {@code level}. */
+        List<UUID> fireAt(BigDecimal level) {
+            return fire(levels.subMap(level, true, level, true));
         }
 
         boolean isEmpty() {
