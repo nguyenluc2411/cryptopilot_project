@@ -30,6 +30,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -75,7 +76,19 @@ class AlertEngineTest {
     private final PriceAlert probe =
             alert(UUID.randomUUID(), PAIR, ConditionOperator.GREATER_THAN, "0", TriggerMode.EVERY_TIME, 1);
 
+    /** The probe of the FUTURES book of the same pair. */
+    private final PriceAlert futuresProbe = alert(
+            UUID.randomUUID(),
+            PAIR,
+            MarketType.FUTURES,
+            ConditionOperator.GREATER_THAN,
+            "0",
+            TriggerMode.EVERY_TIME,
+            1,
+            1);
+
     private int probed;
+    private int futuresProbed;
     private AlertEngine engine;
 
     @BeforeEach
@@ -318,13 +331,12 @@ class AlertEngineTest {
     }
 
     @Test
-    void D89_aStaleRuleLeftInAnotherBook_isDroppedAfterOneRefusal_andNotTriedAgain() {
+    void NSF06_aMoveAndAMoveBackAppliedOutOfOrder_leaveOneBookAtTheNewestVersion_andAPauseEmptiesIt() {
         UUID id = UUID.randomUUID();
         PriceAlert spot1 = spotAt(id, 1);
         PriceAlert futures2 = onFutures(spot1);
         PriceAlert spot3 = spotAt(id, 3);
         startWith(spot1);
-        when(triggers.tryTrigger(argThat(hitOf(spot1)))).thenReturn(false);
         AtomicInteger reads = new AtomicInteger();
         when(triggers.activePriceAlert(id)).thenAnswer(invocation -> switch (reads.incrementAndGet()) {
             case 1 -> {
@@ -335,18 +347,267 @@ class AlertEngineTest {
             case 2 -> Optional.of(spot3);
             default -> Optional.empty(); // paused at v4
         });
-        engine.onAlertsChanged(AlertsChanged.of(id));
-        engine.onAlertsChanged(AlertsChanged.of(id));
-        assertThat(engine.holds(id)).as("located lost the SPOT rule").isFalse();
 
+        engine.onAlertsChanged(AlertsChanged.of(id));
+        AlertEngine.PairKey spot = new AlertEngine.PairKey(MarketType.SPOT, PAIR);
+        assertThat(engine.locatedAt(id)).as("v2 read late is older than v3").isEqualTo(Map.of(spot, 3L));
+        assertThat(engine.booksHolding(id)).isEqualTo(engine.locatedAt(id));
         price("101");
+        // The newest rule still fires, once, at v3.
         verify(triggers, timeout(WAIT))
                 .tryTrigger(
                         argThat(hit -> hitOf(spot1).matches(hit) && hit.alert().version() == 3));
-        price("102");
-        price("103");
-
         verify(triggers, times(1)).tryTrigger(argThat(hitOf(spot1)));
+
+        engine.onAlertsChanged(AlertsChanged.of(id));
+        assertThat(engine.locatedAt(id)).isEmpty();
+        assertThat(engine.booksHolding(id)).isEmpty();
+
+        price("102");
+        verify(triggers, times(1)).tryTrigger(argThat(hitOf(spot1)));
+    }
+
+    /** A read that began before a pause and is applied after it puts the rule in no book, without a refusal. */
+    @Test
+    void D89_aMoveReadBeforeAPauseAndAppliedAfterIt_putsTheRuleInNoBook_andNothingIsTried() {
+        UUID id = UUID.randomUUID();
+        PriceAlert spot1 = spotAt(id, 1);
+        PriceAlert futures2 = onFutures(spot1);
+        startWith(spot1, futuresProbe);
+        AtomicInteger reads = new AtomicInteger();
+        when(triggers.activePriceAlert(id)).thenAnswer(invocation -> {
+            if (reads.incrementAndGet() == 1) {
+                // The pause (v3) commits and its refresh completes while this read of v2 is in flight.
+                engine.onAlertsChanged(AlertsChanged.of(id));
+                return Optional.of(futures2);
+            }
+            return Optional.empty();
+        });
+        engine.onAlertsChanged(AlertsChanged.of(id));
+        assertThat(engine.locatedAt(id)).isEmpty();
+        assertThat(engine.booksHolding(id)).isEmpty();
+
+        futuresPrice("101");
+        price("102");
+
+        verify(triggers, never()).tryTrigger(argThat(hitOf(spot1)));
+        verify(triggers, times(2)).activePriceAlert(id);
+    }
+
+    @Test
+    void NSF06_aResumeReadAppliedAfterTheDeleteOfItsAlert_putsItInNoBook() {
+        UUID id = UUID.randomUUID();
+        startWith(spotAt(id, 1));
+        // Paused at v2: no longer held.
+        when(triggers.activePriceAlert(id)).thenReturn(Optional.empty());
+        engine.onAlertsChanged(AlertsChanged.of(id));
+        AtomicInteger reads = new AtomicInteger();
+        when(triggers.activePriceAlert(id)).thenAnswer(invocation -> {
+            if (reads.incrementAndGet() == 1) {
+                // The delete commits and its refresh completes while the read of the resume (v3) is in flight.
+                engine.onAlertsChanged(AlertsChanged.of(id));
+                return Optional.of(spotAt(id, 3));
+            }
+            return Optional.empty();
+        });
+
+        engine.onAlertsChanged(AlertsChanged.of(id));
+
+        assertThat(engine.locatedAt(id)).isEmpty();
+        assertThat(engine.booksHolding(id)).isEmpty();
+        price("101");
+        verify(triggers, never()).tryTrigger(argThat(hitOf(spotAt(id, 3))));
+    }
+
+    @Test
+    void NSF06_anEditReadAppliedAfterThePauseOfItsAlert_putsItInNoBook() {
+        UUID id = UUID.randomUUID();
+        startWith(spotAt(id, 1));
+        AtomicInteger reads = new AtomicInteger();
+        when(triggers.activePriceAlert(id)).thenAnswer(invocation -> {
+            if (reads.incrementAndGet() == 1) {
+                // The pause (v3) commits and its refresh completes while the read of the edit (v2) is in flight.
+                engine.onAlertsChanged(AlertsChanged.of(id));
+                return Optional.of(spotAt(id, 2));
+            }
+            return Optional.empty();
+        });
+
+        engine.onAlertsChanged(AlertsChanged.of(id));
+
+        assertThat(engine.locatedAt(id)).isEmpty();
+        assertThat(engine.booksHolding(id)).isEmpty();
+        price("101");
+        verify(triggers, never()).tryTrigger(argThat(hitOf(spotAt(id, 1))));
+    }
+
+    @Test
+    void NSF06_aReadInFlightLongerThanTheTombstoneTtl_stillCannotPutBackTheAlertDeletedMeanwhile() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        PriceAlert other = spotAt(UUID.randomUUID(), 1);
+        when(triggers.activePriceAlerts()).thenReturn(List.of(held, other));
+        engine = new AlertEngine(
+                triggers, properties(1000, Duration.ofSeconds(5), Duration.ofMinutes(1)), clock, idleThreads());
+        engine.start();
+        when(triggers.activePriceAlert(other.alertId())).thenReturn(Optional.of(other));
+        AtomicInteger reads = new AtomicInteger();
+        when(triggers.activePriceAlert(held.alertId())).thenAnswer(invocation -> {
+            if (reads.incrementAndGet() == 1) {
+                // The delete is applied, then this read waits past the TTL while another alert is refreshed.
+                engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+                clock.advance(Duration.ofMinutes(1).plusMillis(1));
+                engine.onAlertsChanged(AlertsChanged.of(other.alertId()));
+                return Optional.of(held);
+            }
+            return Optional.empty();
+        });
+
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+
+        assertThat(engine.booksHolding(held.alertId())).isEmpty();
+        assertThat(engine.holds(held.alertId())).isFalse();
+    }
+
+    @Test
+    void NSF06_aRemovalMarker_isForgottenOnceTheTtlHasPassed_andNoReadIsInFlight() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        PriceAlert other = spotAt(UUID.randomUUID(), 1);
+        when(triggers.activePriceAlerts()).thenReturn(List.of(held, other));
+        engine = new AlertEngine(
+                triggers, properties(1000, Duration.ofSeconds(5), Duration.ofMinutes(1)), clock, idleThreads());
+        engine.start();
+        when(triggers.activePriceAlert(held.alertId())).thenReturn(Optional.empty());
+        when(triggers.activePriceAlert(other.alertId())).thenReturn(Optional.of(other));
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+
+        clock.advance(Duration.ofMinutes(1));
+        engine.onAlertsChanged(AlertsChanged.of(other.alertId()));
+        assertThat(engine.tracks(held.alertId())).as("at the ttl").isTrue();
+
+        clock.advance(Duration.ofMillis(1));
+        engine.onAlertsChanged(AlertsChanged.of(other.alertId()));
+        assertThat(engine.tracks(held.alertId())).as("past the ttl").isFalse();
+    }
+
+    @Test
+    void NSF06_aReadInFlightAcrossAStopAndAStart_isIgnored() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        // Deleted before the second start, so its load no longer has it.
+        when(triggers.activePriceAlerts()).thenReturn(List.of(held)).thenReturn(List.of());
+        engine = new AlertEngine(triggers, properties(1000), clock, idleThreads());
+        engine.start();
+        when(triggers.activePriceAlert(held.alertId())).thenAnswer(invocation -> {
+            engine.stop();
+            engine.start();
+            return Optional.of(held);
+        });
+
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+
+        assertThat(engine.booksHolding(held.alertId())).isEmpty();
+        assertThat(engine.tracks(held.alertId())).isFalse();
+    }
+
+    @Test
+    void NSF06_aStaleReadArrivingAfterARestart_leavesTheAlertWhereTheLoadPutIt() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        when(triggers.activePriceAlerts()).thenReturn(List.of(held));
+        engine = new AlertEngine(triggers, properties(1000), clock, idleThreads());
+        engine.start();
+        when(triggers.activePriceAlert(held.alertId())).thenAnswer(invocation -> {
+            engine.stop();
+            engine.start();
+            // A read from before the restart, older than its load.
+            return Optional.empty();
+        });
+
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+
+        assertThat(engine.locatedAt(held.alertId()))
+                .isEqualTo(Map.of(new AlertEngine.PairKey(MarketType.SPOT, PAIR), 1L));
+        assertThat(engine.booksHolding(held.alertId())).isEqualTo(engine.locatedAt(held.alertId()));
+    }
+
+    @Test
+    void NSF06_aRemovalMarker_isForgottenAfterTheTtl_evenWhenALaterReadOfItsAlertFailed() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        PriceAlert other = spotAt(UUID.randomUUID(), 1);
+        when(triggers.activePriceAlerts()).thenReturn(List.of(held, other));
+        engine = new AlertEngine(
+                triggers, properties(1000, Duration.ofSeconds(5), Duration.ofMinutes(1)), clock, idleThreads());
+        engine.start();
+        when(triggers.activePriceAlert(other.alertId())).thenReturn(Optional.of(other));
+        when(triggers.activePriceAlert(held.alertId()))
+                .thenReturn(Optional.empty())
+                .thenThrow(new IllegalStateException("database down"));
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+
+        clock.advance(Duration.ofMinutes(1).plusMillis(1));
+        engine.onAlertsChanged(AlertsChanged.of(other.alertId()));
+
+        assertThat(engine.tracks(held.alertId())).isFalse();
+    }
+
+    @Test
+    void D89_aRefusedTrigger_takesTheRuleOutOfTheBook_evenWhenItsReadFails() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        startWith(held);
+        when(triggers.tryTrigger(argThat(hitOf(held)))).thenReturn(false);
+        when(triggers.activePriceAlert(held.alertId())).thenThrow(new IllegalStateException("database down"));
+
+        price("101");
+        verify(triggers, timeout(WAIT)).activePriceAlert(held.alertId());
+        price("102");
+
+        verify(triggers, times(1)).tryTrigger(argThat(hitOf(held)));
+        assertThat(engine.booksHolding(held.alertId())).isEmpty();
+    }
+
+    @Test
+    void NSF06_aRuleMovedWhileItsTriggerIsRecorded_staysInTheBookItMovedTo() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        PriceAlert moved = onFutures(held);
+        startWith(held);
+        when(triggers.activePriceAlert(held.alertId())).thenReturn(Optional.of(moved));
+        when(triggers.tryTrigger(argThat(hitOf(held)))).thenAnswer(invocation -> {
+            // The move to FUTURES commits while the SPOT trigger is being recorded.
+            engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+            return true;
+        });
+
+        price("101");
+        // The next evaluation starts only once the one before has finished.
+        price("102");
+
+        AlertEngine.PairKey futures = new AlertEngine.PairKey(MarketType.FUTURES, PAIR);
+        assertThat(engine.locatedAt(held.alertId())).isEqualTo(Map.of(futures, 2L));
+        assertThat(engine.booksHolding(held.alertId())).isEqualTo(engine.locatedAt(held.alertId()));
+        verify(triggers, times(1)).tryTrigger(argThat(hitOf(held)));
+    }
+
+    @Test
+    void NSF06_aRemovedVersion_blocksAStaleReadForTheTombstoneTtl_andNotForTheStaleness() {
+        PriceAlert held = spotAt(UUID.randomUUID(), 1);
+        when(triggers.activePriceAlerts()).thenReturn(List.of(held));
+        // Five minutes of staleness, one of tombstone.
+        engine = new AlertEngine(
+                triggers, properties(1000, Duration.ofSeconds(5), Duration.ofMinutes(1)), clock, idleThreads());
+        engine.start();
+        when(triggers.activePriceAlert(held.alertId())).thenReturn(Optional.empty());
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+        // From now on a read that began before the pause arrives.
+        when(triggers.activePriceAlert(held.alertId())).thenReturn(Optional.of(held));
+
+        clock.advance(Duration.ofMinutes(1));
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+        assertThat(engine.holds(held.alertId())).as("at the ttl").isFalse();
+
+        clock.advance(Duration.ofMillis(1));
+        engine.onAlertsChanged(AlertsChanged.of(held.alertId()));
+        assertThat(engine.holds(held.alertId()))
+                .as("past the ttl, well inside the staleness")
+                .isTrue();
     }
 
     @Test
@@ -524,6 +785,14 @@ class AlertEngineTest {
         verify(triggers, timeout(WAIT).times(++probed)).tryTrigger(argThat(hitOf(probe)));
     }
 
+    /** A minute later, a FUTURES price for the pair; returns once the engine has evaluated it. */
+    private void futuresPrice(String close) {
+        clock.advance(Duration.ofMinutes(1));
+        BigDecimal price = new BigDecimal(close);
+        engine.onMinuteKline(new MinuteKline(MarketType.FUTURES, PAIR, T0, price, price, price, false, now()));
+        verify(triggers, timeout(WAIT).times(++futuresProbed)).tryTrigger(argThat(hitOf(futuresProbe)));
+    }
+
     /** Moves the clock, sends a price that meets the alert, and returns once the refusal has been handled. */
     private void refuseOnce(PriceAlert alert, int nth, Duration later) {
         clock.advance(later);
@@ -592,12 +861,17 @@ class AlertEngineTest {
     }
 
     private static AlertEngineProperties properties(int queueCapacity, Duration stopTimeout) {
+        return properties(queueCapacity, stopTimeout, Duration.ofMinutes(5));
+    }
+
+    private static AlertEngineProperties properties(int queueCapacity, Duration stopTimeout, Duration tombstoneTtl) {
         return new AlertEngineProperties(
                 true,
                 1,
                 queueCapacity,
                 Duration.ofSeconds(1),
                 Duration.ofMinutes(5),
+                tombstoneTtl,
                 stopTimeout,
                 new AlertEngineProperties.ExpirySweep(false, "0 * * * * *", "UTC"));
     }

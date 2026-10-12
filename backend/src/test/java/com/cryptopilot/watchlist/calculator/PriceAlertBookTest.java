@@ -316,6 +316,20 @@ class PriceAlertBookTest {
     }
 
     @Test
+    void NSF06_aTombstone_blocksAStaleReadUpToItsTtl_andIsForgottenAfterIt() {
+        PriceAlert alert = atVersion(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME), 3);
+        book.put(alert);
+        book.remove(alert.alertId());
+
+        clock.advance(Duration.ofMinutes(5));
+        assertThat(book.put(alert)).as("at the ttl").isFalse();
+
+        clock.advance(Duration.ofNanos(1));
+        assertThat(book.put(alert)).as("past the ttl").isTrue();
+        assertThat(book.versionOf(alert.alertId())).hasValue(3);
+    }
+
+    @Test
     void D89_aDiscardAfterARefusal_removesUpToItsVersion_andLeavesNoTombstone() {
         PriceAlert alert = atVersion(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME), 3);
         book.put(alert);
