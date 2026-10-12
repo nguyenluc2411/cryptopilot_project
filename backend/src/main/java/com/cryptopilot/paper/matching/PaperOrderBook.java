@@ -3,8 +3,10 @@ package com.cryptopilot.paper.matching;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.model.PriceRange;
 import com.cryptopilot.paper.model.RestingOrder;
+import com.cryptopilot.paper.model.enums.LimitFillMode;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -12,6 +14,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -21,11 +24,12 @@ import java.util.UUID;
  * SELL orders above it.
  *
  * <ul>
- *   <li>A BUY order is reached when a candle trades at or below its price, a SELL order at or above it; both bounds
- *       count. Reached, it fills at its own price, also when the candle traded through it (a gap).
- *   <li>A candle that opened before the order was placed never fills it (D-77): its low and high may hold prices
- *       traded before the order existed. An order whose price the market already stood at when it was placed has
- *       executed then, as a taker, and never waits here.
+ *   <li>A BUY order is reached when the price trades below its own, a SELL order above it; with
+ *       {@link LimitFillMode#TOUCH} a price equal to its own counts too (Q-T8). Reached, it fills at its own price,
+ *       also when the price traded through it (a gap).
+ *   <li>A price traded before the order was placed never fills it (D-77): a trade before its placement, or a candle
+ *       that opened before it, whose low and high may hold prices traded before the order existed. An order whose
+ *       price the market already stood at when it was placed has executed then, as a taker, and never waits here.
  * </ul>
  *
  * <p>The orders a range reaches are returned in price-time priority (see {@link #PRIORITY}), so when many Traders
@@ -37,7 +41,7 @@ import java.util.UUID;
  * <p>Not thread-safe on purpose: one consumer thread owns a book, so it needs no locks and sees the updates of a pair
  * in arrival order.
  *
- * <p>Rule: TR-02; NSF-07; D-77, D-78.
+ * <p>Rule: TR-02, TR-05; NSF-07; Q-T8; D-77, D-78.
  *
  * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges: Market Microstructure for Practitioners</i>. Oxford
  * University Press, ch. 4 (a buy limit executes at or below its price, a sell limit at or above it).
@@ -57,8 +61,14 @@ public final class PaperOrderBook {
             .thenComparing(RestingOrder::placedAt)
             .thenComparing(RestingOrder::orderId);
 
+    private final LimitFillMode mode;
     private final Map<BookKey, Sides> books = new HashMap<>();
     private final Map<UUID, RestingOrder> tracked = new HashMap<>();
+
+    /** A book whose orders are reached as {@code mode} says. */
+    public PaperOrderBook(LimitFillMode mode) {
+        this.mode = Objects.requireNonNull(mode, "mode");
+    }
 
     /** Starts tracking an order, replacing an earlier copy of it. */
     public void track(RestingOrder order) {
@@ -89,8 +99,9 @@ public final class PaperOrderBook {
     }
 
     /**
-     * The orders the range reached, which leave the book: BUY orders at or above its low, SELL orders at or below its
-     * high. An order placed after the range's candle opened stays (D-77).
+     * The orders the range reached, which leave the book: BUY orders above its low, SELL orders below its high, and
+     * those at it with {@link LimitFillMode#TOUCH}. A BUY placed after the range's low was traded stays, as does a
+     * SELL placed after its high (D-77).
      */
     public List<RestingOrder> onRange(PriceRange range) {
         BookKey key = new BookKey(range.market(), range.pairId());
@@ -98,12 +109,14 @@ public final class PaperOrderBook {
         if (pair == null) {
             return List.of();
         }
-        List<UUID> ids = new ArrayList<>(pair.buys.fireAtOrAbove(range.low()));
-        ids.addAll(pair.sells.fireAtOrBelow(range.high()));
+        boolean touch = mode == LimitFillMode.TOUCH;
+        List<UUID> ids = new ArrayList<>(pair.buys.fireAbove(range.low(), touch));
+        ids.addAll(pair.sells.fireBelow(range.high(), touch));
         List<RestingOrder> reached = new ArrayList<>();
         for (UUID id : ids) {
             RestingOrder order = tracked.get(id);
-            if (range.from().isBefore(order.placedAt())) {
+            Instant tradedAt = order.side() == OrderSide.BUY ? range.lowAt() : range.highAt();
+            if (tradedAt.isBefore(order.placedAt())) {
                 pair.of(order.side()).add(order.limitPrice(), id);
             } else {
                 tracked.remove(id);
@@ -160,14 +173,14 @@ public final class PaperOrderBook {
             }
         }
 
-        /** Removes and returns the ids at levels at or above {@code low}: the buys a price down to it reached. */
-        List<UUID> fireAtOrAbove(BigDecimal low) {
-            return fire(levels.tailMap(low, true));
+        /** Removes and returns the ids at levels above {@code low}, or at it too: the buys a price down to it reached. */
+        List<UUID> fireAbove(BigDecimal low, boolean inclusive) {
+            return fire(levels.tailMap(low, inclusive));
         }
 
-        /** Removes and returns the ids at levels at or below {@code high}: the sells a price up to it reached. */
-        List<UUID> fireAtOrBelow(BigDecimal high) {
-            return fire(levels.headMap(high, true));
+        /** Removes and returns the ids at levels below {@code high}, or at it too: the sells a price up to it reached. */
+        List<UUID> fireBelow(BigDecimal high, boolean inclusive) {
+            return fire(levels.headMap(high, inclusive));
         }
 
         boolean isEmpty() {

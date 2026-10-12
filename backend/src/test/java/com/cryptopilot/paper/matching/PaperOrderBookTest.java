@@ -6,6 +6,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.model.PriceRange;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
+import com.cryptopilot.paper.model.enums.LimitFillMode;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -17,7 +18,10 @@ import java.util.Random;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/** Which working orders a candle reaches: buys at or below their price, sells at or above it, never before placed. */
+/**
+ * Which working orders a price reaches: buys below their price, sells above it, at it too with TOUCH; never a price
+ * traded before they were placed.
+ */
 class PaperOrderBookTest {
 
     private static final UUID PAIR = UUID.randomUUID();
@@ -25,7 +29,7 @@ class PaperOrderBookTest {
     private static final Instant PLACED = Instant.parse("2026-10-07T08:00:30Z");
     private static final Instant NEXT_MINUTE = Instant.parse("2026-10-07T08:01:00Z");
 
-    private final PaperOrderBook book = new PaperOrderBook();
+    private final PaperOrderBook book = new PaperOrderBook(LimitFillMode.TOUCH);
 
     @Test
     void TR02_aBuy_isReachedAtOrBelowItsPrice_bothBoundsCounting() {
@@ -157,6 +161,44 @@ class PaperOrderBookTest {
                         .reversed()
                         .thenComparing(RestingOrder::placedAt))
                 .containsExactlyInAnyOrderElementsOf(buyers);
+    }
+
+    @Test
+    void QT8_withCross_aPriceEqualToTheOrders_doesNotReachIt_butOneThroughItDoes() {
+        PaperOrderBook cross = new PaperOrderBook(LimitFillMode.CROSS);
+        RestingOrder buy = order(OrderSide.BUY, "100");
+        RestingOrder sell = order(OrderSide.SELL, "110");
+        cross.track(buy);
+        cross.track(sell);
+
+        assertThat(cross.onRange(range("100", "110", NEXT_MINUTE)))
+                .as("the queue at the order's own price may not have been reached")
+                .isEmpty();
+        assertThat(cross.onRange(range("99.99", "110", NEXT_MINUTE))).containsExactly(buy);
+        assertThat(cross.onRange(range("100", "110.01", NEXT_MINUTE))).containsExactly(sell);
+        assertThat(cross.size()).isZero();
+    }
+
+    @Test
+    void D77_aTradeBeforeTheOrderWasPlaced_neverFillsIt_eachSideReadingTheTimeOfItsOwnBound() {
+        RestingOrder buy = order(OrderSide.BUY, "100");
+        RestingOrder sell = order(OrderSide.SELL, "110");
+        book.track(buy);
+        book.track(sell);
+        // The low was traded before both orders were placed, the high after.
+        PriceRange trades = new PriceRange(
+                MarketType.SPOT,
+                PAIR,
+                new BigDecimal("90"),
+                new BigDecimal("120"),
+                PLACED.minusSeconds(1),
+                false,
+                FillSource.LIVE,
+                PLACED.minusSeconds(1),
+                PLACED.plusSeconds(1));
+
+        assertThat(book.onRange(trades)).containsExactly(sell);
+        assertThat(book.size()).isEqualTo(1);
     }
 
     private static RestingOrder order(OrderSide side, String price) {

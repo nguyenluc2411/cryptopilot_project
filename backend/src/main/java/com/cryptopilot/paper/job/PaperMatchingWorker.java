@@ -1,6 +1,8 @@
 package com.cryptopilot.paper.job;
 
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketTrade;
+import com.cryptopilot.market.MarketTradeListener;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.MinuteKlineListener;
@@ -12,6 +14,7 @@ import com.cryptopilot.paper.matching.PaperOrderBook.BookKey;
 import com.cryptopilot.paper.model.PriceRange;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
+import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import jakarta.annotation.PreDestroy;
 import java.time.Clock;
@@ -46,18 +49,27 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
  * Runs the paper matching engine: one consumer thread owns a {@link PaperOrderBook} and applies to it, in arrival
- * order, the orders that start or stop waiting and the 1-minute candles of the market streams; a replay thread fetches
- * the closed candles the engine missed (Q-T6). Kept apart from the plan engine of the {@code trading} module (Q-T1).
+ * order, the orders that start or stop waiting, the market trades of the pairs and their 1-minute candles; a replay
+ * thread fetches the closed candles the engine missed (Q-T6). Kept apart from the plan engine of the {@code trading}
+ * module (Q-T1).
  *
  * <h2>Feeding</h2>
  *
  * <ul>
+ *   <li>Market trades are the live path (Q-T6, TR-05): each one is matched as it comes, so an order fills within the
+ *       trade's arrival and the storing of its fill, and the orders behind it in the book are reached by the next
+ *       trade. The trades of a pair that arrive while the consumer is busy are merged into one waiting range, with the
+ *       lowest and highest price and the time each was traded, and queued once: the stream reader never blocks, and
+ *       no price is skipped. An order a trade reached fills at that trade's time.
+ *   <li>The forming candles of a pair fill orders only while the pair's trades are silent for {@code trade-silence}:
+ *       Futures, a pair streamed without trades, or a lost trade stream. A closed candle always fills what it reached,
+ *       so a trade lost on a reconnection is made up for at the candle's open time (D-78), and it moves the watermark.
  *   <li>A closed candle is queued as it comes. The forming updates of a pair are merged into one waiting range per
  *       pair, with the lowest low and highest high of its candle, and queued once: the stream reader never blocks, and
  *       a slow consumer reads the pair's latest prices rather than a backlog of them. A forming update dropped for a
  *       newer candle is not lost, as the closed update of its candle carries it in full.
- *   <li>A range fills every order of the pair it reached, at the order's price, at the open time of its candle
- *       (D-78), under the Trader's lock, in price-time priority; the fills of different Traders are stored at once
+ *   <li>A range fills every order of the pair it reached ({@code limit-fill-mode}, Q-T8), at the order's price, at the
+ *       time the range reached it, under the Trader's lock, in price-time priority; the fills of different Traders are stored at once
  *       ({@code fill-parallelism}), those of one Trader in order; an order cancelled meanwhile is not filled (see
  *       {@link PaperMatchingService#fill}). Ordering between an order and a range does not matter for correctness: a
  *       candle that opened before an order was placed never fills it (D-77).
@@ -80,7 +92,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <p>A fill that fails is tried again on the pair's next range once {@code retry-delay} has passed, until
  * {@code retry-deadline}; then the order waits in the book again and the pair's watermark stays held until a restart.
  *
- * <p>Rule: TR-02; NSF-07; Q-T1, Q-T6; A-04; D-77, D-78; ADR-011.
+ * <p>Rule: TR-02, TR-05; NSF-07; Q-T1, Q-T6, Q-T8; A-04; D-77, D-78; ADR-011.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
  * (producer-consumer) and ch. 7 (cancellation and shutdown).
@@ -90,7 +102,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * "Aggregator" (the forming updates of a candle merged into one).
  */
 @Component
-public class PaperMatchingWorker implements MinuteKlineListener {
+public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeListener {
 
     private static final Logger log = LoggerFactory.getLogger(PaperMatchingWorker.class);
     private static final Duration MINUTE = Duration.ofMinutes(1);
@@ -107,8 +119,14 @@ public class PaperMatchingWorker implements MinuteKlineListener {
     /** The merged forming range of each pair, waiting for the consumer; its key is queued once while present. */
     private final Map<BookKey, PriceRange> forming = new ConcurrentHashMap<>();
 
+    /** The merged market trades of each pair, waiting for the consumer; its key is queued once while present. */
+    private final Map<BookKey, PriceRange> trades = new ConcurrentHashMap<>();
+
     /** Owned by the consumer thread once it starts; written by {@link #start()} before that. */
-    private final PaperOrderBook book = new PaperOrderBook();
+    private final PaperOrderBook book;
+
+    /** When the consumer last read a trade of each pair. */
+    private final Map<BookKey, Instant> lastTrade = new HashMap<>();
 
     private final Map<BookKey, Instant> lastClosed = new HashMap<>();
     private final Set<BookKey> replaying = new HashSet<>();
@@ -138,6 +156,7 @@ public class PaperMatchingWorker implements MinuteKlineListener {
         this.properties = properties;
         this.clock = clock;
         this.threads = threads;
+        this.book = new PaperOrderBook(properties.limitFillMode());
     }
 
     /**
@@ -192,7 +211,7 @@ public class PaperMatchingWorker implements MinuteKlineListener {
 
     /** Whether nothing is queued for the consumer or the replay thread; for tests. */
     boolean isIdle() {
-        return queue.isEmpty() && forming.isEmpty() && replays.isEmpty();
+        return queue.isEmpty() && forming.isEmpty() && trades.isEmpty() && replays.isEmpty();
     }
 
     @Override
@@ -209,6 +228,24 @@ public class PaperMatchingWorker implements MinuteKlineListener {
                 kline.closed(),
                 FillSource.LIVE);
         submit(range);
+    }
+
+    /** Hands a market trade to the consumer without waiting; see the class comment. */
+    @Override
+    public void onTrade(MarketTrade trade) {
+        if (!running) {
+            return;
+        }
+        PriceRange range = PriceRange.of(trade);
+        BookKey key = new BookKey(range.market(), range.pairId());
+        AtomicBoolean fresh = new AtomicBoolean();
+        trades.compute(key, (ignored, waiting) -> {
+            fresh.set(waiting == null);
+            return waiting == null ? range : waiting.withTrades(range);
+        });
+        if (fresh.get()) {
+            queue.offer(new Command.Trades(key));
+        }
     }
 
     /** Hands a live range to the consumer without waiting; see the class comment. */
@@ -284,6 +321,12 @@ public class PaperMatchingWorker implements MinuteKlineListener {
                     onRange(range);
                 }
             }
+            case Command.Trades tradesKey -> {
+                PriceRange range = trades.remove(tradesKey.key());
+                if (range != null) {
+                    onTrades(tradesKey.key(), range);
+                }
+            }
             case Command.ReplayDone done -> {
                 replaying.remove(done.key());
                 lastClosed.merge(done.key(), done.until().minus(MINUTE), (a, b) -> a.isAfter(b) ? a : b);
@@ -301,12 +344,9 @@ public class PaperMatchingWorker implements MinuteKlineListener {
         }
         retryDue(key);
         boolean tracked = book.hasOrders(range.market(), range.pairId());
-        List<RestingOrder> reached = book.onRange(range);
-        fillAll(
-                key,
-                reached.stream()
-                        .map(order -> new Fill(order, range.from(), range.source(), null))
-                        .toList());
+        if (range.closed() || !tradesFlow(key)) {
+            fillReached(key, range);
+        }
         boolean replayed = range.source() == FillSource.REPLAY;
         if (range.closed()
                 && (tracked || replayed)
@@ -315,6 +355,32 @@ public class PaperMatchingWorker implements MinuteKlineListener {
                 && !watermarkHeld.contains(key)) {
             advanceWatermark(range);
         }
+    }
+
+    /** Fills at once what the pair's latest trades reached; trades never move the watermark. */
+    private void onTrades(BookKey key, PriceRange range) {
+        lastTrade.put(key, clock.instant());
+        retryDue(key);
+        fillReached(key, range);
+    }
+
+    /** Whether a trade of the pair was read within {@code trade-silence}, so its forming candles are left to them. */
+    private boolean tradesFlow(BookKey key) {
+        Instant last = lastTrade.get(key);
+        return last != null && clock.instant().isBefore(last.plus(properties.tradeSilence()));
+    }
+
+    /** Takes from the book the orders the range reached and stores their fills, each at the time it was reached. */
+    private void fillReached(BookKey key, PriceRange range) {
+        fillAll(
+                key,
+                book.onRange(range).stream()
+                        .map(order -> new Fill(
+                                order,
+                                order.side() == OrderSide.BUY ? range.lowAt() : range.highAt(),
+                                range.source(),
+                                null))
+                        .toList());
     }
 
     /**
@@ -603,6 +669,9 @@ public class PaperMatchingWorker implements MinuteKlineListener {
 
         /** Read the pair's merged forming range. */
         record Forming(BookKey key) implements Command {}
+
+        /** Read the pair's merged market trades. */
+        record Trades(BookKey key) implements Command {}
 
         /** A replay of the pair has caught up; {@code until} is the open time of the first candle not replayed. */
         record ReplayDone(BookKey key, Instant until) implements Command {}

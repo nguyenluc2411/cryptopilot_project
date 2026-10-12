@@ -1,5 +1,6 @@
 package com.cryptopilot.paper.config;
 
+import com.cryptopilot.paper.model.enums.LimitFillMode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -11,9 +12,13 @@ import org.springframework.validation.annotation.Validated;
 /**
  * The paper matching engine, {@code cryptopilot.paper.matching}.
  *
- * <p>Rule: TR-02; NSF-07; Q-T6; A-04.
+ * <p>Rule: TR-02, TR-05; NSF-07; Q-T6, Q-T8; A-04.
  *
  * @param enabled whether working LIMIT orders are matched at all
+ * @param limitFillMode whether a price equal to a waiting order's own fills it ({@code TOUCH}) or the price must trade
+ *     through it ({@code CROSS}, Q-T8)
+ * @param tradeSilence how long after a pair's last market trade its forming 1-minute candles fill orders again: while
+ *     its trades flow they fill orders at once, and a lost trade stream falls back to the candles
  * @param retryDelay how long a fill that failed waits before the pair's next price update tries it again
  * @param retryDeadline how long after its first failure a fill is given up; the order then stays NEW and waits in the
  *     book again, and the pair's watermark is held so a restart replays the candle that reached it
@@ -26,6 +31,8 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties("cryptopilot.paper.matching")
 public record PaperMatchingProperties(
         @DefaultValue("true") boolean enabled,
+        @NotNull @DefaultValue("CROSS") LimitFillMode limitFillMode,
+        @NotNull @DefaultValue("5s") Duration tradeSilence,
         @NotNull @DefaultValue("2s") Duration retryDelay,
         @NotNull @DefaultValue("10m") Duration retryDeadline,
         @Min(1) @DefaultValue("8") int fillParallelism,

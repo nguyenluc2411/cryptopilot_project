@@ -285,6 +285,13 @@ cryptopilot:
       # TR-02: the commission of a Spot fill, taken in the coin it brings in; Binance's standard 0.1% maker and taker.
       spot-maker-fee-rate: 0.001
       spot-taker-fee-rate: 0.001
+    matching:
+      # TR-05, Q-T8: a waiting LIMIT order fills when a market trade goes through its price (CROSS), or also when one
+      # trades at it (TOUCH).
+      limit-fill-mode: CROSS
+      # TR-05: while a pair's market trades flow they fill orders at once; after this long without one its forming
+      # 1-minute candles fill orders again (a lost trade stream, or a pair streamed without trades).
+      trade-silence: 5s
   alert:
     # NSF-06, T-055: PRICE alerts evaluated on the 1-minute candle updates. Off here, on in the dev and prod
     # profiles, so a test context starts no engine.

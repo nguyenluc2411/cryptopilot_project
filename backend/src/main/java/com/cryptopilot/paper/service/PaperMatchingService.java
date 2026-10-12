@@ -23,7 +23,7 @@ public interface PaperMatchingService {
      * Fills a working order the price reached, at its own price, as a maker: under its Trader's lock, and only if it
      * still works.
      *
-     * @param tradedAt the open time of the candle that reached it (D-78)
+     * @param tradedAt when the price reached it: the market trade's time, or the open time of the candle (D-78)
      * @return whether this call filled it; {@code false} when it was cancelled or filled first
      */
     boolean fill(RestingOrder order, Instant tradedAt, FillSource source);

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
+import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.dto.response.OrderResponse;
 import com.cryptopilot.paper.event.PaperOrderRested;
@@ -37,6 +38,33 @@ class PaperMatchingRecordsTest {
 
         assertThat(earlier.mergedWith(later)).isSameAs(later);
         assertThat(later.mergedWith(earlier)).isSameAs(later);
+    }
+
+    @Test
+    void TR05_aTrade_isARangeAtItsPrice_andTradesMerge_keepingTheTimeOfTheirLowAndOfTheirHigh() {
+        PriceRange first = PriceRange.of(trade("100", MINUTE));
+        PriceRange merged = first.withTrades(PriceRange.of(trade("98", MINUTE.plusMillis(10))))
+                .withTrades(PriceRange.of(trade("103", MINUTE.plusMillis(20))))
+                .withTrades(PriceRange.of(trade("98", MINUTE.plusMillis(30))));
+
+        assertThat(first.low()).isEqualByComparingTo("100");
+        assertThat(first.high()).isEqualByComparingTo("100");
+        assertThat(first.lowAt()).isEqualTo(MINUTE);
+        assertThat(first.closed()).isFalse();
+        assertThat(merged.low()).isEqualByComparingTo("98");
+        assertThat(merged.lowAt()).as("the earliest trade at the low").isEqualTo(MINUTE.plusMillis(10));
+        assertThat(merged.high()).isEqualByComparingTo("103");
+        assertThat(merged.highAt()).isEqualTo(MINUTE.plusMillis(20));
+        assertThat(merged.from()).isEqualTo(MINUTE);
+        assertThat(merged.source()).isEqualTo(FillSource.LIVE);
+    }
+
+    @Test
+    void TR05_aCandle_recordsItsLowAndHighAtItsOpenTime() {
+        PriceRange candle = range("100", "105", MINUTE, true);
+
+        assertThat(candle.lowAt()).isEqualTo(MINUTE);
+        assertThat(candle.highAt()).isEqualTo(MINUTE);
     }
 
     @Test
@@ -81,6 +109,10 @@ class PaperMatchingRecordsTest {
         assertThat(new PlacedOrder(order, false).created()).isFalse();
         assertThat(OrderStatus.NEW.isOpen()).isTrue();
         assertThat(OrderStatus.FILLED.isOpen()).isFalse();
+    }
+
+    private static MarketTrade trade(String price, Instant at) {
+        return new MarketTrade(MarketType.SPOT, PAIR, 1, new BigDecimal(price), BigDecimal.ONE, at, false, at);
     }
 
     private static PriceRange range(String low, String high, Instant from, boolean closed) {
