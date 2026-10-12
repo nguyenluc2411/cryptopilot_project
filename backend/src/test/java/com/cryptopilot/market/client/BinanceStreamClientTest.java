@@ -1,6 +1,7 @@
 package com.cryptopilot.market.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import com.cryptopilot.market.model.enums.BinanceVenue;
 import java.net.URI;
@@ -40,6 +41,55 @@ class BinanceStreamClientTest {
                         "ethusdt@markPrice@1s");
     }
 
+    /** TR-03: a Spot pair adds its trades, best bid and ask and depth; a futures pair adds nothing yet. */
+    @Test
+    void TR03_withTradingStreams_aSpotPairAddsItsTradesBookTickerAndDepth() {
+        try (BinanceStreamClient client = new BinanceStreamClient(
+                properties(new BinanceStreamProperties.Trading(true, 10, Duration.ofSeconds(10), 50)),
+                JsonMapper.builder().build(),
+                Clock.systemUTC())) {
+            assertThat(client.streamsFor(BinanceVenue.SPOT, "BTCUSDT"))
+                    .startsWith(BinanceStreamClient.streamsOf(BinanceVenue.SPOT, "BTCUSDT")
+                            .toArray(String[]::new))
+                    .endsWith("btcusdt@aggTrade", "btcusdt@bookTicker", "btcusdt@depth10@100ms")
+                    .hasSize(9);
+            assertThat(client.streamsFor(BinanceVenue.USD_M_FUTURES, "BTCUSDT"))
+                    .isEqualTo(BinanceStreamClient.streamsOf(BinanceVenue.USD_M_FUTURES, "BTCUSDT"));
+        }
+        try (BinanceStreamClient client = new BinanceStreamClient(
+                properties(new BinanceStreamProperties.Trading(false, 20, Duration.ofSeconds(10), 50)),
+                JsonMapper.builder().build(),
+                Clock.systemUTC())) {
+            assertThat(client.streamsFor(BinanceVenue.SPOT, "BTCUSDT"))
+                    .isEqualTo(BinanceStreamClient.streamsOf(BinanceVenue.SPOT, "BTCUSDT"));
+        }
+    }
+
+    @Test
+    void TR03_theDepthCarriesOnlyTheLevelsBinanceOffers() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new BinanceStreamProperties.Trading(true, 15, Duration.ofSeconds(10), 50))
+                .withMessageContaining("5, 10 or 20");
+    }
+
+    private static BinanceStreamProperties properties(BinanceStreamProperties.Trading trading) {
+        return new BinanceStreamProperties(
+                true,
+                URI.create("wss://stream.binance.com:9443"),
+                URI.create("wss://fstream.binance.com/market"),
+                100,
+                Duration.ofSeconds(10),
+                new BinanceStreamProperties.Reconnect(Duration.ofSeconds(1), Duration.ofSeconds(60), 20),
+                Duration.ofHours(23),
+                Duration.ofSeconds(60),
+                Duration.ofMinutes(5),
+                Duration.ofSeconds(60),
+                Duration.ofMinutes(2),
+                4,
+                10000,
+                trading);
+    }
+
     /** Each venue's connections go to its own host; futures keep the /market route (7.1.1). */
     @Test
     void NSF03_eachVenue_connectsToItsOwnHost() {
@@ -56,7 +106,8 @@ class BinanceStreamClientTest {
                 Duration.ofSeconds(60),
                 Duration.ofMinutes(2),
                 4,
-                10000);
+                10000,
+                new BinanceStreamProperties.Trading(false, 20, Duration.ofSeconds(10), 50));
         BinanceStreamShard.Listener ignore = new BinanceStreamShard.Listener() {
             @Override
             public void onMessage(StreamMessage message) {}

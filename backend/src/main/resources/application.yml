@@ -175,6 +175,8 @@ cryptopilot:
       enabled: false
       update-interval: 1s
       overview-interval: 2s
+      # TR-03: the trades and depth of the trading screen, pushed in windows of 100 ms (plan section 12.3).
+      trading-interval: 100ms
     indicators:
       # T-025: a series is rebuilt from its latest stored closed candles (TD 7.2: 1000, so EMA200 no longer depends on
       # where the history starts). No schedule: the indicators follow the closed candles.
@@ -238,6 +240,15 @@ cryptopilot:
       snapshot-max-age: 2m
       partitions: 4
       queue-capacity: 10000
+      trading:
+        # TR-03: each Spot pair also streams @aggTrade, @bookTicker and @depth20@100ms for the paper engine and the
+        # trading screen: nine streams a pair instead of six.
+        enabled: true
+        depth-levels: 20
+        # A best bid and ask or depth older than this is not served as current (a lost stream).
+        max-age: 10s
+        # The latest trades kept per pair for the trades panel.
+        recent-trades: 50
   user:
     risk-profiles:
       # T-103, BR-66, D-53: risk profiles v1, percentages of capital. No profile may exceed AGGRESSIVE; checked at

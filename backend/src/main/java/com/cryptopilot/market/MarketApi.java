@@ -44,6 +44,18 @@ public interface MarketApi {
     Optional<BigDecimal> currentLastPrice(MarketType market, String symbol);
 
     /**
+     * The pair's best bid and ask from the {@code bookTicker} stream, when a current one is held (TR-03); empty for a
+     * pair not streamed with the trading streams, or when the stream is lost.
+     */
+    Optional<BookTop> currentBookTop(MarketType market, UUID pairId);
+
+    /**
+     * The top levels of the pair's order book from the {@code depth} stream, when a current snapshot is held (TR-03);
+     * empty for a pair not streamed with the trading streams, or when the stream is lost.
+     */
+    Optional<OrderBookDepth> currentDepth(MarketType market, UUID pairId);
+
+    /**
      * The current last prices of several pairs of one market, read in one round trip; a pair without a current price
      * is left out.
      */

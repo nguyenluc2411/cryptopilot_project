@@ -1,9 +1,11 @@
 package com.cryptopilot.market.service.impl;
 
+import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKlineBatch;
+import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
@@ -48,6 +50,7 @@ public class MarketApiImpl implements MarketApi {
     private final PriceCacheService prices;
     private final MinuteKlineService minuteKlines;
     private final CoinWriter coinWriter;
+    private final TradingMarketData trading;
 
     @Override
     @Transactional(readOnly = true)
@@ -140,6 +143,16 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public Optional<BigDecimal> currentLastPrice(MarketType market, String symbol) {
         return current(market, symbol, CachedPrice::lastPrice);
+    }
+
+    @Override
+    public Optional<BookTop> currentBookTop(MarketType market, UUID pairId) {
+        return trading.currentBookTop(market, pairId);
+    }
+
+    @Override
+    public Optional<OrderBookDepth> currentDepth(MarketType market, UUID pairId) {
+        return trading.currentDepth(market, pairId);
     }
 
     @Override

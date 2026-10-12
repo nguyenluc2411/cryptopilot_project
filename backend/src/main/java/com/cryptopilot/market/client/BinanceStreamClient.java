@@ -28,7 +28,10 @@ import tools.jackson.databind.json.JsonMapper;
  *   <li>futures {@code <symbol>@markPrice@1s} — mark price, index price and the predicted funding rate.
  * </ul>
  *
- * <p>Six streams per pair and market (D-43; {@code kline_1m} added by T-043).
+ * <p>Six streams per pair and market (D-43; {@code kline_1m} added by T-043). A Spot pair carries three more when
+ * {@code trading} is enabled (TR-03): {@code <symbol>@aggTrade} (each trade, for the paper engine and the trades
+ * panel), {@code <symbol>@bookTicker} (best bid and ask as they change) and {@code <symbol>@depth20@100ms} (the top
+ * levels of the order book).
  *
  * <p>Public market streams only: no listen key, no user data stream, no API key (BR-09).
  *
@@ -49,7 +52,7 @@ public final class BinanceStreamClient implements AutoCloseable {
         this.http = HttpClient.newBuilder()
                 .connectTimeout(properties.connectTimeout())
                 .build();
-        this.parser = new BinanceStreamParser(json);
+        this.parser = new BinanceStreamParser(json, clock);
         this.timer = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofPlatform().name("market-stream-timer").daemon().factory());
         this.backoff = new ReconnectBackoff(
@@ -73,6 +76,22 @@ public final class BinanceStreamClient implements AutoCloseable {
             streams.add(s + "@kline_" + timeframe.code());
         }
         streams.add(venue == BinanceVenue.SPOT ? s + "@ticker" : s + "@markPrice@1s");
+        return List.copyOf(streams);
+    }
+
+    /**
+     * The streams this client opens for one pair on one venue: the six of NSF-03 and, on Spot when {@code trading} is
+     * enabled, the three of TR-03.
+     */
+    public List<String> streamsFor(BinanceVenue venue, String symbol) {
+        List<String> streams = new ArrayList<>(streamsOf(venue, symbol));
+        BinanceStreamProperties.Trading trading = properties.trading();
+        if (venue == BinanceVenue.SPOT && trading.enabled()) {
+            String s = symbol.toLowerCase(Locale.ROOT);
+            streams.add(s + "@aggTrade");
+            streams.add(s + "@bookTicker");
+            streams.add(s + "@depth" + trading.depthLevels() + "@100ms");
+        }
         return List.copyOf(streams);
     }
 

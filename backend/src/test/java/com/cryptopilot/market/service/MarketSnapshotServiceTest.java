@@ -199,6 +199,7 @@ class MarketSnapshotServiceTest {
                 Duration.ofSeconds(60),
                 Duration.ofMinutes(2),
                 4,
-                100);
+                100,
+                new BinanceStreamProperties.Trading(false, 20, Duration.ofSeconds(10), 50));
     }
 }

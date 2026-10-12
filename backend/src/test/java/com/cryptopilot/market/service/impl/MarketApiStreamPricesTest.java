@@ -65,7 +65,8 @@ class MarketApiStreamPricesTest {
                 mock(LeverageBracketRepository.class),
                 cache,
                 mock(MinuteKlineService.class),
-                mock(CoinWriter.class));
+                mock(CoinWriter.class),
+                mock(TradingMarketData.class));
     }
 
     @AfterEach

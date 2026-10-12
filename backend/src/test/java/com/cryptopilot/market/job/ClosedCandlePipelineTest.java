@@ -247,6 +247,7 @@ class ClosedCandlePipelineTest {
                 Duration.ofSeconds(60),
                 Duration.ofMinutes(2),
                 partitions,
-                capacity);
+                capacity,
+                new BinanceStreamProperties.Trading(false, 20, Duration.ofSeconds(10), 50));
     }
 }

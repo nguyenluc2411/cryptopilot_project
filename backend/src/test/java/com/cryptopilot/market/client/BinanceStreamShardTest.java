@@ -414,6 +414,7 @@ class BinanceStreamShardTest {
                 Duration.ofSeconds(60),
                 Duration.ofMinutes(2),
                 2,
-                100);
+                100,
+                new BinanceStreamProperties.Trading(false, 20, Duration.ofSeconds(10), 50));
     }
 }

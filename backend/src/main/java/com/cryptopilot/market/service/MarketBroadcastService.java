@@ -30,4 +30,13 @@ public interface MarketBroadcastService {
      * @return how many overviews were handed to the broker
      */
     int pushOverviews();
+
+    /**
+     * Pushes the trading topics of TR-03 that have something waiting: each {@code trades} destination once with the
+     * trades streamed since the previous push, oldest first, and each {@code depth} destination once with its latest
+     * snapshot.
+     *
+     * @return how many messages were handed to the broker
+     */
+    int pushTrading();
 }

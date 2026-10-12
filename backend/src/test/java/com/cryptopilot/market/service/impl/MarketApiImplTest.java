@@ -48,7 +48,8 @@ class MarketApiImplTest {
     private final LeverageBracketRepository brackets = mock(LeverageBracketRepository.class);
     private final PriceCacheService prices = mock(PriceCacheService.class);
     private final MinuteKlineService minuteKlines = mock(MinuteKlineService.class);
-    private final MarketApiImpl api = new MarketApiImpl(pairs, coins, brackets, prices, minuteKlines, coinWriter);
+    private final MarketApiImpl api =
+            new MarketApiImpl(pairs, coins, brackets, prices, minuteKlines, coinWriter, mock(TradingMarketData.class));
 
     @Test
     void TR04_coins_areNamedBySymbol_andAnUnknownSymbolIsLeftOut() {

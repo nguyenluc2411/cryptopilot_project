@@ -51,8 +51,9 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
 @EnableConfigurationProperties(RealtimeProperties.class)
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
-    /** The public market destinations of TECHNICAL_DESIGN 9. */
-    static final Pattern PUBLIC_TOPICS = Pattern.compile("/topic/(ticker|kline|overview)\\.[A-Za-z0-9._]+");
+    /** The public market destinations of TECHNICAL_DESIGN 9, and the trades and depth of the trading screen (TR-03). */
+    static final Pattern PUBLIC_TOPICS =
+            Pattern.compile("/topic/(ticker|kline|overview|trades|depth)\\.[A-Za-z0-9._]+");
 
     private final RealtimeProperties properties;
     private final CorsProperties origins;
