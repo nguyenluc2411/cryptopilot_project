@@ -39,6 +39,10 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     List<PaperOrder> findByAccountIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
             UUID accountId, Collection<OrderStatus> statuses);
 
+    /** The account's orders of one pair in these statuses, oldest first. */
+    List<PaperOrder> findByAccountIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(
+            UUID accountId, UUID pairId, Collection<OrderStatus> statuses);
+
     /**
      * One page of an account's orders in these statuses, placed in {@code [from, to)}, newest first. No parameter is
      * null, so PostgreSQL can type every one.

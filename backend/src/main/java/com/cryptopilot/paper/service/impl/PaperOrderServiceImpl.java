@@ -10,8 +10,10 @@ import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
+import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.PairListing;
@@ -25,6 +27,8 @@ import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
+import com.cryptopilot.paper.matching.BookSweep;
+import com.cryptopilot.paper.matching.BookSweep.Slice;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
 import com.cryptopilot.paper.model.RestingOrder;
@@ -76,10 +80,16 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>The price is rounded to the pair's tick (BR-30) and the quantity floored to its step (BR-23), then to the 8
  * decimals a balance holds; an order worth less than the pair's minimum notional is refused (MSG15), as the exchange
- * refuses it. A MARKET order, and a LIMIT order the market already stands at, executes at the current Spot last price
- * of the latest-price cache; none is ever executed at a price that is not current (NSF-03).
+ * refuses it.
  *
- * <p>Rule: TR-02, TR-04; BR-21, BR-23, BR-30; NSF-03.
+ * <h2>Executing on arrival</h2>
+ *
+ * <p>A MARKET order, and a LIMIT order that crosses the book, take the levels of the other side of the exchange's book
+ * as Binance matches them ({@link BookSweep}, Q-T7): the current depth20, or without one the best bid and ask as a
+ * single level, or for a pair without the trading streams the current last price, at which the whole order executes.
+ * None is ever executed at a price that is not current (NSF-03).
+ *
+ * <p>Rule: TR-02, TR-04, TR-06; BR-21, BR-23, BR-30; NSF-03; Q-T7.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -125,11 +135,11 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         }
         PairCoins coins = market.pairCoins(pair.pairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + pair.pairId() + " is tradable but not stored"));
-        Optional<BigDecimal> last = market.currentLastPrice(MarketType.SPOT, pair.symbol());
+        Optional<Book> book = bookFor(pair, terms.side());
         String key = request.clientOrderId() == null ? UuidV7.next().toString() : request.clientOrderId();
         PaperOrder order = request.type() == OrderType.MARKET
-                ? placeMarket(account, pair, coins, terms, key, last)
-                : placeLimit(account, pair, coins, terms, key, last);
+                ? placeMarket(account, pair, coins, terms, key, book)
+                : placeLimit(account, pair, coins, terms, key, book);
         log.debug(
                 "Paper order {} {} {} {} placed: {}",
                 order.getId(),
@@ -153,11 +163,33 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                     "order " + orderId + " is " + order.getOrderStatus() + " and cannot be cancelled",
                     order.getOrderStatus());
         }
-        PairCoins coins = coinsOf(order.getPairId());
-        wallets.unlock(account, WalletType.SPOT, lockedCoin(order, coins), order.lockedAmount());
-        order.cancel(clock.instant());
-        events.publishEvent(new PaperOrderCanceled(order.getId()));
+        cancelWorking(account, order, coinsOf(order.getPairId()), clock.instant());
         return toResponse(order, symbolsOf(List.of(order.getPairId())));
+    }
+
+    @Override
+    @Transactional
+    public List<OrderResponse> cancelAll(UUID userId, UUID pairId) {
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        PaperAccount account = accountOf(userId);
+        List<PaperOrder> open = orders.findByAccountIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(
+                account.getId(), pairId, OrderStatus.OPEN);
+        if (open.isEmpty()) {
+            return List.of();
+        }
+        PairCoins coins = coinsOf(pairId);
+        Instant now = clock.instant();
+        open.forEach(order -> cancelWorking(account, order, coins, now));
+        String symbol = symbolOf(symbolsOf(List.of(pairId)), pairId);
+        log.debug("Paper orders of account {} on {} cancelled: {}", account.getId(), symbol, open.size());
+        return open.stream().map(order -> toResponse(order, symbol)).toList();
+    }
+
+    /** Gives back what a working order locked and ends it; the engine drops it from its book after the commit. */
+    private void cancelWorking(PaperAccount account, PaperOrder order, PairCoins coins, Instant at) {
+        wallets.unlock(account, WalletType.SPOT, lockedCoin(order, coins), order.lockedAmount());
+        order.cancel(at);
+        events.publishEvent(new PaperOrderCanceled(order.getId()));
     }
 
     @Override
@@ -225,74 +257,76 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     }
 
     /**
-     * A MARKET order executes whole at the current last price, as a taker, paying from what is free; without a current
-     * price it is refused and nothing is stored.
+     * A MARKET order takes the book at once, as a taker, paying from what is free: one fill per level, flagged when it
+     * needed more than the depth shown. Without a current price it is refused and nothing is stored.
      */
     private PaperOrder placeMarket(
-            PaperAccount account,
-            TradablePair pair,
-            PairCoins coins,
-            Terms terms,
-            String key,
-            Optional<BigDecimal> last) {
-        BigDecimal price = last.orElseThrow(() -> priceUnavailable(pair));
-        BigDecimal quantity;
+            PaperAccount account, TradablePair pair, PairCoins coins, Terms terms, String key, Optional<Book> found) {
+        Book book = found.orElseThrow(() -> priceUnavailable(pair));
+        BookSweep.Result sweep;
         PaperOrder order;
         if (terms.quoteAmount() != null) {
-            quantity = scaled(pair.filters().floorQuantity(Rounding.divide(terms.quoteAmount(), price)));
-            requireTradable(pair.filters(), price, quantity, "quoteOrderQty");
+            sweep = BookSweep.ofQuote(book.levels(), terms.quoteAmount(), pair.filters());
+            requireTradable(pair.filters(), sweep, "quoteOrderQty");
             order = PaperOrder.spotMarketBuyFor(account.getId(), pair.pairId(), key, terms.quoteAmount());
         } else {
-            quantity = terms.quantity();
-            requireTradable(pair.filters(), price, quantity, "quantity");
-            order = PaperOrder.spotMarket(account.getId(), pair.pairId(), key, terms.side(), quantity);
+            sweep = BookSweep.ofQuantity(book.levels(), terms.side(), terms.quantity(), null);
+            requireTradable(pair.filters(), sweep, "quantity");
+            order = PaperOrder.spotMarket(account.getId(), pair.pairId(), key, terms.side(), terms.quantity());
         }
         orders.save(order);
-        settlement.execute(
-                account, order, coins, price, quantity, Liquidity.TAKER, FillSource.LIVE, clock.instant(), false);
+        Instant now = clock.instant();
+        execute(account, order, coins, sweep, now, false);
+        if (order.isOpen()) {
+            order.completeFill(now);
+        }
+        if (sweep.pastBook() && book.shown()) {
+            order.flagDepthExhausted();
+        }
         return order;
     }
 
     /**
-     * A LIMIT order the last price already reached executes at that price, as a taker (a post-only one expires
-     * instead); one it has not reached waits with what it needs locked (GTC, GTX) or expires (IOC, FOK). Without a
-     * current price, a waiting order waits; an IOC or FOK order, which must be decided now, is refused.
+     * A LIMIT order first locks what it needs, as the exchange checks the balance before it matches. Then it takes the
+     * levels at or better than its price, as a taker; what is left waits in the book (GTC) or expires (IOC). A FOK
+     * order the levels cannot fill whole executes nothing and expires, and a post-only (GTX) order that would take a
+     * level expires. Without a current price, a GTC or GTX order waits; an IOC or FOK order, which must be decided
+     * now, is refused.
      */
     private PaperOrder placeLimit(
-            PaperAccount account,
-            TradablePair pair,
-            PairCoins coins,
-            Terms terms,
-            String key,
-            Optional<BigDecimal> last) {
-        requireTradable(pair.filters(), terms.price(), terms.quantity(), "quantity");
+            PaperAccount account, TradablePair pair, PairCoins coins, Terms terms, String key, Optional<Book> book) {
+        requireTradable(pair.filters(), terms.price().multiply(terms.quantity()), terms.quantity(), "quantity");
         TimeInForce timeInForce = terms.timeInForce();
         boolean decidedNow = timeInForce == TimeInForce.IOC || timeInForce == TimeInForce.FOK;
-        if (last.isEmpty() && decidedNow) {
+        if (book.isEmpty() && decidedNow) {
             throw priceUnavailable(pair);
         }
         PaperOrder order = orders.save(PaperOrder.spotLimit(
                 account.getId(), pair.pairId(), key, terms.side(), timeInForce, terms.price(), terms.quantity()));
-        boolean reached = last.isPresent() && reaches(terms.side(), last.get(), terms.price());
-        if (reached && timeInForce != TimeInForce.GTX) {
-            settlement.execute(
-                    account,
-                    order,
-                    coins,
-                    last.get(),
-                    terms.quantity(),
-                    Liquidity.TAKER,
-                    FillSource.LIVE,
-                    clock.instant(),
-                    false);
+        CoinListing locked = lockedCoin(order, coins);
+        wallets.preload(account, WalletType.SPOT, locked);
+        wallets.lock(account, WalletType.SPOT, locked, order.lockedAmount());
+        BookSweep.Result sweep = book.map(
+                        found -> BookSweep.ofQuantity(found.levels(), terms.side(), terms.quantity(), terms.price()))
+                .orElseGet(() -> new BookSweep.Result(List.of(), false));
+        Instant now = clock.instant();
+        boolean wouldTake = timeInForce == TimeInForce.GTX && !sweep.isEmpty();
+        boolean notWhole = timeInForce == TimeInForce.FOK && sweep.quantity().compareTo(terms.quantity()) < 0;
+        if (wouldTake || notWhole) {
+            wallets.unlock(account, WalletType.SPOT, locked, order.lockedAmount());
+            order.expire(wouldTake ? WOULD_TAKE : NOT_FILLABLE, now);
             return order;
         }
-        // An order that ends now still needs what it would have locked, as the exchange checks the balance first.
-        wallets.preload(account, WalletType.SPOT, lockedCoin(order, coins));
-        wallets.lock(account, WalletType.SPOT, lockedCoin(order, coins), order.lockedAmount());
-        if (reached || decidedNow) {
-            wallets.unlock(account, WalletType.SPOT, lockedCoin(order, coins), order.lockedAmount());
-            order.expire(reached ? WOULD_TAKE : NOT_FILLABLE, clock.instant());
+        execute(account, order, coins, sweep, now, true);
+        if (!order.isOpen()) {
+            if (sweep.pastBook() && book.get().shown()) {
+                order.flagDepthExhausted();
+            }
+            return order;
+        }
+        if (decidedNow) {
+            wallets.unlock(account, WalletType.SPOT, locked, order.lockedAmount());
+            order.expire(NOT_FILLABLE, now);
             return order;
         }
         events.publishEvent(new PaperOrderRested(new RestingOrder(
@@ -306,10 +340,57 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         return order;
     }
 
-    /** Whether a price reaches a limit: at or below it for a buy, at or above it for a sell. */
-    static boolean reaches(OrderSide side, BigDecimal price, BigDecimal limit) {
-        int compared = price.compareTo(limit);
-        return side == OrderSide.BUY ? compared <= 0 : compared >= 0;
+    /** Settles each slice of a sweep as one fill, as a taker. */
+    private void execute(
+            PaperAccount account,
+            PaperOrder order,
+            PairCoins coins,
+            BookSweep.Result sweep,
+            Instant at,
+            boolean fromLocked) {
+        for (Slice slice : sweep.slices()) {
+            settlement.execute(
+                    account,
+                    order,
+                    coins,
+                    slice.price(),
+                    slice.quantity(),
+                    Liquidity.TAKER,
+                    FillSource.LIVE,
+                    at,
+                    fromLocked);
+        }
+    }
+
+    /**
+     * The other side of the book an order of {@code side} takes: the asks for a BUY, the bids for a SELL. The current
+     * depth20; without one the best bid or ask, as one level; for a pair without the trading streams the current last
+     * price, as a level of unknown depth the whole order executes at. Empty without any of them.
+     */
+    private Optional<Book> bookFor(TradablePair pair, OrderSide side) {
+        boolean buy = side == OrderSide.BUY;
+        Optional<List<PriceLevel>> depth = market.currentDepth(MarketType.SPOT, pair.pairId())
+                .map(found -> buy ? found.asks() : found.bids())
+                .filter(levels -> !levels.isEmpty());
+        if (depth.isPresent()) {
+            return Optional.of(new Book(depth.get(), true));
+        }
+        Optional<PriceLevel> top = market.currentBookTop(MarketType.SPOT, pair.pairId())
+                .map(found -> buy ? bestAsk(found) : bestBid(found))
+                .filter(level -> level.price().signum() > 0);
+        if (top.isPresent()) {
+            return Optional.of(new Book(List.of(top.get()), true));
+        }
+        return market.currentLastPrice(MarketType.SPOT, pair.symbol())
+                .map(last -> new Book(List.of(new PriceLevel(last, BigDecimal.ZERO)), false));
+    }
+
+    private static PriceLevel bestAsk(BookTop top) {
+        return new PriceLevel(top.askPrice(), top.askQuantity());
+    }
+
+    private static PriceLevel bestBid(BookTop top) {
+        return new PriceLevel(top.bidPrice(), top.bidQuantity());
     }
 
     /** Which fields this stage accepts for the order type, before the pair is looked up. */
@@ -396,12 +477,18 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         return stored == null ? asked == null : asked != null && stored.compareTo(asked) == 0;
     }
 
+    /** An order that takes the book is refused when what it takes is below the pair's minimum notional (MSG15). */
+    private static void requireTradable(PairFilters filters, BookSweep.Result sweep, String field) {
+        requireTradable(filters, sweep.notional(), sweep.quantity(), field);
+    }
+
     /** An order below the pair's minimum notional is refused on the field that sized it (MSG15). */
-    private static void requireTradable(PairFilters filters, BigDecimal price, BigDecimal quantity, String field) {
-        if (quantity.signum() == 0 || filters.isBelowMinNotional(price.multiply(quantity))) {
+    private static void requireTradable(PairFilters filters, BigDecimal notional, BigDecimal quantity, String field) {
+        if (quantity.signum() == 0 || filters.isBelowMinNotional(notional)) {
             throw new FieldValidationException(
-                    "order of " + quantity.toPlainString() + " at " + price.toPlainString() + " is below the minimum"
-                            + " notional of " + filters.minNotional().toPlainString(),
+                    "order of " + quantity.toPlainString() + " worth " + notional.toPlainString()
+                            + " is below the minimum notional of "
+                            + filters.minNotional().toPlainString(),
                     Map.of(field, "MSG15"));
         }
     }
@@ -512,4 +599,13 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             BigDecimal price,
             BigDecimal quantity,
             BigDecimal quoteAmount) {}
+
+    /**
+     * The other side of the book an order takes on arrival.
+     *
+     * @param levels best first
+     * @param shown whether the levels are the exchange's book, so taking more than they hold is flagged; {@code false}
+     *     for the last price, whose depth is not known
+     */
+    private record Book(List<PriceLevel> levels, boolean shown) {}
 }

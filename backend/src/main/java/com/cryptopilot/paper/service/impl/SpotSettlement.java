@@ -26,7 +26,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Settles the execution of a whole Spot order in the Spot wallet: the coin paid goes out, the coin bought comes in,
+ * Settles one execution of a Spot order in the Spot wallet: the coin paid goes out, the coin bought comes in,
  * and the commission is taken from the coin that came in, as Binance charges an account that pays no fee in BNB. Each
  * change is a ledger entry pointing at the fill, so the trade history and the transaction history agree.
  *
@@ -34,8 +34,10 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>A buy pays its price times its quantity rounded up to the amount scale, and a sale brings it rounded down
  *       ({@link PaperOrder#buyCost}, {@link PaperOrder#saleProceeds}): the wallet never gains from a rounding.
  *   <li>The commission is the fee rate of the fill's liquidity times what came in, rounded up to the amount scale.
- *   <li>A working LIMIT order pays from what it locked; a buy that executes below its price gets the rest back. An
- *       order that executes on arrival pays from what is free, and is refused when too little is.
+ *   <li>A LIMIT order pays from what it locked, and its lock shrinks to what the rest of it needs
+ *       ({@link PaperOrder#lockedAfter}); a buy that executes below its price gets the difference back at once. A buy
+ *       at its price pays what its lock shrinks by, so all its executions together cost what one would have, never a
+ *       rounding more. A MARKET order pays from what is free, and is refused when too little is.
  * </ul>
  *
  * <p>Runs inside the caller's transaction, which holds the Trader's paper lock and has checked that the order works.
@@ -51,10 +53,10 @@ public class SpotSettlement {
     private final PaperOrderProperties fees;
 
     /**
-     * Executes the whole order at {@code price} and records the fill.
+     * Executes {@code quantity} of the order at {@code price} and records the fill.
      *
-     * @param quantity the base quantity; the order's own, or for a MARKET buy by total what its amount buys
-     * @param fromLocked whether the order pays from what it locked when it was placed (a working LIMIT order)
+     * @param quantity the base quantity, at most what the order has left
+     * @param fromLocked whether the order pays from what it locked when it was placed (a LIMIT order)
      * @throws com.cryptopilot.common.exception.BusinessException {@code PAPER_INSUFFICIENT_BALANCE} when an order
      *     that pays from what is free finds too little; the caller's transaction then rolls back
      */
@@ -71,7 +73,13 @@ public class SpotSettlement {
             boolean fromLocked) {
         wallets.preload(account, WalletType.SPOT, coins.base(), coins.quote());
         boolean buy = order.getSide() == OrderSide.BUY;
+        BigDecimal released = BigDecimal.ZERO;
         BigDecimal quoteAmount = buy ? PaperOrder.buyCost(price, quantity) : PaperOrder.saleProceeds(price, quantity);
+        if (fromLocked && buy) {
+            BigDecimal freed = order.lockedAmount().subtract(order.lockedAfter(quantity));
+            quoteAmount = quoteAmount.min(freed);
+            released = freed.subtract(quoteAmount);
+        }
         CoinListing paid = buy ? coins.quote() : coins.base();
         CoinListing received = buy ? coins.base() : coins.quote();
         BigDecimal paidAmount = buy ? quoteAmount : quantity;
@@ -85,11 +93,9 @@ public class SpotSettlement {
                 new Execution(price, quantity, quoteAmount, fee, received.coinId(), liquidity, source, tradedAt));
         Ref ref = Ref.to(LedgerRefType.FILL, fill.getId());
         if (fromLocked) {
-            BigDecimal locked = order.lockedAmount();
             wallets.spendLocked(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
-            BigDecimal left = locked.subtract(paidAmount);
-            if (left.signum() > 0) {
-                wallets.unlock(account, WalletType.SPOT, paid, left);
+            if (released.signum() > 0) {
+                wallets.unlock(account, WalletType.SPOT, paid, released);
             }
         } else {
             wallets.debit(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);

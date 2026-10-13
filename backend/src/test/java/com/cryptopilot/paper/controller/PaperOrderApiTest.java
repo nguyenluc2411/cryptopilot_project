@@ -1,17 +1,24 @@
 package com.cryptopilot.paper.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.everyItem;
+import static org.hamcrest.Matchers.is;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.MinuteKline;
+import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.job.PaperMatchingWorker;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
@@ -93,6 +100,9 @@ class PaperOrderApiTest {
 
     @Autowired
     private PaperMatchingWorker worker;
+
+    @Autowired
+    private TradingMarketData trading;
 
     @Autowired
     private PaperMatchingService matching;
@@ -400,6 +410,191 @@ class PaperOrderApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Taking the book (TR-06, Q-T7)
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void QT7_aMarketBuy_walksTheAsksOfTheDepth_oneFillPerLevel_atTheirVwap() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "1"), level("101", "2")), List.of(level("99", "1")));
+
+        place(trader, market("BUY", "\"quantity\": 2.5"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.statusReason").doesNotExist())
+                .andExpect(jsonPath("$.executedQuantity").value(2.5))
+                .andExpect(jsonPath("$.cumQuote").value(251.5))
+                .andExpect(jsonPath("$.avgPrice").value(100.6));
+
+        assertThat(spot(trader, "USDT")).isEqualByComparingTo("9748.5");
+        assertThat(spot(trader, base())).as("2.5 less 0.001 and 0.0015 of fees").isEqualByComparingTo("2.4975");
+        as(trader, get(PAPER + "/fills"), null)
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[*].liquidity").value(everyItem(is("TAKER"))));
+        assertThat(sql.sql("select fill_price from paper_fill where pair_id = ? order by fill_price")
+                        .param(pair)
+                        .query(BigDecimal.class)
+                        .list())
+                .usingElementComparator(BigDecimal::compareTo)
+                .containsExactly(new BigDecimal("100"), new BigDecimal("101"));
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void QT7_aMarketSellLargerThanTheDepth_takesTheRestAtTheLastBid_andIsFlagged() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "10")), List.of(level("99", "1"), level("98", "1")));
+        place(trader, market("BUY", "\"quantity\": 3")).andExpect(status().isCreated());
+
+        place(trader, market("SELL", "\"quantity\": 2.5"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.statusReason").value("DEPTH_EXHAUSTED"))
+                .andExpect(jsonPath("$.cumQuote").value(246.0))
+                .andExpect(jsonPath("$.avgPrice").value(98.4));
+
+        assertThat(spot(trader, base())).isEqualByComparingTo("0.497");
+        assertThat(spot(trader, "USDT")).as("10000 - 300 + 246 - 0.246 fee").isEqualByComparingTo("9945.754");
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void QT7_aMarketBuyByTotal_spendsLevelByLevel_onTheStep() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "1"), level("101", "2")), List.of(level("99", "1")));
+
+        place(trader, market("BUY", "\"quoteOrderQty\": 200"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.executedQuantity").value(1.99))
+                .andExpect(jsonPath("$.cumQuote").value(199.99));
+
+        assertThat(spot(trader, "USDT")).isEqualByComparingTo("9800.01");
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void QT7_withoutDepth_aMarketOrderExecutesAtTheBestAsk_notTheLastPrice() throws Exception {
+        UUID trader = trader();
+        price("100");
+        trading.recordBookTop(new BookTop(
+                MarketType.SPOT,
+                pair,
+                TICKS.incrementAndGet(),
+                new BigDecimal("100.4"),
+                BigDecimal.ONE,
+                new BigDecimal("100.5"),
+                BigDecimal.TEN,
+                Instant.now()));
+
+        place(trader, market("BUY", "\"quantity\": 1"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.avgPrice").value(100.5))
+                .andExpect(jsonPath("$.statusReason").doesNotExist());
+    }
+
+    @Test
+    void TR06_aLimitBuyCrossingTheBook_takesTheAsksUpToItsPrice_andTheRestWaits_untilFilledAsAMaker() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "1"), level("102", "5")), List.of(level("99", "1")));
+
+        String id = id(place(trader, limit("BUY", "101", "3", null))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("PARTIALLY_FILLED"))
+                .andExpect(jsonPath("$.executedQuantity").value(1.0))
+                .andExpect(jsonPath("$.avgPrice").value(100.0))
+                .andExpect(jsonPath("$.closedAt").doesNotExist()));
+        assertThat(locked(trader, "USDT")).as("101 x the 2 left").isEqualByComparingTo("202");
+        assertThat(spot(trader, "USDT")).isEqualByComparingTo("9900");
+        as(trader, get(PAPER + "/orders/open"), null)
+                .andExpect(jsonPath("$[0].orderId").value(id));
+
+        RestingOrder resting = new RestingOrder(
+                UUID.fromString(id),
+                accountOf(trader),
+                MarketType.SPOT,
+                pair,
+                OrderSide.BUY,
+                new BigDecimal("101"),
+                Instant.now());
+        assertThat(matching.fill(resting, Instant.now().plusSeconds(1), FillSource.LIVE))
+                .isTrue();
+
+        as(trader, get(PAPER + "/orders/" + id), null)
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.executedQuantity").value(3.0))
+                .andExpect(jsonPath("$.cumQuote").value(302.0));
+        assertThat(locked(trader, "USDT")).isZero();
+        assertThat(spot(trader, "USDT")).isEqualByComparingTo("9698");
+        assertThat(spot(trader, base()))
+                .as("3 less 0.001 taker and 0.002 maker fees")
+                .isEqualByComparingTo("2.997");
+        as(trader, get(PAPER + "/fills"), null)
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[0].liquidity").value("MAKER"))
+                .andExpect(jsonPath("$.items[1].liquidity").value("TAKER"));
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void TR06_crossingTheBook_anIocKeepsWhatItTook_aFokTakesNothing_andAPostOnlyExpires() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "1"), level("102", "5")), List.of(level("99", "1")));
+
+        place(trader, limit("BUY", "101", "3", "IOC"))
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("NOT_FILLABLE_ON_ARRIVAL"))
+                .andExpect(jsonPath("$.executedQuantity").value(1.0));
+        place(trader, limit("BUY", "101", "3", "FOK"))
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.executedQuantity").value(0.0));
+        place(trader, limit("BUY", "102", "3", "FOK"))
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.cumQuote").value(304.0));
+        place(trader, limit("BUY", "100", "1", "GTX"))
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("POST_ONLY_WOULD_TAKE"));
+        place(trader, limit("BUY", "99.99", "1", "GTX"))
+                .andExpect(jsonPath("$.status").value("NEW"));
+
+        assertThat(locked(trader, "USDT")).as("only the post-only that waits").isEqualByComparingTo("99.99");
+        assertThat(spot(trader, "USDT")).isEqualByComparingTo("9596");
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void TR06_cancelAll_cancelsEveryWorkingOrderOfThePair_andReleasesWhatTheyLocked() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String first = id(place(trader, limit("BUY", "90", "1", null)).andExpect(status().isCreated()));
+        String second = id(place(trader, limit("BUY", "80", "2", null)).andExpect(status().isCreated()));
+        place(trader, market("BUY", "\"quantity\": 1")).andExpect(status().isCreated());
+        String sell = id(place(trader, limit("SELL", "120", "0.5", null)).andExpect(status().isCreated()));
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("250");
+
+        as(trader, delete(PAPER + "/orders/open").param("pairId", pair.toString()), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[0].orderId").value(first))
+                .andExpect(jsonPath("$[1].orderId").value(second))
+                .andExpect(jsonPath("$[2].orderId").value(sell))
+                .andExpect(jsonPath("$[*].status").value(everyItem(is("CANCELED"))));
+
+        assertThat(locked(trader, "USDT")).isZero();
+        assertThat(locked(trader, base())).isZero();
+        as(trader, delete(PAPER + "/orders/open").param("pairId", pair.toString()), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        as(trader, delete(PAPER + "/orders/open"), null).andExpect(status().isBadRequest());
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Idempotency, refusals, ownership
     // ------------------------------------------------------------------------------------------
 
@@ -606,6 +801,16 @@ class PaperOrderApiTest {
                         BigDecimal.ONE,
                         at));
         prices.flush();
+    }
+
+    /** Streams a depth20 snapshot of the test's pair, newer than every earlier one. */
+    private void depth(List<PriceLevel> asks, List<PriceLevel> bids) {
+        trading.recordDepth(
+                new OrderBookDepth(MarketType.SPOT, pair, TICKS.incrementAndGet(), bids, asks, Instant.now()));
+    }
+
+    private static PriceLevel level(String price, String quantity) {
+        return new PriceLevel(new BigDecimal(price), new BigDecimal(quantity));
     }
 
     private ResultActions place(UUID trader, String body) throws Exception {

@@ -24,6 +24,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -49,7 +50,9 @@ public class PaperOrderController {
     private final PaperOrderService orders;
 
     @Operation(summary = "Place a Spot MARKET or LIMIT order; once per clientOrderId")
-    @ApiResponse(responseCode = "201", description = "The order, placed now: FILLED, NEW (waiting) or EXPIRED")
+    @ApiResponse(
+            responseCode = "201",
+            description = "The order, placed now: FILLED, NEW or PARTIALLY_FILLED (waiting), or EXPIRED")
     @ApiResponse(responseCode = "200", description = "The order placed earlier with the same clientOrderId")
     @ApiResponse(
             responseCode = "400",
@@ -74,6 +77,18 @@ public class PaperOrderController {
     @PostMapping("/orders/{orderId}/cancel")
     public OrderResponse cancel(@AuthenticationPrincipal Jwt caller, @PathVariable UUID orderId) {
         return orders.cancel(callerOf(caller), orderId);
+    }
+
+    @Operation(summary = "Cancel every working order of the caller on one pair and release what they locked")
+    @ApiResponse(responseCode = "200", description = "The orders cancelled, oldest first; empty when none was working")
+    @ApiResponse(responseCode = "400", description = "MSG01: no pairId")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened yet")
+    @DeleteMapping("/orders/open")
+    public List<OrderResponse> cancelAll(
+            @AuthenticationPrincipal Jwt caller,
+            @Parameter(description = "The pair, as Binance asks for the symbol") @RequestParam UUID pairId) {
+        return orders.cancelAll(callerOf(caller), pairId);
     }
 
     @Operation(summary = "The caller's working orders, newest first")

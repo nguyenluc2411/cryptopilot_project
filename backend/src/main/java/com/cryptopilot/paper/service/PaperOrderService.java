@@ -23,9 +23,11 @@ public interface PaperOrderService {
      * Places an order, once per idempotency key.
      *
      * <ul>
-     *   <li>MARKET executes at once at the current last price, as a taker.
-     *   <li>LIMIT executes at once, as a taker at the current last price, when that price is already at or better than
-     *       its own; otherwise a GTC order locks what it needs and waits, and an IOC or FOK order expires.
+     *   <li>MARKET executes at once, as a taker, against the levels of the other side of the book (Q-T7): one fill per
+     *       level, at the VWAP of what it took.
+     *   <li>LIMIT locks what it needs, then takes the levels at or better than its price, as a taker; the rest waits
+     *       (GTC), expires (IOC), or, when not all of it can execute, nothing executes and it expires (FOK). A
+     *       post-only (GTX) order that would take a level expires instead.
      * </ul>
      *
      * @throws com.cryptopilot.common.exception.ResourceNotFoundException when the account is not opened, or the pair
@@ -46,6 +48,14 @@ public interface PaperOrderService {
      * @throws com.cryptopilot.common.exception.BusinessException {@code PAPER_ORDER_NOT_OPEN} when it has finished
      */
     OrderResponse cancel(UUID userId, UUID orderId);
+
+    /**
+     * Cancels every working order of the caller on one pair and gives back what they locked, as Binance's cancel of
+     * all open orders of a symbol does.
+     *
+     * @return the orders cancelled, oldest first; empty when none was working
+     */
+    List<OrderResponse> cancelAll(UUID userId, UUID pairId);
 
     /** One order of the caller; MSG41 when there is none. */
     OrderResponse order(UUID userId, UUID orderId);

@@ -18,7 +18,7 @@ import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/** A paper order's life: what it locks, how it executes whole, and that a finished one stays finished. */
+/** A paper order's life: what it locks, how it executes in parts, and that a finished one stays finished. */
 class PaperOrderTest {
 
     private static final UUID ACCOUNT = UUID.randomUUID();
@@ -72,22 +72,63 @@ class PaperOrderTest {
     }
 
     @Test
-    void TR02_partOfAnOrder_doesNotExecute() {
-        PaperOrder order = limit(OrderSide.BUY, "100", "2");
+    void TR06_anOrderExecutedInParts_isPartiallyFilled_locksOnlyItsRest_andAveragesItsPrices() {
+        PaperOrder order = limit(OrderSide.BUY, "100", "3");
 
-        assertThatIllegalArgumentException()
-                .isThrownBy(() -> order.fill(BigDecimal.ONE, new BigDecimal("99"), new BigDecimal("99"), AT));
+        order.fill(BigDecimal.ONE, new BigDecimal("98"), new BigDecimal("98"), AT);
+
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.PARTIALLY_FILLED);
+        assertThat(order.isOpen()).isTrue();
+        assertThat(order.getClosedAt()).isNull();
+        assertThat(order.remainingQuantity()).isEqualByComparingTo("2");
+        assertThat(order.lockedAmount()).isEqualByComparingTo("200");
+        assertThat(order.lockedAfter(new BigDecimal("2"))).isZero();
+
+        order.fill(new BigDecimal("2"), new BigDecimal("99.5"), new BigDecimal("199"), AT);
+
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.FILLED);
+        assertThat(order.getExecutedQuantity()).isEqualByComparingTo("3");
+        assertThat(order.getCumQuoteAmount()).isEqualByComparingTo("297");
+        assertThat(order.getAvgPrice()).as("(98 + 2 x 99.5) / 3").isEqualByComparingTo("99");
+        assertThat(order.getClosedAt()).isEqualTo(AT);
     }
 
     @Test
-    void TR02_aBuyByTotal_executesTheQuantityItsAmountBuys() {
+    void TR06_moreThanAnOrderHasLeft_doesNotExecute() {
+        PaperOrder order = limit(OrderSide.BUY, "100", "2");
+        order.fill(BigDecimal.ONE, new BigDecimal("99"), new BigDecimal("99"), AT);
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> order.fill(new BigDecimal("1.5"), new BigDecimal("99"), new BigDecimal("148.5"), AT));
+        assertThatIllegalArgumentException().isThrownBy(() -> order.lockedAfter(new BigDecimal("1.5")));
+    }
+
+    @Test
+    void TR02_aBuyByTotal_executesTheQuantityItsAmountBuys_andIsFilledWhenCompleted() {
         PaperOrder order = PaperOrder.spotMarketBuyFor(ACCOUNT, PAIR, "k", new BigDecimal("50"));
+        assertThatIllegalStateException().isThrownBy(() -> order.completeFill(AT));
 
-        order.fill(new BigDecimal("0.5"), new BigDecimal("100"), new BigDecimal("50"), AT);
+        order.fill(new BigDecimal("0.3"), new BigDecimal("100"), new BigDecimal("30"), AT);
+        order.fill(new BigDecimal("0.2"), new BigDecimal("100"), new BigDecimal("20"), AT);
 
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.PARTIALLY_FILLED);
+        assertThatIllegalStateException().isThrownBy(order::remainingQuantity);
+        order.completeFill(AT);
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.FILLED);
         assertThat(order.getOrigQuantity()).isNull();
         assertThat(order.getQuoteOrderAmount()).isEqualByComparingTo("50");
         assertThat(order.getExecutedQuantity()).isEqualByComparingTo("0.5");
+    }
+
+    @Test
+    void QT7_onlyAFilledOrder_isFlaggedForTakingMoreThanTheDepthShown() {
+        PaperOrder order = PaperOrder.spotMarket(ACCOUNT, PAIR, "k", OrderSide.SELL, BigDecimal.ONE);
+        assertThatIllegalStateException().isThrownBy(order::flagDepthExhausted);
+
+        order.fill(BigDecimal.ONE, new BigDecimal("99"), new BigDecimal("99"), AT);
+        order.flagDepthExhausted();
+
+        assertThat(order.getStatusReason()).isEqualTo(PaperOrder.DEPTH_EXHAUSTED);
     }
 
     @Test

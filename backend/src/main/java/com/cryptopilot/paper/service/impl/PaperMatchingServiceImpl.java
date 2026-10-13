@@ -29,7 +29,8 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Settles a fill the matching engine decided against a cancel of the same order: both run under the Trader's paper
  * lock, and the fill reads the order's status only once it holds the lock, so exactly one of them finds the order
- * working. A fill replayed after a restart, or decided twice by two instances, finds it FILLED and does nothing.
+ * working. A fill replayed after a restart, or decided twice by two instances, finds it FILLED and does nothing. A
+ * fill executes what the order has left, so one that took part of the book when it was placed (TR-06) fills the rest.
  *
  * <p>Rule: TR-02; NSF-07; Q-T6.
  */
@@ -73,7 +74,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 order,
                 coins,
                 order.getLimitPrice(),
-                order.getOrigQuantity(),
+                order.remainingQuantity(),
                 Liquidity.MAKER,
                 source,
                 tradedAt,

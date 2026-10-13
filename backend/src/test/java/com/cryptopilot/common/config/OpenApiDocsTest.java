@@ -81,7 +81,7 @@ class OpenApiDocsTest {
             "/api/v1/alerts/{id}/pause",
             "/api/v1/alerts/{id}/resume");
 
-    private static final int OPERATIONS = 55;
+    private static final int OPERATIONS = 56;
 
     @Autowired
     private MockMvc mvc;

@@ -23,12 +23,14 @@ import lombok.Getter;
 /**
  * One order of a paper account, open or finished, never deleted: the order history of the trading screens.
  *
- * <p>This stage of TR-02 places Spot MARKET and LIMIT orders, which execute whole or not at all: the simulation has
- * no order book depth to fill part of one against. The columns of the later stages (stop and trailing prices, the
- * position side, order lists) are left unmapped until those stages use them; the database fills them with null.
+ * <p>This stage of TR-02 places Spot MARKET and LIMIT orders. An order executes in one or more fills: one per level
+ * of the exchange's book it takes on arrival (TR-06, Q-T7), and a waiting LIMIT order the rest of its quantity at
+ * once when the market reaches it. Part executed, it is {@code PARTIALLY_FILLED} and still works. The columns of the
+ * later stages (stop and trailing prices, the position side, order lists) are left unmapped until those stages use
+ * them; the database fills them with null.
  *
- * <p>What a working order holds back is not stored: it follows from the order, so {@link #lockedAmount()} gives the
- * same figure at placement, at a fill and at a cancel.
+ * <p>What a working order holds back is not stored: it follows from the order and what of it is left, so
+ * {@link #lockedAmount()} gives the same figure at a fill, at a cancel and after a restart.
  *
  * <p>Rule: TR-02; BR-21 (Spot owns what it sells and holds no position).
  */
@@ -40,6 +42,9 @@ public class PaperOrder extends BaseEntity {
 
     /** Decimals of a price or a quantity column, {@code numeric(28,12)}. */
     public static final int PRICE_SCALE = 12;
+
+    /** Why a filled order is flagged: it took more than the depth shown, the rest at the last level's price (Q-T7). */
+    public static final String DEPTH_EXHAUSTED = "DEPTH_EXHAUSTED";
 
     @Column(name = "account_id", nullable = false, updatable = false)
     private UUID accountId;
@@ -97,7 +102,10 @@ public class PaperOrder extends BaseEntity {
     @Column(name = "order_status", nullable = false, length = 32)
     private OrderStatus orderStatus;
 
-    /** Why an order ended other than by filling, e.g. {@code IOC_NOT_FILLABLE}; otherwise {@code null}. */
+    /**
+     * Why an order ended other than by filling, e.g. {@code NOT_FILLABLE_ON_ARRIVAL}, or {@link #DEPTH_EXHAUSTED} on
+     * one that filled past the book shown; otherwise {@code null}.
+     */
     @Column(name = "status_reason", length = 64)
     private String statusReason;
 
@@ -191,15 +199,36 @@ public class PaperOrder extends BaseEntity {
     }
 
     /**
-     * What a working Spot LIMIT order holds back: the quote it may spend for a buy, the base it sells for a sell. A
-     * buy holds its price times its quantity rounded up to the amount scale, the same figure {@link #buyCost} charges
-     * at that price, so a fill at the limit price spends exactly what was locked.
+     * What a working Spot LIMIT order holds back for the quantity it has not executed yet: the quote it may spend for a
+     * buy, the base it sells for a sell. A buy holds its price times that quantity rounded up to the amount scale, the
+     * same figure {@link #buyCost} charges at that price, so a fill of the rest at the limit price spends exactly what
+     * is locked.
      */
     public BigDecimal lockedAmount() {
+        return lockedFor(remainingQuantity());
+    }
+
+    /** What the order holds back once {@code quantity} more of it has executed; zero once all of it has. */
+    public BigDecimal lockedAfter(BigDecimal quantity) {
+        return lockedFor(remainingQuantity().subtract(quantity));
+    }
+
+    /** The quantity not executed yet. */
+    public BigDecimal remainingQuantity() {
+        if (origQuantity == null) {
+            throw new IllegalStateException("order " + getId() + " is sized by what it spends, not by a quantity");
+        }
+        return origQuantity.subtract(executedQuantity);
+    }
+
+    private BigDecimal lockedFor(BigDecimal quantity) {
         if (orderType != OrderType.LIMIT) {
             throw new IllegalStateException("order " + getId() + " is " + orderType + " and holds nothing back");
         }
-        return side == OrderSide.BUY ? buyCost(limitPrice, origQuantity) : origQuantity;
+        if (quantity.signum() < 0) {
+            throw new IllegalArgumentException("order " + getId() + " has less than " + quantity.negate() + " left");
+        }
+        return side == OrderSide.BUY ? buyCost(limitPrice, quantity) : quantity;
     }
 
     /** Whether the order still works. */
@@ -208,19 +237,46 @@ public class PaperOrder extends BaseEntity {
     }
 
     /**
-     * Records the execution of the whole order: the quantity at the price, for {@code quoteAmount}. The order becomes
-     * FILLED at {@code at}.
+     * Records one execution: {@code quantity} at {@code price}, for {@code quoteAmount}. The average price is the
+     * quantity-weighted mean of the executions' prices. An order of a quantity becomes FILLED at {@code at} once all
+     * of it has executed, PARTIALLY_FILLED before; one sized by what it spends stays PARTIALLY_FILLED until
+     * {@link #completeFill}.
      */
     public void fill(BigDecimal quantity, BigDecimal price, BigDecimal quoteAmount, Instant at) {
         requireOpen("filled");
-        if (origQuantity != null && quantity.compareTo(origQuantity) != 0) {
-            throw new IllegalArgumentException("order " + getId() + " of " + origQuantity.toPlainString()
-                    + " executes whole, not " + quantity.toPlainString());
+        positive(quantity);
+        positive(price);
+        BigDecimal executed = executedQuantity.add(quantity);
+        if (origQuantity != null && executed.compareTo(origQuantity) > 0) {
+            throw new IllegalArgumentException("order " + getId() + " of " + origQuantity.toPlainString() + " has "
+                    + remainingQuantity().toPlainString() + " left, not " + quantity.toPlainString());
         }
-        executedQuantity = positive(quantity);
-        cumQuoteAmount = positive(quoteAmount);
-        avgPrice = positive(price).setScale(PRICE_SCALE, RoundingMode.HALF_EVEN);
+        BigDecimal value = avgPrice == null ? BigDecimal.ZERO : avgPrice.multiply(executedQuantity);
+        avgPrice = value.add(price.multiply(quantity)).divide(executed, PRICE_SCALE, RoundingMode.HALF_EVEN);
+        executedQuantity = executed;
+        cumQuoteAmount = cumQuoteAmount.add(positive(quoteAmount));
+        if (origQuantity != null && executed.compareTo(origQuantity) == 0) {
+            end(OrderStatus.FILLED, null, at);
+        } else {
+            orderStatus = OrderStatus.PARTIALLY_FILLED;
+        }
+    }
+
+    /** Ends an order sized by what it spends, once it has spent what it could: FILLED at {@code at}. */
+    public void completeFill(Instant at) {
+        requireOpen("completed");
+        if (executedQuantity.signum() == 0) {
+            throw new IllegalStateException("order " + getId() + " has executed nothing to complete");
+        }
         end(OrderStatus.FILLED, null, at);
+    }
+
+    /** Flags a filled order that took more than the depth shown, the rest at the last level's price (Q-T7). */
+    public void flagDepthExhausted() {
+        if (orderStatus != OrderStatus.FILLED) {
+            throw new IllegalStateException("order " + getId() + " is " + orderStatus + ", not FILLED");
+        }
+        statusReason = DEPTH_EXHAUSTED;
     }
 
     /** Ends a working order the Trader cancelled. */
