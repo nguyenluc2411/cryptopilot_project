@@ -67,11 +67,12 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     Page<PaperOrder> searchPair(
             UUID accountId, UUID pairId, Collection<OrderStatus> statuses, Instant from, Instant to, Pageable pageable);
 
-    /** Every working LIMIT order of every account, which the matching engine starts its books from. */
+    /** Every working LIMIT and LIMIT_MAKER order of every account, which the matching engine starts its books from. */
     @Transactional(readOnly = true)
     @Query("select new com.cryptopilot.paper.model.RestingOrder(o.id, o.accountId, o.marketType, o.pairId, o.side,"
             + " o.limitPrice, o.createdAt) from PaperOrder o"
-            + " where o.orderStatus in :statuses and o.orderType = com.cryptopilot.paper.model.enums.OrderType.LIMIT")
+            + " where o.orderStatus in :statuses and o.orderType in (com.cryptopilot.paper.model.enums.OrderType.LIMIT,"
+            + " com.cryptopilot.paper.model.enums.OrderType.LIMIT_MAKER)")
     List<RestingOrder> findResting(Collection<OrderStatus> statuses);
 
     /** Writes an order. Not transactional here; the unit of work is the calling service's. */

@@ -199,6 +199,31 @@ public class PaperOrder extends BaseEntity {
     }
 
     /**
+     * A Spot LIMIT_MAKER order: a limit with no time in force that only ever waits (TR-12).
+     *
+     * @param price positive, already rounded to the pair's tick size
+     * @param quantity positive, already floored to the pair's step size
+     */
+    public static PaperOrder spotLimitMaker(
+            UUID accountId, UUID pairId, String clientOrderId, OrderSide side, BigDecimal price, BigDecimal quantity) {
+        return new PaperOrder(
+                accountId,
+                pairId,
+                clientOrderId,
+                side,
+                OrderType.LIMIT_MAKER,
+                null,
+                positive(price),
+                positive(quantity),
+                null);
+    }
+
+    /** Whether the order waits at its own price: a LIMIT or a LIMIT_MAKER order. */
+    public boolean waitsAtPrice() {
+        return orderType == OrderType.LIMIT || orderType == OrderType.LIMIT_MAKER;
+    }
+
+    /**
      * What a working Spot LIMIT order holds back for the quantity it has not executed yet: the quote it may spend for a
      * buy, the base it sells for a sell. A buy holds its price times that quantity rounded up to the amount scale, the
      * same figure {@link #buyCost} charges at that price, so a fill of the rest at the limit price spends exactly what
@@ -222,7 +247,7 @@ public class PaperOrder extends BaseEntity {
     }
 
     private BigDecimal lockedFor(BigDecimal quantity) {
-        if (orderType != OrderType.LIMIT) {
+        if (!waitsAtPrice()) {
             throw new IllegalStateException("order " + getId() + " is " + orderType + " and holds nothing back");
         }
         if (quantity.signum() < 0) {

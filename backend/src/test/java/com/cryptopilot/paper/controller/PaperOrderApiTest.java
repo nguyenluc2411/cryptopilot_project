@@ -317,6 +317,60 @@ class PaperOrderApiTest {
                 .andExpect(jsonPath("$.items.length()").value(3));
     }
 
+    /**
+     * TR-12: a LIMIT_MAKER order that would take the book on arrival is refused and leaves nothing; one below the ask
+     * waits, locks its quote, is a resting order of the engine, and fills as a maker.
+     */
+    @Test
+    void TR12_aLimitMaker_thatWouldTake_isRefused_andOneThatWaits_fillsAsAMaker() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "1")), List.of(level("99", "1")));
+
+        place(trader, limitMaker("BUY", "100", "1"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_WOULD_TAKE"));
+        assertThat(locked(trader, "USDT")).isZero();
+        as(trader, get(PAPER + "/orders"), null)
+                .andExpect(jsonPath("$.items.length()").value(0));
+
+        String id = id(place(trader, limitMaker("BUY", "99", "1"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.type").value("LIMIT_MAKER"))
+                .andExpect(jsonPath("$.timeInForce").doesNotExist())
+                .andExpect(jsonPath("$.status").value("NEW")));
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("99");
+        RestingOrder resting = matching.restingOrders().stream()
+                .filter(order -> order.orderId().toString().equals(id))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("the LIMIT_MAKER order is not a resting order"));
+        assertThat(matching.fill(resting, Instant.now(), FillSource.LIVE)).isTrue();
+        as(trader, get(PAPER + "/fills"), null)
+                .andExpect(jsonPath("$.items[0].orderId").value(id))
+                .andExpect(jsonPath("$.items[0].liquidity").value("MAKER"));
+        assertThat(locked(trader, "USDT")).isZero();
+    }
+
+    /** TR-12: a LIMIT_MAKER order has a price and a quantity and no time in force. */
+    @Test
+    void TR12_aLimitMaker_withATimeInForce_orWithoutAPrice_isMsg15OrMsg01() throws Exception {
+        UUID trader = trader();
+        price("100");
+
+        place(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\","
+                                + " \"type\": \"LIMIT_MAKER\", \"price\": 90, \"quantity\": 1, \"timeInForce\": \"GTC\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.timeInForce").value("MSG15"));
+        place(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\","
+                                + " \"type\": \"LIMIT_MAKER\", \"quantity\": 1}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.price").value("MSG01"));
+    }
+
     @Test
     void NSF03_withoutACurrentPrice_aGtcLimitWaits_butAnIocOneCannotBeDecided() throws Exception {
         UUID trader = trader();
@@ -775,6 +829,11 @@ class PaperOrderApiTest {
     private String market(String side, String size) {
         return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\", \"type\": \"MARKET\", "
                 + size + "}";
+    }
+
+    private String limitMaker(String side, String price, String quantity) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\","
+                + " \"type\": \"LIMIT_MAKER\", \"price\": " + price + ", \"quantity\": " + quantity + "}";
     }
 
     private String limit(String side, String price, String quantity, String timeInForce) {

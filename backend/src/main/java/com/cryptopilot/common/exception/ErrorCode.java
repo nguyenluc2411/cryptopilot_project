@@ -286,7 +286,14 @@ public enum ErrorCode {
      * text for this, so it borrows MSG43 like {@link #TRADING_PLAN_STATUS_TRANSITION_INVALID} (A-38). 409: the request
      * is valid and the order's current status refuses it; the response's message argument is that status.
      */
-    PAPER_ORDER_NOT_OPEN(HttpStatus.CONFLICT, "MSG43");
+    PAPER_ORDER_NOT_OPEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A paper LIMIT_MAKER order would execute on arrival, taking liquidity, so it is refused and not stored, as the
+     * exchange refuses it (TR-12). SRS 5.3 has no text for this, so it borrows MSG43 like {@link #PAPER_ORDER_NOT_OPEN}
+     * (A-38). 409: the request is valid and the current market refuses it.
+     */
+    PAPER_ORDER_WOULD_TAKE(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

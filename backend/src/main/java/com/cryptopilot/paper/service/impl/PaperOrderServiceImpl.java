@@ -91,7 +91,7 @@ import org.springframework.transaction.annotation.Transactional;
  * single level, or for a pair without the trading streams the current last price, at which the whole order executes.
  * None is ever executed at a price that is not current (NSF-03).
  *
- * <p>Rule: TR-02, TR-04, TR-06, TR-08; BR-21, BR-23, BR-30; NSF-03; Q-T7.
+ * <p>Rule: TR-02, TR-04, TR-06, TR-08, TR-12; BR-21, BR-23, BR-30; NSF-03; Q-T7.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -140,9 +140,12 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 .orElseThrow(() -> new IllegalStateException("pair " + pair.pairId() + " is tradable but not stored"));
         Optional<Book> book = bookFor(pair, terms.side());
         String key = request.clientOrderId() == null ? UuidV7.next().toString() : request.clientOrderId();
-        PaperOrder order = request.type() == OrderType.MARKET
-                ? placeMarket(account, pair, coins, terms, key, book)
-                : placeLimit(account, pair, coins, terms, key, book);
+        PaperOrder order =
+                switch (request.type()) {
+                    case MARKET -> placeMarket(account, pair, coins, terms, key, book);
+                    case LIMIT_MAKER -> placeLimitMaker(account, pair, coins, terms, key, book);
+                    default -> placeLimit(account, pair, coins, terms, key, book);
+                };
         feed.order(account, order);
         log.debug(
                 "Paper order {} {} {} {} placed: {}",
@@ -334,6 +337,39 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             order.expire(NOT_FILLABLE, now);
             return order;
         }
+        rest(account, order);
+        return order;
+    }
+
+    /**
+     * A LIMIT_MAKER order only ever waits: when its price would take a level of the other side of the book on arrival
+     * it is refused and nothing is stored, as the exchange refuses it (TR-12). Without a current price it waits, as a
+     * GTC limit does.
+     */
+    private PaperOrder placeLimitMaker(
+            PaperAccount account, TradablePair pair, PairCoins coins, Terms terms, String key, Optional<Book> book) {
+        requireTradable(pair.filters(), terms.price().multiply(terms.quantity()), terms.quantity(), "quantity");
+        boolean wouldTake = book.map(
+                        found -> !BookSweep.ofQuantity(found.levels(), terms.side(), terms.quantity(), terms.price())
+                                .isEmpty())
+                .orElse(false);
+        if (wouldTake) {
+            throw new BusinessException(
+                    ErrorCode.PAPER_ORDER_WOULD_TAKE,
+                    "LIMIT_MAKER " + terms.side() + " at " + terms.price().toPlainString()
+                            + " would execute on arrival");
+        }
+        PaperOrder order = orders.save(PaperOrder.spotLimitMaker(
+                account.getId(), pair.pairId(), key, terms.side(), terms.price(), terms.quantity()));
+        CoinListing locked = lockedCoin(order, coins);
+        wallets.preload(account, WalletType.SPOT, locked);
+        wallets.lock(account, WalletType.SPOT, locked, order.lockedAmount());
+        rest(account, order);
+        return order;
+    }
+
+    /** Hands a working order to the matching engine, which tracks it once the placement commits. */
+    private void rest(PaperAccount account, PaperOrder order) {
         events.publishEvent(new PaperOrderRested(new RestingOrder(
                 order.getId(),
                 account.getId(),
@@ -342,7 +378,6 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 order.getSide(),
                 order.getLimitPrice(),
                 order.getCreatedAt())));
-        return order;
     }
 
     /** Settles each slice of a sweep as one fill, as a taker. */
@@ -406,6 +441,20 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             errors.put("market", "MSG15");
         }
         switch (request.type()) {
+            case LIMIT_MAKER -> {
+                if (request.price() == null) {
+                    errors.put("price", "MSG01");
+                }
+                if (request.quantity() == null) {
+                    errors.put("quantity", "MSG01");
+                }
+                if (request.timeInForce() != null) {
+                    errors.put("timeInForce", "MSG15");
+                }
+                if (request.quoteOrderQty() != null) {
+                    errors.put("quoteOrderQty", "MSG15");
+                }
+            }
             case LIMIT -> {
                 if (request.price() == null) {
                     errors.put("price", "MSG01");

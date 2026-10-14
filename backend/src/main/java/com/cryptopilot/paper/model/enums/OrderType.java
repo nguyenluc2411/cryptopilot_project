@@ -4,7 +4,7 @@ package com.cryptopilot.paper.model.enums;
  * The kind of a paper order. The names are the values {@code paper_order.order_type} accepts; the stop, take profit
  * and trailing kinds are placed by later stages of TR-02, so a request for one is refused for now.
  *
- * <p>Rule: TR-02.
+ * <p>Rule: TR-02, TR-12.
  */
 public enum OrderType {
 
@@ -13,6 +13,9 @@ public enum OrderType {
 
     /** Waits at its price, or executes at once when the price is already there. */
     LIMIT,
+
+    /** Only ever waits at its price: refused when it would execute on arrival (TR-12). Has no time in force. */
+    LIMIT_MAKER,
 
     STOP_MARKET,
     STOP_LIMIT,
