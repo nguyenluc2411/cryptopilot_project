@@ -235,7 +235,7 @@
 						<JWT_SECRET>test-only-signing-key-0123456789ab</JWT_SECRET>
 						<!-- Every cached test context keeps a full pool open on the one test database (300
 						     connections), so the suite keeps the pool of ten it always had; the
-						     application's own size (20) is for one running instance. -->
+						     application's own size (22) is for one running instance. -->
 						<DB_POOL_MAX>10</DB_POOL_MAX>
 					</systemPropertyVariables>
 					<!-- Tests tagged "live" call the real exchange. They never run in the default build:

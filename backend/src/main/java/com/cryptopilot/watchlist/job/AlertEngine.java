@@ -150,9 +150,6 @@ public class AlertEngine implements MinuteKlineListener {
         running = true;
         List<PriceAlert> loaded = triggers.activePriceAlerts();
         loaded.forEach(alert -> apply(alert.alertId(), load, false, at -> held(alert.alertId(), at, alert, load)));
-        log.debug(
-                "NSF-06 {} ACTIVE OPEN_INTEREST_CHANGE alerts are not evaluated yet",
-                triggers.activeAlertsNotEvaluated());
         for (int i = 0; i < fresh.size(); i++) {
             Thread thread = threads.newThread(fresh.get(i)::run);
             thread.setName("watchlist-alert-" + i);

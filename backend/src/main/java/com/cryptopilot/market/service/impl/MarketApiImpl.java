@@ -3,12 +3,14 @@ package com.cryptopilot.market.service.impl;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKlineBatch;
+import com.cryptopilot.market.OpenInterestSample;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
+import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
@@ -37,6 +39,7 @@ public class MarketApiImpl implements MarketApi {
     private final LeverageBracketRepository brackets;
     private final PriceCacheService prices;
     private final MinuteKlineService minuteKlines;
+    private final FuturesMetricsRepository metrics;
 
     @Override
     @Transactional(readOnly = true)
@@ -68,6 +71,12 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public Optional<BigDecimal> currentMarkPrice(String symbol) {
         return current(MarketType.FUTURES, symbol, CachedPrice::markPrice);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<OpenInterestSample> openInterestAtOrBefore(UUID pairId, Instant at) {
+        return metrics.openInterestAtOrBefore(pairId, at);
     }
 
     @Override

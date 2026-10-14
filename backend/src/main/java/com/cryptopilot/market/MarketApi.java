@@ -32,6 +32,12 @@ public interface MarketApi {
      */
     Optional<BigDecimal> currentMarkPrice(String symbol);
 
+    /**
+     * The latest stored open interest reading of a Futures pair at or before {@code at}, in contracts; empty when none
+     * is stored (Q-45).
+     */
+    Optional<OpenInterestSample> openInterestAtOrBefore(UUID pairId, Instant at);
+
     /** The predicted funding rate of the coming Futures settlement, when the cache holds a current one. */
     Optional<BigDecimal> currentFundingRate(String symbol);
 
