@@ -293,7 +293,14 @@ public enum ErrorCode {
      * exchange refuses it (TR-12). SRS 5.3 has no text for this, so it borrows MSG43 like {@link #PAPER_ORDER_NOT_OPEN}
      * (A-38). 409: the request is valid and the current market refuses it.
      */
-    PAPER_ORDER_WOULD_TAKE(HttpStatus.CONFLICT, "MSG43");
+    PAPER_ORDER_WOULD_TAKE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A paper stop limit's stop is the last price itself, so it would trigger at once, and the side of the price it
+     * waits on cannot be told; it is refused and not stored, as the exchange refuses it (TR-09). Borrows MSG43 like
+     * {@link #PAPER_ORDER_NOT_OPEN} (A-38). 409: the request is valid and the current market refuses it.
+     */
+    PAPER_ORDER_WOULD_TRIGGER(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

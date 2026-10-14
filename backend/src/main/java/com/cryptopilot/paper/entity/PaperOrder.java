@@ -7,6 +7,7 @@ import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.model.enums.TimeInForce;
+import com.cryptopilot.paper.model.enums.TriggerCondition;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -23,16 +24,17 @@ import lombok.Getter;
 /**
  * One order of a paper account, open or finished, never deleted: the order history of the trading screens.
  *
- * <p>This stage of TR-02 places Spot MARKET and LIMIT orders. An order executes in one or more fills: one per level
+ * <p>Spot MARKET, LIMIT and LIMIT_MAKER orders, and stop limits and trailing stops that wait for the last price to
+ * trigger them and then work as the limit order they carry (TR-09, TR-11). An order executes in one or more fills: one per level
  * of the exchange's book it takes on arrival (TR-06, Q-T7), and a waiting LIMIT order the rest of its quantity at
  * once when the market reaches it. Part executed, it is {@code PARTIALLY_FILLED} and still works. The columns of the
- * later stages (stop and trailing prices, the position side, order lists) are left unmapped until those stages use
- * them; the database fills them with null.
+ * later stages (the position side, order lists) are left unmapped until those stages use them; the database fills
+ * them with null.
  *
  * <p>What a working order holds back is not stored: it follows from the order and what of it is left, so
  * {@link #lockedAmount()} gives the same figure at a fill, at a cancel and after a restart.
  *
- * <p>Rule: TR-02; BR-21 (Spot owns what it sells and holds no position).
+ * <p>Rule: TR-02, TR-09, TR-11, TR-12; BR-21 (Spot owns what it sells and holds no position).
  */
 @Getter
 @Entity
@@ -74,6 +76,31 @@ public class PaperOrder extends BaseEntity {
 
     @Column(name = "limit_price", precision = 28, scale = 12, updatable = false)
     private BigDecimal limitPrice;
+
+    /** A stop limit's stop; a trailing stop's stop once it triggered, {@code null} before. */
+    @Column(name = "stop_price", precision = 28, scale = 12)
+    private BigDecimal stopPrice;
+
+    /** Which way the last price must move to trigger a stop limit or a trailing stop; otherwise {@code null}. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "trigger_condition", length = 32, updatable = false)
+    private TriggerCondition triggerCondition;
+
+    /** The price that activates a trailing stop, or {@code null} for one active from its placement. */
+    @Column(name = "activation_price", precision = 28, scale = 12, updatable = false)
+    private BigDecimal activationPrice;
+
+    /** A trailing stop's callback, in percent of its best price; otherwise {@code null}. */
+    @Column(name = "callback_rate", precision = 12, scale = 8, updatable = false)
+    private BigDecimal callbackRate;
+
+    /** A trailing stop's best price so far, as last stored; {@code null} before it is activated. */
+    @Column(name = "trailing_extreme_price", precision = 28, scale = 12)
+    private BigDecimal trailingExtremePrice;
+
+    /** When a stop limit or a trailing stop triggered; {@code null} before, and for every other order. */
+    @Column(name = "triggered_at")
+    private Instant triggeredAt;
 
     /** The quantity asked for, or {@code null} for a MARKET buy sized by what it spends. */
     @Column(name = "orig_quantity", precision = 28, scale = 12, updatable = false)
@@ -218,9 +245,122 @@ public class PaperOrder extends BaseEntity {
                 null);
     }
 
-    /** Whether the order waits at its own price: a LIMIT or a LIMIT_MAKER order. */
-    public boolean waitsAtPrice() {
-        return orderType == OrderType.LIMIT || orderType == OrderType.LIMIT_MAKER;
+    /**
+     * A Spot stop limit (TR-09): waits until the last price trades at or past {@code stopPrice} in the direction of
+     * {@code condition}, then works as a LIMIT order at {@code price}.
+     *
+     * @param stopPrice positive, already rounded to the pair's tick size
+     * @param price positive, already rounded to the pair's tick size
+     * @param quantity positive, already floored to the pair's step size
+     */
+    public static PaperOrder spotStopLimit(
+            UUID accountId,
+            UUID pairId,
+            String clientOrderId,
+            OrderSide side,
+            TimeInForce timeInForce,
+            BigDecimal stopPrice,
+            TriggerCondition condition,
+            BigDecimal price,
+            BigDecimal quantity) {
+        PaperOrder order = new PaperOrder(
+                accountId,
+                pairId,
+                clientOrderId,
+                side,
+                OrderType.STOP_LIMIT,
+                Objects.requireNonNull(timeInForce, "a stop limit has a time in force"),
+                positive(price),
+                positive(quantity),
+                null);
+        order.stopPrice = positive(stopPrice);
+        order.triggerCondition = Objects.requireNonNull(condition, "condition");
+        return order;
+    }
+
+    /**
+     * A Spot trailing stop (TR-11): once active, follows the best price and triggers when the price comes back by
+     * {@code callbackRate} percent, then works as a LIMIT order at {@code price}. A SELL triggers below its best
+     * price, a BUY above it.
+     *
+     * @param activationPrice the price that activates it, or {@code null} for active at once from {@code extreme}
+     * @param extreme the best price it starts from when it is active at once; otherwise {@code null}
+     */
+    public static PaperOrder spotTrailingStopLimit(
+            UUID accountId,
+            UUID pairId,
+            String clientOrderId,
+            OrderSide side,
+            TimeInForce timeInForce,
+            BigDecimal callbackRate,
+            BigDecimal activationPrice,
+            BigDecimal extreme,
+            BigDecimal price,
+            BigDecimal quantity) {
+        PaperOrder order = new PaperOrder(
+                accountId,
+                pairId,
+                clientOrderId,
+                side,
+                OrderType.TRAILING_STOP_LIMIT,
+                Objects.requireNonNull(timeInForce, "a trailing stop has a time in force"),
+                positive(price),
+                positive(quantity),
+                null);
+        order.callbackRate = positive(callbackRate);
+        order.activationPrice = activationPrice == null ? null : positive(activationPrice);
+        order.trailingExtremePrice = extreme == null ? null : positive(extreme);
+        if (order.activationPrice == null && order.trailingExtremePrice == null) {
+            throw new IllegalArgumentException("a trailing stop without an activation price starts from a best price");
+        }
+        order.triggerCondition = side == OrderSide.SELL ? TriggerCondition.AT_OR_BELOW : TriggerCondition.AT_OR_ABOVE;
+        return order;
+    }
+
+    /** Whether the order carries a limit price, and so locks by it: every kind but MARKET. */
+    public boolean hasLimitPrice() {
+        return limitPrice != null;
+    }
+
+    /** Whether the order is a stop limit or a trailing stop. */
+    public boolean isTriggered() {
+        return orderType == OrderType.STOP_LIMIT || orderType == OrderType.TRAILING_STOP_LIMIT;
+    }
+
+    /** Whether the order still waits for the price to trigger it. */
+    public boolean awaitsTrigger() {
+        return isTriggered() && triggeredAt == null && isOpen();
+    }
+
+    /**
+     * When the order started waiting at its limit price: when it was placed, or for a stop limit or a trailing stop
+     * when it triggered. A price traded before then never fills it (D-77).
+     */
+    public Instant restingSince() {
+        return triggeredAt != null ? triggeredAt : getCreatedAt();
+    }
+
+    /**
+     * Records that the last price triggered a stop limit or a trailing stop at {@code at}: from then on it works as
+     * the limit order it carries. A trailing stop keeps the stop it triggered at.
+     */
+    public void trigger(Instant at, BigDecimal stop) {
+        requireOpen("triggered");
+        if (!awaitsTrigger()) {
+            throw new IllegalStateException("order " + getId() + " is " + orderType + " and waits for no trigger");
+        }
+        triggeredAt = Objects.requireNonNull(at, "at must not be null");
+        if (orderType == OrderType.TRAILING_STOP_LIMIT) {
+            stopPrice = positive(stop).setScale(PRICE_SCALE, RoundingMode.HALF_EVEN);
+        }
+    }
+
+    /** Stores a trailing stop's best price so far, so a restart resumes from it. */
+    public void moveExtreme(BigDecimal extreme) {
+        if (orderType != OrderType.TRAILING_STOP_LIMIT || !awaitsTrigger()) {
+            throw new IllegalStateException("order " + getId() + " follows no best price");
+        }
+        trailingExtremePrice = positive(extreme).setScale(PRICE_SCALE, RoundingMode.HALF_EVEN);
     }
 
     /**
@@ -247,7 +387,7 @@ public class PaperOrder extends BaseEntity {
     }
 
     private BigDecimal lockedFor(BigDecimal quantity) {
-        if (!waitsAtPrice()) {
+        if (!hasLimitPrice()) {
             throw new IllegalStateException("order " + getId() + " is " + orderType + " and holds nothing back");
         }
         if (quantity.signum() < 0) {

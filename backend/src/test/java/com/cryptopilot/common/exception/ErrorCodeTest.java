@@ -52,7 +52,8 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.ALERT_STATUS_TRANSITION_INVALID, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_INSUFFICIENT_BALANCE, "MSG01 400"),
             Map.entry(ErrorCode.PAPER_ORDER_NOT_OPEN, "MSG43 409"),
-            Map.entry(ErrorCode.PAPER_ORDER_WOULD_TAKE, "MSG43 409"));
+            Map.entry(ErrorCode.PAPER_ORDER_WOULD_TAKE, "MSG43 409"),
+            Map.entry(ErrorCode.PAPER_ORDER_WOULD_TRIGGER, "MSG43 409"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

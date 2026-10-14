@@ -9,12 +9,15 @@ import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
+import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
 import com.cryptopilot.paper.matching.PaperOrderBook;
 import com.cryptopilot.paper.matching.PaperOrderBook.BookKey;
+import com.cryptopilot.paper.matching.TriggerBook;
 import com.cryptopilot.paper.model.PriceRange;
 import com.cryptopilot.paper.model.RestingOrder;
+import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.service.PaperMatchingService;
@@ -98,7 +101,16 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <p>A fill that fails is tried again on the pair's next range once {@code retry-delay} has passed, until
  * {@code retry-deadline}; then the order waits in the book again and the pair's watermark stays held until a restart.
  *
- * <p>Rule: TR-02, TR-05; NSF-07; Q-T1, Q-T6, Q-T8; A-04; D-77, D-78; ADR-011.
+ * <h2>Stop limits and trailing stops</h2>
+ *
+ * <p>The stop limits and trailing stops wait in a {@link TriggerBook} the same ranges reach, before the limit orders
+ * are filled. A range that triggers one has it triggered under its Trader's lock: live, it meets the current book at
+ * once as a limit order placed then does, and what is left of it waits in the book; replayed, it waits at its price
+ * for the candles that follow. A trigger that fails leaves the order watched, so the next range triggers it again.
+ * The best prices the trailing stops followed to are stored once a minute, on each closed candle, and a restart
+ * resumes from them; the replay from the watermark covers the minute not stored.
+ *
+ * <p>Rule: TR-02, TR-05, TR-09, TR-11; NSF-07; Q-T1, Q-T6, Q-T8; A-04; D-77, D-78; ADR-011.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
  * (producer-consumer) and ch. 7 (cancellation and shutdown).
@@ -130,6 +142,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     /** Owned by the consumer thread once it starts; written by {@link #start()} before that. */
     private final PaperOrderBook book;
+
+    /** The stop limits and trailing stops; owned like {@link #book}. */
+    private final TriggerBook triggers = new TriggerBook();
 
     /** When the consumer last read a trade of each pair. */
     private final Map<BookKey, Instant> lastTrade = new HashMap<>();
@@ -180,13 +195,23 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             book.track(order);
             oldest.merge(keyOf(order), order.placedAt(), (a, b) -> a.isBefore(b) ? a : b);
         }
+        List<TriggerOrder> waiting = matching.triggerOrders();
+        for (TriggerOrder order : waiting) {
+            triggers.track(order);
+            oldest.merge(
+                    new BookKey(order.market(), order.pairId()), order.placedAt(), (a, b) -> a.isBefore(b) ? a : b);
+        }
         if (properties.replay().enabled()) {
             oldest.forEach((key, placedAt) -> startupReplay(key, placedAt));
         }
         running = true;
         startThread("paper-matching", this::drain);
         startThread("paper-replay", this::runReplays);
-        log.info("TR-02 paper matching started with {} orders; {} pairs to replay", resting.size(), replaying.size());
+        log.info(
+                "TR-02 paper matching started with {} orders and {} waiting for a trigger; {} pairs to replay",
+                resting.size(),
+                waiting.size(),
+                replaying.size());
     }
 
     /** Stops the threads and waits up to {@code stop-timeout} for them to end. */
@@ -279,6 +304,14 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
     }
 
+    /** A stop limit or a trailing stop waits for its trigger. */
+    @TransactionalEventListener
+    public void onAwaitingTrigger(PaperOrderAwaitingTrigger event) {
+        if (running) {
+            queue.offer(new Command.TrackTrigger(event.order()));
+        }
+    }
+
     /** A cancelled order leaves the book. */
     @TransactionalEventListener
     public void onCanceled(PaperOrderCanceled event) {
@@ -312,8 +345,10 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     private void handle(Command command) {
         switch (command) {
             case Command.Track track -> book.track(track.order(), queueAhead(track.order()));
+            case Command.TrackTrigger track -> triggers.track(track.order());
             case Command.Untrack untrack -> {
                 book.untrack(untrack.orderId());
+                triggers.untrack(untrack.orderId());
                 retries.values()
                         .forEach(waiting -> waiting.removeIf(
                                 pending -> pending.order().orderId().equals(untrack.orderId())));
@@ -349,9 +384,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             watchForGap(key, range);
         }
         retryDue(key);
-        boolean tracked = book.hasOrders(range.market(), range.pairId());
+        boolean tracked = hasOrders(key);
         if (range.closed() || !tradesFlow(key)) {
             fillReached(key, range);
+        }
+        if (range.closed()) {
+            saveExtremes();
         }
         boolean replayed = range.source() == FillSource.REPLAY;
         if (range.closed()
@@ -376,8 +414,52 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         return last != null && clock.instant().isBefore(last.plus(properties.tradeSilence()));
     }
 
-    /** Takes from the book the orders the range reached and stores their fills, each at the time it was reached. */
+    /** Whether any order of the pair waits, at its price or for a trigger. */
+    private boolean hasOrders(BookKey key) {
+        return book.hasOrders(key.market(), key.pairId()) || triggers.hasOrders(key.market(), key.pairId());
+    }
+
+    /**
+     * Triggers the stop limits and trailing stops the range reached, earliest first, one after another; a trigger that
+     * fails leaves its order watched for the next range.
+     */
+    private void triggerReached(PriceRange range) {
+        for (TriggerBook.Triggered fired : triggers.onRange(range)) {
+            try {
+                if (!matching.trigger(fired.order(), fired.at(), fired.stopPrice(), range.source())) {
+                    log.debug(
+                            "TR-09 paper order {} no longer waits for a trigger",
+                            fired.order().orderId());
+                }
+            } catch (RuntimeException failure) {
+                triggers.track(fired.order());
+                log.warn(
+                        "TR-09 paper order {} trigger failed; it waits for the next price: {}",
+                        fired.order().orderId(),
+                        failure.toString());
+            }
+        }
+    }
+
+    /** Stores the best prices the trailing stops followed to since the last closed candle. */
+    private void saveExtremes() {
+        Map<UUID, BigDecimal> moved = triggers.movedExtremes();
+        if (moved.isEmpty()) {
+            return;
+        }
+        try {
+            matching.saveExtremes(moved);
+        } catch (RuntimeException failure) {
+            log.warn("TR-11 best prices of {} trailing stops not stored: {}", moved.size(), failure.toString());
+        }
+    }
+
+    /**
+     * Triggers what the range reached, then takes from the book the orders it reached and stores their fills, each
+     * at the time it was reached.
+     */
     private void fillReached(BookKey key, PriceRange range) {
+        triggerReached(range);
         fillAll(
                 key,
                 book.onRange(range, this::depthAt).stream()
@@ -430,7 +512,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         if (last != null
                 && range.from().isAfter(last.plus(MINUTE))
                 && properties.replay().enabled()
-                && book.hasOrders(key.market(), key.pairId())
+                && hasOrders(key)
                 && replaying.add(key)) {
             log.warn(
                     "TR-02 {} {}: candles from {} to {} missing from the stream; replaying them",
@@ -699,6 +781,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     private sealed interface Command {
 
         record Track(RestingOrder order) implements Command {}
+
+        record TrackTrigger(TriggerOrder order) implements Command {}
 
         record Untrack(UUID orderId) implements Command {}
 

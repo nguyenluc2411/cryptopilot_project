@@ -30,6 +30,10 @@ import java.util.UUID;
  * @param statusReason why an order ended other than by filling, e.g. {@code IOC_NOT_FILLABLE}; otherwise {@code null}
  * @param placedAt when it was placed
  * @param closedAt when it finished; {@code null} while it works
+ * @param stopPrice a stop limit's stop, or a trailing stop's once triggered; otherwise {@code null}
+ * @param callbackRate a trailing stop's callback, in percent; otherwise {@code null}
+ * @param activationPrice a trailing stop's activation price; otherwise {@code null}
+ * @param triggeredAt when a stop limit or a trailing stop triggered; {@code null} before and for other orders
  */
 public record OrderResponse(
         UUID orderId,
@@ -49,4 +53,8 @@ public record OrderResponse(
         OrderStatus status,
         String statusReason,
         Instant placedAt,
-        Instant closedAt) {}
+        Instant closedAt,
+        BigDecimal stopPrice,
+        BigDecimal callbackRate,
+        BigDecimal activationPrice,
+        Instant triggeredAt) {}

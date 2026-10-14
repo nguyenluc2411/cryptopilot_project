@@ -3,10 +3,12 @@ package com.cryptopilot.paper.service.impl;
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairCoins;
+import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.model.RestingOrder;
+import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderStatus;
@@ -14,9 +16,11 @@ import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperMatchingWatermarkRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
 import com.cryptopilot.paper.service.PaperMatchingService;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -32,7 +36,9 @@ import org.springframework.transaction.annotation.Transactional;
  * working. A fill replayed after a restart, or decided twice by two instances, finds it FILLED and does nothing. A
  * fill executes what the order has left, so one that took part of the book when it was placed (TR-06) fills the rest.
  *
- * <p>Rule: TR-02; NSF-07; Q-T6.
+ * A stop limit or a trailing stop the price triggered is triggered the same way, under the lock, and only once.
+ *
+ * <p>Rule: TR-02, TR-09, TR-11; NSF-07; Q-T6.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -43,6 +49,8 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final PaperAccountRepository accounts;
     private final PaperOrderRepository orders;
     private final SpotSettlement settlement;
+    private final SpotArrival arrival;
+    private final PaperUserFeed feed;
     private final PaperMatchingWatermarkRepository watermarks;
     private final UserLock lock;
     private final MarketApi market;
@@ -81,6 +89,59 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 true);
         log.info("TR-02 paper order {} filled at {} ({}, {})", order.getId(), order.getLimitPrice(), tradedAt, source);
         return true;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<TriggerOrder> triggerOrders() {
+        return orders.findAwaitingTrigger(OrderStatus.OPEN);
+    }
+
+    @Override
+    @Transactional
+    public boolean trigger(TriggerOrder watched, Instant at, BigDecimal stopPrice, FillSource source) {
+        PaperAccount account = accounts.findById(watched.accountId())
+                .orElseThrow(() -> new IllegalStateException("account " + watched.accountId() + " is not stored"));
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.getUserId());
+        // Read only now, under the lock, so a cancel committed while this trigger waited for it is seen.
+        Optional<PaperOrder> found = orders.findById(watched.orderId());
+        if (found.isEmpty() || !found.get().awaitsTrigger()) {
+            return false;
+        }
+        PaperOrder order = found.get();
+        order.trigger(at, stopPrice);
+        feed.order(account, order);
+        log.info(
+                "TR-09 paper order {} {} triggered at {} ({}, {})",
+                order.getId(),
+                order.getOrderType(),
+                stopPrice,
+                at,
+                source);
+        if (source == FillSource.REPLAY) {
+            // The candles replayed after this one fill it at its price; the book of now is not the book of then.
+            arrival.rest(account, order);
+            return true;
+        }
+        TradablePair pair = market.tradablePair(order.getPairId(), order.getMarketType())
+                .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not tradable"));
+        PairCoins coins = market.pairCoins(order.getPairId())
+                .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
+        arrival.limitOnArrival(account, order, coins, arrival.bookFor(pair, order.getSide()), clock.instant());
+        return true;
+    }
+
+    @Override
+    @Transactional
+    public void saveExtremes(Map<UUID, BigDecimal> extremes) {
+        if (extremes.isEmpty()) {
+            return;
+        }
+        for (PaperOrder order : orders.findByIdIn(extremes.keySet())) {
+            if (order.awaitsTrigger()) {
+                order.moveExtreme(extremes.get(order.getId()));
+            }
+        }
     }
 
     @Override

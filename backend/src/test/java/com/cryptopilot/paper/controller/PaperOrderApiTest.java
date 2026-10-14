@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -12,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.OrderBookDepth.PriceLevel;
@@ -21,8 +23,10 @@ import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.job.PaperMatchingWorker;
 import com.cryptopilot.paper.model.RestingOrder;
+import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -381,6 +385,189 @@ class PaperOrderApiTest {
         place(trader, limit("BUY", "90", "1", null))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("NEW"));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Stop limits and trailing stops (TR-09, TR-11)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * TR-09: a buy stop above the last price waits, locking what its limit needs; a trade at the stop triggers it and,
+     * live, its limit meets the book at once as a taker.
+     */
+    @Test
+    void TR09_aBuyStopAboveTheLastPrice_isTriggeredByATradeAtTheStop_andTakesTheBook() throws Exception {
+        UUID trader = trader();
+        price("100");
+
+        String id = id(place(trader, stopLimit("BUY", "105", "106", "1"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.type").value("STOP_LIMIT"))
+                .andExpect(jsonPath("$.status").value("NEW"))
+                .andExpect(jsonPath("$.stopPrice").value(105.0))
+                .andExpect(jsonPath("$.timeInForce").value("GTC"))
+                .andExpect(jsonPath("$.triggeredAt").doesNotExist()));
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("106");
+
+        depth(List.of(level("105.5", "5")), List.of(level("104", "5")));
+        trade("104.99", 1);
+        trade("105", 2);
+
+        awaitStatus(trader, id, "FILLED");
+        as(trader, get(PAPER + "/orders/" + id), null)
+                .andExpect(jsonPath("$.avgPrice").value(105.5))
+                .andExpect(jsonPath("$.triggeredAt").exists());
+        as(trader, get(PAPER + "/fills").param("pairId", pair.toString()), null)
+                .andExpect(jsonPath("$.items[0].liquidity").value("TAKER"));
+        assertThat(locked(trader, "USDT")).isZero();
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /** TR-09: a stop at the last price would trigger at once and is refused; without a price the side is unknown. */
+    @Test
+    void TR09_aStopAtTheLastPrice_isRefused_andWithoutAPrice_theStopCannotBePlaced() throws Exception {
+        UUID trader = trader();
+
+        place(trader, stopLimit("BUY", "105", "106", "1"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MARKET_PRICE_UNAVAILABLE"));
+        price("100");
+        place(trader, stopLimit("SELL", "100", "99", "1"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_WOULD_TRIGGER"));
+        as(trader, get(PAPER + "/orders"), null)
+                .andExpect(jsonPath("$.items.length()").value(0));
+    }
+
+    /** TR-09: a cancelled stop gives back what it locked, and a trigger that comes after the cancel does nothing. */
+    @Test
+    void TR09_aCancelledStop_unlocks_andALateTriggerDoesNothing() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String id = id(place(trader, stopLimit("BUY", "105", "106", "1")).andExpect(status().isCreated()));
+        TriggerOrder watched = matching.triggerOrders().stream()
+                .filter(order -> order.orderId().toString().equals(id))
+                .findFirst()
+                .orElseThrow();
+        assertThat(watched.condition()).isEqualTo(TriggerCondition.AT_OR_ABOVE);
+
+        as(trader, post(PAPER + "/orders/" + id + "/cancel"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELED"));
+
+        assertThat(locked(trader, "USDT")).isZero();
+        assertThat(matching.trigger(watched, Instant.now(), watched.stopPrice(), FillSource.LIVE))
+                .isFalse();
+        assertThat(matching.triggerOrders())
+                .noneMatch(order -> order.orderId().toString().equals(id));
+    }
+
+    /** TR-09: replayed, a triggered stop waits at its limit price from the trigger on, for the candles that follow. */
+    @Test
+    void TR09_aStopTriggeredByAReplay_waitsAtItsPrice_fromTheTrigger() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String id = id(place(trader, stopLimit("BUY", "105", "104", "1")).andExpect(status().isCreated()));
+        TriggerOrder watched = matching.triggerOrders().stream()
+                .filter(order -> order.orderId().toString().equals(id))
+                .findFirst()
+                .orElseThrow();
+        Instant at = Instant.now().plusSeconds(1);
+
+        assertThat(matching.trigger(watched, at, watched.stopPrice(), FillSource.REPLAY))
+                .isTrue();
+
+        as(trader, get(PAPER + "/orders/" + id), null)
+                .andExpect(jsonPath("$.status").value("NEW"))
+                .andExpect(jsonPath("$.triggeredAt").exists());
+        assertThat(matching.restingOrders())
+                .filteredOn(order -> order.orderId().toString().equals(id))
+                .singleElement()
+                .satisfies(order -> assertThat(order.placedAt()).isCloseTo(at, within(1, ChronoUnit.MILLIS)));
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("104");
+    }
+
+    /**
+     * TR-11: a sell trailing stop follows the high from the last price, triggers when the price falls back by its
+     * callback, and its limit then takes the bids.
+     */
+    @Test
+    void TR11_aSellTrailingStop_followsTheHigh_andTriggersOnTheCallback() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+
+        String id = id(place(trader, trailing("SELL", "2", null, "90", "1"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.type").value("TRAILING_STOP_LIMIT"))
+                .andExpect(jsonPath("$.callbackRate").value(2.0))
+                .andExpect(jsonPath("$.stopPrice").doesNotExist()));
+        assertThat(locked(trader, base())).isEqualByComparingTo("1");
+
+        depth(List.of(level("108", "5")), List.of(level("107", "5")));
+        trade("110", 1);
+        trade("108", 2);
+        // 110 × 0.98 = 107.8: the trailing stop triggers here.
+        trade("107.8", 3);
+
+        awaitStatus(trader, id, "FILLED");
+        as(trader, get(PAPER + "/orders/" + id), null)
+                .andExpect(jsonPath("$.stopPrice").value(107.8))
+                .andExpect(jsonPath("$.avgPrice").value(107.0));
+        assertThat(locked(trader, base())).isZero();
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /**
+     * TR-11: a buy trailing stop with an activation price the price has not reached waits unactivated; the best price
+     * the engine stores is where it resumes after a restart.
+     */
+    @Test
+    void TR11_aTrailingStopWithAnActivationPrice_waitsForIt_andResumesFromItsStoredBestPrice() throws Exception {
+        UUID trader = trader();
+        price("100");
+
+        String id = id(place(trader, trailing("BUY", "1", "90", "95", "1"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.activationPrice").value(90.0)));
+        TriggerOrder watched = matching.triggerOrders().stream()
+                .filter(order -> order.orderId().toString().equals(id))
+                .findFirst()
+                .orElseThrow();
+        assertThat(watched.condition()).isEqualTo(TriggerCondition.AT_OR_ABOVE);
+        assertThat(watched.extreme()).isNull();
+
+        matching.saveExtremes(Map.of(UUID.fromString(id), new BigDecimal("88")));
+
+        assertThat(matching.triggerOrders())
+                .filteredOn(order -> order.orderId().toString().equals(id))
+                .singleElement()
+                .satisfies(order -> assertThat(order.extreme()).isEqualByComparingTo("88"));
+    }
+
+    /** TR-09, TR-11: each kind takes its own fields only. */
+    @Test
+    void TR09_TR11_theTriggerFields_belongToTheirKindsOnly() throws Exception {
+        UUID trader = trader();
+        price("100");
+
+        place(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\", \"type\": \"LIMIT\","
+                                + " \"price\": 90, \"quantity\": 1, \"stopPrice\": 95, \"callbackRate\": 1}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.stopPrice").value("MSG15"))
+                .andExpect(jsonPath("$.errors.callbackRate").value("MSG15"));
+        place(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\","
+                                + " \"type\": \"STOP_LIMIT\", \"price\": 90, \"quantity\": 1, \"timeInForce\": \"GTX\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.stopPrice").value("MSG01"))
+                .andExpect(jsonPath("$.errors.timeInForce").value("MSG15"));
+        place(trader, trailing("SELL", "25", null, "90", "1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.callbackRate").value("MSG15"));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -829,6 +1016,26 @@ class PaperOrderApiTest {
     private String market(String side, String size) {
         return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\", \"type\": \"MARKET\", "
                 + size + "}";
+    }
+
+    private String stopLimit(String side, String stop, String price, String quantity) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\","
+                + " \"type\": \"STOP_LIMIT\", \"stopPrice\": " + stop + ", \"price\": " + price + ", \"quantity\": "
+                + quantity + "}";
+    }
+
+    private String trailing(String side, String callbackRate, String activation, String price, String quantity) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\","
+                + " \"type\": \"TRAILING_STOP_LIMIT\", \"callbackRate\": " + callbackRate
+                + (activation == null ? "" : ", \"activationPrice\": " + activation)
+                + ", \"price\": " + price + ", \"quantity\": " + quantity + "}";
+    }
+
+    /** One market trade of the test's pair, {@code second} seconds from now, handed to the engine as it streams. */
+    private void trade(String price, int second) {
+        Instant at = Instant.now().plusSeconds(second);
+        worker.onTrade(new MarketTrade(
+                MarketType.SPOT, pair, TICKS.incrementAndGet(), new BigDecimal(price), BigDecimal.ONE, at, false, at));
     }
 
     private String limitMaker(String side, String price, String quantity) {

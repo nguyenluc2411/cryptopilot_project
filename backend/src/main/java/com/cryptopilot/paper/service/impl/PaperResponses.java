@@ -36,7 +36,11 @@ final class PaperResponses {
                 order.getOrderStatus(),
                 order.getStatusReason(),
                 order.getCreatedAt(),
-                order.getClosedAt());
+                order.getClosedAt(),
+                order.getStopPrice(),
+                order.getCallbackRate(),
+                order.getActivationPrice(),
+                order.getTriggeredAt());
     }
 
     /**
