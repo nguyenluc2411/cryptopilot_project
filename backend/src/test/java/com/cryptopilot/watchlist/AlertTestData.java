@@ -99,7 +99,52 @@ public final class AlertTestData {
         return id;
     }
 
-    /** An ACTIVE RSI_14 alert, which the engine does not evaluate yet. */
+    /**
+     * An INDICATOR alert in the given state, written straight to the table (no entitlement check).
+     *
+     * @param threshold the level, or {@code null} for a line cross
+     * @param cooldownMinutes the cooldown, or {@code null}
+     * @param expiresAt the expiry, or {@code null}
+     */
+    public UUID indicatorAlert(
+            UUID trader,
+            UUID watchlistId,
+            String market,
+            String indicator,
+            String timeframe,
+            String condition,
+            String threshold,
+            String triggerMode,
+            Integer cooldownMinutes,
+            String status,
+            Instant expiresAt) {
+        UUID id = UUID.randomUUID();
+        OffsetDateTime now = now();
+        sql.sql("""
+                        insert into alert (alert_id, user_id, watchlist_id, market_type, alert_type, indicator_name,
+                                           timeframe, condition_operator, threshold_value, trigger_mode,
+                                           cooldown_minutes, alert_status, expires_at, created_at, updated_at)
+                        values (?, ?, ?, ?, 'INDICATOR', ?, ?, ?, ?::numeric, ?, ?, ?, ?, ?, ?)""")
+                .params(
+                        id,
+                        trader,
+                        watchlistId,
+                        market,
+                        indicator,
+                        timeframe,
+                        condition,
+                        threshold,
+                        triggerMode,
+                        cooldownMinutes,
+                        status,
+                        expiresAt == null ? null : expiresAt.atOffset(ZoneOffset.UTC),
+                        now,
+                        now)
+                .update();
+        return id;
+    }
+
+    /** An ACTIVE RSI_14 alert on 1h, which the PRICE engine does not hold. */
     public UUID indicatorAlert(UUID trader, UUID watchlistId) {
         UUID id = UUID.randomUUID();
         OffsetDateTime now = now();
