@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -205,8 +206,15 @@ class MatchingRaceTest {
         }
     }
 
+    /**
+     * The fill happens on a worker thread, so the test waits for it with a bound instead of polling the wall clock.
+     *
+     * <p>Reference: Freeman, S., &amp; Pryce, N. (2009). <i>Growing Object-Oriented Software, Guided by Tests</i>.
+     * Addison-Wesley, ch. 27 (testing asynchronous code); Luo, Q., Hariri, F., Eloussi, L., &amp; Marinov, D. (2014).
+     * An Empirical Analysis of Flaky Tests. FSE 2014.
+     */
     @Test
-    void NSF07_aLimitPlanActivatedAfterStart_isFilledByARangeThatReachesIt() throws InterruptedException {
+    void NSF07_aLimitPlanActivatedAfterStart_isFilledByARangeThatReachesIt() {
         UUID id = activePlan(LIMIT);
         inTransaction(() -> {
             events.publishEvent(activated(id));
@@ -218,10 +226,10 @@ class MatchingRaceTest {
                         MarketType.FUTURES, pair, new BigDecimal("99"), new BigDecimal("101"), FILLED_AT)))
                 .isTrue();
 
-        Instant deadline = Instant.now().plusSeconds(10);
-        while (plan(id).getStatus() != PlanStatus.EXECUTED && Instant.now().isBefore(deadline)) {
-            Thread.sleep(20);
-        }
+        await("plan executed")
+                .atMost(Duration.ofSeconds(10))
+                .pollInterval(Duration.ofMillis(20))
+                .until(() -> plan(id).getStatus() == PlanStatus.EXECUTED);
         assertThat(plan(id).getExecutedAt()).isEqualTo(FILLED_AT);
     }
 

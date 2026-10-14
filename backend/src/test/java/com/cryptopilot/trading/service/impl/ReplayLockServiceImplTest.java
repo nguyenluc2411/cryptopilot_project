@@ -2,6 +2,7 @@ package com.cryptopilot.trading.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -13,6 +14,7 @@ import com.cryptopilot.trading.config.ReplayLockProperties;
 import java.time.Duration;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -105,19 +107,29 @@ class ReplayLockServiceImplTest {
         assertThat(redis.keys(ReplayLockServiceImpl.KEY_PREFIX + "*")).isEmpty();
     }
 
-    /** A holder that crashed renews nothing: once its key expires, a new start succeeds. */
+    /**
+     * A holder that crashed renews nothing: once its key expires, a new start succeeds. The key carries the lease as
+     * its TTL, and Redis removes it; the test waits for that with a bound instead of a sleep loop.
+     *
+     * <p>Reference: Freeman, S., &amp; Pryce, N. (2009). <i>Growing Object-Oriented Software, Guided by Tests</i>.
+     * Addison-Wesley, ch. 27 (testing asynchronous code); Luo, Q., Hariri, F., Eloussi, L., &amp; Marinov, D. (2014).
+     * An Empirical Analysis of Flaky Tests. FSE 2014.
+     */
     @Test
-    void D85_anExpiredKey_allowsARestart() throws InterruptedException {
-        ReplayLockProperties shortLived = new ReplayLockProperties(Duration.ofMillis(300), Duration.ofMillis(100));
+    void D85_anExpiredKey_allowsARestart() {
+        // Long enough that the refusal below is checked while the key is alive, even on a slow run.
+        ReplayLockProperties shortLived = new ReplayLockProperties(Duration.ofSeconds(1), Duration.ofMillis(100));
         service(shortLived).tryAcquire(MarketType.SPOT, PAIR);
         ReplayLockServiceImpl restarted = service(shortLived);
         assertThat(restarted.tryAcquire(MarketType.SPOT, PAIR)).isFalse();
 
-        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (Boolean.TRUE.equals(redis.hasKey("rpl:SPOT:" + PAIR))) {
-            assertThat(System.nanoTime()).as("the key expires in time").isLessThan(deadline);
-            Thread.sleep(20);
-        }
+        assertThat(redis.getExpire("rpl:SPOT:" + PAIR, TimeUnit.MILLISECONDS))
+                .as("the key expires by itself")
+                .isBetween(1L, shortLived.ttl().toMillis());
+        await("the key expires")
+                .atMost(Duration.ofSeconds(5))
+                .pollInterval(Duration.ofMillis(20))
+                .until(() -> !Boolean.TRUE.equals(redis.hasKey("rpl:SPOT:" + PAIR)));
 
         assertThat(restarted.tryAcquire(MarketType.SPOT, PAIR)).isTrue();
     }
