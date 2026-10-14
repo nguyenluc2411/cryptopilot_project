@@ -40,7 +40,8 @@ final class PaperResponses {
                 order.getStopPrice(),
                 order.getCallbackRate(),
                 order.getActivationPrice(),
-                order.getTriggeredAt());
+                order.getTriggeredAt(),
+                order.getListId());
     }
 
     /**

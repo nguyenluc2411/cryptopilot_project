@@ -9,13 +9,16 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderRested;
 import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.matching.BookSweep.Slice;
 import com.cryptopilot.paper.model.RestingOrder;
+import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.model.enums.TimeInForce;
 import com.cryptopilot.paper.model.enums.WalletType;
 import java.math.BigDecimal;
@@ -149,6 +152,21 @@ public class SpotArrival {
                 order.getSide(),
                 order.getLimitPrice(),
                 order.restingSince())));
+    }
+
+    /** Hands a stop limit or a trailing stop to the matching engine, which watches it once the placement commits. */
+    public void awaitTrigger(PaperAccount account, PaperOrder order) {
+        events.publishEvent(new PaperOrderAwaitingTrigger(new TriggerOrder(
+                order.getId(),
+                account.getId(),
+                order.getMarketType(),
+                order.getPairId(),
+                order.getTriggerCondition(),
+                order.getOrderType() == OrderType.STOP_LIMIT ? order.getStopPrice() : null,
+                order.getCallbackRate(),
+                order.getActivationPrice(),
+                order.getTrailingExtremePrice(),
+                order.getCreatedAt())));
     }
 
     /** What a working order locks: the quote coin for a buy, the base coin for a sell. */

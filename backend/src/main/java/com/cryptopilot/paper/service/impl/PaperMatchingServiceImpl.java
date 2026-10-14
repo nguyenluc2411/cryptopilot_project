@@ -51,6 +51,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final SpotSettlement settlement;
     private final SpotArrival arrival;
     private final PaperUserFeed feed;
+    private final PaperOrderLists lists;
     private final PaperMatchingWatermarkRepository watermarks;
     private final UserLock lock;
     private final MarketApi market;
@@ -77,6 +78,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         PaperOrder order = found.get();
         PairCoins coins = market.pairCoins(order.getPairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
+        lists.beforeExecution(account, order, tradedAt);
         settlement.execute(
                 account,
                 order,
@@ -87,6 +89,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 source,
                 tradedAt,
                 true);
+        lists.afterExecution(account, order, tradedAt);
         log.info("TR-02 paper order {} filled at {} ({}, {})", order.getId(), order.getLimitPrice(), tradedAt, source);
         return true;
     }
@@ -109,6 +112,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             return false;
         }
         PaperOrder order = found.get();
+        lists.beforeExecution(account, order, at);
         order.trigger(at, stopPrice);
         feed.order(account, order);
         log.info(
@@ -128,6 +132,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         PairCoins coins = market.pairCoins(order.getPairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
         arrival.limitOnArrival(account, order, coins, arrival.bookFor(pair, order.getSide()), clock.instant());
+        lists.afterExecution(account, order, at);
         return true;
     }
 

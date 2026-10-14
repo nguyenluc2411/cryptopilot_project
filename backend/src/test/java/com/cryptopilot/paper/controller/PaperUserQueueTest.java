@@ -156,8 +156,13 @@ class PaperUserQueueTest {
     private void deleteRows() {
         for (UUID trader : traders) {
             String account = "(select account_id from paper_account where user_id = ?)";
-            for (String table :
-                    List.of("paper_fill", "paper_order", "paper_ledger_entry", "paper_transfer", "paper_balance")) {
+            for (String table : List.of(
+                    "paper_fill",
+                    "paper_order",
+                    "paper_order_list",
+                    "paper_ledger_entry",
+                    "paper_transfer",
+                    "paper_balance")) {
                 sql.sql("delete from " + table + " where account_id = " + account)
                         .param(trader)
                         .update();

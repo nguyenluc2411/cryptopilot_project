@@ -91,6 +91,10 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
             + " com.cryptopilot.paper.model.enums.OrderType.TRAILING_STOP_LIMIT)")
     List<TriggerOrder> findAwaitingTrigger(Collection<OrderStatus> statuses);
 
+    /** The orders of a group, as they were placed. */
+    @Transactional(readOnly = true)
+    List<PaperOrder> findByListIdOrderByClientOrderIdAsc(UUID listId);
+
     /** Reads the orders of these ids. */
     List<PaperOrder> findByIdIn(Collection<UUID> ids);
 

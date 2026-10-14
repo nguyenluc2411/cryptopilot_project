@@ -27,14 +27,14 @@ import lombok.Getter;
  * <p>Spot MARKET, LIMIT and LIMIT_MAKER orders, and stop limits and trailing stops that wait for the last price to
  * trigger them and then work as the limit order they carry (TR-09, TR-11). An order executes in one or more fills: one per level
  * of the exchange's book it takes on arrival (TR-06, Q-T7), and a waiting LIMIT order the rest of its quantity at
- * once when the market reaches it. Part executed, it is {@code PARTIALLY_FILLED} and still works. The columns of the
- * later stages (the position side, order lists) are left unmapped until those stages use them; the database fills
- * them with null.
+ * once when the market reaches it. Part executed, it is {@code PARTIALLY_FILLED} and still works. An order of a
+ * group (OCO, OTO, OTOCO) points at it (TR-10); the pending order of an OTO or OTOCO is {@code PENDING_NEW} until its
+ * working order fills. The position side of Futures is left unmapped until that stage uses it.
  *
  * <p>What a working order holds back is not stored: it follows from the order and what of it is left, so
  * {@link #lockedAmount()} gives the same figure at a fill, at a cancel and after a restart.
  *
- * <p>Rule: TR-02, TR-09, TR-11, TR-12; BR-21 (Spot owns what it sells and holds no position).
+ * <p>Rule: TR-02, TR-09, TR-10, TR-11, TR-12; BR-21 (Spot owns what it sells and holds no position).
  */
 @Getter
 @Entity
@@ -61,6 +61,10 @@ public class PaperOrder extends BaseEntity {
     /** The idempotency key the client sent, or one generated for a request that sent none. */
     @Column(name = "client_order_id", nullable = false, length = 64, updatable = false)
     private String clientOrderId;
+
+    /** The group the order was placed in (TR-10), or {@code null}. */
+    @Column(name = "list_id", updatable = false)
+    private UUID listId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "side", nullable = false, length = 32, updatable = false)
@@ -317,6 +321,48 @@ public class PaperOrder extends BaseEntity {
         return order;
     }
 
+    /**
+     * Places the order in a group (TR-10). Called before it is first stored.
+     *
+     * @param pending whether it waits, PENDING_NEW, until its group's working order fills
+     */
+    public PaperOrder inList(UUID listId, boolean pending) {
+        if (this.listId != null || executedQuantity.signum() != 0 || orderStatus != OrderStatus.NEW) {
+            throw new IllegalStateException("order " + getId() + " is already placed");
+        }
+        this.listId = Objects.requireNonNull(listId, "listId must not be null");
+        if (pending) {
+            orderStatus = OrderStatus.PENDING_NEW;
+        }
+        return this;
+    }
+
+    /** Whether the order waits to be placed until its group's working order fills. */
+    public boolean isPending() {
+        return orderStatus == OrderStatus.PENDING_NEW;
+    }
+
+    /** Places a pending order of a group, now that its working order filled: it works from now on. */
+    public void activate() {
+        if (!isPending()) {
+            throw new IllegalStateException("order " + getId() + " is " + orderStatus + ", not PENDING_NEW");
+        }
+        orderStatus = OrderStatus.NEW;
+    }
+
+    /**
+     * Ends a pending order of a group that could not be placed when its working order filled, e.g. for too little
+     * free balance.
+     *
+     * @param reason a short code the order history shows
+     */
+    public void reject(String reason, Instant at) {
+        if (!isPending()) {
+            throw new IllegalStateException("order " + getId() + " is " + orderStatus + ", not PENDING_NEW");
+        }
+        end(OrderStatus.REJECTED, Objects.requireNonNull(reason, "reason"), at);
+    }
+
     /** Whether the order carries a limit price, and so locks by it: every kind but MARKET. */
     public boolean hasLimitPrice() {
         return limitPrice != null;
@@ -444,9 +490,11 @@ public class PaperOrder extends BaseEntity {
         statusReason = DEPTH_EXHAUSTED;
     }
 
-    /** Ends a working order the Trader cancelled. */
+    /** Ends a working order, or a pending order of a group, the Trader cancelled. */
     public void cancel(Instant at) {
-        requireOpen("cancelled");
+        if (!isPending()) {
+            requireOpen("cancelled");
+        }
         end(OrderStatus.CANCELED, null, at);
     }
 

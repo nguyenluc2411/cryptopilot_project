@@ -1,8 +1,10 @@
 package com.cryptopilot.paper.service;
 
 import com.cryptopilot.common.web.PageResponse;
+import com.cryptopilot.paper.dto.request.PlaceOrderListRequest;
 import com.cryptopilot.paper.dto.request.PlaceOrderRequest;
 import com.cryptopilot.paper.dto.response.FillResponse;
+import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
@@ -48,6 +50,12 @@ public interface PaperOrderService {
      * @throws com.cryptopilot.common.exception.BusinessException {@code PAPER_ORDER_NOT_OPEN} when it has finished
      */
     OrderResponse cancel(UUID userId, UUID orderId);
+
+    OrderListResponse placeList(UUID userId, PlaceOrderListRequest request);
+
+    OrderListResponse cancelList(UUID userId, UUID listId);
+
+    OrderListResponse orderList(UUID userId, UUID listId);
 
     /**
      * Cancels every working order of the caller on one pair and gives back what they locked, as Binance's cancel of

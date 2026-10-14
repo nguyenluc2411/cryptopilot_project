@@ -141,6 +141,12 @@ public class PaperWallets {
         return balance;
     }
 
+    /** The free amount of a coin; zero for a coin the wallet never held. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal free(PaperAccount account, WalletType wallet, CoinListing coin) {
+        return find(account, wallet, coin).map(PaperBalance::getFreeAmount).orElse(BigDecimal.ZERO);
+    }
+
     // An amount was locked in this balance, so it exists; a missing one is a defect.
     private PaperBalance held(PaperAccount account, WalletType wallet, CoinListing coin) {
         return find(account, wallet, coin)

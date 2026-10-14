@@ -2,8 +2,10 @@ package com.cryptopilot.paper.controller;
 
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
+import com.cryptopilot.paper.dto.request.PlaceOrderListRequest;
 import com.cryptopilot.paper.dto.request.PlaceOrderRequest;
 import com.cryptopilot.paper.dto.response.FillResponse;
+import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
@@ -69,7 +71,44 @@ public class PaperOrderController {
                 .body(placed.order());
     }
 
-    @Operation(summary = "Cancel a working order and release what it locked")
+    @Operation(summary = "Place a Spot OCO, OTO or OTOCO group of orders (TR-10)")
+    @ApiResponse(responseCode = "201", description = "The group, EXECUTING, with its orders")
+    @ApiResponse(
+            responseCode = "400",
+            description =
+                    "MSG01, MSG15: `errors` names each rejected part or field; PAPER_INSUFFICIENT_BALANCE (MSG01)")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened, or the pair is not tradable")
+    @ApiResponse(
+            responseCode = "409",
+            description = "MSG43: a working LIMIT_MAKER would take the book, or a pending stop is the last price")
+    @ApiResponse(responseCode = "503", description = "MSG43: no current price")
+    @PostMapping("/order-lists")
+    public ResponseEntity<OrderListResponse> placeList(
+            @AuthenticationPrincipal Jwt caller, @Valid @RequestBody PlaceOrderListRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(orders.placeList(callerOf(caller), request));
+    }
+
+    @Operation(summary = "Cancel every order of a group that works or waits, releasing what they locked")
+    @ApiResponse(responseCode = "200", description = "The group, ALL_DONE")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such group of the caller")
+    @ApiResponse(responseCode = "409", description = "MSG43: the group has finished")
+    @PostMapping("/order-lists/{listId}/cancel")
+    public OrderListResponse cancelList(@AuthenticationPrincipal Jwt caller, @PathVariable UUID listId) {
+        return orders.cancelList(callerOf(caller), listId);
+    }
+
+    @Operation(summary = "One group of the caller's orders")
+    @ApiResponse(responseCode = "200", description = "The group with its orders")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such group of the caller")
+    @GetMapping("/order-lists/{listId}")
+    public OrderListResponse orderList(@AuthenticationPrincipal Jwt caller, @PathVariable UUID listId) {
+        return orders.orderList(callerOf(caller), listId);
+    }
+
+    @Operation(summary = "Cancel a working order and release what it locked; for an order of a group, the group")
     @ApiResponse(responseCode = "200", description = "The order, CANCELED")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such order of the caller")

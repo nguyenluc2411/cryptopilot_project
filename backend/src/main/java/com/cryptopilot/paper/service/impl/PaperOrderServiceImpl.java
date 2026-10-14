@@ -17,18 +17,19 @@ import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.dto.request.PlaceOrderListRequest;
 import com.cryptopilot.paper.dto.request.PlaceOrderRequest;
 import com.cryptopilot.paper.dto.response.FillResponse;
+import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
 import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperOrder;
-import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
+import com.cryptopilot.paper.entity.PaperOrderList;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
-import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
@@ -37,6 +38,7 @@ import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperFillRepository;
+import com.cryptopilot.paper.repository.PaperOrderListRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
 import com.cryptopilot.paper.service.PaperOrderService;
 import java.math.BigDecimal;
@@ -45,6 +47,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -87,7 +90,7 @@ import org.springframework.transaction.annotation.Transactional;
  * single level, or for a pair without the trading streams the current last price, at which the whole order executes.
  * None is ever executed at a price that is not current (NSF-03).
  *
- * <p>Rule: TR-02, TR-04, TR-06, TR-08, TR-09, TR-11, TR-12; BR-21, BR-23, BR-30; NSF-03; Q-T7.
+ * <p>Rule: TR-02, TR-04, TR-06, TR-08, TR-09, TR-10, TR-11, TR-12; BR-21, BR-23, BR-30; NSF-03; Q-T7.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -98,11 +101,17 @@ public class PaperOrderServiceImpl implements PaperOrderService {
 
     private static final Logger log = LoggerFactory.getLogger(PaperOrderServiceImpl.class);
 
+    /** What the open orders list: the working orders, and the pending orders of groups (TR-10). */
+    private static final Set<OrderStatus> LISTED_OPEN =
+            EnumSet.of(OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED, OrderStatus.PENDING_NEW);
+
     private final PaperAccountRepository accounts;
     private final PaperOrderRepository orders;
     private final PaperFillRepository fills;
     private final PaperWallets wallets;
     private final SpotArrival arrival;
+    private final PaperOrderLists lists;
+    private final PaperOrderListRepository groups;
     private final UserLock lock;
     private final MarketApi market;
     private final ApplicationEventPublisher events;
@@ -156,13 +165,18 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         PaperAccount account = accountOf(userId);
         PaperOrder order = orders.findByIdAndAccountId(orderId, account.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
-        if (!order.isOpen()) {
+        if (!order.isOpen() && !order.isPending()) {
             throw new BusinessException(
                     ErrorCode.PAPER_ORDER_NOT_OPEN,
                     "order " + orderId + " is " + order.getOrderStatus() + " and cannot be cancelled",
                     order.getOrderStatus());
         }
-        cancelWorking(account, order, coinsOf(order.getPairId()), clock.instant());
+        if (order.getListId() != null) {
+            // Cancelling any order of a group cancels the group (TR-10).
+            lists.cancel(account, groupOf(order.getListId()), clock.instant());
+        } else {
+            cancelWorking(account, order, coinsOf(order.getPairId()), clock.instant());
+        }
         return toResponse(order, symbolsOf(List.of(order.getPairId())));
     }
 
@@ -178,10 +192,56 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         }
         PairCoins coins = coinsOf(pairId);
         Instant now = clock.instant();
-        open.forEach(order -> cancelWorking(account, order, coins, now));
+        Set<UUID> cancelledGroups = new HashSet<>();
+        for (PaperOrder order : open) {
+            if (order.getListId() == null) {
+                cancelWorking(account, order, coins, now);
+            } else if (cancelledGroups.add(order.getListId())) {
+                lists.cancel(account, groupOf(order.getListId()), now);
+            }
+        }
         String symbol = symbolOf(symbolsOf(List.of(pairId)), pairId);
         log.debug("Paper orders of account {} on {} cancelled: {}", account.getId(), symbol, open.size());
         return open.stream().map(order -> toResponse(order, symbol)).toList();
+    }
+
+    @Override
+    @Transactional
+    public OrderListResponse placeList(UUID userId, PlaceOrderListRequest request) {
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        return lists.place(accountOf(userId), request);
+    }
+
+    @Override
+    @Transactional
+    public OrderListResponse cancelList(UUID userId, UUID listId) {
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        PaperAccount account = accountOf(userId);
+        PaperOrderList list = groups.findByIdAndAccountId(listId, account.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("PaperOrderList", listId));
+        if (!list.isExecuting()) {
+            throw new BusinessException(
+                    ErrorCode.PAPER_ORDER_NOT_OPEN,
+                    "group " + listId + " is " + list.getListStatus() + " and cannot be cancelled",
+                    list.getListStatus());
+        }
+        lists.cancel(account, list, clock.instant());
+        return lists.response(list);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public OrderListResponse orderList(UUID userId, UUID listId) {
+        PaperOrderList list = groups.findByIdAndAccountId(
+                        listId, accountOf(userId).getId())
+                .orElseThrow(() -> new ResourceNotFoundException("PaperOrderList", listId));
+        return lists.response(list);
+    }
+
+    // fk_paper_order_list keeps the group of an order stored.
+    private PaperOrderList groupOf(UUID listId) {
+        return groups.findById(listId)
+                .orElseThrow(() -> new IllegalStateException("group " + listId + " of a paper order is not stored"));
     }
 
     /** Gives back what a working order locked and ends it; the engine drops it from its book after the commit. */
@@ -206,7 +266,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     public List<OrderResponse> openOrders(UUID userId, UUID pairId) {
         List<PaperOrder> open = orders
                 .findByAccountIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
-                        accountOf(userId).getId(), OrderStatus.OPEN)
+                        accountOf(userId).getId(), LISTED_OPEN)
                 .stream()
                 .filter(order -> pairId == null || order.getPairId().equals(pairId))
                 .toList();
@@ -346,7 +406,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 terms.price(),
                 terms.quantity()));
         lock(account, order, coins);
-        awaitTrigger(account, order);
+        arrival.awaitTrigger(account, order);
         return order;
     }
 
@@ -377,23 +437,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 terms.price(),
                 terms.quantity()));
         lock(account, order, coins);
-        awaitTrigger(account, order);
+        arrival.awaitTrigger(account, order);
         return order;
-    }
-
-    /** Hands a stop limit or a trailing stop to the matching engine, which watches it once the placement commits. */
-    private void awaitTrigger(PaperAccount account, PaperOrder order) {
-        events.publishEvent(new PaperOrderAwaitingTrigger(new TriggerOrder(
-                order.getId(),
-                account.getId(),
-                order.getMarketType(),
-                order.getPairId(),
-                order.getTriggerCondition(),
-                order.getOrderType() == OrderType.STOP_LIMIT ? order.getStopPrice() : null,
-                order.getCallbackRate(),
-                order.getActivationPrice(),
-                order.getTrailingExtremePrice(),
-                order.getCreatedAt())));
     }
 
     /** Locks what a working order needs, as the exchange checks the balance before it matches. */

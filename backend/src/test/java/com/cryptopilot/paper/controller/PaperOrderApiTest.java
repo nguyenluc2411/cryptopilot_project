@@ -132,8 +132,13 @@ class PaperOrderApiTest {
     void removeRows() {
         for (UUID trader : traders) {
             String account = "(select account_id from paper_account where user_id = ?)";
-            for (String table :
-                    List.of("paper_fill", "paper_order", "paper_ledger_entry", "paper_transfer", "paper_balance")) {
+            for (String table : List.of(
+                    "paper_fill",
+                    "paper_order",
+                    "paper_order_list",
+                    "paper_ledger_entry",
+                    "paper_transfer",
+                    "paper_balance")) {
                 sql.sql("delete from " + table + " where account_id = " + account)
                         .param(trader)
                         .update();
@@ -568,6 +573,226 @@ class PaperOrderApiTest {
         place(trader, trailing("SELL", "25", null, "90", "1"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.callbackRate").value("MSG15"));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Groups of orders (TR-10)
+    // ------------------------------------------------------------------------------------------
+
+    /** TR-10: a sell OCO locks its quantity once; the take profit filling expires the stop and gives the lock back. */
+    @Test
+    void TR10_aSellOco_locksOnce_andItsTakeProfitFilling_expiresTheStop() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+
+        String body = placeList(trader, oco("SELL", "1", "110", "95", "94"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.type").value("OCO"))
+                .andExpect(jsonPath("$.status").value("EXECUTING"))
+                .andExpect(jsonPath("$.orders.length()").value(2))
+                .andExpect(jsonPath("$.orders[0].type").value("LIMIT"))
+                .andExpect(jsonPath("$.orders[0].status").value("NEW"))
+                .andExpect(jsonPath("$.orders[1].type").value("STOP_LIMIT"))
+                .andExpect(jsonPath("$.orders[1].status").value("NEW"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String listId = JsonPath.read(body, "$.listId");
+        String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+        String stop = JsonPath.read(body, "$.orders[1].orderId");
+        assertThat(locked(trader, base())).isEqualByComparingTo("1");
+
+        trade("110.01", 1);
+
+        awaitStatus(trader, takeProfit, "FILLED");
+        as(trader, get(PAPER + "/orders/" + stop), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        as(trader, get(PAPER + "/order-lists/" + listId), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ALL_DONE"));
+        assertThat(locked(trader, base())).isZero();
+        assertThat(matching.triggerOrders())
+                .noneMatch(order -> order.orderId().toString().equals(stop));
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /** TR-10: the stop of an OCO triggering expires the take profit; its limit then takes the bids. */
+    @Test
+    void TR10_theStopOfAnOcoTriggering_expiresTheTakeProfit() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        String body = placeList(trader, oco("SELL", "1", "110", "95", "94"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+        String stop = JsonPath.read(body, "$.orders[1].orderId");
+
+        depth(List.of(level("95.5", "5")), List.of(level("94.5", "5")));
+        trade("95", 1);
+
+        awaitStatus(trader, stop, "FILLED");
+        as(trader, get(PAPER + "/orders/" + stop), null)
+                .andExpect(jsonPath("$.avgPrice").value(94.5));
+        as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        assertThat(locked(trader, base())).isZero();
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /**
+     * TR-10: a buy OCO locks the larger of what its two orders need; cancelling one of its orders cancels the group
+     * and gives the lock back once.
+     */
+    @Test
+    void TR10_aBuyOco_locksTheLargerNeed_andCancellingOneOrder_cancelsTheGroup() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String body = placeList(trader, oco("BUY", "1", "90", "105", "106"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String listId = JsonPath.read(body, "$.listId");
+        String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("106");
+
+        as(trader, post(PAPER + "/orders/" + takeProfit + "/cancel"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELED"));
+
+        as(trader, get(PAPER + "/order-lists/" + listId), null)
+                .andExpect(jsonPath("$.status").value("ALL_DONE"))
+                .andExpect(jsonPath("$.orders[*].status", everyItem(is("CANCELED"))));
+        assertThat(locked(trader, "USDT")).isZero();
+        assertThat(spot(trader, "USDT")).isEqualByComparingTo("10000");
+        as(trader, post(PAPER + "/order-lists/" + listId + "/cancel"), null)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_NOT_OPEN"));
+    }
+
+    /** TR-10: an OCO's take profit and stop must lie on either side of the last price. */
+    @Test
+    void TR10_anOcoWhosePricesDoNotLieAroundTheLastPrice_isMsg15() throws Exception {
+        UUID trader = trader();
+        price("100");
+
+        placeList(trader, oco("SELL", "1", "99", "101", "100"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors['oco.takeProfitPrice']").value("MSG15"))
+                .andExpect(jsonPath("$.errors['oco.stopPrice']").value("MSG15"));
+        as(trader, get(PAPER + "/orders"), null)
+                .andExpect(jsonPath("$.items.length()").value(0));
+    }
+
+    /**
+     * TR-10: an OTOCO's OCO waits, locking nothing, while its working buy waits; the buy filling places the OCO, which
+     * locks the coin bought.
+     */
+    @Test
+    void TR10_anOtoco_placesItsOco_onceTheWorkingOrderFills() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String body = placeList(trader, otoco("99", "1", "0.99", "110", "95", "94"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.type").value("OTOCO"))
+                .andExpect(jsonPath("$.orders[0].status").value("NEW"))
+                .andExpect(jsonPath("$.orders[1].status").value("PENDING_NEW"))
+                .andExpect(jsonPath("$.orders[2].status").value("PENDING_NEW"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String listId = JsonPath.read(body, "$.listId");
+        String working = JsonPath.read(body, "$.orders[0].orderId");
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("99");
+        as(trader, get(PAPER + "/orders/open"), null)
+                .andExpect(jsonPath("$.length()").value(3));
+
+        trade("98.99", 1);
+
+        awaitStatus(trader, working, "FILLED");
+        as(trader, get(PAPER + "/order-lists/" + listId), null)
+                .andExpect(jsonPath("$.status").value("EXECUTING"))
+                .andExpect(jsonPath("$.orders[1].status").value("NEW"))
+                .andExpect(jsonPath("$.orders[2].status").value("NEW"));
+        assertThat(locked(trader, "USDT")).isZero();
+        assertThat(locked(trader, base())).isEqualByComparingTo("0.99");
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /**
+     * TR-10: an OTOCO's OCO that needs more than the buy left free — the fee was taken in the coin bought — is
+     * REJECTED when the buy fills, and the buy's fill stands.
+     */
+    @Test
+    void TR10_anOtocoWhoseOcoNeedsMoreThanIsFree_isRejected_andTheFillStands() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("99", "5")), List.of(level("98", "5")));
+
+        String body = placeList(trader, otoco("100", "1", "1", "110", "95", "94"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("ALL_DONE"))
+                .andExpect(jsonPath("$.orders[0].status").value("FILLED"))
+                .andExpect(jsonPath("$.orders[1].status").value("REJECTED"))
+                .andExpect(jsonPath("$.orders[1].statusReason").value("INSUFFICIENT_BALANCE"))
+                .andExpect(jsonPath("$.orders[2].status").value("REJECTED"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(JsonPath.<Object>read(body, "$.orders[0].avgPrice")).isNotNull();
+        assertThat(spot(trader, base())).isEqualByComparingTo("0.999");
+        assertThat(locked(trader, base())).isZero();
+    }
+
+    /** TR-10: an OTO whose working order fills on arrival places its pending order at once. */
+    @Test
+    void TR10_anOtoWhoseWorkingOrderFillsOnArrival_placesThePendingOrderAtOnce() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "5")), List.of(level("99", "5")));
+
+        placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTO\","
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"LIMIT\", \"price\": 101, \"quantity\": 1},"
+                                + " \"pending\": {\"side\": \"SELL\", \"type\": \"LIMIT\", \"price\": 120, \"quantity\": 0.99}}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orders[0].status").value("FILLED"))
+                .andExpect(jsonPath("$.orders[0].avgPrice").value(100.0))
+                .andExpect(jsonPath("$.orders[1].status").value("NEW"))
+                .andExpect(jsonPath("$.status").value("EXECUTING"));
+
+        assertThat(locked(trader, base())).isEqualByComparingTo("0.99");
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /** TR-10: each kind of group takes its own parts only. */
+    @Test
+    void TR10_eachKindOfGroup_takesItsOwnPartsOnly() throws Exception {
+        UUID trader = trader();
+        price("100");
+
+        placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OCO\","
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"LIMIT\", \"price\": 99, \"quantity\": 1}}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.oco").value("MSG01"))
+                .andExpect(jsonPath("$.errors.working").value("MSG15"));
+        placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTO\","
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"STOP_LIMIT\", \"price\": 99, \"quantity\": 1}}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.pending").value("MSG01"))
+                .andExpect(jsonPath("$.errors['working.type']").value("MSG15"));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1016,6 +1241,27 @@ class PaperOrderApiTest {
     private String market(String side, String size) {
         return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\", \"type\": \"MARKET\", "
                 + size + "}";
+    }
+
+    private ResultActions placeList(UUID trader, String body) throws Exception {
+        return as(trader, post(PAPER + "/order-lists"), body);
+    }
+
+    private String oco(String side, String quantity, String takeProfit, String stop, String stopLimit) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OCO\", \"oco\": "
+                + ocoPart(side, quantity, takeProfit, stop, stopLimit) + "}";
+    }
+
+    private String otoco(
+            String buyPrice, String buyQuantity, String ocoQuantity, String takeProfit, String stop, String stopLimit) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTOCO\","
+                + " \"working\": {\"side\": \"BUY\", \"type\": \"LIMIT\", \"price\": " + buyPrice + ", \"quantity\": "
+                + buyQuantity + "}, \"oco\": " + ocoPart("SELL", ocoQuantity, takeProfit, stop, stopLimit) + "}";
+    }
+
+    private static String ocoPart(String side, String quantity, String takeProfit, String stop, String stopLimit) {
+        return "{\"side\": \"" + side + "\", \"quantity\": " + quantity + ", \"takeProfitPrice\": " + takeProfit
+                + ", \"stopPrice\": " + stop + ", \"stopLimitPrice\": " + stopLimit + "}";
     }
 
     private String stopLimit(String side, String stop, String price, String quantity) {

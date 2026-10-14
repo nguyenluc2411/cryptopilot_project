@@ -34,6 +34,7 @@ import java.util.UUID;
  * @param callbackRate a trailing stop's callback, in percent; otherwise {@code null}
  * @param activationPrice a trailing stop's activation price; otherwise {@code null}
  * @param triggeredAt when a stop limit or a trailing stop triggered; {@code null} before and for other orders
+ * @param listId the group (OCO, OTO, OTOCO) it was placed in; otherwise {@code null}
  */
 public record OrderResponse(
         UUID orderId,
@@ -57,4 +58,5 @@ public record OrderResponse(
         BigDecimal stopPrice,
         BigDecimal callbackRate,
         BigDecimal activationPrice,
-        Instant triggeredAt) {}
+        Instant triggeredAt,
+        UUID listId) {}
