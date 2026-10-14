@@ -241,8 +241,7 @@ class IndicatorAlertIntegrationTest {
     }
 
     @Test
-    void NSF06_aCandle_leavesFundingRateAndOpenInterestAlerts_andOnlyOpenInterestIsCountedAsNotEvaluated() {
-        long before = triggers.activeAlertsNotEvaluated();
+    void NSF06_aCandle_leavesFundingRateAndOpenInterestAlertsAlone() {
         UUID rsi = indicator("FUTURES", "RSI_14", "1h", "GREATER_THAN", "70", "ONCE", null);
         UUID funding = indicator("FUTURES", "FUNDING_RATE", "1h", "GREATER_THAN", "0", "ONCE", null);
         UUID openInterest = indicator("FUTURES", "OPEN_INTEREST_CHANGE", "1h", "GREATER_THAN", "0", "ONCE", null);
@@ -254,7 +253,6 @@ class IndicatorAlertIntegrationTest {
         assertThat(data.triggerCount(rsi)).isOne();
         assertThat(data.triggerCount(funding)).isZero();
         assertThat(data.triggerCount(openInterest)).isZero();
-        assertThat(triggers.activeAlertsNotEvaluated()).isEqualTo(before + 1);
     }
 
     @Test

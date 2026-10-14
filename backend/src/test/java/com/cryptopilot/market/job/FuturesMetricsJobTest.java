@@ -189,7 +189,7 @@ class FuturesMetricsJobTest {
     private FuturesMetricsJob job(boolean enabled) {
         FuturesMetricsProperties properties = properties(enabled);
         FuturesMetricsService service = new FuturesMetricsServiceImpl(
-                client, pairs, metrics, new LatestMarketData(), properties, transactions, clock);
+                client, pairs, metrics, new LatestMarketData(), properties, transactions, clock, event -> {});
         return new FuturesMetricsJob(service, recordingScheduler(), properties);
     }
 

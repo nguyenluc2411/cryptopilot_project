@@ -15,6 +15,7 @@ import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
+import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
@@ -37,7 +38,8 @@ class MarketApiImplTest {
     private final LeverageBracketRepository brackets = mock(LeverageBracketRepository.class);
     private final PriceCacheService prices = mock(PriceCacheService.class);
     private final MinuteKlineService minuteKlines = mock(MinuteKlineService.class);
-    private final MarketApiImpl api = new MarketApiImpl(pairs, brackets, prices, minuteKlines);
+    private final MarketApiImpl api =
+            new MarketApiImpl(pairs, brackets, prices, minuteKlines, mock(FuturesMetricsRepository.class));
 
     @Test
     void A04_closedMinuteCandles_areFetchedByTheMinuteKlineService() {

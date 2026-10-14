@@ -9,6 +9,7 @@ import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.config.PriceCacheProperties;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
+import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.support.MutableTestClock;
@@ -61,7 +62,8 @@ class MarketApiStreamPricesTest {
                 mock(CryptoPairRepository.class),
                 mock(LeverageBracketRepository.class),
                 cache,
-                mock(MinuteKlineService.class));
+                mock(MinuteKlineService.class),
+                mock(FuturesMetricsRepository.class));
     }
 
     @AfterEach

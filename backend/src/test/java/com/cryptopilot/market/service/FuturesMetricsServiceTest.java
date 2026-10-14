@@ -15,6 +15,7 @@ import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StubExchange;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.FuturesMetricsProperties;
+import com.cryptopilot.market.event.OpenInterestSampled;
 import com.cryptopilot.market.model.MetricsRun;
 import com.cryptopilot.market.model.SettlementRun;
 import com.cryptopilot.market.repository.CryptoPairRepository;
@@ -33,6 +34,7 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -84,6 +86,7 @@ class FuturesMetricsServiceTest {
     private final MutableTestClock clock = new MutableTestClock(NOW);
     private final SyntheticFuturesMetrics source = new SyntheticFuturesMetrics(Instant.parse("2026-09-24T10:05:00Z"));
     private final LatestMarketData latest = new LatestMarketData();
+    private final List<Object> published = new CopyOnWriteArrayList<>();
 
     private MarketTestData data;
     private StubExchange exchange;
@@ -146,6 +149,28 @@ class FuturesMetricsServiceTest {
         assertThat(row.get("long_account_ratio")).isEqualTo(new BigDecimal("0.55250000"));
         assertThat(row.get("short_account_ratio")).isEqualTo(new BigDecimal("0.44750000"));
         assertThat(row.get("mark_price")).as("no NSF-03 row there: stays empty").isNull();
+    }
+
+    /**
+     * Q-45: only the readings within two periods of the run are live and announced, oldest first; the history the
+     * first collection reads is stored without an announcement, and a run that writes nothing announces nothing.
+     */
+    @Test
+    void Q45_onlyLiveOpenInterestReadings_areAnnounced_oldestFirst() {
+        UUID btc = futuresPair("BTCUSDT");
+
+        service(5, 50).collectMetrics();
+        List<OpenInterestSampled> first = announced();
+        published.clear();
+        service(5, 50).collectMetrics();
+
+        assertThat(instantsWith(btc, "open_interest")).hasSize(12);
+        assertThat(first)
+                .as("cutoff 10:06, live from 09:56: 10:00 and 10:05 of the twelve")
+                .containsExactly(
+                        new OpenInterestSampled(btc, "BTCUSDT", Instant.parse("2026-09-24T10:00:00Z")),
+                        new OpenInterestSampled(btc, "BTCUSDT", Instant.parse("2026-09-24T10:05:00Z")));
+        assertThat(announced()).isEmpty();
     }
 
     /**
@@ -688,6 +713,13 @@ class FuturesMetricsServiceTest {
 
     // ------------------------------------------------------------------ helpers
 
+    private List<OpenInterestSampled> announced() {
+        return published.stream()
+                .filter(OpenInterestSampled.class::isInstance)
+                .map(OpenInterestSampled.class::cast)
+                .toList();
+    }
+
     private FuturesMetricsService service(int pageSize, int maxRequests) {
         return service(pageSize, maxRequests, Duration.ofDays(30));
     }
@@ -708,7 +740,8 @@ class FuturesMetricsServiceTest {
                         settlementDepth,
                         Duration.ofMinutes(2)),
                 transactions,
-                clock);
+                clock,
+                published::add);
     }
 
     private UUID futuresPair(String symbol) {
