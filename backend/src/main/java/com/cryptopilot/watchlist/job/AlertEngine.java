@@ -52,8 +52,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *       queues the pair once in its partition (by market and pair). A full queue leaves the pair outside it, still
  *       with only its latest price, and logs a warning at most once a minute.
  *   <li>One thread per partition evaluates its pairs, at most once per {@code throttle} each, on the latest price.
- *   <li>At start the books are loaded from the ACTIVE PRICE alerts; INDICATOR alerts are not evaluated yet. After each
- *       committed change of an alert ({@link AlertsChanged}) the alert is read again and added, replaced or removed.
+ *   <li>At start the books are loaded from the ACTIVE PRICE alerts; {@link IndicatorAlertJob} evaluates INDICATOR
+ *       alerts. After each committed change of an alert ({@link AlertsChanged}) the alert is read again and added,
+ *       replaced or removed.
  *       A trigger the database refuses drops that rule from the book that fired it, then reads the alert again.
  *   <li>An alert is in at most one book, and {@code located} names that book and the version it holds. Every change
  *       of an alert's place happens inside {@code located.compute} on the alert's entry, so the two agree whenever
@@ -149,7 +150,9 @@ public class AlertEngine implements MinuteKlineListener {
         running = true;
         List<PriceAlert> loaded = triggers.activePriceAlerts();
         loaded.forEach(alert -> apply(alert.alertId(), load, false, at -> held(alert.alertId(), at, alert, load)));
-        log.debug("NSF-06 {} ACTIVE INDICATOR alerts are not evaluated yet", triggers.activeAlertsNotEvaluated());
+        log.debug(
+                "NSF-06 {} ACTIVE OPEN_INTEREST_CHANGE alerts are not evaluated yet",
+                triggers.activeAlertsNotEvaluated());
         for (int i = 0; i < fresh.size(); i++) {
             Thread thread = threads.newThread(fresh.get(i)::run);
             thread.setName("watchlist-alert-" + i);
