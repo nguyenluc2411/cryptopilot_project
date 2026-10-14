@@ -11,7 +11,8 @@ import java.util.UUID;
 
 /**
  * What the alert evaluation reads and writes in the database (NSF-06): the ACTIVE PRICE alerts the engine holds in
- * memory, the ACTIVE INDICATOR alerts of a closed candle, the ACTIVE FUNDING_RATE alerts, and their triggers. Implemented by {@link com.cryptopilot.watchlist.service.impl.AlertTriggerServiceImpl}.
+ * memory, the ACTIVE INDICATOR alerts of a closed candle, the ACTIVE FUNDING_RATE alerts, and their triggers.
+ * Implemented by {@link com.cryptopilot.watchlist.service.impl.AlertTriggerServiceImpl}.
  *
  * <p>Rule: NSF-06, BR-18, BR-19, BR-20; SRS 3.4.4; TECHNICAL_DESIGN 7.9.
  */

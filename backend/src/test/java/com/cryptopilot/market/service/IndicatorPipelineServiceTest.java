@@ -311,6 +311,27 @@ class IndicatorPipelineServiceTest {
                 .satisfies(event -> assertThat(event.previous()).isEqualTo(IndicatorLevels.NONE));
     }
 
+    /** The previous values are the row right before, never an older one across a gap. */
+    @Test
+    void NSF06_aMissingRowRightBefore_publishesNoPreviousValues_evenWithAnOlderRow() {
+        List<Kline> series = series(40);
+        candles.insertAll(pair, MarketType.SPOT, "1h", series);
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(37)));
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(38)));
+        sql.sql("delete from technical_indicator where pair_id = ? and open_time = ?")
+                .params(pair, Timestamp.from(series.get(38).openTime()))
+                .update();
+        published.clear();
+
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(39)));
+
+        assertThat(store.at(pair, MarketType.SPOT, "1h", series.get(37).openTime()))
+                .isPresent();
+        assertThat(published.stream(IndicatorsComputed.class))
+                .singleElement()
+                .satisfies(event -> assertThat(event.previous()).isEqualTo(IndicatorLevels.NONE));
+    }
+
     /** No row, no event: an out-of-order candle reaches no alert. */
     @Test
     void NSF06_aCandleWithoutARow_publishesNothing() {

@@ -184,10 +184,10 @@ public interface AlertRepository extends Repository<Alert, UUID> {
                       and alert_status = 'ACTIVE'
                       and alert_type = 'INDICATOR'
                       and (expires_at is null or expires_at > :now)
-                      and (last_bar_open_time is null or last_bar_open_time < :bar)
                       and (trigger_mode <> 'EVERY_TIME'
                            or last_triggered_at is null
-                           or last_triggered_at + make_interval(mins => coalesce(cooldown_minutes, 0)) <= :now)""", nativeQuery = true)
+                           or last_triggered_at + make_interval(mins => coalesce(cooldown_minutes, 0)) <= :now)
+                      and (last_bar_open_time is null or last_bar_open_time < :bar)""", nativeQuery = true)
     int recordIndicatorTrigger(
             @Param("alertId") UUID alertId,
             @Param("version") long version,

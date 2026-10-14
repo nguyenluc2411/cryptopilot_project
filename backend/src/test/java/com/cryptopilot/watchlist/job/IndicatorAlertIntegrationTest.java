@@ -258,6 +258,31 @@ class IndicatorAlertIntegrationTest {
     }
 
     @Test
+    void Q39_aFundingRateAlertExpiringNow_doesNotFire_oneExpiringLaterDoes() {
+        UUID expired = data.indicatorAlert(
+                trader, row, "FUTURES", "FUNDING_RATE", "1h", "GREATER_THAN", "0.01", "ONCE", null, "ACTIVE", NOW);
+        UUID later = data.indicatorAlert(
+                trader,
+                row,
+                "FUTURES",
+                "FUNDING_RATE",
+                "1h",
+                "GREATER_THAN",
+                "0.01",
+                "ONCE",
+                null,
+                "ACTIVE",
+                NOW.plusSeconds(1));
+        Instant hour = TriggerPolicy.barOpenTime(NOW);
+
+        assertThat(fundingTrigger(expired, hour)).isFalse();
+        assertThat(fundingTrigger(later, hour)).isTrue();
+
+        assertThat(data.triggerCount(expired)).isZero();
+        assertThat(recorder.of(expired)).isEmpty();
+    }
+
+    @Test
     void BR19_aFundingRateAlert_oncePerBar_firesOncePerHour_andEveryTime_waitsOnlyForItsCooldown() {
         UUID perBar = indicator("FUTURES", "FUNDING_RATE", "1h", "GREATER_THAN", "0.01", "ONCE_PER_BAR", null);
         UUID everyTime = indicator("FUTURES", "FUNDING_RATE", "1h", "GREATER_THAN", "0.01", "EVERY_TIME", 1);

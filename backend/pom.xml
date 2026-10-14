@@ -233,6 +233,10 @@
 						     32 ASCII characters — 256 bits, the minimum HS256 accepts — and opens
 						     nothing: it signs tokens for a database that is thrown away with the container. -->
 						<JWT_SECRET>test-only-signing-key-0123456789ab</JWT_SECRET>
+						<!-- Every cached test context keeps a full pool open on the one test database (300
+						     connections), so the suite keeps the pool of ten it always had; the
+						     application's own size (20) is for one running instance. -->
+						<DB_POOL_MAX>10</DB_POOL_MAX>
 					</systemPropertyVariables>
 					<!-- Tests tagged "live" call the real exchange. They never run in the default build:
 					     a CI runner may be geo-blocked (HTTP 451) and a live market is not deterministic.
