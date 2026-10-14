@@ -69,6 +69,7 @@ public class PairServiceImpl implements PairService {
         Optional<Coin> quote = known.computeIfAbsent(pair.getQuoteCoinId(), coins::findById);
         Optional<PairFilters> filters = pair.filters(market);
         return new PairResponse(
+                pair.getId(),
                 pair.getSymbol(),
                 market.name(),
                 base.map(Coin::getSymbol).orElse(null),

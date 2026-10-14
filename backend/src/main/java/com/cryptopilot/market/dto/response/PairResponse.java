@@ -1,12 +1,15 @@
 package com.cryptopilot.market.dto.response;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 /**
  * One pair enabled on a market (BR-07), as the market list of SCR-01 and SCR-09 shows it.
  *
- * <p>Rule: UC-09, BR-07; SRS 3.3.1.
+ * <p>Rule: UC-09, BR-07; SRS 3.3.1. The id is what the watchlist, alert, plan and demo order requests name the pair by
+ * (FEQ-01).
  *
+ * @param pairId the pair's id
  * @param symbol the symbol, e.g. {@code BTCUSDT}
  * @param market {@code SPOT} or {@code FUTURES}
  * @param baseAsset the base coin's symbol
@@ -19,6 +22,7 @@ import java.math.BigDecimal;
  * @param displayOrder the administrator's order, lowest first
  */
 public record PairResponse(
+        UUID pairId,
         String symbol,
         String market,
         String baseAsset,
