@@ -18,7 +18,6 @@ import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderSide;
-import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.model.enums.TimeInForce;
 import com.cryptopilot.paper.model.enums.WalletType;
 import java.math.BigDecimal;
@@ -33,8 +32,8 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * What a Spot limit order does when it reaches the market: when it is placed (TR-06), and when a stop limit or a
- * trailing stop is triggered and becomes the limit order it carries (TR-09, TR-11). It takes the levels of the other
+ * What a Spot order does when it reaches the market: a limit order when it is placed (TR-06), and a Spot stop when it
+ * is triggered and becomes the LIMIT or MARKET order it carries (TR-09, TR-11). It takes the levels of the other
  * side of the exchange's book at or better than its price, as a taker; what is left waits in the book (GTC) or
  * expires (IOC). A FOK order the levels cannot fill whole executes nothing and expires, and a post-only (GTX) order
  * that would take a level expires.
@@ -56,6 +55,9 @@ public class SpotArrival {
 
     /** Why a post-only (GTX) limit expired: it would have executed on arrival. */
     static final String WOULD_TAKE = "POST_ONLY_WOULD_TAKE";
+
+    /** Why a triggered market stop expired: too little was free to pay for what the book offered. */
+    static final String INSUFFICIENT_BALANCE = "INSUFFICIENT_BALANCE";
 
     private final PaperWallets wallets;
     private final SpotSettlement settlement;
@@ -154,19 +156,50 @@ public class SpotArrival {
                 order.restingSince())));
     }
 
-    /** Hands a stop limit or a trailing stop to the matching engine, which watches it once the placement commits. */
+    /** Hands a Spot stop to the matching engine, which watches it once the placement commits. */
     public void awaitTrigger(PaperAccount account, PaperOrder order) {
         events.publishEvent(new PaperOrderAwaitingTrigger(new TriggerOrder(
                 order.getId(),
                 account.getId(),
                 order.getMarketType(),
                 order.getPairId(),
+                order.getSide(),
                 order.getTriggerCondition(),
-                order.getOrderType() == OrderType.STOP_LIMIT ? order.getStopPrice() : null,
+                order.getStopPrice(),
                 order.getCallbackRate(),
-                order.getActivationPrice(),
                 order.getTrailingExtremePrice(),
                 order.getCreatedAt())));
+    }
+
+    /**
+     * A triggered STOP_LOSS or TAKE_PROFIT executes as a MARKET order now: what it held back is given back, and it
+     * takes the book paying from what is free, as a MARKET order placed then. Without a current price, or with too
+     * little free to pay for what the book offers, it expires: a trigger cannot be refused like a placement.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void marketOnTrigger(
+            PaperAccount account, PaperOrder order, PairCoins coins, Optional<Book> found, Instant now) {
+        CoinListing locked = lockedCoin(order, coins);
+        wallets.unlock(account, WalletType.SPOT, locked, order.lockedAmount());
+        if (found.isEmpty()) {
+            order.expire(NOT_FILLABLE, now);
+            return;
+        }
+        Book book = found.get();
+        BookSweep.Result sweep = BookSweep.ofQuantity(book.levels(), order.getSide(), order.remainingQuantity(), null);
+        BigDecimal needed = order.getSide() == OrderSide.BUY
+                ? sweep.slices().stream()
+                        .map(slice -> PaperOrder.buyCost(slice.price(), slice.quantity()))
+                        .reduce(BigDecimal.ZERO, BigDecimal::add)
+                : sweep.quantity();
+        if (sweep.isEmpty() || wallets.free(account, WalletType.SPOT, locked).compareTo(needed) < 0) {
+            order.expire(sweep.isEmpty() ? NOT_FILLABLE : INSUFFICIENT_BALANCE, now);
+            return;
+        }
+        execute(account, order, coins, sweep, now, false);
+        if (sweep.pastBook() && book.shown()) {
+            order.flagDepthExhausted();
+        }
     }
 
     /** What a working order locks: the quote coin for a buy, the base coin for a sell. */

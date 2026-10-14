@@ -105,7 +105,7 @@ class PaperOrderTest {
 
     @Test
     void TR02_aBuyByTotal_executesTheQuantityItsAmountBuys_andIsFilledWhenCompleted() {
-        PaperOrder order = PaperOrder.spotMarketBuyFor(ACCOUNT, PAIR, "k", new BigDecimal("50"));
+        PaperOrder order = PaperOrder.spotMarketFor(ACCOUNT, PAIR, "k", OrderSide.BUY, new BigDecimal("50"));
         assertThatIllegalStateException().isThrownBy(() -> order.completeFill(AT));
 
         order.fill(new BigDecimal("0.3"), new BigDecimal("100"), new BigDecimal("30"), AT);

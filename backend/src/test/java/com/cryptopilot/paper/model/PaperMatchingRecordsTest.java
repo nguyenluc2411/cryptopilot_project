@@ -126,7 +126,6 @@ class PaperMatchingRecordsTest {
                 null,
                 null,
                 null,
-                null,
                 null);
 
         assertThat(new PlacedOrder(order, false).created()).isFalse();

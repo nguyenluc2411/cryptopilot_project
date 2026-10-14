@@ -24,8 +24,9 @@ import lombok.Getter;
 /**
  * One order of a paper account, open or finished, never deleted: the order history of the trading screens.
  *
- * <p>Spot MARKET, LIMIT and LIMIT_MAKER orders, and stop limits and trailing stops that wait for the last price to
- * trigger them and then work as the limit order they carry (TR-09, TR-11). An order executes in one or more fills: one per level
+ * <p>Spot MARKET, LIMIT and LIMIT_MAKER orders, and the Spot stops (STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT,
+ * TAKE_PROFIT_LIMIT) that wait for the last price to trigger them and then work as the MARKET or LIMIT order they carry
+ * (TR-09, TR-11). An order executes in one or more fills: one per level
  * of the exchange's book it takes on arrival (TR-06, Q-T7), and a waiting LIMIT order the rest of its quantity at
  * once when the market reaches it. Part executed, it is {@code PARTIALLY_FILLED} and still works. An order of a
  * group (OCO, OTO, OTOCO) points at it (TR-10); the pending order of an OTO or OTOCO is {@code PENDING_NEW} until its
@@ -81,20 +82,20 @@ public class PaperOrder extends BaseEntity {
     @Column(name = "limit_price", precision = 28, scale = 12, updatable = false)
     private BigDecimal limitPrice;
 
-    /** A stop limit's stop; a trailing stop's stop once it triggered, {@code null} before. */
-    @Column(name = "stop_price", precision = 28, scale = 12)
+    /** A Spot stop's stopPrice: its trigger, or the activation of a trailing stop; {@code null} without one. */
+    @Column(name = "stop_price", precision = 28, scale = 12, updatable = false)
     private BigDecimal stopPrice;
 
-    /** Which way the last price must move to trigger a stop limit or a trailing stop; otherwise {@code null}. */
+    /** The side of the last price a stop's condition is met on, fixed by its type and side; otherwise null. */
     @Enumerated(EnumType.STRING)
     @Column(name = "trigger_condition", length = 32, updatable = false)
     private TriggerCondition triggerCondition;
 
-    /** The price that activates a trailing stop, or {@code null} for one active from its placement. */
+    /** The activation price of a Futures trailing stop; unused on Spot, where the stopPrice activates one. */
     @Column(name = "activation_price", precision = 28, scale = 12, updatable = false)
     private BigDecimal activationPrice;
 
-    /** A trailing stop's callback, in percent of its best price; otherwise {@code null}. */
+    /** A trailing stop's delta, in percent of its best price (the exchange's trailingDelta / 100); otherwise null. */
     @Column(name = "callback_rate", precision = 12, scale = 8, updatable = false)
     private BigDecimal callbackRate;
 
@@ -185,17 +186,18 @@ public class PaperOrder extends BaseEntity {
     }
 
     /**
-     * A Spot MARKET buy sized by what it spends ("by total"); the quantity follows from the price it executes at.
+     * A Spot MARKET order sized by a quote amount ("by total"): what a BUY spends or a SELL brings in, as the
+     * exchange's quoteOrderQty; the quantity follows from the prices it executes at.
      *
      * @param quoteAmount positive, in the quote asset
      */
-    public static PaperOrder spotMarketBuyFor(
-            UUID accountId, UUID pairId, String clientOrderId, BigDecimal quoteAmount) {
+    public static PaperOrder spotMarketFor(
+            UUID accountId, UUID pairId, String clientOrderId, OrderSide side, BigDecimal quoteAmount) {
         return new PaperOrder(
                 accountId,
                 pairId,
                 clientOrderId,
-                OrderSide.BUY,
+                Objects.requireNonNull(side, "side must not be null"),
                 OrderType.MARKET,
                 null,
                 null,
@@ -250,74 +252,51 @@ public class PaperOrder extends BaseEntity {
     }
 
     /**
-     * A Spot stop limit (TR-09): waits until the last price trades at or past {@code stopPrice} in the direction of
-     * {@code condition}, then works as a LIMIT order at {@code price}.
+     * A Spot stop as the exchange's Spot API has it (TR-09, TR-11): STOP_LOSS or TAKE_PROFIT, executed as a MARKET order
+     * once triggered, or STOP_LOSS_LIMIT or TAKE_PROFIT_LIMIT, working as a LIMIT order at {@code price}. It has a
+     * {@code stopPrice}, a trailing delta, or both; the side of the price its stop condition is met on follows from its
+     * type and side.
      *
-     * @param stopPrice positive, already rounded to the pair's tick size
-     * @param price positive, already rounded to the pair's tick size
+     * @param timeInForce for a limit kind; {@code null} for a market kind
+     * @param stopPrice the exchange's stopPrice on the pair's tick: the trigger, or the activation of a trailing stop
+     * @param trailingPercent the trailing delta in percent (the exchange's trailingDelta / 100), or {@code null}
+     * @param price for a limit kind, on the pair's tick; {@code null} for a market kind
      * @param quantity positive, already floored to the pair's step size
      */
-    public static PaperOrder spotStopLimit(
+    public static PaperOrder spotStop(
             UUID accountId,
             UUID pairId,
             String clientOrderId,
+            OrderType type,
             OrderSide side,
             TimeInForce timeInForce,
             BigDecimal stopPrice,
-            TriggerCondition condition,
+            BigDecimal trailingPercent,
             BigDecimal price,
             BigDecimal quantity) {
-        PaperOrder order = new PaperOrder(
-                accountId,
-                pairId,
-                clientOrderId,
-                side,
-                OrderType.STOP_LIMIT,
-                Objects.requireNonNull(timeInForce, "a stop limit has a time in force"),
-                positive(price),
-                positive(quantity),
-                null);
-        order.stopPrice = positive(stopPrice);
-        order.triggerCondition = Objects.requireNonNull(condition, "condition");
-        return order;
-    }
-
-    /**
-     * A Spot trailing stop (TR-11): once active, follows the best price and triggers when the price comes back by
-     * {@code callbackRate} percent, then works as a LIMIT order at {@code price}. A SELL triggers below its best
-     * price, a BUY above it.
-     *
-     * @param activationPrice the price that activates it, or {@code null} for active at once from {@code extreme}
-     * @param extreme the best price it starts from when it is active at once; otherwise {@code null}
-     */
-    public static PaperOrder spotTrailingStopLimit(
-            UUID accountId,
-            UUID pairId,
-            String clientOrderId,
-            OrderSide side,
-            TimeInForce timeInForce,
-            BigDecimal callbackRate,
-            BigDecimal activationPrice,
-            BigDecimal extreme,
-            BigDecimal price,
-            BigDecimal quantity) {
-        PaperOrder order = new PaperOrder(
-                accountId,
-                pairId,
-                clientOrderId,
-                side,
-                OrderType.TRAILING_STOP_LIMIT,
-                Objects.requireNonNull(timeInForce, "a trailing stop has a time in force"),
-                positive(price),
-                positive(quantity),
-                null);
-        order.callbackRate = positive(callbackRate);
-        order.activationPrice = activationPrice == null ? null : positive(activationPrice);
-        order.trailingExtremePrice = extreme == null ? null : positive(extreme);
-        if (order.activationPrice == null && order.trailingExtremePrice == null) {
-            throw new IllegalArgumentException("a trailing stop without an activation price starts from a best price");
+        if (!type.isSpotStop()) {
+            throw new IllegalArgumentException(type + " is not a Spot stop");
         }
-        order.triggerCondition = side == OrderSide.SELL ? TriggerCondition.AT_OR_BELOW : TriggerCondition.AT_OR_ABOVE;
+        boolean market = type.isSpotMarketStop();
+        if (market != (price == null) || market != (timeInForce == null)) {
+            throw new IllegalArgumentException(type + " takes a price and a time in force only as a limit kind");
+        }
+        if (stopPrice == null && trailingPercent == null) {
+            throw new IllegalArgumentException("a stop has a stop price, a trailing delta or both");
+        }
+        PaperOrder order = new PaperOrder(
+                accountId,
+                pairId,
+                clientOrderId,
+                side,
+                type,
+                timeInForce,
+                market ? null : positive(price),
+                positive(quantity),
+                null);
+        order.stopPrice = stopPrice == null ? null : positive(stopPrice);
+        order.callbackRate = trailingPercent == null ? null : positive(trailingPercent);
+        order.triggerCondition = type.triggerConditionFor(side);
         return order;
     }
 
@@ -363,14 +342,14 @@ public class PaperOrder extends BaseEntity {
         end(OrderStatus.REJECTED, Objects.requireNonNull(reason, "reason"), at);
     }
 
-    /** Whether the order carries a limit price, and so locks by it: every kind but MARKET. */
-    public boolean hasLimitPrice() {
-        return limitPrice != null;
+    /** Whether a working order of this kind holds back what it needs: every kind but MARKET. */
+    public boolean locks() {
+        return orderType != OrderType.MARKET;
     }
 
-    /** Whether the order is a stop limit or a trailing stop. */
+    /** Whether the order is a Spot stop: STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT or TAKE_PROFIT_LIMIT. */
     public boolean isTriggered() {
-        return orderType == OrderType.STOP_LIMIT || orderType == OrderType.TRAILING_STOP_LIMIT;
+        return orderType.isSpotStop();
     }
 
     /** Whether the order still waits for the price to trigger it. */
@@ -378,32 +357,36 @@ public class PaperOrder extends BaseEntity {
         return isTriggered() && triggeredAt == null && isOpen();
     }
 
+    /** Whether the order has a trailing delta. */
+    public boolean isTrailing() {
+        return callbackRate != null;
+    }
+
+    /** The trailing delta in basis points, as the exchange's trailingDelta; {@code null} without one. */
+    public Long trailingDelta() {
+        return callbackRate == null ? null : callbackRate.movePointRight(2).longValueExact();
+    }
+
     /**
-     * When the order started waiting at its limit price: when it was placed, or for a stop limit or a trailing stop
-     * when it triggered. A price traded before then never fills it (D-77).
+     * When the order started waiting at its limit price: when it was placed, or for a stop when it triggered. A price
+     * traded before then never fills it (D-77).
      */
     public Instant restingSince() {
         return triggeredAt != null ? triggeredAt : getCreatedAt();
     }
 
-    /**
-     * Records that the last price triggered a stop limit or a trailing stop at {@code at}: from then on it works as
-     * the limit order it carries. A trailing stop keeps the stop it triggered at.
-     */
-    public void trigger(Instant at, BigDecimal stop) {
+    /** Records that the last price triggered the stop at {@code at}: from then on it works as the order it carries. */
+    public void trigger(Instant at) {
         requireOpen("triggered");
         if (!awaitsTrigger()) {
             throw new IllegalStateException("order " + getId() + " is " + orderType + " and waits for no trigger");
         }
         triggeredAt = Objects.requireNonNull(at, "at must not be null");
-        if (orderType == OrderType.TRAILING_STOP_LIMIT) {
-            stopPrice = positive(stop).setScale(PRICE_SCALE, RoundingMode.HALF_EVEN);
-        }
     }
 
     /** Stores a trailing stop's best price so far, so a restart resumes from it. */
     public void moveExtreme(BigDecimal extreme) {
-        if (orderType != OrderType.TRAILING_STOP_LIMIT || !awaitsTrigger()) {
+        if (!isTrailing() || !awaitsTrigger()) {
             throw new IllegalStateException("order " + getId() + " follows no best price");
         }
         trailingExtremePrice = positive(extreme).setScale(PRICE_SCALE, RoundingMode.HALF_EVEN);
@@ -433,13 +416,14 @@ public class PaperOrder extends BaseEntity {
     }
 
     private BigDecimal lockedFor(BigDecimal quantity) {
-        if (!hasLimitPrice()) {
+        if (!locks()) {
             throw new IllegalStateException("order " + getId() + " is " + orderType + " and holds nothing back");
         }
         if (quantity.signum() < 0) {
             throw new IllegalArgumentException("order " + getId() + " has less than " + quantity.negate() + " left");
         }
-        return side == OrderSide.BUY ? buyCost(limitPrice, quantity) : quantity;
+        // A STOP_LOSS or TAKE_PROFIT buy has no price of its own: it holds back what it would pay at its stop.
+        return side == OrderSide.BUY ? buyCost(limitPrice != null ? limitPrice : stopPrice, quantity) : quantity;
     }
 
     /** Whether the order still works. */

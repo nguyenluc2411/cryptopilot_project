@@ -2,6 +2,7 @@ package com.cryptopilot.paper.service.impl;
 
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -113,7 +114,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         }
         PaperOrder order = found.get();
         lists.beforeExecution(account, order, at);
-        order.trigger(at, stopPrice);
+        order.trigger(at);
         feed.order(account, order);
         log.info(
                 "TR-09 paper order {} {} triggered at {} ({}, {})",
@@ -122,18 +123,29 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 stopPrice,
                 at,
                 source);
-        if (source == FillSource.REPLAY) {
-            // The candles replayed after this one fill it at its price; the book of now is not the book of then.
-            arrival.rest(account, order);
-            return true;
-        }
-        TradablePair pair = market.tradablePair(order.getPairId(), order.getMarketType())
-                .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not tradable"));
         PairCoins coins = market.pairCoins(order.getPairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
-        arrival.limitOnArrival(account, order, coins, arrival.bookFor(pair, order.getSide()), clock.instant());
+        boolean replayed = source == FillSource.REPLAY;
+        if (order.getOrderType().isSpotMarketStop()) {
+            // Replayed, the book of then is not known: it executes at the price that triggered it.
+            Optional<SpotArrival.Book> book = replayed
+                    ? Optional.of(new SpotArrival.Book(List.of(new PriceLevel(stopPrice, BigDecimal.ZERO)), false))
+                    : arrival.bookFor(pairOf(order), order.getSide());
+            arrival.marketOnTrigger(account, order, coins, book, replayed ? at : clock.instant());
+        } else if (replayed) {
+            // The candles replayed after this one fill it at its price; the book of now is not the book of then.
+            arrival.rest(account, order);
+        } else {
+            arrival.limitOnArrival(
+                    account, order, coins, arrival.bookFor(pairOf(order), order.getSide()), clock.instant());
+        }
         lists.afterExecution(account, order, at);
         return true;
+    }
+
+    private TradablePair pairOf(PaperOrder order) {
+        return market.tradablePair(order.getPairId(), order.getMarketType())
+                .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not tradable"));
     }
 
     @Override

@@ -70,25 +70,26 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
 
     /**
      * Every working order of every account that waits at its limit price, which the matching engine starts its books
-     * from: LIMIT and LIMIT_MAKER orders, and stop limits and trailing stops that have triggered, waiting since then.
+     * from: LIMIT and LIMIT_MAKER orders, and STOP_LOSS_LIMIT and TAKE_PROFIT_LIMIT orders that have triggered,
+     * waiting since then.
      */
     @Transactional(readOnly = true)
     @Query("select new com.cryptopilot.paper.model.RestingOrder(o.id, o.accountId, o.marketType, o.pairId, o.side,"
             + " o.limitPrice, coalesce(o.triggeredAt, o.createdAt)) from PaperOrder o"
             + " where o.orderStatus in :statuses and (o.orderType in (com.cryptopilot.paper.model.enums.OrderType.LIMIT,"
             + " com.cryptopilot.paper.model.enums.OrderType.LIMIT_MAKER) or (o.orderType in"
-            + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LIMIT,"
-            + " com.cryptopilot.paper.model.enums.OrderType.TRAILING_STOP_LIMIT) and o.triggeredAt is not null))")
+            + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS_LIMIT,"
+            + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_LIMIT) and o.triggeredAt is not null))")
     List<RestingOrder> findResting(Collection<OrderStatus> statuses);
 
-    /** Every stop limit and trailing stop that still waits for its trigger, which the engine starts watching from. */
+    /** Every Spot stop that still waits for its trigger, which the engine starts watching from. */
     @Transactional(readOnly = true)
-    @Query("select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.accountId, o.marketType, o.pairId,"
-            + " o.triggerCondition, o.stopPrice, o.callbackRate,"
-            + " o.activationPrice, o.trailingExtremePrice, o.createdAt) from PaperOrder o"
-            + " where o.orderStatus in :statuses and o.triggeredAt is null and o.orderType in"
-            + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LIMIT,"
-            + " com.cryptopilot.paper.model.enums.OrderType.TRAILING_STOP_LIMIT)")
+    @Query(
+            "select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.accountId, o.marketType, o.pairId, o.side,"
+                    + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice, o.createdAt) from PaperOrder o"
+                    + " where o.orderStatus in :statuses and o.triggeredAt is null and o.orderType in"
+                    + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS, com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS_LIMIT,"
+                    + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_LIMIT)")
     List<TriggerOrder> findAwaitingTrigger(Collection<OrderStatus> statuses);
 
     /** The orders of a group, as they were placed. */

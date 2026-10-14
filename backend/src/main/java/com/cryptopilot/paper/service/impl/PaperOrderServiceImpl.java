@@ -143,8 +143,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 switch (request.type()) {
                     case MARKET -> placeMarket(account, pair, coins, terms, key, book);
                     case LIMIT_MAKER -> placeLimitMaker(account, pair, coins, terms, key, book);
-                    case STOP_LIMIT -> placeStopLimit(account, pair, coins, terms, key);
-                    case TRAILING_STOP_LIMIT -> placeTrailingStop(account, pair, coins, terms, key);
+                    case STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT ->
+                        placeStop(account, pair, coins, terms, key);
                     default -> placeLimit(account, pair, coins, terms, key, book);
                 };
         feed.order(account, order);
@@ -318,7 +318,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
 
     /**
      * A MARKET order takes the book at once, as a taker, paying from what is free: one fill per level, flagged when it
-     * needed more than the depth shown. Without a current price it is refused and nothing is stored.
+     * needed more than the depth shown. Sized by {@code quoteOrderQty}, a BUY spends that amount and a SELL sells what
+     * brings it in, as on the exchange. Without a current price it is refused and nothing is stored.
      */
     private PaperOrder placeMarket(
             PaperAccount account,
@@ -333,7 +334,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         if (terms.quoteAmount() != null) {
             sweep = BookSweep.ofQuote(book.levels(), terms.quoteAmount(), pair.filters());
             requireTradable(pair.filters(), sweep, "quoteOrderQty");
-            order = PaperOrder.spotMarketBuyFor(account.getId(), pair.pairId(), key, terms.quoteAmount());
+            order = PaperOrder.spotMarketFor(account.getId(), pair.pairId(), key, terms.side(), terms.quoteAmount());
         } else {
             sweep = BookSweep.ofQuantity(book.levels(), terms.side(), terms.quantity(), null);
             requireTradable(pair.filters(), sweep, "quantity");
@@ -354,9 +355,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     /**
      * A LIMIT order first locks what it needs, as the exchange checks the balance before it matches. Then it takes the
      * levels at or better than its price, as a taker; what is left waits in the book (GTC) or expires (IOC). A FOK
-     * order the levels cannot fill whole executes nothing and expires, and a post-only (GTX) order that would take a
-     * level expires. Without a current price, a GTC or GTX order waits; an IOC or FOK order, which must be decided
-     * now, is refused.
+     * order the levels cannot fill whole executes nothing and expires. Without a current price, a GTC order waits; an
+     * IOC or FOK order, which must be decided now, is refused. The post-only order of Spot is LIMIT_MAKER.
      */
     private PaperOrder placeLimit(
             PaperAccount account,
@@ -378,62 +378,44 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     }
 
     /**
-     * A stop limit locks what its limit order will need, as the exchange does, and waits for the last price to trade at
-     * or past its stop. Which way that is follows from where the stop lies against the last price now: above it, the
-     * price must rise to it; below it, fall to it. A stop at the last price itself is refused. Without a current
-     * price, which way cannot be told, and it is refused.
+     * A Spot stop (STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT) locks what it will need, as the exchange
+     * does, and waits for the last price to trigger it. Its stop condition is met on the side of the price its type and
+     * side fix; a stopPrice that is already met now is refused, as the exchange refuses an order that would trigger
+     * immediately. With a trailing delta the stopPrice only says where tracking starts, and may already be met. A
+     * market stop that buys holds back what it would pay at its stop, so it needs one. Without a current price it is
+     * refused.
      */
-    private PaperOrder placeStopLimit(
-            PaperAccount account, TradablePair pair, PairCoins coins, Terms terms, String key) {
-        requireTradable(pair.filters(), terms.price().multiply(terms.quantity()), terms.quantity(), "quantity");
+    private PaperOrder placeStop(PaperAccount account, TradablePair pair, PairCoins coins, Terms terms, String key) {
+        OrderType type = terms.type();
+        if (type.isSpotMarketStop() && terms.side() == OrderSide.BUY && terms.stopPrice() == null) {
+            throw new FieldValidationException(
+                    type + " BUY without a stopPrice cannot hold back what it would pay", Map.of("stopPrice", "MSG01"));
+        }
         BigDecimal last =
                 market.currentLastPrice(MarketType.SPOT, pair.symbol()).orElseThrow(() -> priceUnavailable(pair));
-        int side = terms.stopPrice().compareTo(last);
-        if (side == 0) {
-            throw new BusinessException(
-                    ErrorCode.PAPER_ORDER_WOULD_TRIGGER,
-                    "stop " + terms.stopPrice().toPlainString() + " is the last price and would trigger at once");
+        BigDecimal sizing =
+                terms.price() != null ? terms.price() : terms.stopPrice() != null ? terms.stopPrice() : last;
+        requireTradable(pair.filters(), sizing.multiply(terms.quantity()), terms.quantity(), "quantity");
+        TriggerCondition condition = type.triggerConditionFor(terms.side());
+        if (terms.stopPrice() != null && terms.trailingPercent() == null) {
+            int side = last.compareTo(terms.stopPrice());
+            boolean met = condition == TriggerCondition.AT_OR_ABOVE ? side >= 0 : side <= 0;
+            if (met) {
+                throw new BusinessException(
+                        ErrorCode.PAPER_ORDER_WOULD_TRIGGER,
+                        type + " " + terms.side() + " at " + terms.stopPrice().toPlainString()
+                                + " would trigger immediately at the last price " + last.toPlainString());
+            }
         }
-        TriggerCondition condition = side > 0 ? TriggerCondition.AT_OR_ABOVE : TriggerCondition.AT_OR_BELOW;
-        PaperOrder order = orders.save(PaperOrder.spotStopLimit(
+        PaperOrder order = orders.save(PaperOrder.spotStop(
                 account.getId(),
                 pair.pairId(),
                 key,
+                type,
                 terms.side(),
                 terms.timeInForce(),
                 terms.stopPrice(),
-                condition,
-                terms.price(),
-                terms.quantity()));
-        lock(account, order, coins);
-        arrival.awaitTrigger(account, order);
-        return order;
-    }
-
-    /**
-     * A trailing stop locks what its limit order will need and waits: a SELL follows the highest price and triggers
-     * when the price falls back by its callback, a BUY follows the lowest and triggers when it rises back by it. With
-     * an activation price the price has not reached yet, it starts following once it does; otherwise it follows from
-     * the last price now. Without a current price it is refused.
-     */
-    private PaperOrder placeTrailingStop(
-            PaperAccount account, TradablePair pair, PairCoins coins, Terms terms, String key) {
-        requireTradable(pair.filters(), terms.price().multiply(terms.quantity()), terms.quantity(), "quantity");
-        BigDecimal last =
-                market.currentLastPrice(MarketType.SPOT, pair.symbol()).orElseThrow(() -> priceUnavailable(pair));
-        BigDecimal activation = terms.activationPrice();
-        boolean sell = terms.side() == OrderSide.SELL;
-        boolean activeNow =
-                activation == null || (sell ? last.compareTo(activation) >= 0 : last.compareTo(activation) <= 0);
-        PaperOrder order = orders.save(PaperOrder.spotTrailingStopLimit(
-                account.getId(),
-                pair.pairId(),
-                key,
-                terms.side(),
-                terms.timeInForce(),
-                terms.callbackRate(),
-                activation,
-                activeNow ? last : null,
+                terms.trailingPercent(),
                 terms.price(),
                 terms.quantity()));
         lock(account, order, coins);
@@ -485,24 +467,34 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             // Futures orders are the next stage of TR-02.
             errors.put("market", "MSG15");
         }
-        if (request.type() != OrderType.STOP_LIMIT && request.stopPrice() != null) {
+        boolean stop = request.type().isSpotStop();
+        if (!stop && request.stopPrice() != null) {
             errors.put("stopPrice", "MSG15");
         }
-        if (request.type() != OrderType.TRAILING_STOP_LIMIT) {
-            if (request.callbackRate() != null) {
-                errors.put("callbackRate", "MSG15");
-            }
-            if (request.activationPrice() != null) {
-                errors.put("activationPrice", "MSG15");
-            }
+        if (!stop && request.trailingDelta() != null) {
+            errors.put("trailingDelta", "MSG15");
         }
         switch (request.type()) {
-            case STOP_LIMIT, TRAILING_STOP_LIMIT -> {
-                if (request.type() == OrderType.STOP_LIMIT && request.stopPrice() == null) {
+            case STOP_LOSS, TAKE_PROFIT -> {
+                if (request.stopPrice() == null && request.trailingDelta() == null) {
                     errors.put("stopPrice", "MSG01");
                 }
-                if (request.type() == OrderType.TRAILING_STOP_LIMIT && request.callbackRate() == null) {
-                    errors.put("callbackRate", "MSG01");
+                if (request.quantity() == null) {
+                    errors.put("quantity", "MSG01");
+                }
+                if (request.price() != null) {
+                    errors.put("price", "MSG15");
+                }
+                if (request.timeInForce() != null) {
+                    errors.put("timeInForce", "MSG15");
+                }
+                if (request.quoteOrderQty() != null) {
+                    errors.put("quoteOrderQty", "MSG15");
+                }
+            }
+            case STOP_LOSS_LIMIT, TAKE_PROFIT_LIMIT -> {
+                if (request.stopPrice() == null && request.trailingDelta() == null) {
+                    errors.put("stopPrice", "MSG01");
                 }
                 if (request.price() == null) {
                     errors.put("price", "MSG01");
@@ -535,6 +527,10 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 if (request.price() == null) {
                     errors.put("price", "MSG01");
                 }
+                if (request.timeInForce() == TimeInForce.GTX) {
+                    // GTX is the post-only of Futures; on Spot a post-only order is a LIMIT_MAKER.
+                    errors.put("timeInForce", "MSG15");
+                }
                 if (request.quantity() == null) {
                     errors.put("quantity", "MSG01");
                 }
@@ -552,8 +548,6 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 if (request.quantity() == null && request.quoteOrderQty() == null) {
                     errors.put("quantity", "MSG01");
                 } else if (request.quantity() != null && request.quoteOrderQty() != null) {
-                    errors.put("quoteOrderQty", "MSG15");
-                } else if (request.quoteOrderQty() != null && request.side() == OrderSide.SELL) {
                     errors.put("quoteOrderQty", "MSG15");
                 }
             }
@@ -576,12 +570,13 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             throw new FieldValidationException("quantity is below one step", Map.of("quantity", "MSG15"));
         }
         boolean hasTimeInForce = request.type() == OrderType.LIMIT
-                || request.type() == OrderType.STOP_LIMIT
-                || request.type() == OrderType.TRAILING_STOP_LIMIT;
+                || request.type() == OrderType.STOP_LOSS_LIMIT
+                || request.type() == OrderType.TAKE_PROFIT_LIMIT;
         TimeInForce timeInForce =
                 hasTimeInForce && request.timeInForce() == null ? TimeInForce.GTC : request.timeInForce();
         BigDecimal stopPrice = onTick(filters, request.stopPrice(), "stopPrice");
-        BigDecimal activationPrice = onTick(filters, request.activationPrice(), "activationPrice");
+        BigDecimal trailingPercent =
+                request.trailingDelta() == null ? null : BigDecimal.valueOf(request.trailingDelta(), 2);
         return new Terms(
                 request.side(),
                 request.type(),
@@ -590,8 +585,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 quantity,
                 request.quoteOrderQty(),
                 stopPrice,
-                request.callbackRate(),
-                activationPrice);
+                trailingPercent);
     }
 
     /** A trigger price on the pair's tick; {@code null} stays {@code null}; one that rounds to zero is MSG15. */
@@ -619,10 +613,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 && sameValue(placed.getLimitPrice(), terms.price())
                 && sameValue(placed.getOrigQuantity(), terms.quantity())
                 && sameValue(placed.getQuoteOrderAmount(), terms.quoteAmount())
-                && (placed.getOrderType() != OrderType.STOP_LIMIT
-                        || sameValue(placed.getStopPrice(), terms.stopPrice()))
-                && sameValue(placed.getCallbackRate(), terms.callbackRate())
-                && sameValue(placed.getActivationPrice(), terms.activationPrice());
+                && sameValue(placed.getStopPrice(), terms.stopPrice())
+                && sameValue(placed.getCallbackRate(), terms.trailingPercent());
         if (!same) {
             throw new BusinessException(
                     ErrorCode.DATA_CONFLICT,
@@ -708,10 +700,9 @@ public class PaperOrderServiceImpl implements PaperOrderService {
      *
      * @param price the LIMIT price on the tick; {@code null} for MARKET
      * @param quantity the quantity on the step; {@code null} for a MARKET buy by total
-     * @param quoteAmount what a MARKET buy by total spends; otherwise {@code null}
-     * @param stopPrice a STOP_LIMIT's stop on the tick; otherwise {@code null}
-     * @param callbackRate a TRAILING_STOP_LIMIT's callback in percent; otherwise {@code null}
-     * @param activationPrice a TRAILING_STOP_LIMIT's activation price on the tick, or {@code null}
+     * @param quoteAmount what a MARKET order by total spends or brings in; otherwise {@code null}
+     * @param stopPrice a stop's stopPrice on the tick; otherwise {@code null}
+     * @param trailingPercent a stop's trailing delta in percent; otherwise {@code null}
      */
     private record Terms(
             OrderSide side,
@@ -721,6 +712,5 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             BigDecimal quantity,
             BigDecimal quoteAmount,
             BigDecimal stopPrice,
-            BigDecimal callbackRate,
-            BigDecimal activationPrice) {}
+            BigDecimal trailingPercent) {}
 }

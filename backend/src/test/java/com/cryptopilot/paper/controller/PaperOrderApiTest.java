@@ -309,7 +309,7 @@ class PaperOrderApiTest {
     }
 
     @Test
-    void TR02_anIocOrFokLimitThePriceHasNotReached_andAPostOnlyThatWouldTake_expireAtOnce() throws Exception {
+    void TR02_anIocOrFokLimitThePriceHasNotReached_expiresAtOnce_andGtxIsNotASpotTimeInForce() throws Exception {
         UUID trader = trader();
         price("100");
 
@@ -319,16 +319,16 @@ class PaperOrderApiTest {
                 .andExpect(jsonPath("$.statusReason").value("NOT_FILLABLE_ON_ARRIVAL"));
         place(trader, limit("BUY", "90", "1", "FOK"))
                 .andExpect(jsonPath("$.status").value("EXPIRED"));
+        // GTX is the post-only of Futures; on Spot the post-only order is a LIMIT_MAKER.
         place(trader, limit("BUY", "110", "1", "GTX"))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("EXPIRED"))
-                .andExpect(jsonPath("$.statusReason").value("POST_ONLY_WOULD_TAKE"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.timeInForce").value("MSG15"));
 
         assertThat(spot(trader, "USDT")).isEqualByComparingTo("10000");
         assertThat(locked(trader, "USDT")).isZero();
         as(trader, get(PAPER + "/orders").param("status", "EXPIRED"), null)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items.length()").value(3));
+                .andExpect(jsonPath("$.items.length()").value(2));
     }
 
     /**
@@ -398,21 +398,21 @@ class PaperOrderApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Stop limits and trailing stops (TR-09, TR-11)
+    // Spot stops (TR-09, TR-11): STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT
     // ------------------------------------------------------------------------------------------
 
     /**
-     * TR-09: a buy stop above the last price waits, locking what its limit needs; a trade at the stop triggers it and,
-     * live, its limit meets the book at once as a taker.
+     * TR-09: a STOP_LOSS_LIMIT buy above the last price waits, locking what its limit needs; a trade at the stop
+     * triggers it and, live, its limit meets the book at once as a taker.
      */
     @Test
-    void TR09_aBuyStopAboveTheLastPrice_isTriggeredByATradeAtTheStop_andTakesTheBook() throws Exception {
+    void TR09_aStopLossLimitBuy_isTriggeredByATradeAtTheStop_andTakesTheBook() throws Exception {
         UUID trader = trader();
         price("100");
 
-        String id = id(place(trader, stopLimit("BUY", "105", "106", "1"))
+        String id = id(place(trader, stop("STOP_LOSS_LIMIT", "BUY", "105", null, "106", "1"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.type").value("STOP_LIMIT"))
+                .andExpect(jsonPath("$.type").value("STOP_LOSS_LIMIT"))
                 .andExpect(jsonPath("$.status").value("NEW"))
                 .andExpect(jsonPath("$.stopPrice").value(105.0))
                 .andExpect(jsonPath("$.timeInForce").value("GTC"))
@@ -433,20 +433,61 @@ class PaperOrderApiTest {
         assertLedgerAddsUpToTheBalances(trader);
     }
 
-    /** TR-09: a stop at the last price would trigger at once and is refused; without a price the side is unknown. */
+    /**
+     * TR-09: a STOP_LOSS sell below the last price locks its quantity; triggered, it executes as a MARKET order at the
+     * bids, as the exchange's STOP_LOSS does.
+     */
     @Test
-    void TR09_aStopAtTheLastPrice_isRefused_andWithoutAPrice_theStopCannotBePlaced() throws Exception {
+    void TR09_aStopLossSell_executesAsAMarketOrder_onceTriggered() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+
+        String id = id(place(trader, stop("STOP_LOSS", "SELL", "95", null, null, "1"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.type").value("STOP_LOSS"))
+                .andExpect(jsonPath("$.price").doesNotExist())
+                .andExpect(jsonPath("$.timeInForce").doesNotExist()));
+        assertThat(locked(trader, base())).isEqualByComparingTo("1");
+
+        depth(List.of(level("96", "5")), List.of(level("94.5", "5")));
+        trade("95", 1);
+
+        awaitStatus(trader, id, "FILLED");
+        as(trader, get(PAPER + "/orders/" + id), null)
+                .andExpect(jsonPath("$.avgPrice").value(94.5));
+        assertThat(locked(trader, base())).isZero();
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /**
+     * TR-09: the side of the price a stop waits on is fixed by its type and side, as the exchange fixes it; a stop whose
+     * condition the last price already meets would trigger immediately and is refused; without a price it cannot be
+     * placed.
+     */
+    @Test
+    void TR09_theStopConditionFollowsTheType_andAStopAlreadyMet_isRefused() throws Exception {
         UUID trader = trader();
 
-        place(trader, stopLimit("BUY", "105", "106", "1"))
+        place(trader, stop("STOP_LOSS_LIMIT", "BUY", "105", null, "106", "1"))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("MARKET_PRICE_UNAVAILABLE"));
         price("100");
-        place(trader, stopLimit("SELL", "100", "99", "1"))
+        // A STOP_LOSS sell waits below the price: a stop at 101 is already met.
+        place(trader, stop("STOP_LOSS_LIMIT", "SELL", "101", null, "99", "1"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("PAPER_ORDER_WOULD_TRIGGER"));
-        as(trader, get(PAPER + "/orders"), null)
-                .andExpect(jsonPath("$.items.length()").value(0));
+        // A TAKE_PROFIT buy waits below the price too, a TAKE_PROFIT sell above it.
+        place(trader, stop("TAKE_PROFIT_LIMIT", "BUY", "100", null, "99", "1"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_WOULD_TRIGGER"));
+        String takeProfit = id(place(trader, stop("TAKE_PROFIT_LIMIT", "BUY", "95", null, "96", "1"))
+                .andExpect(status().isCreated()));
+
+        assertThat(matching.triggerOrders())
+                .filteredOn(order -> order.orderId().toString().equals(takeProfit))
+                .singleElement()
+                .satisfies(order -> assertThat(order.condition()).isEqualTo(TriggerCondition.AT_OR_BELOW));
     }
 
     /** TR-09: a cancelled stop gives back what it locked, and a trigger that comes after the cancel does nothing. */
@@ -454,7 +495,8 @@ class PaperOrderApiTest {
     void TR09_aCancelledStop_unlocks_andALateTriggerDoesNothing() throws Exception {
         UUID trader = trader();
         price("100");
-        String id = id(place(trader, stopLimit("BUY", "105", "106", "1")).andExpect(status().isCreated()));
+        String id = id(place(trader, stop("STOP_LOSS_LIMIT", "BUY", "105", null, "106", "1"))
+                .andExpect(status().isCreated()));
         TriggerOrder watched = matching.triggerOrders().stream()
                 .filter(order -> order.orderId().toString().equals(id))
                 .findFirst()
@@ -472,12 +514,13 @@ class PaperOrderApiTest {
                 .noneMatch(order -> order.orderId().toString().equals(id));
     }
 
-    /** TR-09: replayed, a triggered stop waits at its limit price from the trigger on, for the candles that follow. */
+    /** TR-09: replayed, a triggered limit stop waits at its limit price from the trigger on. */
     @Test
     void TR09_aStopTriggeredByAReplay_waitsAtItsPrice_fromTheTrigger() throws Exception {
         UUID trader = trader();
         price("100");
-        String id = id(place(trader, stopLimit("BUY", "105", "104", "1")).andExpect(status().isCreated()));
+        String id = id(place(trader, stop("STOP_LOSS_LIMIT", "BUY", "105", null, "104", "1"))
+                .andExpect(status().isCreated()));
         TriggerOrder watched = matching.triggerOrders().stream()
                 .filter(order -> order.orderId().toString().equals(id))
                 .findFirst()
@@ -498,53 +541,53 @@ class PaperOrderApiTest {
     }
 
     /**
-     * TR-11: a sell trailing stop follows the high from the last price, triggers when the price falls back by its
-     * callback, and its limit then takes the bids.
+     * TR-11: a STOP_LOSS_LIMIT sell with a trailingDelta and no stopPrice tracks from the next trade, follows the high,
+     * and triggers when the price falls back by the delta; its limit then takes the bids.
      */
     @Test
-    void TR11_aSellTrailingStop_followsTheHigh_andTriggersOnTheCallback() throws Exception {
+    void TR11_aTrailingStopLossSell_followsTheHigh_andTriggersOnTheDelta() throws Exception {
         UUID trader = trader();
         price("100");
         place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
 
-        String id = id(place(trader, trailing("SELL", "2", null, "90", "1"))
+        String id = id(place(trader, stop("STOP_LOSS_LIMIT", "SELL", null, "200", "90", "1"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.type").value("TRAILING_STOP_LIMIT"))
-                .andExpect(jsonPath("$.callbackRate").value(2.0))
+                .andExpect(jsonPath("$.type").value("STOP_LOSS_LIMIT"))
+                .andExpect(jsonPath("$.trailingDelta").value(200))
                 .andExpect(jsonPath("$.stopPrice").doesNotExist()));
         assertThat(locked(trader, base())).isEqualByComparingTo("1");
 
         depth(List.of(level("108", "5")), List.of(level("107", "5")));
         trade("110", 1);
         trade("108", 2);
-        // 110 × 0.98 = 107.8: the trailing stop triggers here.
+        // 2 % back from the high of 110: 107.8.
         trade("107.8", 3);
 
         awaitStatus(trader, id, "FILLED");
         as(trader, get(PAPER + "/orders/" + id), null)
-                .andExpect(jsonPath("$.stopPrice").value(107.8))
                 .andExpect(jsonPath("$.avgPrice").value(107.0));
         assertThat(locked(trader, base())).isZero();
         assertLedgerAddsUpToTheBalances(trader);
     }
 
     /**
-     * TR-11: a buy trailing stop with an activation price the price has not reached waits unactivated; the best price
-     * the engine stores is where it resumes after a restart.
+     * TR-11: with a stopPrice, a trailing TAKE_PROFIT_LIMIT buy starts tracking only once its stop condition is met;
+     * the best price the engine stores is where it resumes after a restart.
      */
     @Test
-    void TR11_aTrailingStopWithAnActivationPrice_waitsForIt_andResumesFromItsStoredBestPrice() throws Exception {
+    void TR11_aTrailingStopWithAStopPrice_waitsForIt_andResumesFromItsStoredBestPrice() throws Exception {
         UUID trader = trader();
         price("100");
 
-        String id = id(place(trader, trailing("BUY", "1", "90", "95", "1"))
+        String id = id(place(trader, stop("TAKE_PROFIT_LIMIT", "BUY", "90", "100", "95", "1"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.activationPrice").value(90.0)));
+                .andExpect(jsonPath("$.stopPrice").value(90.0))
+                .andExpect(jsonPath("$.trailingDelta").value(100)));
         TriggerOrder watched = matching.triggerOrders().stream()
                 .filter(order -> order.orderId().toString().equals(id))
                 .findFirst()
                 .orElseThrow();
-        assertThat(watched.condition()).isEqualTo(TriggerCondition.AT_OR_ABOVE);
+        assertThat(watched.condition()).isEqualTo(TriggerCondition.AT_OR_BELOW);
         assertThat(watched.extreme()).isNull();
 
         matching.saveExtremes(Map.of(UUID.fromString(id), new BigDecimal("88")));
@@ -555,29 +598,52 @@ class PaperOrderApiTest {
                 .satisfies(order -> assertThat(order.extreme()).isEqualByComparingTo("88"));
     }
 
-    /** TR-09, TR-11: each kind takes its own fields only. */
+    /** TR-09, TR-11: each kind takes its own fields only, and the delta stays within 10 to 2000 basis points. */
     @Test
-    void TR09_TR11_theTriggerFields_belongToTheirKindsOnly() throws Exception {
+    void TR09_TR11_theStopFields_belongToTheStopsOnly() throws Exception {
         UUID trader = trader();
         price("100");
 
         place(
                         trader,
                         "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\", \"type\": \"LIMIT\","
-                                + " \"price\": 90, \"quantity\": 1, \"stopPrice\": 95, \"callbackRate\": 1}")
+                                + " \"price\": 90, \"quantity\": 1, \"stopPrice\": 95, \"trailingDelta\": 100}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.stopPrice").value("MSG15"))
-                .andExpect(jsonPath("$.errors.callbackRate").value("MSG15"));
+                .andExpect(jsonPath("$.errors.trailingDelta").value("MSG15"));
         place(
                         trader,
                         "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\","
-                                + " \"type\": \"STOP_LIMIT\", \"price\": 90, \"quantity\": 1, \"timeInForce\": \"GTX\"}")
+                                + " \"type\": \"STOP_LOSS_LIMIT\", \"price\": 90, \"quantity\": 1,"
+                                + " \"timeInForce\": \"GTX\"}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.stopPrice").value("MSG01"))
                 .andExpect(jsonPath("$.errors.timeInForce").value("MSG15"));
-        place(trader, trailing("SELL", "25", null, "90", "1"))
+        place(trader, stop("STOP_LOSS", "SELL", "95", null, "94", "1"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errors.callbackRate").value("MSG15"));
+                .andExpect(jsonPath("$.errors.price").value("MSG15"));
+        place(trader, stop("STOP_LOSS", "BUY", null, "100", null, "1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.stopPrice").value("MSG01"));
+        place(trader, stop("STOP_LOSS_LIMIT", "SELL", null, "2500", "90", "1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.trailingDelta").value("MSG15"));
+    }
+
+    /** A MARKET sell by quoteOrderQty sells what brings in that amount, as the exchange's quoteOrderQty on a SELL. */
+    @Test
+    void TR06_aMarketSellByQuoteOrderQty_sellsWhatBringsInTheAmount() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+
+        place(trader, market("SELL", "\"quoteOrderQty\": 50"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.quoteOrderQty").value(50.0))
+                .andExpect(jsonPath("$.executedQuantity").value(0.5))
+                .andExpect(jsonPath("$.cumQuote").value(50.0));
+        assertLedgerAddsUpToTheBalances(trader);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -596,9 +662,9 @@ class PaperOrderApiTest {
                 .andExpect(jsonPath("$.type").value("OCO"))
                 .andExpect(jsonPath("$.status").value("EXECUTING"))
                 .andExpect(jsonPath("$.orders.length()").value(2))
-                .andExpect(jsonPath("$.orders[0].type").value("LIMIT"))
+                .andExpect(jsonPath("$.orders[0].type").value("LIMIT_MAKER"))
                 .andExpect(jsonPath("$.orders[0].status").value("NEW"))
-                .andExpect(jsonPath("$.orders[1].type").value("STOP_LIMIT"))
+                .andExpect(jsonPath("$.orders[1].type").value("STOP_LOSS_LIMIT"))
                 .andExpect(jsonPath("$.orders[1].status").value("NEW"))
                 .andReturn()
                 .getResponse()
@@ -778,6 +844,125 @@ class PaperOrderApiTest {
         assertLedgerAddsUpToTheBalances(trader);
     }
 
+    /**
+     * TR-10: without a stop limit price, the stop of an OCO is a STOP_LOSS, executed as a MARKET order once triggered;
+     * its trigger expires the take profit.
+     */
+    @Test
+    void TR10_anOcoWithoutAStopLimitPrice_stopsWithAStopLoss_executedAtTheMarket() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        String body = placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OCO\","
+                                + " \"oco\": {\"side\": \"SELL\", \"quantity\": 1, \"takeProfitPrice\": 110,"
+                                + " \"stopPrice\": 95}}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orders[1].type").value("STOP_LOSS"))
+                .andExpect(jsonPath("$.orders[1].price").doesNotExist())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+        String stop = JsonPath.read(body, "$.orders[1].orderId");
+
+        depth(List.of(level("96", "5")), List.of(level("94", "5")));
+        trade("95", 1);
+
+        awaitStatus(trader, stop, "FILLED");
+        as(trader, get(PAPER + "/orders/" + stop), null)
+                .andExpect(jsonPath("$.avgPrice").value(94.0));
+        as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        assertThat(locked(trader, base())).isZero();
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /** TR-10: an OCO whose take profit the book already reaches is refused, as the exchange refuses its LIMIT_MAKER. */
+    @Test
+    void TR10_anOcoWhoseTakeProfitWouldTake_isRefused() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        depth(List.of(level("112", "5")), List.of(level("111", "5")));
+
+        placeList(trader, oco("SELL", "1", "110", "95", "94"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_WOULD_TAKE"));
+        assertThat(locked(trader, base())).isZero();
+    }
+
+    /**
+     * TR-10: an OTO's pending order may be a Spot stop; placed once the working buy fills, it locks the coin bought and
+     * waits for its trigger.
+     */
+    @Test
+    void TR10_anOtoWithAPendingStopLoss_waitsForItsTrigger_onceTheWorkingOrderFills() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "5")), List.of(level("99", "5")));
+
+        String body = placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTO\","
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"LIMIT\", \"price\": 101, \"quantity\": 1},"
+                                + " \"pending\": {\"side\": \"SELL\", \"type\": \"STOP_LOSS\", \"stopPrice\": 95,"
+                                + " \"quantity\": 0.99}}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orders[0].status").value("FILLED"))
+                .andExpect(jsonPath("$.orders[1].type").value("STOP_LOSS"))
+                .andExpect(jsonPath("$.orders[1].status").value("NEW"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String pending = JsonPath.read(body, "$.orders[1].orderId");
+
+        assertThat(locked(trader, base())).isEqualByComparingTo("0.99");
+        assertThat(matching.triggerOrders())
+                .filteredOn(order -> order.orderId().toString().equals(pending))
+                .singleElement()
+                .satisfies(order -> assertThat(order.condition()).isEqualTo(TriggerCondition.AT_OR_BELOW));
+    }
+
+    /** TR-10: each order of a group takes the fields of its type, and the prices of a pending OCO lie in order. */
+    @Test
+    void TR10_theOrdersOfAGroup_takeTheFieldsOfTheirTypes() throws Exception {
+        UUID trader = trader();
+        price("100");
+
+        placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTO\","
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"LIMIT\", \"price\": 99, \"quantity\": 1},"
+                                + " \"pending\": {\"side\": \"SELL\", \"type\": \"STOP_LOSS\", \"price\": 94, \"quantity\": 1}}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors['pending.stopPrice']").value("MSG01"))
+                .andExpect(jsonPath("$.errors['pending.price']").value("MSG15"));
+        placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTO\","
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"LIMIT\", \"stopPrice\": 98, \"quantity\": 1},"
+                                + " \"pending\": {\"side\": \"SELL\", \"type\": \"LIMIT\", \"price\": 120, \"quantity\": 1}}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors['working.price']").value("MSG01"))
+                .andExpect(jsonPath("$.errors['working.stopPrice']").value("MSG15"));
+        placeList(trader, otoco("99", "1", "1", "94", "95", "93"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors['oco.takeProfitPrice']").value("MSG15"));
+        placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTO\","
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"LIMIT\", \"price\": 99, \"quantity\": 1},"
+                                + " \"pending\": {\"side\": \"SELL\", \"type\": \"STOP_LOSS\", \"stopPrice\": 101,"
+                                + " \"quantity\": 1}}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_WOULD_TRIGGER"));
+        as(trader, get(PAPER + "/orders"), null)
+                .andExpect(jsonPath("$.items.length()").value(0));
+    }
+
     /** TR-10: each kind of group takes its own parts only. */
     @Test
     void TR10_eachKindOfGroup_takesItsOwnPartsOnly() throws Exception {
@@ -794,7 +979,7 @@ class PaperOrderApiTest {
         placeList(
                         trader,
                         "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTO\","
-                                + " \"working\": {\"side\": \"BUY\", \"type\": \"STOP_LIMIT\", \"price\": 99, \"quantity\": 1}}")
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"STOP_LOSS_LIMIT\", \"price\": 99, \"quantity\": 1}}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.pending").value("MSG01"))
                 .andExpect(jsonPath("$.errors['working.type']").value("MSG15"));
@@ -1078,7 +1263,7 @@ class PaperOrderApiTest {
     }
 
     @Test
-    void TR06_crossingTheBook_anIocKeepsWhatItTook_aFokTakesNothing_andAPostOnlyExpires() throws Exception {
+    void TR06_crossingTheBook_anIocKeepsWhatItTook_aFokTakesNothing_andALimitMakerIsRefused() throws Exception {
         UUID trader = trader();
         price("100");
         depth(List.of(level("100", "1"), level("102", "5")), List.of(level("99", "1")));
@@ -1093,10 +1278,10 @@ class PaperOrderApiTest {
         place(trader, limit("BUY", "102", "3", "FOK"))
                 .andExpect(jsonPath("$.status").value("FILLED"))
                 .andExpect(jsonPath("$.cumQuote").value(304.0));
-        place(trader, limit("BUY", "100", "1", "GTX"))
-                .andExpect(jsonPath("$.status").value("EXPIRED"))
-                .andExpect(jsonPath("$.statusReason").value("POST_ONLY_WOULD_TAKE"));
-        place(trader, limit("BUY", "99.99", "1", "GTX"))
+        place(trader, limitMaker("BUY", "100", "1"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_WOULD_TAKE"));
+        place(trader, limitMaker("BUY", "99.99", "1"))
                 .andExpect(jsonPath("$.status").value("NEW"));
 
         assertThat(locked(trader, "USDT")).as("only the post-only that waits").isEqualByComparingTo("99.99");
@@ -1180,8 +1365,6 @@ class PaperOrderApiTest {
                 .andExpect(jsonPath("$.errors.timeInForce").value("MSG15"))
                 .andExpect(jsonPath("$.errors.quantity").value("MSG01"));
         place(trader, market("BUY", "\"quantity\": 1, \"quoteOrderQty\": 10"))
-                .andExpect(jsonPath("$.errors.quoteOrderQty").value("MSG15"));
-        place(trader, market("SELL", "\"quoteOrderQty\": 10"))
                 .andExpect(jsonPath("$.errors.quoteOrderQty").value("MSG15"));
         place(trader, market("BUY", "\"quoteOrderQty\": 4"))
                 .andExpect(status().isBadRequest())
@@ -1335,17 +1518,12 @@ class PaperOrderApiTest {
                 + ", \"stopPrice\": " + stop + ", \"stopLimitPrice\": " + stopLimit + "}";
     }
 
-    private String stopLimit(String side, String stop, String price, String quantity) {
-        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\","
-                + " \"type\": \"STOP_LIMIT\", \"stopPrice\": " + stop + ", \"price\": " + price + ", \"quantity\": "
-                + quantity + "}";
-    }
-
-    private String trailing(String side, String callbackRate, String activation, String price, String quantity) {
-        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\","
-                + " \"type\": \"TRAILING_STOP_LIMIT\", \"callbackRate\": " + callbackRate
-                + (activation == null ? "" : ", \"activationPrice\": " + activation)
-                + ", \"price\": " + price + ", \"quantity\": " + quantity + "}";
+    /** A Spot stop of the test's pair; a {@code null} stop, delta or price is left out. */
+    private String stop(String type, String side, String stop, String trailingDelta, String price, String quantity) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\", \"type\": \"" + type
+                + "\"" + (stop == null ? "" : ", \"stopPrice\": " + stop)
+                + (trailingDelta == null ? "" : ", \"trailingDelta\": " + trailingDelta)
+                + (price == null ? "" : ", \"price\": " + price) + ", \"quantity\": " + quantity + "}";
     }
 
     /** One market trade of the test's pair, {@code second} seconds from now, handed to the engine as it streams. */

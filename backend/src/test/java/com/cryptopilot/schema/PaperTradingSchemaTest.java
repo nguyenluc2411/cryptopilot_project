@@ -155,11 +155,23 @@ class PaperTradingSchemaTest {
     }
 
     @Test
-    void aStopOrder_needsItsTriggerAndWhichWayItFires() {
-        insertOrder("STOP_MARKET", null, null, new BigDecimal("58000"), "AT_OR_BELOW");
+    void aSpotStop_needsItsTriggerAndWhichWayItFires() {
+        insertOrder("STOP_LOSS", null, null, new BigDecimal("58000"), "AT_OR_BELOW");
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertOrder("STOP_MARKET", null, null, new BigDecimal("58000"), null));
+                .isThrownBy(() -> insertOrder("STOP_LOSS", null, null, new BigDecimal("58000"), null));
+    }
+
+    @Test
+    void aSpotStop_needsAStopPriceOrATrailingDelta() {
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertOrder("STOP_LOSS", null, null, null, "AT_OR_BELOW"));
+    }
+
+    @Test
+    void aSpotLimitStop_hasAPriceAndATimeInForce() {
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertOrder("STOP_LOSS_LIMIT", null, null, new BigDecimal("58000"), "AT_OR_BELOW"));
     }
 
     @Test
