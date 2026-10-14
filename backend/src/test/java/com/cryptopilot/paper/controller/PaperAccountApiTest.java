@@ -88,7 +88,8 @@ class PaperAccountApiTest {
     void removeRows() {
         for (UUID trader : traders) {
             String account = "(select account_id from paper_account where user_id = ?)";
-            for (String table : List.of("paper_ledger_entry", "paper_transfer", "paper_balance")) {
+            for (String table :
+                    List.of("paper_ledger_entry", "paper_transfer", "paper_balance", "paper_equity_snapshot")) {
                 sql.sql("delete from " + table + " where account_id = " + account)
                         .param(trader)
                         .update();

@@ -162,7 +162,8 @@ class PaperUserQueueTest {
                     "paper_order_list",
                     "paper_ledger_entry",
                     "paper_transfer",
-                    "paper_balance")) {
+                    "paper_balance",
+                    "paper_equity_snapshot")) {
                 sql.sql("delete from " + table + " where account_id = " + account)
                         .param(trader)
                         .update();

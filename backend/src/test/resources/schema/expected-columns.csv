@@ -251,6 +251,7 @@ paper_account,version,bigint,64,0,NO
 paper_balance,account_id,uuid,,,NO
 paper_balance,balance_id,uuid,,,NO
 paper_balance,coin_id,uuid,,,NO
+paper_balance,cost_basis_amount,numeric,28,8,YES
 paper_balance,created_at,timestamp with time zone,,,NO
 paper_balance,free_amount,numeric,28,8,NO
 paper_balance,locked_amount,numeric,28,8,NO

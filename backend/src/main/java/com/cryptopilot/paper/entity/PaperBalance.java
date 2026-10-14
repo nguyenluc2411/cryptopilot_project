@@ -11,6 +11,8 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.Getter;
@@ -57,6 +59,13 @@ public class PaperBalance extends BaseEntity {
         this.freeAmount = BigDecimal.ZERO;
         this.lockedAmount = BigDecimal.ZERO;
     }
+
+    /**
+     * What the holding cost, in USDT (TR-13): what the buys paid less the share of it the sales took away, the
+     * opening grant at its price then. {@code null} when not known.
+     */
+    @Column(name = "cost_basis_amount", precision = 28, scale = 8)
+    private BigDecimal costBasisAmount;
 
     /** An empty balance of a coin the wallet has not held before. */
     public static PaperBalance empty(UUID accountId, WalletType walletType, UUID coinId) {
@@ -111,6 +120,52 @@ public class PaperBalance extends BaseEntity {
         BigDecimal spent = positive(amount);
         requireLocked(spent);
         lockedAmount = lockedAmount.subtract(spent);
+    }
+
+    /**
+     * Adds what an acquisition of the coin cost, in USDT. An empty balance starts its cost from it; a holding whose
+     * cost is not known stays not known, so a part of it is never averaged with a guess.
+     *
+     * @param totalBefore the total held before the acquisition was credited
+     */
+    public void addCost(BigDecimal cost, BigDecimal totalBefore) {
+        Objects.requireNonNull(cost, "cost must not be null");
+        if (cost.signum() < 0) {
+            throw new IllegalArgumentException("cost must not be negative, was " + cost.toPlainString());
+        }
+        if (totalBefore.signum() == 0) {
+            costBasisAmount = scaled(cost);
+        } else if (costBasisAmount != null) {
+            costBasisAmount = scaled(costBasisAmount.add(cost));
+        }
+    }
+
+    /**
+     * Takes away the share of the cost a sale of {@code sold} took, the average cost method: what is left keeps its
+     * average cost. Called once the sale has been taken from the balance; nothing left, nothing is left of the cost.
+     */
+    public void reduceCost(BigDecimal sold) {
+        if (costBasisAmount == null) {
+            return;
+        }
+        BigDecimal left = total();
+        BigDecimal before = left.add(positive(sold));
+        costBasisAmount = left.signum() == 0
+                ? scaled(BigDecimal.ZERO)
+                : scaled(costBasisAmount.multiply(left).divide(before, MathContext.DECIMAL128));
+    }
+
+    /** The average cost of one unit in USDT, or {@code null} when the cost is not known or nothing is held. */
+    public BigDecimal averageCost() {
+        BigDecimal total = total();
+        if (costBasisAmount == null || total.signum() == 0) {
+            return null;
+        }
+        return costBasisAmount.divide(total, 12, RoundingMode.HALF_EVEN);
+    }
+
+    private static BigDecimal scaled(BigDecimal amount) {
+        return amount.setScale(8, RoundingMode.HALF_EVEN);
     }
 
     /** The refusal names the coin by its symbol, then the amount needed and the amount free (message arguments). */

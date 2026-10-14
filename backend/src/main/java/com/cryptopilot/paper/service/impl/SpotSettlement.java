@@ -5,6 +5,7 @@ import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.paper.config.PaperOrderProperties;
 import com.cryptopilot.paper.entity.PaperAccount;
+import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperFill.Execution;
 import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
@@ -43,7 +44,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Runs inside the caller's transaction, which holds the Trader's paper lock and has checked that the order works.
  * The fill and the order it changed are noted for the Trader's queues ({@link PaperUserFeed}).
  *
- * <p>Rule: TR-02, TR-04, TR-08; BR-21 (Spot owns what it sells).
+ * <p>Rule: TR-02, TR-04, TR-08, TR-13; BR-21 (Spot owns what it sells).
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -95,14 +96,26 @@ public class SpotSettlement {
                 new Execution(price, quantity, quoteAmount, fee, received.coinId(), liquidity, source, tradedAt));
         Ref ref = Ref.to(LedgerRefType.FILL, fill.getId());
         if (fromLocked) {
-            wallets.spendLocked(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
+            PaperBalance out =
+                    wallets.spendLocked(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
+            if (!buy) {
+                out.reduceCost(quantity);
+            }
             if (released.signum() > 0) {
                 wallets.unlock(account, WalletType.SPOT, paid, released);
             }
         } else {
-            wallets.debit(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
+            PaperBalance out = wallets.debit(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
+            if (!buy) {
+                out.reduceCost(quantity);
+            }
         }
-        wallets.credit(account, WalletType.SPOT, received, receivedAmount, LedgerEntryType.TRADE, ref);
+        PaperBalance in =
+                wallets.credit(account, WalletType.SPOT, received, receivedAmount, LedgerEntryType.TRADE, ref);
+        if (buy) {
+            // What the buy paid is the cost of what it brought, the fee taken from it included (TR-13).
+            in.addCost(quoteAmount, in.total().subtract(receivedAmount));
+        }
         if (fee.signum() > 0) {
             wallets.debit(account, WalletType.SPOT, received, fee, LedgerEntryType.FEE, ref);
         }

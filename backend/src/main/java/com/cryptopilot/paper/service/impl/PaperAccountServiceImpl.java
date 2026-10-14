@@ -74,7 +74,7 @@ import org.springframework.transaction.annotation.Transactional;
  * symbol synchronisation has not stored them yet, and the account, its balances and its INITIAL_GRANT entries are
  * written in one transaction, so either all of them exist or none does. The funds are granted this once (Q-T5).
  *
- * <p>Rule: TR-04; Q-T5.
+ * <p>Rule: TR-04, TR-13; Q-T5.
  */
 @Service
 @RequiredArgsConstructor
@@ -98,6 +98,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     private final UserLock lock;
     private final PaperAccountProperties properties;
     private final MarketApi market;
+    private final PaperEquity equity;
 
     @Override
     @Transactional
@@ -115,6 +116,8 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         PaperAccount opened = accounts.save(PaperAccount.open(userId));
         accounts.flush();
         grant(opened);
+        // Today's PnL counts from the opening, as from 00:00 UTC on the days after (TR-13).
+        equity.snapshot(opened);
         log.info("Paper account {} opened for user {}", opened.getId(), userId);
         return new OpenedAccount(toResponse(opened), true);
     }
@@ -271,13 +274,26 @@ public class PaperAccountServiceImpl implements PaperAccountService {
             Map<String, BigDecimal> grant,
             Map<String, CoinListing> coins,
             Ref ref) {
+        // The coins of the Spot grant are valued at their last price now, the cost their PnL starts from (TR-13).
+        Map<String, BigDecimal> prices = wallet == WalletType.SPOT
+                ? market.currentLastPrices(
+                        MarketType.SPOT,
+                        grant.keySet().stream()
+                                .filter(symbol -> !USDT.equals(symbol))
+                                .map(symbol -> symbol + USDT)
+                                .collect(Collectors.toSet()))
+                : Map.of();
         grant.forEach((symbol, amount) -> {
             CoinListing coin = coins.get(symbol);
             if (coin == null) {
                 // ensureCoins returns every symbol asked for, so this is a defect, and the whole opening rolls back.
                 throw new IllegalStateException("coin " + symbol + " of the paper grant is not stored");
             }
-            wallets.grant(account, wallet, coin, amount, ref);
+            PaperBalance balance = wallets.grant(account, wallet, coin, amount, ref);
+            BigDecimal price = prices.get(symbol + USDT);
+            if (price != null && !USDT.equals(symbol)) {
+                balance.addCost(amount.multiply(price), BigDecimal.ZERO);
+            }
         });
     }
 
@@ -285,7 +301,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
      * The value of a balance in USDT at the current Spot last price; zero for an empty balance and {@code null} when
      * no current price is known.
      */
-    private static BigDecimal usdtValue(String asset, BigDecimal amount, Map<String, BigDecimal> prices) {
+    static BigDecimal usdtValue(String asset, BigDecimal amount, Map<String, BigDecimal> prices) {
         if (amount.signum() == 0) {
             return Rounding.toAmount(BigDecimal.ZERO);
         }

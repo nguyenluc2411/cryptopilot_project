@@ -285,6 +285,12 @@ cryptopilot:
       # TR-02: the commission of a Spot fill, taken in the coin it brings in; Binance's standard 0.1% maker and taker.
       spot-maker-fee-rate: 0.001
       spot-taker-fee-rate: 0.001
+    equity-snapshot:
+      # TR-13: every paper account's worth at the start of the day, the base of today's PnL and the asset chart. Off
+      # here, on in the dev and prod profiles, so a test context schedules nothing.
+      enabled: false
+      cron: "0 0 0 * * *"
+      zone: UTC
     matching:
       # TR-05, Q-T8: a price through a waiting LIMIT order's own always fills it. At exactly its price: QUEUE, as
       # Binance's price-time priority, once the quantity the exchange's book showed ahead of it there is traded; CROSS

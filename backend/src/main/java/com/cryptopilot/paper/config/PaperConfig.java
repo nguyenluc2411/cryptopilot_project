@@ -9,6 +9,10 @@ import org.springframework.context.annotation.Configuration;
  * <p>Rule: TR-02, TR-04; Q-T5.
  */
 @Configuration
-@EnableConfigurationProperties({PaperAccountProperties.class, PaperOrderProperties.class, PaperMatchingProperties.class
+@EnableConfigurationProperties({
+    PaperAccountProperties.class,
+    PaperOrderProperties.class,
+    PaperMatchingProperties.class,
+    PaperEquityProperties.class
 })
 public class PaperConfig {}

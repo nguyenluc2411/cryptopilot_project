@@ -1,8 +1,10 @@
 package com.cryptopilot.paper.repository;
 
 import com.cryptopilot.paper.entity.PaperAccount;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +24,11 @@ public interface PaperAccountRepository extends Repository<PaperAccount, UUID> {
 
     /** Writes an account. Not transactional here; the unit of work is the calling service's. */
     PaperAccount save(PaperAccount account);
+
+    /** The id of every paper account, for the daily equity snapshot (TR-13). */
+    @Transactional(readOnly = true)
+    @Query("select a.id from PaperAccount a order by a.id")
+    List<UUID> findAllIds();
 
     /** Sends pending statements, so {@code uq_paper_account_user} answers where the caller can read it. */
     void flush();

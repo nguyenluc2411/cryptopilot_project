@@ -77,6 +77,8 @@ class OpenApiDocsTest {
             "/api/v1/paper/order-lists",
             "/api/v1/paper/order-lists/{listId}",
             "/api/v1/paper/order-lists/{listId}/cancel",
+            "/api/v1/paper/spot/pnl",
+            "/api/v1/paper/equity",
             "/api/v1/watchlist",
             "/api/v1/watchlist/{id}",
             "/api/v1/alerts",
@@ -84,7 +86,7 @@ class OpenApiDocsTest {
             "/api/v1/alerts/{id}/pause",
             "/api/v1/alerts/{id}/resume");
 
-    private static final int OPERATIONS = 59;
+    private static final int OPERATIONS = 61;
 
     @Autowired
     private MockMvc mvc;

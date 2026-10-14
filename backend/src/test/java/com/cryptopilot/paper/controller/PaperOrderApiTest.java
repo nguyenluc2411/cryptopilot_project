@@ -28,6 +28,7 @@ import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
+import com.cryptopilot.paper.service.PaperPnlService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -111,6 +112,9 @@ class PaperOrderApiTest {
     @Autowired
     private PaperMatchingService matching;
 
+    @Autowired
+    private PaperPnlService pnl;
+
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
     private UUID pair;
@@ -138,7 +142,8 @@ class PaperOrderApiTest {
                     "paper_order_list",
                     "paper_ledger_entry",
                     "paper_transfer",
-                    "paper_balance")) {
+                    "paper_balance",
+                    "paper_equity_snapshot")) {
                 sql.sql("delete from " + table + " where account_id = " + account)
                         .param(trader)
                         .update();
@@ -793,6 +798,72 @@ class PaperOrderApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.pending").value("MSG01"))
                 .andExpect(jsonPath("$.errors['working.type']").value("MSG15"));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Cost and PnL (TR-13)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * TR-13: a buy's cost is what it paid, the fee taken in the coin included; a sale takes away its share of the cost,
+     * so what is left keeps its average cost; the PnL is the value at the last price less that cost.
+     */
+    @Test
+    void TR13_aBuyAndASale_setTheCost_andThePnlIsTheValueLessIt() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        price("110");
+        place(trader, market("SELL", "\"quantity\": 1")).andExpect(status().isCreated());
+
+        // 2 bought for 200, 0.002 of it the fee: 1.998 held. 1 sold: 0.998 left, which keeps 0.998 / 1.998 of 200.
+        String body = as(trader, get(PAPER + "/spot/pnl"), null)
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        List<Map<String, Object>> rows = JsonPath.read(body, "$.coins[?(@.asset == '" + base() + "')]");
+        assertThat(rows).hasSize(1);
+        Map<String, Object> row = rows.get(0);
+        assertThat(new BigDecimal(String.valueOf(row.get("quantity")))).isEqualByComparingTo("0.998");
+        assertThat(new BigDecimal(String.valueOf(row.get("costBasis")))).isEqualByComparingTo("99.8998999");
+        assertThat(new BigDecimal(String.valueOf(row.get("averageCost"))))
+                .isCloseTo(new BigDecimal("100.1001001"), within(new BigDecimal("0.0000001")));
+        assertThat(new BigDecimal(String.valueOf(row.get("value")))).isEqualByComparingTo("109.78");
+        assertThat(new BigDecimal(String.valueOf(row.get("unrealizedPnl")))).isEqualByComparingTo("9.8801001");
+        assertThat(new BigDecimal(String.valueOf(row.get("unrealizedPnlPercent"))))
+                .isEqualByComparingTo("9.89");
+        // No price of the granted BTC, ETH and BNB was known at the opening: their cost is not known.
+        assertThat(JsonPath.<Boolean>read(body, "$.complete")).isFalse();
+    }
+
+    /**
+     * TR-13: the account's worth is snapshotted when it opens; today's PnL is the worth now less that snapshot, and a
+     * second snapshot of the same day is never taken.
+     */
+    @Test
+    void TR13_todaysPnl_isTheWorthNowLessTheSnapshotOfTheDay() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+
+        // Opened with 10,000 USDT in Spot and 5,000 in Futures, the other coins without a price: 15,000.
+        // Now 9,800 USDT and 1.998 of the coin at 100: 14,999.8, the fee of 0.002 × 100 less.
+        as(trader, get(PAPER + "/equity").param("days", "7"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalEquity").value(14999.8))
+                .andExpect(jsonPath("$.todayPnl").value(-0.2))
+                .andExpect(jsonPath("$.history.length()").value(1))
+                .andExpect(jsonPath("$.history[0].totalEquity").value(15000.0));
+
+        pnl.snapshotAll();
+
+        assertThat(sql.sql("""
+                        select count(*) from paper_equity_snapshot s join paper_account a on a.account_id = s.account_id
+                         where a.user_id = ?""").param(trader).query(Long.class).single()).isEqualTo(1L);
+        as(trader, get(PAPER + "/equity").param("days", "0"), null)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.days").value("MSG01"));
     }
 
     // ------------------------------------------------------------------------------------------
