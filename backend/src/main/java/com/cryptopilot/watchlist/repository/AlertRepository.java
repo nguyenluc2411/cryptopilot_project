@@ -1,7 +1,10 @@
 package com.cryptopilot.watchlist.repository;
 
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.watchlist.entity.Alert;
+import com.cryptopilot.watchlist.model.IndicatorAlert;
 import com.cryptopilot.watchlist.model.PriceAlertRow;
+import com.cryptopilot.watchlist.model.enums.AlertIndicator;
 import com.cryptopilot.watchlist.model.enums.AlertStatus;
 import com.cryptopilot.watchlist.model.enums.AlertType;
 import java.math.BigDecimal;
@@ -65,6 +68,40 @@ public interface AlertRepository extends Repository<Alert, UUID> {
             + " and a.type = com.cryptopilot.watchlist.model.enums.AlertType.PRICE")
     Optional<PriceAlertRow> findActivePriceAlert(@Param("alertId") UUID alertId);
 
+    /**
+     * The ACTIVE INDICATOR alerts of these indicators on one candle series: what a closed candle of the series is
+     * evaluated against (NSF-06).
+     */
+    @Transactional(readOnly = true)
+    @Query("select new com.cryptopilot.watchlist.model.IndicatorAlert(a.id, a.userId, a.watchlistId, w.pairId,"
+            + " a.market, a.indicator, a.timeframe, a.condition, a.threshold, a.triggerMode, a.cooldownMinutes,"
+            + " a.expiresAt, a.notifyInApp, a.notifyEmail, a.notifyPush, a.triggerCount, a.version)"
+            + " from Alert a join Watchlist w on w.id = a.watchlistId"
+            + " where a.status = com.cryptopilot.watchlist.model.enums.AlertStatus.ACTIVE"
+            + " and a.type = com.cryptopilot.watchlist.model.enums.AlertType.INDICATOR"
+            + " and w.pairId = :pairId and a.market = :market and a.timeframe = :timeframe"
+            + " and a.indicator in :indicators")
+    List<IndicatorAlert> findActiveIndicatorAlerts(
+            @Param("pairId") UUID pairId,
+            @Param("market") MarketType market,
+            @Param("timeframe") String timeframe,
+            @Param("indicators") Collection<AlertIndicator> indicators);
+
+    /** The ACTIVE FUNDING_RATE alerts of every Trader, with the pair of their watchlist row (NSF-06). */
+    @Transactional(readOnly = true)
+    @Query("select new com.cryptopilot.watchlist.model.IndicatorAlert(a.id, a.userId, a.watchlistId, w.pairId,"
+            + " a.market, a.indicator, a.timeframe, a.condition, a.threshold, a.triggerMode, a.cooldownMinutes,"
+            + " a.expiresAt, a.notifyInApp, a.notifyEmail, a.notifyPush, a.triggerCount, a.version)"
+            + " from Alert a join Watchlist w on w.id = a.watchlistId"
+            + " where a.status = com.cryptopilot.watchlist.model.enums.AlertStatus.ACTIVE"
+            + " and a.type = com.cryptopilot.watchlist.model.enums.AlertType.INDICATOR"
+            + " and a.indicator = com.cryptopilot.watchlist.model.enums.AlertIndicator.FUNDING_RATE")
+    List<IndicatorAlert> findActiveFundingRateAlerts();
+
+    /** How many ACTIVE alerts of these indicators there are, all Traders together. */
+    @Transactional(readOnly = true)
+    long countByStatusAndIndicatorIn(AlertStatus status, Collection<AlertIndicator> indicators);
+
     /** How many alerts are in this status and of this type, all Traders together. */
     @Transactional(readOnly = true)
     long countByStatusAndType(AlertStatus status, AlertType type);
@@ -113,6 +150,83 @@ public interface AlertRepository extends Repository<Alert, UUID> {
                            or last_bar_open_time is null
                            or last_bar_open_time <> :bar)""", nativeQuery = true)
     int recordTrigger(
+            @Param("alertId") UUID alertId,
+            @Param("version") long version,
+            @Param("value") BigDecimal value,
+            @Param("bar") Instant barOpenTime,
+            @Param("now") Instant now);
+
+    /**
+     * Records one trigger of an INDICATOR alert on a closed candle, if the row still allows it, and answers whether it
+     * did. The same conditions as {@link #recordTrigger}, with the candle in place of the 1h bar: whatever the trigger
+     * mode, an alert fires at most once per candle and never on a candle older than the one it last fired on, so the
+     * same candle delivered twice, or read by two evaluations at once, records one trigger.
+     *
+     * <p>Rule: NSF-06, BR-19; SRS 3.4.4; D-89.
+     *
+     * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly, ch. 7 ("Preventing
+     * Lost Updates": an atomic conditional update, compare-and-set).
+     *
+     * @return 1 when this call recorded the trigger, 0 when the row did not allow it
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = """
+                    update alert
+                    set trigger_count = trigger_count + 1,
+                        last_triggered_at = :now,
+                        last_evaluated_value = :value,
+                        last_bar_open_time = :bar,
+                        alert_status = case when trigger_mode = 'ONCE' then 'TRIGGERED' else alert_status end,
+                        version = version + 1,
+                        updated_at = greatest(updated_at, :now)
+                    where alert_id = :alertId
+                      and version = :version
+                      and alert_status = 'ACTIVE'
+                      and alert_type = 'INDICATOR'
+                      and (expires_at is null or expires_at > :now)
+                      and (trigger_mode <> 'EVERY_TIME'
+                           or last_triggered_at is null
+                           or last_triggered_at + make_interval(mins => coalesce(cooldown_minutes, 0)) <= :now)
+                      and (last_bar_open_time is null or last_bar_open_time < :bar)""", nativeQuery = true)
+    int recordIndicatorTrigger(
+            @Param("alertId") UUID alertId,
+            @Param("version") long version,
+            @Param("value") BigDecimal value,
+            @Param("bar") Instant barOpenTime,
+            @Param("now") Instant now);
+
+    /**
+     * Records one trigger of a FUNDING_RATE alert, if the row still allows it, and answers whether it did. The same
+     * conditions as {@link #recordTrigger} for a PRICE alert, on an INDICATOR row: ONCE_PER_BAR is refused within the
+     * 1h candle it last fired on (A-40), EVERY_TIME before its cooldown has passed.
+     *
+     * <p>Rule: NSF-06, BR-19; SRS 3.4.4; A-40; D-89.
+     *
+     * @return 1 when this call recorded the trigger, 0 when the row did not allow it
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = """
+                    update alert
+                    set trigger_count = trigger_count + 1,
+                        last_triggered_at = :now,
+                        last_evaluated_value = :value,
+                        last_bar_open_time = :bar,
+                        alert_status = case when trigger_mode = 'ONCE' then 'TRIGGERED' else alert_status end,
+                        version = version + 1,
+                        updated_at = greatest(updated_at, :now)
+                    where alert_id = :alertId
+                      and version = :version
+                      and alert_status = 'ACTIVE'
+                      and alert_type = 'INDICATOR'
+                      and indicator_name = 'FUNDING_RATE'
+                      and (expires_at is null or expires_at > :now)
+                      and (trigger_mode <> 'EVERY_TIME'
+                           or last_triggered_at is null
+                           or last_triggered_at + make_interval(mins => coalesce(cooldown_minutes, 0)) <= :now)
+                      and (trigger_mode <> 'ONCE_PER_BAR'
+                           or last_bar_open_time is null
+                           or last_bar_open_time <> :bar)""", nativeQuery = true)
+    int recordFundingRateTrigger(
             @Param("alertId") UUID alertId,
             @Param("version") long version,
             @Param("value") BigDecimal value,

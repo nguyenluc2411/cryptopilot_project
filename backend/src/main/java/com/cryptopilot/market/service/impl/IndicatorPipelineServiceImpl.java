@@ -3,6 +3,8 @@ package com.cryptopilot.market.service.impl;
 import com.cryptopilot.market.calculator.SetupComponents;
 import com.cryptopilot.market.calculator.SwingSupportResistance;
 import com.cryptopilot.market.event.CandleClosed;
+import com.cryptopilot.market.event.IndicatorLevels;
+import com.cryptopilot.market.event.IndicatorsComputed;
 import com.cryptopilot.market.model.ComponentInputs;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.DerivativesInputs;
@@ -24,6 +26,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,8 +34,10 @@ import org.springframework.transaction.annotation.Transactional;
  * Builds the {@code technical_indicator} row of a closed candle from what T-025, T-026 and T-027 compute: the
  * indicators from {@link IndicatorService}, the nearest support and resistance over the latest 200 stored candles,
  * and the component scores. Indicators and levels are stored rounded half-up to 10 places (TECHNICAL_DESIGN 5.4).
+ * Each stored row is announced as {@link IndicatorsComputed}, with the stored values of the candle before it, for the
+ * indicator alerts (NSF-06).
  *
- * <p>Rule: NSF-05; BR-12, BR-13, BR-14; TECHNICAL_DESIGN 5.4, 7.2–7.4; D-53 (rule 3).
+ * <p>Rule: NSF-05, NSF-06; BR-12, BR-13, BR-14; TECHNICAL_DESIGN 5.4, 7.2–7.4, 7.9; D-53 (rule 3).
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -48,6 +53,7 @@ public class IndicatorPipelineServiceImpl implements IndicatorPipelineService {
     private final TechnicalIndicatorRepository store;
     private final MarketDataQueryRepository marketData;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional
@@ -113,7 +119,26 @@ public class IndicatorPipelineServiceImpl implements IndicatorPipelineService {
                 components,
                 clock.instant());
         store.upsert(row);
+        IndicatorLevels previous = store.at(
+                        candle.pairId(),
+                        candle.market(),
+                        candle.timeframe(),
+                        candle.openTime().minus(interval))
+                .map(IndicatorPipelineServiceImpl::levels)
+                .orElse(IndicatorLevels.NONE);
+        events.publishEvent(new IndicatorsComputed(
+                candle.pairId(),
+                candle.symbol(),
+                candle.market(),
+                candle.timeframe(),
+                candle.openTime(),
+                levels(row),
+                previous));
         return Optional.of(row);
+    }
+
+    private static IndicatorLevels levels(StoredIndicators row) {
+        return new IndicatorLevels(row.rsi14(), row.macdHistogram(), row.ema20(), row.ema50());
     }
 
     private static BigDecimal scaled(Double value) {

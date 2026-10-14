@@ -6,6 +6,8 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.watchlist.config.AlertEngineProperties;
 import com.cryptopilot.watchlist.model.AlertsChanged;
+import com.cryptopilot.watchlist.model.IndicatorAlert;
+import com.cryptopilot.watchlist.model.IndicatorAlertHit;
 import com.cryptopilot.watchlist.model.PriceAlert;
 import com.cryptopilot.watchlist.model.PriceAlertHit;
 import com.cryptopilot.watchlist.model.enums.ConditionOperator;
@@ -259,6 +261,26 @@ class AlertEngineConcurrencyTest {
         @Override
         public boolean tryTrigger(PriceAlertHit hit) {
             throw new AssertionError("the partitions do not run in this test");
+        }
+
+        @Override
+        public List<IndicatorAlert> activeIndicatorAlerts(UUID pairId, MarketType market, String timeframe) {
+            throw new AssertionError("indicator alerts are not part of this test");
+        }
+
+        @Override
+        public boolean tryTriggerIndicator(IndicatorAlertHit hit) {
+            throw new AssertionError("indicator alerts are not part of this test");
+        }
+
+        @Override
+        public List<IndicatorAlert> activeFundingRateAlerts() {
+            throw new AssertionError("indicator alerts are not part of this test");
+        }
+
+        @Override
+        public boolean tryTriggerFundingRate(IndicatorAlertHit hit) {
+            throw new AssertionError("indicator alerts are not part of this test");
         }
 
         private static MarketType other(MarketType market) {

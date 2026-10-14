@@ -104,6 +104,17 @@ public class TechnicalIndicatorRepository {
                 .flatMap(value -> value);
     }
 
+    /** The row of one candle, or empty when it is not stored. */
+    public Optional<StoredIndicators> at(UUID pairId, MarketType market, String timeframe, Instant openTime) {
+        return sql.sql("select " + COLUMNS + """
+
+                          from technical_indicator
+                         where pair_id = ? and market_type = ? and timeframe = ? and open_time = ?""")
+                .params(pairId, market.name(), timeframe, Timestamp.from(openTime))
+                .query((row, index) -> read(row))
+                .optional();
+    }
+
     private static StoredIndicators read(ResultSet row) throws SQLException {
         MarketType market = MarketType.valueOf(row.getString("market_type"));
         ComponentScores components = new ComponentScores(

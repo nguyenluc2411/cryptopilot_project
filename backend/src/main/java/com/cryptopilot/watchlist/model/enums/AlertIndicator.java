@@ -16,7 +16,7 @@ public enum AlertIndicator {
     /** EMA20 crossing EMA50 on the alert's timeframe: their difference changes sign. */
     EMA_CROSS(false, true),
 
-    /** The funding rate from the mark price stream. Futures only; read on 1h, set by the server (A-40). */
+    /** The predicted funding rate from the mark price stream, its level in percent (Q-30). Futures only; 1h (A-40). */
     FUNDING_RATE(true, false),
 
     /** The change of open interest over one hour, in percent. Futures only; read on 1h, set by the server (A-40). */
