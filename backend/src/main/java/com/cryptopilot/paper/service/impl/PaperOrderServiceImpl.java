@@ -74,7 +74,9 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Every change runs under the Trader's paper lock (the scope of {@link PaperAccountServiceImpl}), so a placement,
  * a cancel and a fill of the matching engine never interleave on the same account, and an idempotency key is looked
  * up and written without a race. Every balance change goes through {@link PaperWallets}; an execution is settled by
- * {@link SpotSettlement}. A refusal of any kind rolls the whole placement back, so a refused order leaves no row.
+ * {@link SpotSettlement}. A refusal of any kind rolls the whole placement back, so a refused order leaves no row. Each
+ * order placed or cancelled is noted for the Trader's order queue ({@link PaperUserFeed}); a replayed key changes
+ * nothing and pushes nothing.
  *
  * <h2>Prices and quantities</h2>
  *
@@ -89,7 +91,7 @@ import org.springframework.transaction.annotation.Transactional;
  * single level, or for a pair without the trading streams the current last price, at which the whole order executes.
  * None is ever executed at a price that is not current (NSF-03).
  *
- * <p>Rule: TR-02, TR-04, TR-06; BR-21, BR-23, BR-30; NSF-03; Q-T7.
+ * <p>Rule: TR-02, TR-04, TR-06, TR-08; BR-21, BR-23, BR-30; NSF-03; Q-T7.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -114,6 +116,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     private final UserLock lock;
     private final MarketApi market;
     private final ApplicationEventPublisher events;
+    private final PaperUserFeed feed;
     private final Clock clock;
 
     @Override
@@ -140,6 +143,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         PaperOrder order = request.type() == OrderType.MARKET
                 ? placeMarket(account, pair, coins, terms, key, book)
                 : placeLimit(account, pair, coins, terms, key, book);
+        feed.order(account, order);
         log.debug(
                 "Paper order {} {} {} {} placed: {}",
                 order.getId(),
@@ -189,6 +193,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     private void cancelWorking(PaperAccount account, PaperOrder order, PairCoins coins, Instant at) {
         wallets.unlock(account, WalletType.SPOT, lockedCoin(order, coins), order.lockedAmount());
         order.cancel(at);
+        feed.order(account, order);
         events.publishEvent(new PaperOrderCanceled(order.getId()));
     }
 
@@ -539,50 +544,14 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     }
 
     private static OrderResponse toResponse(PaperOrder order, String symbol) {
-        return new OrderResponse(
-                order.getId(),
-                order.getClientOrderId(),
-                order.getPairId(),
-                symbol,
-                order.getMarketType(),
-                order.getSide(),
-                order.getOrderType(),
-                order.getTimeInForce(),
-                order.getLimitPrice(),
-                order.getOrigQuantity(),
-                amountOrNull(order.getQuoteOrderAmount()),
-                order.getExecutedQuantity(),
-                Rounding.toAmount(order.getCumQuoteAmount()),
-                order.getAvgPrice(),
-                order.getOrderStatus(),
-                order.getStatusReason(),
-                order.getCreatedAt(),
-                order.getClosedAt());
+        return PaperResponses.order(order, symbol);
     }
 
     private static FillResponse toResponse(PaperFill fill, Map<UUID, String> symbols, Map<UUID, String> assets) {
         String asset = Objects.requireNonNull(
                 assets.get(fill.getFeeCoinId()),
                 () -> "fee coin " + fill.getFeeCoinId() + " of fill " + fill.getId() + " is not stored");
-        return new FillResponse(
-                fill.getId(),
-                fill.getOrderId(),
-                fill.getPairId(),
-                symbolOf(symbols, fill.getPairId()),
-                fill.getMarketType(),
-                fill.getSide(),
-                fill.getFillPrice(),
-                fill.getFillQuantity(),
-                Rounding.toAmount(fill.getQuoteAmount()),
-                Rounding.toAmount(fill.getFeeAmount()),
-                asset,
-                fill.getLiquidity(),
-                fill.getFillSource(),
-                fill.getTradedAt());
-    }
-
-    private static BigDecimal amountOrNull(BigDecimal amount) {
-        return amount == null ? null : Rounding.toAmount(amount);
+        return PaperResponses.fill(fill, symbolOf(symbols, fill.getPairId()), asset);
     }
 
     /**

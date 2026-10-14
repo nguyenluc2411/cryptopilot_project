@@ -41,8 +41,9 @@ import org.springframework.transaction.annotation.Transactional;
  * </ul>
  *
  * <p>Runs inside the caller's transaction, which holds the Trader's paper lock and has checked that the order works.
+ * The fill and the order it changed are noted for the Trader's queues ({@link PaperUserFeed}).
  *
- * <p>Rule: TR-02, TR-04; BR-21 (Spot owns what it sells).
+ * <p>Rule: TR-02, TR-04, TR-08; BR-21 (Spot owns what it sells).
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -51,6 +52,7 @@ public class SpotSettlement {
     private final PaperWallets wallets;
     private final PaperFillRepository fills;
     private final PaperOrderProperties fees;
+    private final PaperUserFeed feed;
 
     /**
      * Executes {@code quantity} of the order at {@code price} and records the fill.
@@ -105,6 +107,9 @@ public class SpotSettlement {
             wallets.debit(account, WalletType.SPOT, received, fee, LedgerEntryType.FEE, ref);
         }
         order.fill(quantity, price, quoteAmount, tradedAt);
-        return fills.save(fill);
+        PaperFill saved = fills.save(fill);
+        feed.fill(account, saved);
+        feed.order(account, order);
+        return saved;
     }
 }

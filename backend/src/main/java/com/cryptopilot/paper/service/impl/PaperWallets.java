@@ -30,9 +30,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * total and writes no entry.
  *
  * <p>Runs inside the caller's transaction, which holds the account's paper lock. A coin is passed with its symbol, so
- * a refusal names it to the Trader as {@code USDT}, never by its key.
+ * a refusal names it to the Trader as {@code USDT}, never by its key. Each balance that moves is noted for the
+ * Trader's balance queue ({@link PaperUserFeed}).
  *
- * <p>Rule: TR-04.
+ * <p>Rule: TR-04, TR-08.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -43,6 +44,7 @@ public class PaperWallets {
 
     private final PaperBalanceRepository balances;
     private final PaperLedgerEntryRepository ledger;
+    private final PaperUserFeed feed;
 
     /**
      * The opening grant of a coin (Q-T5): a new balance holding {@code amount}, written without looking for one first,
@@ -53,6 +55,7 @@ public class PaperWallets {
         PaperBalance balance = remember(balances.save(PaperBalance.empty(account.getId(), wallet, coin.coinId())));
         balance.credit(amount);
         record(balance, LedgerEntryType.INITIAL_GRANT, amount, ref);
+        feed.balance(account, balance, coin.symbol());
         return balance;
     }
 
@@ -69,6 +72,7 @@ public class PaperWallets {
                 .orElseGet(() -> remember(balances.save(PaperBalance.empty(account.getId(), wallet, coin.coinId()))));
         balance.credit(amount);
         record(balance, type, amount, ref);
+        feed.balance(account, balance, coin.symbol());
         return balance;
     }
 
@@ -92,6 +96,7 @@ public class PaperWallets {
                 find(account, wallet, coin).orElseGet(() -> PaperBalance.empty(account.getId(), wallet, coin.coinId()));
         balance.debit(amount, coin.symbol());
         record(balance, type, amount.negate(), ref);
+        feed.balance(account, balance, coin.symbol());
         return balance;
     }
 
@@ -107,6 +112,7 @@ public class PaperWallets {
         PaperBalance balance =
                 find(account, wallet, coin).orElseGet(() -> PaperBalance.empty(account.getId(), wallet, coin.coinId()));
         balance.lock(amount, coin.symbol());
+        feed.balance(account, balance, coin.symbol());
         return balance;
     }
 
@@ -115,6 +121,7 @@ public class PaperWallets {
     public PaperBalance unlock(PaperAccount account, WalletType wallet, CoinListing coin, BigDecimal amount) {
         PaperBalance balance = held(account, wallet, coin);
         balance.unlock(amount);
+        feed.balance(account, balance, coin.symbol());
         return balance;
     }
 
@@ -130,6 +137,7 @@ public class PaperWallets {
         PaperBalance balance = held(account, wallet, coin);
         balance.spendLocked(amount);
         record(balance, type, amount.negate(), ref);
+        feed.balance(account, balance, coin.symbol());
         return balance;
     }
 
