@@ -19,7 +19,7 @@ import java.time.Instant;
  * @param indicator the indicator of an INDICATOR alert
  * @param timeframe 15m, 1h, 4h or 1d for RSI_14, MACD_CROSS and EMA_CROSS
  * @param condition how the value is compared with the threshold
- * @param threshold the target price, the RSI level, the funding rate or the open interest change
+ * @param threshold the target price, the RSI level, the funding rate in percent (Q-30) or the open interest change
  * @param triggerMode ONCE, ONCE_PER_BAR or EVERY_TIME
  * @param cooldownMinutes the least time between two firings, at least one minute
  * @param notifyEmail deliver by email as well as in the app

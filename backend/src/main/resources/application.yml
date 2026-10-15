@@ -17,6 +17,12 @@ spring:
       timeout: 2s
   application:
     name: cryptopilot
+  datasource:
+    hikari:
+      # D-93: an indicator alert trigger holds a second connection while its candle partition still holds the
+      # NSF-05 one. 20 = 2 x 4 candle partitions + 2 alert partitions + 10 for web requests and schedulers;
+      # well under PostgreSQL's default max_connections of 100.
+      maximum-pool-size: ${DB_POOL_MAX:20}
   threads:
     virtual:
       enabled: true

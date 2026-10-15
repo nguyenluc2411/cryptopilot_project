@@ -7,6 +7,8 @@ import com.cryptopilot.market.calculator.SetupComponents;
 import com.cryptopilot.market.calculator.SwingSupportResistance;
 import com.cryptopilot.market.client.Kline;
 import com.cryptopilot.market.event.CandleClosed;
+import com.cryptopilot.market.event.IndicatorLevels;
+import com.cryptopilot.market.event.IndicatorsComputed;
 import com.cryptopilot.market.model.ComponentInputs;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.IndicatorSnapshot;
@@ -32,6 +34,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 
 /**
  * NSF-05 over stored candles on TimescaleDB: each closed candle gets one {@code technical_indicator} row holding the
@@ -42,6 +46,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
+@RecordApplicationEvents
 class IndicatorPipelineServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-09-25T00:00:00Z");
@@ -65,6 +70,9 @@ class IndicatorPipelineServiceTest {
 
     @Autowired
     private JdbcClient sql;
+
+    @Autowired
+    private ApplicationEvents published;
 
     private MarketTestData data;
     private UUID pair;
@@ -262,6 +270,79 @@ class IndicatorPipelineServiceTest {
         events.publishEvent(closed(MarketType.SPOT, series.get(39)));
 
         assertThat(rows()).isEqualTo(1);
+    }
+
+    /** NSF-06 reads the alerts' values from the event: this candle's row and the row of the candle before it. */
+    @Test
+    void NSF06_aStoredRow_isPublished_withTheValuesOfThePreviousCandle() {
+        List<Kline> series = series(60);
+        candles.insertAll(pair, MarketType.SPOT, "1h", series);
+        StoredIndicators before =
+                pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(58))).orElseThrow();
+
+        StoredIndicators row =
+                pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(59))).orElseThrow();
+
+        IndicatorsComputed event = published.stream(IndicatorsComputed.class)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+        assertThat(event.pairId()).isEqualTo(pair);
+        assertThat(event.symbol()).isEqualTo("BTCUSDT");
+        assertThat(event.market()).isEqualTo(MarketType.SPOT);
+        assertThat(event.timeframe()).isEqualTo("1h");
+        assertThat(event.openTime()).isEqualTo(series.get(59).openTime());
+        assertThat(event.current())
+                .isEqualTo(new IndicatorLevels(row.rsi14(), row.macdHistogram(), row.ema20(), row.ema50()));
+        assertThat(event.previous())
+                .isEqualTo(new IndicatorLevels(before.rsi14(), before.macdHistogram(), before.ema20(), before.ema50()));
+        assertThat(event.current().ema50()).isNotNull();
+        assertThat(event.current().macdHistogram()).isNotNull();
+    }
+
+    @Test
+    void NSF06_theFirstRowOfASeries_isPublishedWithoutPreviousValues() {
+        List<Kline> series = series(40);
+        candles.insertAll(pair, MarketType.SPOT, "1h", series);
+
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(39)));
+
+        assertThat(published.stream(IndicatorsComputed.class))
+                .singleElement()
+                .satisfies(event -> assertThat(event.previous()).isEqualTo(IndicatorLevels.NONE));
+    }
+
+    /** The previous values are the row right before, never an older one across a gap. */
+    @Test
+    void NSF06_aMissingRowRightBefore_publishesNoPreviousValues_evenWithAnOlderRow() {
+        List<Kline> series = series(40);
+        candles.insertAll(pair, MarketType.SPOT, "1h", series);
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(37)));
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(38)));
+        sql.sql("delete from technical_indicator where pair_id = ? and open_time = ?")
+                .params(pair, Timestamp.from(series.get(38).openTime()))
+                .update();
+        published.clear();
+
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(39)));
+
+        assertThat(store.at(pair, MarketType.SPOT, "1h", series.get(37).openTime()))
+                .isPresent();
+        assertThat(published.stream(IndicatorsComputed.class))
+                .singleElement()
+                .satisfies(event -> assertThat(event.previous()).isEqualTo(IndicatorLevels.NONE));
+    }
+
+    /** No row, no event: an out-of-order candle reaches no alert. */
+    @Test
+    void NSF06_aCandleWithoutARow_publishesNothing() {
+        List<Kline> series = series(40);
+        candles.insertAll(pair, MarketType.SPOT, "1h", series);
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(39)));
+        published.clear();
+
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(35)));
+
+        assertThat(published.stream(IndicatorsComputed.class)).isEmpty();
     }
 
     @Test

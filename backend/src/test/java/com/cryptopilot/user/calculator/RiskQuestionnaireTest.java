@@ -19,15 +19,15 @@ import org.junit.jupiter.params.provider.CsvSource;
  * The risk questionnaire: its shape (SRS 3.2.5), the level of each group score on both sides of each threshold, the
  * lower-level rule, and the answers it refuses.
  *
- * <p>Rule: BR-66; SRS 3.2.5; D-53.
+ * <p>Rule: BR-67; SRS 3.2.5; D-53.
  */
 class RiskQuestionnaireTest {
 
     @Test
-    void BR66_theQuestionnaire_hasFiveToSevenQuestionsInTheTwoGroups() {
+    void BR67_theQuestionnaire_hasSixQuestionsInTheTwoGroups() {
         List<RiskQuestion> questions = RiskQuestionnaire.questions();
 
-        assertThat(questions).hasSizeBetween(5, 7);
+        assertThat(questions).hasSize(6);
         assertThat(questions.stream().filter(q -> q.group() == QuestionGroup.CAPACITY))
                 .hasSize(3);
         assertThat(questions.stream().filter(q -> q.group() == QuestionGroup.ATTITUDE))
@@ -41,7 +41,7 @@ class RiskQuestionnaireTest {
     /** Group score to level: 3–4 low, 5–7 medium, 8–9 high, checked on each side of both thresholds. */
     @ParameterizedTest(name = "{0} points → {1}")
     @CsvSource({"3, CONSERVATIVE", "4, CONSERVATIVE", "5, BALANCED", "7, BALANCED", "8, AGGRESSIVE", "9, AGGRESSIVE"})
-    void BR66_aGroupScore_givesTheLevelOfItsBand(int score, RiskProfile expected) {
+    void BR67_aGroupScore_givesTheLevelOfItsBand(int score, RiskProfile expected) {
         assertThat(RiskQuestionnaire.profileOf(score)).isEqualTo(expected);
     }
 
@@ -56,7 +56,7 @@ class RiskQuestionnaireTest {
         "3, 2, BALANCED",
         "2, 3, BALANCED"
     })
-    void BR66_theSuggestion_isTheLowerOfTheTwoGroupLevels(
+    void BR67_theSuggestion_isTheLowerOfTheTwoGroupLevels(
             int capacityPoints, int attitudePoints, RiskProfile expected) {
         QuestionnaireResult result = RiskQuestionnaire.score(answers(capacityPoints, attitudePoints));
 
@@ -67,7 +67,7 @@ class RiskQuestionnaireTest {
 
     /** One answer moves a group across a threshold: 4 is low, 5 is medium; 7 is medium, 8 is high. */
     @Test
-    void BR66_oneAnswerAcrossAThreshold_changesTheSuggestion() {
+    void BR67_oneAnswerAcrossAThreshold_changesTheSuggestion() {
         Map<String, String> low = answers(2, 2);
         setGroup(low, QuestionGroup.CAPACITY, 1, 1, 2);
         assertThat(RiskQuestionnaire.score(low).suggested()).isEqualTo(RiskProfile.CONSERVATIVE);
@@ -82,7 +82,7 @@ class RiskQuestionnaireTest {
     }
 
     @Test
-    void BR66_anUnansweredQuestion_isRefused() {
+    void BR67_anUnansweredQuestion_isRefused() {
         Map<String, String> answers = answers(2, 2);
         answers.remove(RiskQuestionnaire.questions().get(0).code());
 
@@ -92,7 +92,7 @@ class RiskQuestionnaireTest {
     }
 
     @Test
-    void BR66_anAnswerThatIsNotTheQuestions_isRefused() {
+    void BR67_anAnswerThatIsNotTheQuestions_isRefused() {
         Map<String, String> answers = answers(2, 2);
         answers.put(RiskQuestionnaire.questions().get(0).code(), "SOMETHING_ELSE");
 
@@ -102,7 +102,7 @@ class RiskQuestionnaireTest {
     }
 
     @Test
-    void BR66_aKeyThatIsNoQuestion_isRefused() {
+    void BR67_aKeyThatIsNoQuestion_isRefused() {
         Map<String, String> answers = answers(2, 2);
         answers.put("FAVOURITE_COIN", "BTC");
 

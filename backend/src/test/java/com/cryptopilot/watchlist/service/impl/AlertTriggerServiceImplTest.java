@@ -203,6 +203,18 @@ class AlertTriggerServiceImplTest {
         UUID futures = data.priceAlert(trader, row, "FUTURES", "CROSS_BELOW", "90", "ONCE", null, "ACTIVE", null);
         UUID paused = data.priceAlert(trader, row, "SPOT", "CROSS_ABOVE", "100", "ONCE", null, "PAUSED", null);
         UUID indicator = data.indicatorAlert(trader, row);
+        data.indicatorAlert(
+                trader,
+                row,
+                "FUTURES",
+                "OPEN_INTEREST_CHANGE",
+                "1h",
+                "GREATER_THAN",
+                "5",
+                "ONCE",
+                null,
+                "ACTIVE",
+                null);
 
         List<PriceAlert> mine = triggers.activePriceAlerts().stream()
                 .filter(alert -> alert.userId().equals(trader))

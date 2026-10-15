@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
@@ -506,30 +507,31 @@ class MatchingReplayTest {
     }
 
     private void awaitWatermark(Instant openTime) {
-        await(
+        awaitUntil(
                 () -> Optional.of(openTime).equals(matching.watermark(MarketType.FUTURES, pair)),
                 "watermark " + openTime);
     }
 
     private void awaitFill(UUID planId) {
-        await(() -> fills.containsKey(planId), "fill of " + planId);
+        awaitUntil(() -> fills.containsKey(planId), "fill of " + planId);
     }
 
     private void awaitIdle() {
-        await(feed::isIdle, "replays done");
+        awaitUntil(feed::isIdle, "replays done");
     }
 
-    private static void await(Supplier<Boolean> condition, String what) {
-        Instant deadline = Instant.now().plusSeconds(20);
-        while (!condition.get()) {
-            assertThat(Instant.now()).as("%s in time", what).isBefore(deadline);
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException(interrupted);
-            }
-        }
+    /**
+     * Waits for the replay threads with a bound, polling the condition rather than sleeping in a loop.
+     *
+     * <p>Reference: Freeman, S., &amp; Pryce, N. (2009). <i>Growing Object-Oriented Software, Guided by Tests</i>.
+     * Addison-Wesley, ch. 27 (testing asynchronous code); Luo, Q., Hariri, F., Eloussi, L., &amp; Marinov, D. (2014).
+     * An Empirical Analysis of Flaky Tests. FSE 2014.
+     */
+    private static void awaitUntil(Supplier<Boolean> condition, String what) {
+        await(what)
+                .atMost(Duration.ofSeconds(20))
+                .pollInterval(Duration.ofMillis(20))
+                .until(condition::get);
     }
 
     /** The {@code i}-th update inside minute {@code m}: the low and high of the minute so far. */

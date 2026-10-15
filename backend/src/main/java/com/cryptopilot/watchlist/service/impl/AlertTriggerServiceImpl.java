@@ -2,14 +2,19 @@ package com.cryptopilot.watchlist.service.impl;
 
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairListing;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.watchlist.event.AlertTriggered;
+import com.cryptopilot.watchlist.model.IndicatorAlert;
+import com.cryptopilot.watchlist.model.IndicatorAlertHit;
 import com.cryptopilot.watchlist.model.PriceAlert;
 import com.cryptopilot.watchlist.model.PriceAlertHit;
 import com.cryptopilot.watchlist.model.PriceAlertRow;
+import com.cryptopilot.watchlist.model.enums.AlertIndicator;
 import com.cryptopilot.watchlist.model.enums.AlertStatus;
 import com.cryptopilot.watchlist.model.enums.AlertType;
 import com.cryptopilot.watchlist.repository.AlertRepository;
 import com.cryptopilot.watchlist.service.AlertTriggerService;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,10 +27,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Loads the ACTIVE PRICE alerts for the engine and records their triggers.
+ * Loads the ACTIVE alerts NSF-06 evaluates and records their triggers: PRICE alerts for the engine, RSI_14,
+ * MACD_CROSS and EMA_CROSS alerts for a closed candle, and FUNDING_RATE alerts.
  *
  * <p>The database is the arbiter of a trigger, not the engine's memory and not a Redis lease: {@link #tryTrigger}
  * runs one conditional update ({@link AlertRepository#recordTrigger}), and only the call that changed the row
@@ -43,6 +50,13 @@ import org.springframework.transaction.annotation.Transactional;
 public class AlertTriggerServiceImpl implements AlertTriggerService {
 
     private static final Logger log = LoggerFactory.getLogger(AlertTriggerServiceImpl.class);
+
+    /** The indicators evaluated on a closed candle. */
+    static final Set<AlertIndicator> CANDLE_INDICATORS =
+            EnumSet.of(AlertIndicator.RSI_14, AlertIndicator.MACD_CROSS, AlertIndicator.EMA_CROSS);
+
+    /** The indicators nothing evaluates yet: OPEN_INTEREST_CHANGE waits on Q-45. */
+    static final Set<AlertIndicator> NOT_EVALUATED = EnumSet.of(AlertIndicator.OPEN_INTEREST_CHANGE);
 
     private final AlertRepository alerts;
     private final MarketApi market;
@@ -71,7 +85,7 @@ public class AlertTriggerServiceImpl implements AlertTriggerService {
     @Override
     @Transactional(readOnly = true)
     public long activeAlertsNotEvaluated() {
-        return alerts.countByStatusAndType(AlertStatus.ACTIVE, AlertType.INDICATOR);
+        return alerts.countByStatusAndIndicatorIn(AlertStatus.ACTIVE, NOT_EVALUATED);
     }
 
     @Override
@@ -97,6 +111,68 @@ public class AlertTriggerServiceImpl implements AlertTriggerService {
                 hit.observedValue(),
                 hit.at(),
                 // The update ran on the version the engine read, so the stored count was this one.
+                alert.triggerCount() + 1,
+                alert.notifyInApp(),
+                alert.notifyEmail(),
+                alert.notifyPush()));
+        return true;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<IndicatorAlert> activeFundingRateAlerts() {
+        return alerts.findActiveFundingRateAlerts();
+    }
+
+    @Override
+    @Transactional
+    public boolean tryTriggerFundingRate(IndicatorAlertHit hit) {
+        IndicatorAlert alert = hit.alert();
+        int changed = alerts.recordFundingRateTrigger(
+                alert.alertId(), alert.version(), hit.observedValue(), hit.barOpenTime(), hit.at());
+        return published(hit, changed);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<IndicatorAlert> activeIndicatorAlerts(UUID pairId, MarketType market, String timeframe) {
+        return alerts.findActiveIndicatorAlerts(pairId, market, timeframe, CANDLE_INDICATORS);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>{@code REQUIRES_NEW}: the caller runs after the commit of the candle's indicators, where a joined transaction
+     * would already be completed and the update never committed.
+     */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean tryTriggerIndicator(IndicatorAlertHit hit) {
+        IndicatorAlert alert = hit.alert();
+        int changed = alerts.recordIndicatorTrigger(
+                alert.alertId(), alert.version(), hit.observedValue(), hit.barOpenTime(), hit.at());
+        return published(hit, changed);
+    }
+
+    /** Publishes {@code AlertTriggered} when the update changed the row; answers whether it did. */
+    private boolean published(IndicatorAlertHit hit, int changed) {
+        IndicatorAlert alert = hit.alert();
+        if (changed == 0) {
+            log.debug("NSF-06 alert {} not triggered: its row no longer allows it", alert.alertId());
+            return false;
+        }
+        events.publishEvent(new AlertTriggered(
+                alert.alertId(),
+                alert.userId(),
+                alert.pairId(),
+                hit.symbol(),
+                alert.market(),
+                AlertType.INDICATOR,
+                alert.indicator(),
+                alert.condition(),
+                alert.threshold(),
+                hit.observedValue(),
+                hit.at(),
                 alert.triggerCount() + 1,
                 alert.notifyInApp(),
                 alert.notifyEmail(),
