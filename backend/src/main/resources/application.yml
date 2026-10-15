@@ -4,7 +4,10 @@ spring:
       # TR-02: every order placement holds a connection for its whole transaction, so the pool is what many Traders
       # placing at once wait on. The default of 10 is too few; a deployment sets DB_POOL_SIZE to what its Postgres
       # (max_connections) can spare. Waiting longer than the timeout answers 5xx rather than hanging.
-      maximum-pool-size: ${DB_POOL_SIZE:30}
+      # D-93: an indicator alert trigger holds a second connection while its candle partition still holds the
+      # NSF-05 one, which alone needs 20 = 2 x 4 candle partitions + 2 alert partitions + 10 for web requests and
+      # schedulers. 30 covers both and stays well under PostgreSQL's default max_connections of 100.
+      maximum-pool-size: ${DB_POOL_MAX:30}
       # Opened on demand above this: an idle instance, or one of the many contexts a test run keeps, holds only these.
       minimum-idle: ${DB_POOL_MIN_IDLE:5}
       connection-timeout: ${DB_POOL_TIMEOUT_MS:10000}
@@ -17,12 +20,6 @@ spring:
       timeout: 2s
   application:
     name: cryptopilot
-  datasource:
-    hikari:
-      # D-93: an indicator alert trigger holds a second connection while its candle partition still holds the
-      # NSF-05 one. 20 = 2 x 4 candle partitions + 2 alert partitions + 10 for web requests and schedulers;
-      # well under PostgreSQL's default max_connections of 100.
-      maximum-pool-size: ${DB_POOL_MAX:20}
   threads:
     virtual:
       enabled: true
