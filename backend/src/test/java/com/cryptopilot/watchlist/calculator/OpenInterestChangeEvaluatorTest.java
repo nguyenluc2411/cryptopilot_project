@@ -54,6 +54,26 @@ class OpenInterestChangeEvaluatorTest {
     }
 
     @Test
+    void Q45_aLevelWithTwelvePlaces_comparesAtItsOwnScale() {
+        store(T.minus(Duration.ofHours(1)), "3000");
+        store(T, "3100");
+        IndicatorReading reading = read(T).orElseThrow();
+
+        assertThat(IndicatorCondition.met(GREATER_THAN, new BigDecimal("3.333333333332"), reading))
+                .as("one unit in the twelfth place below the change")
+                .isTrue();
+        assertThat(IndicatorCondition.met(GREATER_THAN, new BigDecimal("3.333333333333"), reading))
+                .as("equal at twelve places: strict")
+                .isFalse();
+        assertThat(IndicatorCondition.met(
+                        CROSS_ABOVE,
+                        new BigDecimal("3.333333333333"),
+                        new IndicatorReading(BigDecimal.ZERO, reading.current())))
+                .as("reaching the level exactly crosses it")
+                .isTrue();
+    }
+
+    @Test
     void BR20_anIncreaseCrossingTheLevel_fires_andReachingItExactlyIsEnough() {
         series("1000", "1000", "1050", "1100");
 

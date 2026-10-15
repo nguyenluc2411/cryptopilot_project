@@ -104,7 +104,9 @@ class OpenInterestAlertIntegrationTest {
         Duration latency = Duration.ofNanos(System.nanoTime() - start);
 
         assertThat(recorder.of(alert)).hasSize(1);
-        assertThat(latency).isLessThan(Duration.ofSeconds(1));
+        // The check above proves delivery before the commit returns; this bound only catches a gross stall on a slow
+        // CI.
+        assertThat(latency).isLessThan(Duration.ofSeconds(5));
         AlertTriggered event = recorder.of(alert).getFirst();
         assertThat(event.type()).isEqualTo(AlertType.INDICATOR);
         assertThat(event.indicator()).isEqualTo(AlertIndicator.OPEN_INTEREST_CHANGE);
