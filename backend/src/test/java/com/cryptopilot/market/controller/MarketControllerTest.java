@@ -84,7 +84,7 @@ class MarketControllerTest {
     @Test
     void BR07_pairs_listOnlyThePairsEnabledOnTheMarket_inDisplayOrder() throws Exception {
         data.pair("ETHUSDT", true, true, "TRADING", "TRADING", 2);
-        data.pair("BTCUSDT", true, false, "TRADING", null, 1);
+        UUID btc = data.pair("BTCUSDT", true, false, "TRADING", null, 1);
         data.pair("SOLUSDT", false, true, null, "TRADING", 0);
         data.pair("XRPUSDT", false, false, "TRADING", "TRADING", 0);
 
@@ -93,6 +93,7 @@ class MarketControllerTest {
                 .andExpect(jsonPath("$.total").value(2))
                 .andExpect(jsonPath("$.page").value(1))
                 .andExpect(jsonPath("$.pageSize").value(20))
+                .andExpect(jsonPath("$.items[0].pairId").value(btc.toString()))
                 .andExpect(jsonPath("$.items[0].symbol").value("BTCUSDT"))
                 .andExpect(jsonPath("$.items[0].market").value("SPOT"))
                 .andExpect(jsonPath("$.items[0].baseAsset").value("BTC"))
