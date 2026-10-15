@@ -1,5 +1,6 @@
 package com.cryptopilot.market.repository;
 
+import com.cryptopilot.market.OpenInterestSample;
 import com.cryptopilot.market.calculator.FundingTimes;
 import com.cryptopilot.market.client.FundingRate;
 import com.cryptopilot.market.client.LongShortRatio;
@@ -74,6 +75,19 @@ public class FuturesMetricsRepository {
                     .update();
         }
         return written;
+    }
+
+    /** The latest open interest reading at or before {@code at}, in contracts; empty when none is stored. */
+    public Optional<OpenInterestSample> openInterestAtOrBefore(UUID pairId, Instant at) {
+        return sql.sql("""
+                        select snapshot_time, open_interest from futures_market_data
+                         where pair_id = ? and snapshot_time <= ? and open_interest is not null
+                         order by snapshot_time desc
+                         limit 1""")
+                .params(pairId, Timestamp.from(at))
+                .query((row, index) -> new OpenInterestSample(
+                        row.getTimestamp("snapshot_time").toInstant(), row.getBigDecimal("open_interest")))
+                .optional();
     }
 
     /** Writes the long/short account ratio readings of a pair; answers how many were written. */

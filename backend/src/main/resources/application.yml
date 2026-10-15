@@ -10,10 +10,11 @@ spring:
     name: cryptopilot
   datasource:
     hikari:
-      # D-93: an indicator alert trigger holds a second connection while its candle partition still holds the
-      # NSF-05 one. 20 = 2 x 4 candle partitions + 2 alert partitions + 10 for web requests and schedulers;
-      # well under PostgreSQL's default max_connections of 100.
-      maximum-pool-size: ${DB_POOL_MAX:20}
+      # D-93: an indicator or open interest alert trigger holds a second connection while the thread that
+      # committed the candle or the reading still holds its own. 22 = 2 x 4 candle partitions + 2 alert
+      # partitions + 2 for the NSF-04 thread + 10 for web requests and schedulers; well under PostgreSQL's
+      # default max_connections of 100.
+      maximum-pool-size: ${DB_POOL_MAX:22}
   threads:
     virtual:
       enabled: true

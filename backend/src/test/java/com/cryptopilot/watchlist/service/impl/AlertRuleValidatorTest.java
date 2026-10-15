@@ -184,6 +184,27 @@ class AlertRuleValidatorTest {
         assertErrors(indicator(FUTURES, OPEN_INTEREST_CHANGE, null, GREATER_THAN, null), Map.of("threshold", "MSG01"));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"5", "-5", "0", "4.99"})
+    void Q30_aFundingRateLevel_withinFivePercent_isAccepted(String percent) {
+        assertThat(AlertRuleValidator.validate(indicator(FUTURES, FUNDING_RATE, null, GREATER_THAN, percent), NOW)
+                        .threshold())
+                .isEqualByComparingTo(percent);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"5.01", "-5.01", "100"})
+    void Q30_aFundingRateLevel_beyondFivePercent_isOutOfRange(String percent) {
+        assertErrors(indicator(FUTURES, FUNDING_RATE, null, GREATER_THAN, percent), Map.of("threshold", "MSG15"));
+    }
+
+    @Test
+    void Q45_anOpenInterestChangeLevel_isNotBoundByTheFundingRateLimit() {
+        assertThat(AlertRuleValidator.validate(indicator(FUTURES, OPEN_INTEREST_CHANGE, null, GREATER_THAN, "25"), NOW)
+                        .threshold())
+                .isEqualByComparingTo("25");
+    }
+
     // ------------------------------------------------------------------------------------------ mode, cooldown, expiry
 
     @Test
