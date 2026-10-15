@@ -83,6 +83,7 @@ public class SymbolSyncWriter {
                 listed.stream().collect(Collectors.toMap(ExchangeSymbol::symbol, Function.identity(), (a, b) -> a));
         List<CryptoPair> universe = new ArrayList<>(pairs.findAllForSync());
         List<String> created = createMissingSeeds(market, bySymbol, seedSymbols, universe);
+        placeSeeds(seedSymbols, universe);
         List<String> filterChanges = new ArrayList<>();
         List<String> flagged = new ArrayList<>();
 
@@ -185,6 +186,21 @@ public class SymbolSyncWriter {
             created.add(seed);
         }
         return created;
+    }
+
+    /**
+     * A seed pair takes its place in lists from its place in the seed list, which is written in the order the
+     * pairs should be shown (BTCUSDT first); a pair outside the list keeps its own. Without this every pair has
+     * the default 0 and lists fall back to the alphabet, ADAUSDT first.
+     */
+    private void placeSeeds(Collection<String> seeds, List<CryptoPair> universe) {
+        List<String> ordered = List.copyOf(seeds);
+        for (CryptoPair pair : universe) {
+            int index = ordered.indexOf(pair.getSymbol());
+            if (index >= 0) {
+                pair.placeAt(index + 1);
+            }
+        }
     }
 
     /**

@@ -300,6 +300,28 @@ class SymbolSyncServiceTest {
     }
 
     /**
+     * A seed pair is placed in lists where it stands in the seed list, whether the sync created it or found it;
+     * a pair outside the list keeps its place. So BTCUSDT leads when the list starts with it, not ADAUSDT by
+     * the alphabet.
+     */
+    @Test
+    void NSF01_seedPairs_arePlacedInTheOrderOfTheSeedList() {
+        register("BTCUSDT", "BTC", "USDT");
+        register("SHIBUSDT", "SHIB", "USDT");
+
+        service(List.of("XRPUSDT", "BTCUSDT")).sync(MarketType.SPOT);
+
+        assertThat(pair("XRPUSDT").getDisplayOrder()).as("created by the sync").isEqualTo(1);
+        assertThat(pair("BTCUSDT").getDisplayOrder()).as("already registered").isEqualTo(2);
+        assertThat(pair("SHIBUSDT").getDisplayOrder()).as("not a seed").isZero();
+
+        service(List.of("BTCUSDT", "XRPUSDT")).sync(MarketType.SPOT);
+
+        assertThat(pair("BTCUSDT").getDisplayOrder()).as("the list reordered").isEqualTo(1);
+        assertThat(pair("XRPUSDT").getDisplayOrder()).isEqualTo(2);
+    }
+
+    /**
      * A registered pair whose exchange entry has a filter the system cannot use keeps its last good filters;
      * its status is still recorded from the exchange.
      */
