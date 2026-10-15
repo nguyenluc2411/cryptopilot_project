@@ -25,6 +25,7 @@ import com.cryptopilot.market.service.impl.FuturesMetricsServiceImpl;
 import com.cryptopilot.market.service.impl.LatestMarketData;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.sql.Timestamp;
@@ -87,6 +88,7 @@ class FuturesMetricsServiceTest {
     private final SyntheticFuturesMetrics source = new SyntheticFuturesMetrics(Instant.parse("2026-09-24T10:05:00Z"));
     private final LatestMarketData latest = new LatestMarketData();
     private final List<Object> published = new CopyOnWriteArrayList<>();
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
     private MarketTestData data;
     private StubExchange exchange;
@@ -741,7 +743,8 @@ class FuturesMetricsServiceTest {
                         Duration.ofMinutes(2)),
                 transactions,
                 clock,
-                published::add);
+                published::add,
+                meters);
     }
 
     private UUID futuresPair(String symbol) {

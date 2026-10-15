@@ -19,6 +19,7 @@ import com.cryptopilot.market.service.impl.FuturesMetricsServiceImpl;
 import com.cryptopilot.market.service.impl.LatestMarketData;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.time.Duration;
@@ -189,7 +190,15 @@ class FuturesMetricsJobTest {
     private FuturesMetricsJob job(boolean enabled) {
         FuturesMetricsProperties properties = properties(enabled);
         FuturesMetricsService service = new FuturesMetricsServiceImpl(
-                client, pairs, metrics, new LatestMarketData(), properties, transactions, clock, event -> {});
+                client,
+                pairs,
+                metrics,
+                new LatestMarketData(),
+                properties,
+                transactions,
+                clock,
+                event -> {},
+                new SimpleMeterRegistry());
         return new FuturesMetricsJob(service, recordingScheduler(), properties);
     }
 

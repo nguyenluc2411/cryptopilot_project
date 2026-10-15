@@ -33,8 +33,8 @@ public final class OpenInterestChangeEvaluator {
     /** Two NSF-04 periods of 5 minutes: how far a base or previous reading may be from where it is looked for. */
     public static final Duration TOLERANCE = Duration.ofMinutes(10);
 
-    /** Decimal places of a change in percent. */
-    public static final int SCALE = 8;
+    /** Decimal places of a change in percent: those of the stored threshold, so the two compare exactly. */
+    public static final int SCALE = 12;
 
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
 

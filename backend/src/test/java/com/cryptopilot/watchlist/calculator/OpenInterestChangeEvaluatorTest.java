@@ -31,13 +31,13 @@ class OpenInterestChangeEvaluatorTest {
     private final NavigableMap<Instant, BigDecimal> stored = new TreeMap<>();
 
     @Test
-    void Q45_theChange_isInPercentOfTheBaseAnHourEarlier_atEightPlaces() {
+    void Q45_theChange_isInPercentOfTheBaseAnHourEarlier_atTwelvePlaces() {
         store(T.minus(Duration.ofHours(1)), "3000");
         store(T, "3100");
 
         IndicatorReading reading = read(T).orElseThrow();
 
-        assertThat(reading.current()).isEqualTo(new BigDecimal("3.33333333"));
+        assertThat(reading.current()).isEqualTo(new BigDecimal("3.333333333333"));
         assertThat(reading.previous()).isNull();
     }
 

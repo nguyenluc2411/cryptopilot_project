@@ -20,6 +20,9 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.service.FuturesMetricsService;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -56,7 +59,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * — the exchange answers only its latest entries to a request with a start and no end. Only instants before
  * the current minute are written; see {@link FuturesMetricsRepository} for why.
  * An open interest reading within two periods of the run is live and announced as
- * {@link OpenInterestSampled} for the alerts (NSF-06, Q-45); older ones are history and are not.
+ * {@link OpenInterestSampled} for the alerts (NSF-06, Q-45); older ones are history and are not, and are
+ * counted and logged so the lag of real data can be measured.
  *
  * <p>A period the exchange has not published yet is simply not there: nothing is written for it, the resume
  * point stays where it was and the next run asks again. Nothing is ever carried from one reading into another
@@ -99,6 +103,12 @@ public class FuturesMetricsServiceImpl implements FuturesMetricsService {
     /** How far before the run's cutoff a reading is still live: two collection periods (Q-45). */
     static final Duration LIVE_WINDOW = PERIOD.duration().multipliedBy(2);
 
+    /** The counter of open interest readings stored past the live window, so never announced. */
+    static final String STALE_OPEN_INTEREST = "cryptopilot.market.open_interest.stale";
+
+    /** The lag of the newest open interest reading of a page behind the run's cutoff. */
+    static final String OPEN_INTEREST_LAG = "cryptopilot.market.open_interest.lag";
+
     /** The most settled rates the exchange answers per call. */
     static final int FUNDING_PAGE = 1000;
 
@@ -110,6 +120,8 @@ public class FuturesMetricsServiceImpl implements FuturesMetricsService {
     private final TransactionTemplate transaction;
     private final Clock clock;
     private final ApplicationEventPublisher events;
+    private final Counter staleOpenInterest;
+    private final DistributionSummary openInterestLag;
 
     public FuturesMetricsServiceImpl(
             BinanceRestClient exchange,
@@ -119,7 +131,8 @@ public class FuturesMetricsServiceImpl implements FuturesMetricsService {
             FuturesMetricsProperties properties,
             PlatformTransactionManager transactions,
             Clock clock,
-            ApplicationEventPublisher events) {
+            ApplicationEventPublisher events,
+            MeterRegistry meters) {
         this.exchange = exchange;
         this.pairs = pairs;
         this.metrics = metrics;
@@ -128,6 +141,13 @@ public class FuturesMetricsServiceImpl implements FuturesMetricsService {
         this.transaction = new TransactionTemplate(transactions);
         this.clock = clock;
         this.events = events;
+        this.staleOpenInterest = Counter.builder(STALE_OPEN_INTEREST)
+                .description("Open interest readings stored past the live window, not announced to alerts")
+                .register(meters);
+        this.openInterestLag = DistributionSummary.builder(OPEN_INTEREST_LAG)
+                .description("Lag of the newest open interest reading of a page behind the run's cutoff")
+                .baseUnit("seconds")
+                .register(meters);
     }
 
     /**
@@ -256,7 +276,7 @@ public class FuturesMetricsServiceImpl implements FuturesMetricsService {
             return 0;
         }
         Instant liveFrom = cutoff.minus(LIVE_WINDOW);
-        return transaction.execute(status -> {
+        int stored = transaction.execute(status -> {
             int written = metrics.upsertOpenInterest(pair.getId(), readings);
             readings.stream()
                     .map(OpenInterestStatistic::timestamp)
@@ -266,6 +286,28 @@ public class FuturesMetricsServiceImpl implements FuturesMetricsService {
                             time -> events.publishEvent(new OpenInterestSampled(pair.getId(), pair.getSymbol(), time)));
             return written;
         });
+        recordLag(pair, readings, cutoff, liveFrom);
+        return stored;
+    }
+
+    /** Measures how far the page's newest reading trails the cutoff, and counts the readings too old to announce. */
+    private void recordLag(CryptoPair pair, List<OpenInterestStatistic> readings, Instant cutoff, Instant liveFrom) {
+        Instant newest = readings.stream()
+                .map(OpenInterestStatistic::timestamp)
+                .max(Instant::compareTo)
+                .orElseThrow();
+        openInterestLag.record(Duration.between(newest, cutoff).toSeconds());
+        long stale = readings.stream()
+                .filter(reading -> reading.timestamp().isBefore(liveFrom))
+                .count();
+        if (stale > 0) {
+            staleOpenInterest.increment(stale);
+            log.warn(
+                    "NSF-04 {} open interest: {} readings older than {} stored without alert evaluation",
+                    pair.getSymbol(),
+                    stale,
+                    liveFrom);
+        }
     }
 
     private int writeLongShort(UUID pairId, List<LongShortRatio> readings) {
