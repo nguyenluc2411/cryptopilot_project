@@ -254,11 +254,6 @@ class AlertEngineConcurrencyTest {
         }
 
         @Override
-        public long activeAlertsNotEvaluated() {
-            return 0;
-        }
-
-        @Override
         public boolean tryTrigger(PriceAlertHit hit) {
             throw new AssertionError("the partitions do not run in this test");
         }
@@ -280,6 +275,16 @@ class AlertEngineConcurrencyTest {
 
         @Override
         public boolean tryTriggerFundingRate(IndicatorAlertHit hit) {
+            throw new AssertionError("indicator alerts are not part of this test");
+        }
+
+        @Override
+        public List<IndicatorAlert> activeOpenInterestAlerts(UUID pairId) {
+            throw new AssertionError("indicator alerts are not part of this test");
+        }
+
+        @Override
+        public boolean tryTriggerOpenInterest(IndicatorAlertHit hit) {
             throw new AssertionError("indicator alerts are not part of this test");
         }
 

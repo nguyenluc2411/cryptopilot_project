@@ -98,9 +98,17 @@ public interface AlertRepository extends Repository<Alert, UUID> {
             + " and a.indicator = com.cryptopilot.watchlist.model.enums.AlertIndicator.FUNDING_RATE")
     List<IndicatorAlert> findActiveFundingRateAlerts();
 
-    /** How many ACTIVE alerts of these indicators there are, all Traders together. */
+    /** The ACTIVE OPEN_INTEREST_CHANGE alerts on one pair, with the pair of their watchlist row (NSF-06). */
     @Transactional(readOnly = true)
-    long countByStatusAndIndicatorIn(AlertStatus status, Collection<AlertIndicator> indicators);
+    @Query("select new com.cryptopilot.watchlist.model.IndicatorAlert(a.id, a.userId, a.watchlistId, w.pairId,"
+            + " a.market, a.indicator, a.timeframe, a.condition, a.threshold, a.triggerMode, a.cooldownMinutes,"
+            + " a.expiresAt, a.notifyInApp, a.notifyEmail, a.notifyPush, a.triggerCount, a.version)"
+            + " from Alert a join Watchlist w on w.id = a.watchlistId"
+            + " where a.status = com.cryptopilot.watchlist.model.enums.AlertStatus.ACTIVE"
+            + " and a.type = com.cryptopilot.watchlist.model.enums.AlertType.INDICATOR"
+            + " and a.indicator = com.cryptopilot.watchlist.model.enums.AlertIndicator.OPEN_INTEREST_CHANGE"
+            + " and w.pairId = :pairId")
+    List<IndicatorAlert> findActiveOpenInterestAlerts(@Param("pairId") UUID pairId);
 
     /** How many alerts are in this status and of this type, all Traders together. */
     @Transactional(readOnly = true)
@@ -231,6 +239,47 @@ public interface AlertRepository extends Repository<Alert, UUID> {
             @Param("version") long version,
             @Param("value") BigDecimal value,
             @Param("bar") Instant barOpenTime,
+            @Param("now") Instant now);
+
+    /**
+     * Records one trigger of an OPEN_INTEREST_CHANGE alert on an open interest reading, if the row still allows it,
+     * and answers whether it did. {@code last_bar_open_time} holds the instant of the reading it last fired on: an
+     * alert fires at most once per reading and never on a reading older than that one, whatever the mode, so the same
+     * reading evaluated twice records one trigger. ONCE_PER_BAR is refused within the UTC hour of that reading (A-40),
+     * EVERY_TIME before its cooldown has passed.
+     *
+     * <p>Rule: NSF-06, BR-19; SRS 3.4.4; A-40; D-89; Q-45.
+     *
+     * @return 1 when this call recorded the trigger, 0 when the row did not allow it
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = """
+                    update alert
+                    set trigger_count = trigger_count + 1,
+                        last_triggered_at = :now,
+                        last_evaluated_value = :value,
+                        last_bar_open_time = :sample,
+                        alert_status = case when trigger_mode = 'ONCE' then 'TRIGGERED' else alert_status end,
+                        version = version + 1,
+                        updated_at = greatest(updated_at, :now)
+                    where alert_id = :alertId
+                      and version = :version
+                      and alert_status = 'ACTIVE'
+                      and alert_type = 'INDICATOR'
+                      and indicator_name = 'OPEN_INTEREST_CHANGE'
+                      and (expires_at is null or expires_at > :now)
+                      and (last_bar_open_time is null or last_bar_open_time < :sample)
+                      and (trigger_mode <> 'EVERY_TIME'
+                           or last_triggered_at is null
+                           or last_triggered_at + make_interval(mins => coalesce(cooldown_minutes, 0)) <= :now)
+                      and (trigger_mode <> 'ONCE_PER_BAR'
+                           or last_bar_open_time is null
+                           or date_trunc('hour', last_bar_open_time, 'UTC') < date_trunc('hour', :sample, 'UTC'))""", nativeQuery = true)
+    int recordOpenInterestTrigger(
+            @Param("alertId") UUID alertId,
+            @Param("version") long version,
+            @Param("value") BigDecimal value,
+            @Param("sample") Instant sampleTime,
             @Param("now") Instant now);
 
     /**

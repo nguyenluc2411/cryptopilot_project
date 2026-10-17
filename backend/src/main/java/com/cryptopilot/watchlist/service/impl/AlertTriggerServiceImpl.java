@@ -10,7 +10,6 @@ import com.cryptopilot.watchlist.model.PriceAlert;
 import com.cryptopilot.watchlist.model.PriceAlertHit;
 import com.cryptopilot.watchlist.model.PriceAlertRow;
 import com.cryptopilot.watchlist.model.enums.AlertIndicator;
-import com.cryptopilot.watchlist.model.enums.AlertStatus;
 import com.cryptopilot.watchlist.model.enums.AlertType;
 import com.cryptopilot.watchlist.repository.AlertRepository;
 import com.cryptopilot.watchlist.service.AlertTriggerService;
@@ -32,7 +31,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Loads the ACTIVE alerts NSF-06 evaluates and records their triggers: PRICE alerts for the engine, RSI_14,
- * MACD_CROSS and EMA_CROSS alerts for a closed candle, and FUNDING_RATE alerts.
+ * MACD_CROSS and EMA_CROSS alerts for a closed candle, FUNDING_RATE alerts, and OPEN_INTEREST_CHANGE alerts for
+ * an open interest reading.
  *
  * <p>The database is the arbiter of a trigger, not the engine's memory and not a Redis lease: {@link #tryTrigger}
  * runs one conditional update ({@link AlertRepository#recordTrigger}), and only the call that changed the row
@@ -54,9 +54,6 @@ public class AlertTriggerServiceImpl implements AlertTriggerService {
     /** The indicators evaluated on a closed candle. */
     static final Set<AlertIndicator> CANDLE_INDICATORS =
             EnumSet.of(AlertIndicator.RSI_14, AlertIndicator.MACD_CROSS, AlertIndicator.EMA_CROSS);
-
-    /** The indicators nothing evaluates yet: OPEN_INTEREST_CHANGE waits on Q-45. */
-    static final Set<AlertIndicator> NOT_EVALUATED = EnumSet.of(AlertIndicator.OPEN_INTEREST_CHANGE);
 
     private final AlertRepository alerts;
     private final MarketApi market;
@@ -80,12 +77,6 @@ public class AlertTriggerServiceImpl implements AlertTriggerService {
         return alerts.findActivePriceAlert(alertId).flatMap(row -> Optional.ofNullable(
                         symbols(Set.of(row.pairId())).get(row.pairId()))
                 .map(row::withSymbol));
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public long activeAlertsNotEvaluated() {
-        return alerts.countByStatusAndIndicatorIn(AlertStatus.ACTIVE, NOT_EVALUATED);
     }
 
     @Override
@@ -116,6 +107,26 @@ public class AlertTriggerServiceImpl implements AlertTriggerService {
                 alert.notifyEmail(),
                 alert.notifyPush()));
         return true;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<IndicatorAlert> activeOpenInterestAlerts(UUID pairId) {
+        return alerts.findActiveOpenInterestAlerts(pairId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>{@code REQUIRES_NEW}: the caller runs after the commit of the reading, like the indicator triggers.
+     */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean tryTriggerOpenInterest(IndicatorAlertHit hit) {
+        IndicatorAlert alert = hit.alert();
+        int changed = alerts.recordOpenInterestTrigger(
+                alert.alertId(), alert.version(), hit.observedValue(), hit.barOpenTime(), hit.at());
+        return published(hit, changed);
     }
 
     @Override

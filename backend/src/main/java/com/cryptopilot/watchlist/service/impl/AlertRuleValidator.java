@@ -27,8 +27,8 @@ import java.util.Set;
  *   <li>RSI_14: a timeframe and a level from 0 to 100.
  *   <li>MACD_CROSS, EMA_CROSS: a timeframe and a cross condition; no threshold, since one line crosses the other
  *       (TECHNICAL_DESIGN 7.9), so the stored threshold is {@code null} (D-76).
- *   <li>FUNDING_RATE, OPEN_INTEREST_CHANGE: Futures only and a threshold; the timeframe is 1h, set here, and a client
- *       that sends one is refused (A-40).
+ *   <li>FUNDING_RATE, OPEN_INTEREST_CHANGE: Futures only and a threshold in percent (Q-30, Q-45); a FUNDING_RATE
+ *       level lies within ±5 %. The timeframe is 1h, set here, and a client that sends one is refused (A-40).
  *   <li>EVERY_TIME needs a cooldown (BR-19); an expiry is after now and at most 90 days ahead (SRS 3.4.2).
  * </ul>
  *
@@ -49,6 +49,9 @@ final class AlertRuleValidator {
     private static final Set<String> TIMEFRAMES = Set.of("15m", "1h", "4h", "1d");
 
     private static final BigDecimal RSI_MAX = BigDecimal.valueOf(100);
+
+    /** The largest FUNDING_RATE level either side of zero, in percent (Q-30). */
+    static final BigDecimal FUNDING_RATE_MAX = BigDecimal.valueOf(5);
 
     private static final String REQUIRED = "MSG01";
 
@@ -85,7 +88,12 @@ final class AlertRuleValidator {
             }
             reject(errors, "timeframe", timeframe);
             timeframe = FUTURES_INDICATOR_TIMEFRAME;
-            require(errors, "threshold", threshold);
+            if (threshold == null) {
+                errors.put("threshold", REQUIRED);
+            } else if (indicator == AlertIndicator.FUNDING_RATE
+                    && threshold.abs().compareTo(FUNDING_RATE_MAX) > 0) {
+                errors.put("threshold", OUT_OF_RANGE);
+            }
         } else {
             if (timeframe == null) {
                 errors.put("timeframe", REQUIRED);
@@ -154,12 +162,6 @@ final class AlertRuleValidator {
         if (expiresAt != null && !expiresAt.isAfter(now)) {
             throw new FieldValidationException(
                     "the expiry " + expiresAt + " has passed", Map.of("expiresAt", OUT_OF_RANGE));
-        }
-    }
-
-    private static void require(Map<String, String> errors, String field, Object value) {
-        if (value == null) {
-            errors.put(field, REQUIRED);
         }
     }
 

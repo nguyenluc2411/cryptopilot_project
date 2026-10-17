@@ -15,6 +15,7 @@ import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StubExchange;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.FuturesMetricsProperties;
+import com.cryptopilot.market.event.OpenInterestSampled;
 import com.cryptopilot.market.model.MetricsRun;
 import com.cryptopilot.market.model.SettlementRun;
 import com.cryptopilot.market.repository.CryptoPairRepository;
@@ -24,6 +25,8 @@ import com.cryptopilot.market.service.impl.FuturesMetricsServiceImpl;
 import com.cryptopilot.market.service.impl.LatestMarketData;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.sql.Timestamp;
@@ -33,11 +36,15 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -59,6 +66,9 @@ import tools.jackson.databind.json.JsonMapper;
 class FuturesMetricsServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-09-24T10:06:30Z");
+
+    private static final String STALE_OPEN_INTEREST = "cryptopilot.market.open_interest.stale";
+    private static final String OPEN_INTEREST_LAG = "cryptopilot.market.open_interest.lag";
 
     private static final String OPEN_INTEREST = "/futures/data/openInterestHist";
     private static final String LONG_SHORT = "/futures/data/globalLongShortAccountRatio";
@@ -84,6 +94,8 @@ class FuturesMetricsServiceTest {
     private final MutableTestClock clock = new MutableTestClock(NOW);
     private final SyntheticFuturesMetrics source = new SyntheticFuturesMetrics(Instant.parse("2026-09-24T10:05:00Z"));
     private final LatestMarketData latest = new LatestMarketData();
+    private final List<Object> published = new CopyOnWriteArrayList<>();
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
     private MarketTestData data;
     private StubExchange exchange;
@@ -146,6 +158,60 @@ class FuturesMetricsServiceTest {
         assertThat(row.get("long_account_ratio")).isEqualTo(new BigDecimal("0.55250000"));
         assertThat(row.get("short_account_ratio")).isEqualTo(new BigDecimal("0.44750000"));
         assertThat(row.get("mark_price")).as("no NSF-03 row there: stays empty").isNull();
+    }
+
+    /**
+     * Q-45: only the readings within two periods of the run are live and announced, oldest first; the history the
+     * first collection reads is stored without an announcement, and a run that writes nothing announces nothing.
+     */
+    @Test
+    void Q45_onlyLiveOpenInterestReadings_areAnnounced_oldestFirst() {
+        UUID btc = futuresPair("BTCUSDT");
+
+        service(5, 50).collectMetrics();
+        List<OpenInterestSampled> first = announced();
+        published.clear();
+        service(5, 50).collectMetrics();
+
+        assertThat(instantsWith(btc, "open_interest")).hasSize(12);
+        assertThat(first)
+                .as("cutoff 10:06, live from 09:56: 10:00 and 10:05 of the twelve")
+                .containsExactly(
+                        new OpenInterestSampled(btc, "BTCUSDT", Instant.parse("2026-09-24T10:00:00Z")),
+                        new OpenInterestSampled(btc, "BTCUSDT", Instant.parse("2026-09-24T10:05:00Z")));
+        assertThat(announced()).isEmpty();
+    }
+
+    /**
+     * Q-45: readings stored past the live window are counted, and the lag of each page's newest reading behind the
+     * cutoff is measured; a live reading counts nothing.
+     */
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void Q45_readingsPastTheLiveWindow_areCounted_andTheLagIsMeasured(CapturedOutput output) {
+        futuresPair("BTCUSDT");
+        source.publishedUntil(Instant.parse("2026-09-24T10:05:00Z"));
+        FuturesMetricsService service = service(5, 50);
+
+        service.collectMetrics();
+
+        assertThat(meters.counter(STALE_OPEN_INTEREST).count())
+                .as("09:10 to 09:55: ten of the twelve")
+                .isEqualTo(10);
+        DistributionSummary lag = meters.summary(OPEN_INTEREST_LAG);
+        assertThat(lag.count()).as("one per page of five").isEqualTo(3);
+        assertThat(lag.max()).as("09:30 behind the 10:06 cutoff").isEqualTo(2160);
+
+        clock.set(NOW.plus(Duration.ofMinutes(5)));
+        source.publishedUntil(Instant.parse("2026-09-24T10:10:00Z"));
+        service.collectMetrics();
+
+        assertThat(meters.counter(STALE_OPEN_INTEREST).count()).isEqualTo(10);
+        assertThat(lag.count()).isEqualTo(4);
+        assertThat(lag.totalAmount()).as("2160 + 660 + 60 + 60").isEqualTo(2940);
+        assertThat(output)
+                .contains("BTCUSDT open interest: 5 readings older than")
+                .doesNotContain(": 0 readings");
     }
 
     /**
@@ -688,6 +754,13 @@ class FuturesMetricsServiceTest {
 
     // ------------------------------------------------------------------ helpers
 
+    private List<OpenInterestSampled> announced() {
+        return published.stream()
+                .filter(OpenInterestSampled.class::isInstance)
+                .map(OpenInterestSampled.class::cast)
+                .toList();
+    }
+
     private FuturesMetricsService service(int pageSize, int maxRequests) {
         return service(pageSize, maxRequests, Duration.ofDays(30));
     }
@@ -708,7 +781,9 @@ class FuturesMetricsServiceTest {
                         settlementDepth,
                         Duration.ofMinutes(2)),
                 transactions,
-                clock);
+                clock,
+                published::add,
+                meters);
     }
 
     private UUID futuresPair(String symbol) {

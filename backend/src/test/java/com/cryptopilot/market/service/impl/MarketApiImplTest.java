@@ -22,6 +22,7 @@ import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
+import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
@@ -48,8 +49,15 @@ class MarketApiImplTest {
     private final LeverageBracketRepository brackets = mock(LeverageBracketRepository.class);
     private final PriceCacheService prices = mock(PriceCacheService.class);
     private final MinuteKlineService minuteKlines = mock(MinuteKlineService.class);
-    private final MarketApiImpl api =
-            new MarketApiImpl(pairs, coins, brackets, prices, minuteKlines, coinWriter, mock(TradingMarketData.class));
+    private final MarketApiImpl api = new MarketApiImpl(
+            pairs,
+            coins,
+            brackets,
+            prices,
+            minuteKlines,
+            coinWriter,
+            mock(TradingMarketData.class),
+            mock(FuturesMetricsRepository.class));
 
     @Test
     void TR04_coins_areNamedBySymbol_andAnUnknownSymbolIsLeftOut() {
