@@ -21,6 +21,36 @@ spring:
       timeout: 2s
   application:
     name: cryptopilot
+  modulith:
+    events:
+      # ADR-010, T-056: the transactional outbox. Flyway owns event_publication (V1), so the registry never creates it.
+      jdbc:
+        schema-initialization:
+          enabled: false
+      # Only @ApplicationModuleListener deliveries are recorded; the in-memory @TransactionalEventListener hand-offs of
+      # the market, trading, paper and watchlist workers stay as they were.
+      registry-trigger-annotation: org.springframework.modulith.events.ApplicationModuleListener
+      # A delivered publication is deleted at once: the auth events carry a working link (A-18), which must not stay
+      # in the table after the mail went out.
+      completion-mode: delete
+      # Left off: OutboxProcessorJob runs at start-up instead, after the application is ready and within the retry cap.
+      republish-outstanding-events-on-restart: false
+  mail:
+    # T-057: the SMTP server of the mail adapter. Empty host: no mail is sent and the links are logged instead (never
+    # in prod, which refuses to start). STARTTLS is required: a server that does not offer it gets neither the login nor
+    # the mail, and the delivery fails and is retried. Only a local sink such as Mailpit sets SMTP_STARTTLS_REQUIRED=false.
+    host: ${SMTP_HOST:}
+    port: ${SMTP_PORT:587}
+    username: ${SMTP_USER:}
+    password: ${SMTP_PASSWORD:}
+    default-encoding: UTF-8
+    properties:
+      "[mail.smtp.starttls.enable]": true
+      "[mail.smtp.starttls.required]": ${SMTP_STARTTLS_REQUIRED:true}
+      "[mail.smtp.ssl.checkserveridentity]": true
+      "[mail.smtp.connectiontimeout]": 5000
+      "[mail.smtp.timeout]": 10000
+      "[mail.smtp.writetimeout]": 10000
   threads:
     virtual:
       enabled: true
@@ -60,6 +90,24 @@ spring:
       demo_password_hash: ${DEMO_PASSWORD_HASH:!DEMO_PASSWORD_HASH_NOT_SET}
 
 cryptopilot:
+  outbox:
+    # T-056, ADR-010: resubmits the event publications whose listener failed. Off here, on in the dev and prod
+    # profiles, so a test context schedules nothing.
+    enabled: false
+    interval: 1m
+    # A failed delivery is retried at least 1, 2 and then 4 minutes after its last attempt, at most max-retries times.
+    # A retry runs on the first run after it is due, so with a 1-minute interval the waits are about 2, 2 and 4 minutes.
+    first-retry-after: 1m
+    max-retries: 3
+    # A publication still unfinished this long after its last attempt is taken for crashed and retried.
+    stale-after: 5m
+    # Anything older is deleted, delivered or not: the longest link an event carries lives 24 hours (BR-01).
+    retention: 24h
+  notification:
+    mail:
+      # T-057: the sender address, and the web application the mailed links open (/verify-email, /reset-password).
+      from: ${SMTP_FROM:no-reply@cryptopilot.local}
+      public-base-url: ${PUBLIC_BASE_URL:http://localhost:5173}
   web:
     # Reverse proxies whose X-Forwarded-For is believed: addresses or CIDR ranges, comma-separated. Empty trusts none,
     # so the direct peer is the client. Set wherever Nginx sits in front.
@@ -349,4 +397,7 @@ management:
   health:
     redis:
       # Redis is a cache (ADR-005): losing it costs a warm-up, never data, so it does not make the application unhealthy.
+      enabled: false
+    mail:
+      # T-057: an SMTP outage only delays mail (the outbox retries it), so it does not make the application unhealthy.
       enabled: false
