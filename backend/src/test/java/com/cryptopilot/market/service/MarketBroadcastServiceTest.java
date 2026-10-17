@@ -3,11 +3,18 @@ package com.cryptopilot.market.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.client.Kline;
+import com.cryptopilot.market.client.StreamMessage.AggTradeMessage;
+import com.cryptopilot.market.client.StreamMessage.BookTickerMessage;
+import com.cryptopilot.market.client.StreamMessage.DepthMessage;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
+import com.cryptopilot.market.client.StreamMessage.Level;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
+import com.cryptopilot.market.dto.response.DepthResponse;
 import com.cryptopilot.market.dto.response.KlineUpdateResponse;
 import com.cryptopilot.market.dto.response.MarketOverviewResponse;
+import com.cryptopilot.market.dto.response.MarketTradeResponse;
+import com.cryptopilot.market.dto.response.MarketTradesResponse;
 import com.cryptopilot.market.dto.response.TickerUpdateResponse;
 import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -159,6 +166,48 @@ class MarketBroadcastServiceTest {
         assertThat(overview.tickers().get(0).lastPrice()).isEqualByComparingTo("63001");
     }
 
+    /**
+     * TR-03: the trades streamed between two trading pushes go out as one message, oldest first, on their own rhythm;
+     * the ticker push does not carry them, and nothing new means nothing sent.
+     */
+    @Test
+    void TR03_trades_goOutTogetherOnTheTradingPush_oldestFirst() {
+        broadcast.publish(MarketType.SPOT, trade("BTCUSDT", 1, "63000.1", false));
+        broadcast.publish(MarketType.SPOT, trade("BTCUSDT", 2, "63000.2", true));
+        broadcast.publish(MarketType.SPOT, trade("ETHUSDT", 9, "4000", false));
+
+        assertThat(broadcast.pushUpdates()).isZero();
+        assertThat(broadcast.pushTrading()).isEqualTo(2);
+
+        MarketTradesResponse btc = payload("/topic/trades.SPOT.BTCUSDT", MarketTradesResponse.class);
+        assertThat(btc.market()).isEqualTo("SPOT");
+        assertThat(btc.symbol()).isEqualTo("BTCUSDT");
+        assertThat(btc.trades()).extracting(MarketTradeResponse::id).containsExactly(1L, 2L);
+        assertThat(btc.trades().get(1).buyerMaker()).isTrue();
+        assertThat(btc.trades().get(1).price()).isEqualByComparingTo("63000.2");
+        assertThat(broadcast.pushTrading()).as("nothing new, nothing sent").isZero();
+    }
+
+    /** TR-03: only the latest depth snapshot goes out; a late, older one does not replace it; a book ticker is not a topic. */
+    @Test
+    void TR03_theDepth_goesOutAsItsLatestSnapshot_andTheBookTickerIsNotATopic() {
+        broadcast.publish(MarketType.SPOT, depth("BTCUSDT", 41, "63000"));
+        broadcast.publish(MarketType.SPOT, depth("BTCUSDT", 43, "63002"));
+        broadcast.publish(MarketType.SPOT, depth("BTCUSDT", 42, "63001"));
+        broadcast.publish(
+                MarketType.SPOT,
+                new BookTickerMessage(
+                        "BTCUSDT", 44, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ONE, AT));
+
+        assertThat(broadcast.pushTrading()).isOne();
+
+        DepthResponse depth = payload("/topic/depth.SPOT.BTCUSDT", DepthResponse.class);
+        assertThat(depth.lastUpdateId()).isEqualTo(43);
+        assertThat(depth.bids().getFirst()).containsExactly(new BigDecimal("63002"), new BigDecimal("1.5"));
+        assertThat(depth.asks()).isEmpty();
+        assertThat(depth.receivedAt()).isEqualTo(AT);
+    }
+
     /** A destination the broker refuses is logged; the other destinations of the same push are delivered. */
     @Test
     void TD9_aRefusedDestination_doesNotStopThePush() {
@@ -186,6 +235,16 @@ class MarketBroadcastServiceTest {
                 .map(entry -> type.cast(entry.getValue()))
                 .reduce((first, second) -> second)
                 .orElseThrow(() -> new AssertionError("nothing sent to " + destination));
+    }
+
+    private static AggTradeMessage trade(String symbol, long id, String price, boolean buyerMaker) {
+        return new AggTradeMessage(
+                symbol, id, new BigDecimal(price), BigDecimal.ONE, AT.plusMillis(id), buyerMaker, AT.plusMillis(id));
+    }
+
+    private static DepthMessage depth(String symbol, long updateId, String bid) {
+        return new DepthMessage(
+                symbol, updateId, List.of(new Level(new BigDecimal(bid), new BigDecimal("1.5"))), List.of(), AT);
     }
 
     private static TickerMessage ticker(String symbol, String last, Instant at) {

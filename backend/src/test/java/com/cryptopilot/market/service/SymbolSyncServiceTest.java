@@ -239,6 +239,25 @@ class SymbolSyncServiceTest {
     }
 
     /**
+     * TR-04: the paper accounts store coins too. A coin another writer stored before the synchronisation is the one
+     * the seed pair is registered with, and the synchronisation does not fail on {@code uq_coin_symbol}.
+     */
+    @Test
+    void TR04_aCoinStoredByAnotherWriter_isReused() {
+        UUID usdt = UUID.randomUUID();
+        sql.sql("insert into coin (coin_id, symbol, coin_name, created_at, updated_at)"
+                        + " values (?, 'USDT', 'USDT', now(), now())")
+                .param(usdt)
+                .update();
+
+        SyncReport report = service(List.of("XRPUSDT")).sync(MarketType.SPOT);
+
+        assertThat(report.created()).containsExactly("XRPUSDT");
+        assertThat(pair("XRPUSDT").getQuoteCoinId()).isEqualTo(usdt);
+        assertThat(coins.findBySymbol("XRP")).isPresent();
+    }
+
+    /**
      * The universe: a seed symbol missing from the table is created INACTIVE with both markets off and its
      * coins; a symbol that is neither registered nor seeded is ignored however many the exchange lists.
      */
@@ -278,6 +297,28 @@ class SymbolSyncServiceTest {
 
         assertThat(report.created()).isEmpty();
         assertThat(symbolsInTable()).containsExactly("BTCUSDT");
+    }
+
+    /**
+     * A seed pair is placed in lists where it stands in the seed list, whether the sync created it or found it;
+     * a pair outside the list keeps its place. So BTCUSDT leads when the list starts with it, not ADAUSDT by
+     * the alphabet.
+     */
+    @Test
+    void NSF01_seedPairs_arePlacedInTheOrderOfTheSeedList() {
+        register("BTCUSDT", "BTC", "USDT");
+        register("SHIBUSDT", "SHIB", "USDT");
+
+        service(List.of("XRPUSDT", "BTCUSDT")).sync(MarketType.SPOT);
+
+        assertThat(pair("XRPUSDT").getDisplayOrder()).as("created by the sync").isEqualTo(1);
+        assertThat(pair("BTCUSDT").getDisplayOrder()).as("already registered").isEqualTo(2);
+        assertThat(pair("SHIBUSDT").getDisplayOrder()).as("not a seed").isZero();
+
+        service(List.of("BTCUSDT", "XRPUSDT")).sync(MarketType.SPOT);
+
+        assertThat(pair("BTCUSDT").getDisplayOrder()).as("the list reordered").isEqualTo(1);
+        assertThat(pair("XRPUSDT").getDisplayOrder()).isEqualTo(2);
     }
 
     /**

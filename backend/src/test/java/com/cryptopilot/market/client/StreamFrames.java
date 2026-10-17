@@ -69,4 +69,35 @@ public final class StreamFrames {
                         + "\"i\":\"84316.26956522\",\"r\":\"0.00001583\",\"T\":1790265600000,\"st\":1}}")
                 .formatted(symbol.toLowerCase(Locale.ROOT), at.toEpochMilli(), symbol);
     }
+
+    /** A Spot aggregated trade of this symbol, in the shape of Binance's documented example (TR-03). */
+    public static String aggTrade(
+            String symbol, long id, String price, String quantity, Instant at, boolean buyerMaker) {
+        return ("{\"stream\":\"%s@aggTrade\",\"data\":{\"e\":\"aggTrade\",\"E\":%d,\"s\":\"%s\",\"a\":%d,"
+                        + "\"p\":\"%s\",\"q\":\"%s\",\"f\":100,\"l\":105,\"T\":%d,\"m\":%s,\"M\":true}}")
+                .formatted(
+                        symbol.toLowerCase(Locale.ROOT),
+                        at.toEpochMilli() + 3,
+                        symbol,
+                        id,
+                        price,
+                        quantity,
+                        at.toEpochMilli(),
+                        buyerMaker);
+    }
+
+    /** A Spot best bid and ask: no event type, no event time (TR-03). */
+    public static String bookTicker(String symbol, long updateId, String bid, String ask) {
+        return ("{\"stream\":\"%s@bookTicker\",\"data\":{\"u\":%d,\"s\":\"%s\",\"b\":\"%s\",\"B\":\"31.21\","
+                        + "\"a\":\"%s\",\"A\":\"40.66\"}}")
+                .formatted(symbol.toLowerCase(Locale.ROOT), updateId, symbol, bid, ask);
+    }
+
+    /** A Spot partial depth of two levels a side: no event type, symbol or event time (TR-03). */
+    public static String depth(String symbol, long lastUpdateId) {
+        return ("{\"stream\":\"%s@depth20@100ms\",\"data\":{\"lastUpdateId\":%d,"
+                        + "\"bids\":[[\"84282.00\",\"4.39\"],[\"84281.50\",\"0.10\"]],"
+                        + "\"asks\":[[\"84282.01\",\"7.90\"],[\"84283.00\",\"1.25\"]]}}")
+                .formatted(symbol.toLowerCase(Locale.ROOT), lastUpdateId);
+    }
 }

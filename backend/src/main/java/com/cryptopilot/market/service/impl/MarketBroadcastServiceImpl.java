@@ -1,16 +1,23 @@
 package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.client.StreamMessage;
+import com.cryptopilot.market.client.StreamMessage.AggTradeMessage;
+import com.cryptopilot.market.client.StreamMessage.BookTickerMessage;
+import com.cryptopilot.market.client.StreamMessage.DepthMessage;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
+import com.cryptopilot.market.dto.response.DepthResponse;
 import com.cryptopilot.market.dto.response.KlineUpdateResponse;
 import com.cryptopilot.market.dto.response.MarketOverviewResponse;
+import com.cryptopilot.market.dto.response.MarketTradeResponse;
+import com.cryptopilot.market.dto.response.MarketTradesResponse;
 import com.cryptopilot.market.dto.response.TickerUpdateResponse;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketBroadcastService;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.List;
@@ -42,7 +49,15 @@ import org.springframework.stereotype.Service;
  * decorator, while the others carry on. Nothing here writes to a socket, and a failure to hand over a message is logged
  * and does not stop the push of the others.
  *
- * <p>Rule: NSF-03; BR-08; SRS 3.3.1, 4.2.3 (realtime price delivery within 2 s); TECHNICAL_DESIGN 9; D-50, D-51.
+ * <h2>Trading topics (TR-03)</h2>
+ *
+ * <p>{@code /topic/trades.{market}.{symbol}} and {@code /topic/depth.{market}.{symbol}} are pushed by
+ * {@link #pushTrading} on their own, faster rhythm (100 ms by default, plan section 12.3): the trades streamed since the
+ * previous push in one message, oldest first, and the latest depth snapshot. A best bid and ask is not pushed; the depth
+ * carries it.
+ *
+ * <p>Rule: NSF-03; BR-08; SRS 3.3.1, 4.2.3 (realtime price delivery within 2 s); TECHNICAL_DESIGN 9; D-50, D-51;
+ * TR-03.
  */
 @Service
 public class MarketBroadcastServiceImpl implements MarketBroadcastService {
@@ -52,6 +67,8 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
     private final Map<String, TickerUpdateResponse> tickers = new ConcurrentHashMap<>();
     private final Map<String, NavigableMap<Instant, KlineUpdateResponse>> klines = new ConcurrentHashMap<>();
     private final Map<MarketType, Map<String, TickerUpdateResponse>> overview = new EnumMap<>(MarketType.class);
+    private final Map<String, List<MarketTradeResponse>> trades = new ConcurrentHashMap<>();
+    private final Map<String, DepthResponse> depths = new ConcurrentHashMap<>();
     private final SimpMessageSendingOperations broker;
     private final Clock clock;
 
@@ -80,7 +97,42 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
                     });
                 }
             }
+            case AggTradeMessage trade ->
+                // Atomic per destination against the push's remove, like the klines.
+                trades.compute(tradesDestination(market.name(), trade.symbol()), (destination, waiting) -> {
+                    List<MarketTradeResponse> list = waiting == null ? new ArrayList<>() : waiting;
+                    list.add(TradingResponses.trade(trade));
+                    return list;
+                });
+            case DepthMessage depth ->
+                depths.merge(
+                        depthDestination(market.name(), depth.symbol()),
+                        TradingResponses.depth(market.name(), depth),
+                        (waiting, arriving) -> arriving.lastUpdateId() < waiting.lastUpdateId() ? waiting : arriving);
+            case BookTickerMessage ignored -> {
+                // Not a topic of its own: the depth carries the best bid and ask.
+            }
         }
+    }
+
+    @Override
+    public int pushTrading() {
+        int sent = 0;
+        for (String destination : List.copyOf(trades.keySet())) {
+            List<MarketTradeResponse> waiting = trades.remove(destination);
+            if (waiting != null && !waiting.isEmpty()) {
+                String[] parts =
+                        destination.substring("/topic/trades.".length()).split("\\.", 2);
+                sent += send(destination, new MarketTradesResponse(parts[0], parts[1], waiting)) ? 1 : 0;
+            }
+        }
+        for (String destination : List.copyOf(depths.keySet())) {
+            DepthResponse latest = depths.remove(destination);
+            if (latest != null) {
+                sent += send(destination, latest) ? 1 : 0;
+            }
+        }
+        return sent;
     }
 
     @Override
@@ -123,6 +175,16 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
     /** {@code /topic/ticker.{market}.{symbol}}. */
     static String tickerDestination(String market, String symbol) {
         return "/topic/ticker." + market + "." + symbol;
+    }
+
+    /** {@code /topic/trades.{market}.{symbol}}. */
+    static String tradesDestination(String market, String symbol) {
+        return "/topic/trades." + market + "." + symbol;
+    }
+
+    /** {@code /topic/depth.{market}.{symbol}}. */
+    static String depthDestination(String market, String symbol) {
+        return "/topic/depth." + market + "." + symbol;
     }
 
     /** {@code /topic/kline.{market}.{symbol}.{tf}}. */

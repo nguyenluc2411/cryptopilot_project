@@ -39,9 +39,11 @@ public class MarketHubJob {
         }
         scheduler.scheduleAtFixedRate(broadcast::pushUpdates, properties.updateInterval());
         scheduler.scheduleAtFixedRate(broadcast::pushOverviews, properties.overviewInterval());
+        scheduler.scheduleAtFixedRate(broadcast::pushTrading, properties.tradingInterval());
         log.info(
-                "Market topics pushed every {}, overviews every {}",
+                "Market topics pushed every {}, overviews every {}, trades and depth every {}",
                 properties.updateInterval(),
-                properties.overviewInterval());
+                properties.overviewInterval(),
+                properties.tradingInterval());
     }
 }

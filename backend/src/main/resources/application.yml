@@ -1,4 +1,17 @@
 spring:
+  datasource:
+    hikari:
+      # TR-02: every order placement holds a connection for its whole transaction, so the pool is what many Traders
+      # placing at once wait on. The default of 10 is too few; a deployment sets DB_POOL_SIZE to what its Postgres
+      # (max_connections) can spare. Waiting longer than the timeout answers 5xx rather than hanging.
+      # D-93: an indicator or open interest alert trigger holds a second connection while the thread that committed
+      # the candle or the reading still holds its own, which alone needs 22 = 2 x 4 candle partitions + 2 alert
+      # partitions + 2 for the NSF-04 thread + 10 for web requests and schedulers. 30 covers both and stays well
+      # under PostgreSQL's default max_connections of 100.
+      maximum-pool-size: ${DB_POOL_MAX:30}
+      # Opened on demand above this: an idle instance, or one of the many contexts a test run keeps, holds only these.
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      connection-timeout: ${DB_POOL_TIMEOUT_MS:10000}
   data:
     redis:
       # The latest-price cache (TD 5.6, ADR-005). Local defaults; a deployment sets REDIS_HOST/PORT/PASSWORD.
@@ -8,13 +21,6 @@ spring:
       timeout: 2s
   application:
     name: cryptopilot
-  datasource:
-    hikari:
-      # D-93: an indicator or open interest alert trigger holds a second connection while the thread that
-      # committed the candle or the reading still holds its own. 22 = 2 x 4 candle partitions + 2 alert
-      # partitions + 2 for the NSF-04 thread + 10 for web requests and schedulers; well under PostgreSQL's
-      # default max_connections of 100.
-      maximum-pool-size: ${DB_POOL_MAX:22}
   threads:
     virtual:
       enabled: true
@@ -27,6 +33,16 @@ spring:
     # The persistence context ends with the transaction. Leaving it open across the view would let
     # a controller trigger a lazy load, which the layer rules of the design forbid.
     open-in-view: false
+    properties:
+      hibernate:
+        # TR-02: a paper order writes the order, its fill, two to three ledger entries and two balances at commit.
+        # Sent as one batch per table instead of one round trip per row; the keys are UUID v7 generated in the
+        # application, so nothing waits for the database to return an id.
+        jdbc:
+          batch_size: 50
+          batch_versioned_data: true
+        order_inserts: true
+        order_updates: true
   flyway:
     # The production migration path, and only it. Sample data lives in classpath:db/demo, which the
     # dev profile adds; nothing here reaches it, so a staging or production database cannot acquire
@@ -60,6 +76,10 @@ cryptopilot:
       login: ${RATE_LIMIT_LOGIN:10}
       auth: ${RATE_LIMIT_AUTH:20}
       api: ${RATE_LIMIT_API:120}
+      # Placing a paper order is counted apart from the calls above, in a window of its own, as Binance does (50 new
+      # orders in 10 seconds); cancels and reads are not counted.
+      paper-orders: ${RATE_LIMIT_PAPER_ORDERS:50}
+      paper-orders-window: 10s
   realtime:
     # TD 9: the STOMP endpoint's transport limits, so one slow client cannot hold the others (Spring's per-session
     # decorator buffers up to the limit, then closes that session). Its origins are cryptopilot.web.cors above.
@@ -159,6 +179,8 @@ cryptopilot:
       enabled: false
       update-interval: 1s
       overview-interval: 2s
+      # TR-03: the trades and depth of the trading screen, pushed in windows of 100 ms (plan section 12.3).
+      trading-interval: 100ms
     indicators:
       # T-025: a series is rebuilt from its latest stored closed candles (TD 7.2: 1000, so EMA200 no longer depends on
       # where the history starts). No schedule: the indicators follow the closed candles.
@@ -222,6 +244,15 @@ cryptopilot:
       snapshot-max-age: 2m
       partitions: 4
       queue-capacity: 10000
+      trading:
+        # TR-03: each Spot pair also streams @aggTrade, @bookTicker and @depth20@100ms for the paper engine and the
+        # trading screen: nine streams a pair instead of six.
+        enabled: true
+        depth-levels: 20
+        # A best bid and ask or depth older than this is not served as current (a lost stream).
+        max-age: 10s
+        # The latest trades kept per pair for the trades panel.
+        recent-trades: 50
   user:
     risk-profiles:
       # T-103, BR-66, D-53: risk profiles v1, percentages of capital. No profile may exceed AGGRESSIVE; checked at
@@ -242,6 +273,36 @@ cryptopilot:
           max-futures-leverage: 10
           max-total-open-risk-percent: 6
           min-setup-score-to-alert: 55
+  paper:
+    account:
+      # TR-04, Q-T5: the virtual funds a paper account is opened with, granted once; there is no reset. Keys in lower
+      # case, the form an environment variable binds to, so CRYPTOPILOT_PAPER_ACCOUNT_SPOTGRANT_USDT replaces usdt
+      # here instead of adding a second key. At most 8 decimals; the Futures wallet holds USDT only (USDⓈ-M).
+      spot-grant:
+        usdt: 10000
+        btc: 0.1
+        eth: 1
+        bnb: 10
+      futures-grant:
+        usdt: 5000
+    order:
+      # TR-02: the commission of a Spot fill, taken in the coin it brings in; Binance's standard 0.1% maker and taker.
+      spot-maker-fee-rate: 0.001
+      spot-taker-fee-rate: 0.001
+    equity-snapshot:
+      # TR-13: every paper account's worth at the start of the day, the base of today's PnL and the asset chart. Off
+      # here, on in the dev and prod profiles, so a test context schedules nothing.
+      enabled: false
+      cron: "0 0 0 * * *"
+      zone: UTC
+    matching:
+      # TR-05, Q-T8: a price through a waiting LIMIT order's own always fills it. At exactly its price: QUEUE, as
+      # Binance's price-time priority, once the quantity the exchange's book showed ahead of it there is traded; CROSS
+      # never; TOUCH always.
+      limit-fill-mode: QUEUE
+      # TR-05: while a pair's market trades flow they fill orders at once; after this long without one its forming
+      # 1-minute candles fill orders again (a lost trade stream, or a pair streamed without trades).
+      trade-silence: 5s
   alert:
     # NSF-06, T-055: PRICE alerts evaluated on the 1-minute candle updates. Off here, on in the dev and prod
     # profiles, so a test context starts no engine.

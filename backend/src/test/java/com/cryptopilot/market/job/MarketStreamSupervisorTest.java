@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.MarketTrade;
+import com.cryptopilot.market.MarketTradeListener;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.client.BinanceRestClient;
@@ -29,6 +31,7 @@ import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;
 import com.cryptopilot.market.service.impl.LatestMarketData;
 import com.cryptopilot.market.service.impl.StreamCandleServiceImpl;
+import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.lang.reflect.Proxy;
 import java.time.Clock;
@@ -83,6 +86,10 @@ class MarketStreamSupervisorTest {
     private final List<StreamMessage> realtime = new CopyOnWriteArrayList<>();
     private final List<MinuteKline> minutes = new CopyOnWriteArrayList<>();
     private final List<MinuteKlineListener> minuteListeners = new CopyOnWriteArrayList<>(List.of(minutes::add));
+    private final List<MarketTrade> trades = new CopyOnWriteArrayList<>();
+    private final List<MarketTradeListener> tradeListeners = new CopyOnWriteArrayList<>(List.of(trades::add));
+    private boolean tradingStreams;
+    private TradingMarketData trading;
     private MarketUpdateService updates = (market, message) -> {
         realtime.add(message);
         signal();
@@ -224,6 +231,51 @@ class MarketStreamSupervisorTest {
         assertThat(minutes).allSatisfy(kline -> assertThat(kline.close()).isEqualByComparingTo("101.20"));
         assertThat(realtime).noneMatch(message -> message instanceof StreamMessage.KlineMessage);
         assertThat(storedCandles()).isZero();
+    }
+
+    /**
+     * TR-03: with the trading streams on, a Spot pair also streams its trades, best bid and ask and depth; a trade goes
+     * to the trade listeners (the paper engine) and the latest values, even when a listener throws, and all three reach
+     * the realtime fan-out for the topics.
+     */
+    @Test
+    void TR03_tradingStreams_areOpenedAndRoutedToTheTradeListenersAndTheLatestValues() {
+        tradingStreams = true;
+        tradeListeners.add(trade -> {
+            throw new IllegalStateException("listener down");
+        });
+        supervisor = supervisor(true, 100);
+        supervisor.start();
+        server.awaitConnection(2);
+        Connection spot = connection("/stream");
+        assertThat(server.paths())
+                .anySatisfy(path -> assertThat(path)
+                        .startsWith("/stream?")
+                        .contains("btcusdt@aggTrade", "btcusdt@bookTicker", "btcusdt@depth20@100ms"))
+                .noneSatisfy(path -> assertThat(path).startsWith("/market/").contains("@aggTrade"));
+
+        spot.send(StreamFrames.aggTrade("BTCUSDT", 7, "101.20", "0.5", AT, false));
+        spot.send(StreamFrames.aggTrade("DOGEUSDT", 8, "0.1", "10", AT, false));
+        spot.send(StreamFrames.bookTicker("BTCUSDT", 41, "101.19", "101.21"));
+        spot.send(StreamFrames.depth("BTCUSDT", 42));
+
+        await(() -> trading.currentDepth(MarketType.SPOT, btc).isPresent(), "the depth after the trade");
+        assertThat(trades).singleElement().satisfies(trade -> {
+            assertThat(trade.market()).isEqualTo(MarketType.SPOT);
+            assertThat(trade.pairId()).isEqualTo(btc);
+            assertThat(trade.aggregateTradeId()).isEqualTo(7);
+            assertThat(trade.price()).isEqualByComparingTo("101.20");
+            assertThat(trade.tradeTime()).isEqualTo(AT);
+        });
+        assertThat(trading.recentTrades(MarketType.SPOT, btc, 10)).containsExactlyElementsOf(trades);
+        assertThat(trading.currentBookTop(MarketType.SPOT, btc).orElseThrow().bidPrice())
+                .isEqualByComparingTo("101.19");
+        assertThat(trading.currentDepth(MarketType.SPOT, btc).orElseThrow().lastUpdateId())
+                .isEqualTo(42);
+        assertThat(realtime)
+                .hasAtLeastOneElementOfType(StreamMessage.AggTradeMessage.class)
+                .hasAtLeastOneElementOfType(StreamMessage.BookTickerMessage.class)
+                .hasAtLeastOneElementOfType(StreamMessage.DepthMessage.class);
     }
 
     /** A lost connection that comes back publishes the reconnection; the first opening does not. */
@@ -375,7 +427,9 @@ class MarketStreamSupervisorTest {
                 Duration.ofSeconds(60),
                 Duration.ofMinutes(2),
                 2,
-                100);
+                100,
+                new BinanceStreamProperties.Trading(tradingStreams, 20, Duration.ofSeconds(10), 50));
+        trading = new TradingMarketData(properties, Clock.systemUTC());
         streams = new BinanceStreamClient(properties, JsonMapper.builder().build(), Clock.systemUTC());
         return new MarketStreamSupervisor(
                 streams,
@@ -386,7 +440,9 @@ class MarketStreamSupervisorTest {
                 properties,
                 this::publish,
                 updates,
-                minuteListeners);
+                minuteListeners,
+                trading,
+                tradeListeners);
     }
 
     private CandleBackfillService backfill() {

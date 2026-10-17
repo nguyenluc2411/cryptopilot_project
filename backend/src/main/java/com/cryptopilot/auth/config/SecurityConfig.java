@@ -198,6 +198,7 @@ public class SecurityConfig {
         "/api/v1/alerts/**",
         "/api/v1/notifications/**",
         "/api/v1/plans/**",
+        "/api/v1/paper/**",
         "/api/v1/journal/**",
         "/api/v1/performance",
         "/api/v1/posts/**",

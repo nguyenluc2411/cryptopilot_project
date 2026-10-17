@@ -15,10 +15,13 @@ import org.springframework.validation.annotation.Validated;
  * @param updateInterval how often the ticker and kline topics are pushed; each destination at most once per interval
  *     (TECHNICAL_DESIGN 9: at most one ticker message per second per destination)
  * @param overviewInterval how often each market's overview is pushed (TECHNICAL_DESIGN 9: every 2 s)
+ * @param tradingInterval how often the trades and depth topics of the trading screen are pushed (TR-03; plan section
+ *     12.3: a window of 50 to 100 ms, so a browser is not sent more than it can draw)
  */
 @Validated
 @ConfigurationProperties("cryptopilot.market.hub")
 public record MarketHubProperties(
         @DefaultValue("false") boolean enabled,
         @NotNull @DefaultValue("1s") Duration updateInterval,
-        @NotNull @DefaultValue("2s") Duration overviewInterval) {}
+        @NotNull @DefaultValue("2s") Duration overviewInterval,
+        @NotNull @DefaultValue("100ms") Duration tradingInterval) {}

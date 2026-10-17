@@ -54,6 +54,8 @@ class OpenApiDocsTest {
             "/api/v1/me/devices/{deviceId}",
             "/api/v1/market/pairs",
             "/api/v1/market/{market}/{symbol}/candles",
+            "/api/v1/market/{market}/{symbol}/depth",
+            "/api/v1/market/{market}/{symbol}/trades",
             "/api/v1/market/spot/{symbol}/stats",
             "/api/v1/market/futures/{symbol}/stats",
             "/api/v1/market/futures/{symbol}/metrics",
@@ -63,6 +65,20 @@ class OpenApiDocsTest {
             "/api/v1/plans/{id}",
             "/api/v1/plans/{id}/activate",
             "/api/v1/plans/{id}/cancel",
+            "/api/v1/paper/account",
+            "/api/v1/paper/wallets/{wallet}",
+            "/api/v1/paper/transfers",
+            "/api/v1/paper/ledger",
+            "/api/v1/paper/orders",
+            "/api/v1/paper/orders/open",
+            "/api/v1/paper/orders/{orderId}",
+            "/api/v1/paper/orders/{orderId}/cancel",
+            "/api/v1/paper/fills",
+            "/api/v1/paper/order-lists",
+            "/api/v1/paper/order-lists/{listId}",
+            "/api/v1/paper/order-lists/{listId}/cancel",
+            "/api/v1/paper/spot/pnl",
+            "/api/v1/paper/equity",
             "/api/v1/watchlist",
             "/api/v1/watchlist/{id}",
             "/api/v1/alerts",
@@ -70,7 +86,7 @@ class OpenApiDocsTest {
             "/api/v1/alerts/{id}/pause",
             "/api/v1/alerts/{id}/resume");
 
-    private static final int OPERATIONS = 41;
+    private static final int OPERATIONS = 61;
 
     @Autowired
     private MockMvc mvc;

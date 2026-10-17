@@ -36,6 +36,7 @@ import org.springframework.validation.annotation.Validated;
  * @param snapshotMaxAge the oldest price a snapshot may carry; an older one is not written
  * @param partitions how many ordered consumers store closed candles, each serving a share of the pairs
  * @param queueCapacity closed candles a partition may hold before one is refused
+ * @param trading the streams of the trading screen and the paper engine (TR-03)
  */
 @Validated
 @ConfigurationProperties("cryptopilot.market.stream")
@@ -57,7 +58,32 @@ public record BinanceStreamProperties(
         @NotNull @DefaultValue("60s") Duration snapshotInterval,
         @NotNull @DefaultValue("2m") Duration snapshotMaxAge,
         @Min(1) @Max(64) @DefaultValue("4") int partitions,
-        @Min(1) @DefaultValue("10000") int queueCapacity) {
+        @Min(1) @DefaultValue("10000") int queueCapacity,
+        @NotNull @Valid @DefaultValue Trading trading) {
+
+    /**
+     * The streams of the trading screen and the paper engine, on Spot (TR-03): {@code <symbol>@aggTrade},
+     * {@code <symbol>@bookTicker} and {@code <symbol>@depth<levels>@100ms}, on top of the six of NSF-03. Futures is
+     * not streamed this way yet.
+     *
+     * @param enabled whether the Spot pairs carry these streams at all
+     * @param depthLevels how many levels of each side the depth stream carries: 5, 10 or 20, as Binance offers
+     * @param maxAge the oldest best bid and ask or depth served as current; Binance pushes them as they change, and
+     *     the depth every 100 ms, so an older one means a lost stream
+     * @param recentTrades how many of the latest trades of a pair are kept for the trades panel
+     */
+    public record Trading(
+            @DefaultValue("true") boolean enabled,
+            @Min(5) @Max(20) @DefaultValue("20") int depthLevels,
+            @NotNull @DefaultValue("10s") Duration maxAge,
+            @Min(1) @Max(1000) @DefaultValue("50") int recentTrades) {
+
+        public Trading {
+            if (depthLevels != 5 && depthLevels != 10 && depthLevels != 20) {
+                throw new IllegalArgumentException("depthLevels must be 5, 10 or 20, was " + depthLevels);
+            }
+        }
+    }
 
     /**
      * The back-off of NSF-03: from 1 s, doubling, up to 60 s.

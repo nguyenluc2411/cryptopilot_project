@@ -1,12 +1,20 @@
 package com.cryptopilot.market.job;
 
+import com.cryptopilot.market.BookTop;
+import com.cryptopilot.market.MarketTrade;
+import com.cryptopilot.market.MarketTradeListener;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineListener;
+import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.client.BinanceStreamClient;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.BinanceStreamShard;
 import com.cryptopilot.market.client.StreamMessage;
+import com.cryptopilot.market.client.StreamMessage.AggTradeMessage;
+import com.cryptopilot.market.client.StreamMessage.BookTickerMessage;
+import com.cryptopilot.market.client.StreamMessage.DepthMessage;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
+import com.cryptopilot.market.client.StreamMessage.Level;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.event.MarketStreamReconnected;
@@ -18,6 +26,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketUpdateService;
 import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.market.service.impl.LatestMarketData;
+import com.cryptopilot.market.service.impl.TradingMarketData;
 import jakarta.annotation.PreDestroy;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -55,6 +64,8 @@ import org.springframework.stereotype.Component;
  *   <li>A closed candle of a stored timeframe goes to the {@link ClosedCandlePipeline}; a forming one is not
  *       stored (BR-08).
  *   <li>A Spot ticker or a futures mark price overwrites the pair's entry in {@link LatestMarketData}.
+ *   <li>A trade, a best bid and ask or a depth snapshot of the trading streams (TR-03) overwrites the pair's entry in
+ *       {@link TradingMarketData}; a trade also goes to every {@link MarketTradeListener} (the paper engine).
  *   <li>A connection that opens again after a loss publishes {@link MarketStreamReconnected}, and NSF-02
  *       fetches whatever closed meanwhile.
  * </ul>
@@ -77,6 +88,8 @@ public class MarketStreamSupervisor {
     private final ApplicationEventPublisher events;
     private final MarketUpdateService updates;
     private final List<MinuteKlineListener> minuteListeners;
+    private final TradingMarketData trading;
+    private final List<MarketTradeListener> tradeListeners;
     private final Map<MarketType, MarketStreams> running = new EnumMap<>(MarketType.class);
 
     public MarketStreamSupervisor(
@@ -88,7 +101,9 @@ public class MarketStreamSupervisor {
             BinanceStreamProperties properties,
             ApplicationEventPublisher events,
             MarketUpdateService updates,
-            List<MinuteKlineListener> minuteListeners) {
+            List<MinuteKlineListener> minuteListeners,
+            TradingMarketData trading,
+            List<MarketTradeListener> tradeListeners) {
         this.streams = streams;
         this.candles = candles;
         this.latest = latest;
@@ -98,6 +113,8 @@ public class MarketStreamSupervisor {
         this.events = events;
         this.updates = updates;
         this.minuteListeners = List.copyOf(minuteListeners);
+        this.trading = trading;
+        this.tradeListeners = List.copyOf(tradeListeners);
     }
 
     /** Opens the streams of both markets and schedules the refresh, when enabled. */
@@ -149,6 +166,7 @@ public class MarketStreamSupervisor {
             current.shards().forEach(BinanceStreamShard::close);
         }
         latest.retainOnly(market, targets.stream().map(StreamTarget::pairId).toList());
+        trading.retainOnly(market, targets.stream().map(StreamTarget::pairId).toList());
         Map<String, StreamTarget> bySymbol =
                 targets.stream().collect(Collectors.toMap(StreamTarget::symbol, Function.identity()));
         List<BinanceStreamShard> shards = shardsFor(market, targets, bySymbol);
@@ -179,7 +197,7 @@ public class MarketStreamSupervisor {
         List<BinanceStreamShard> shards = new ArrayList<>();
         List<String> batch = new ArrayList<>();
         for (StreamTarget target : targets) {
-            List<String> names = BinanceStreamClient.streamsOf(venue, target.symbol());
+            List<String> names = streams.streamsFor(venue, target.symbol());
             if (batch.size() + names.size() > streams.maxStreamsPerConnection()) {
                 shards.add(streams.shard(venue, market + "-" + shards.size(), batch, listener));
                 batch = new ArrayList<>();
@@ -224,6 +242,29 @@ public class MarketStreamSupervisor {
                 }
                 case TickerMessage ticker -> latest.recordTicker(target.pairId(), ticker);
                 case MarkPriceMessage markPrice -> latest.recordMarkPrice(target.pairId(), markPrice);
+                case AggTradeMessage aggTrade -> {
+                    MarketTrade trade = trade(target, aggTrade);
+                    trading.recordTrade(trade);
+                    toTradeListeners(trade);
+                }
+                case BookTickerMessage book ->
+                    trading.recordBookTop(new BookTop(
+                            market,
+                            target.pairId(),
+                            book.updateId(),
+                            book.bidPrice(),
+                            book.bidQuantity(),
+                            book.askPrice(),
+                            book.askQuantity(),
+                            book.eventTime()));
+                case DepthMessage depth ->
+                    trading.recordDepth(new OrderBookDepth(
+                            market,
+                            target.pairId(),
+                            depth.lastUpdateId(),
+                            levels(depth.bids()),
+                            levels(depth.asks()),
+                            depth.eventTime()));
             }
             // T-022: the cache and the market topics, after storage and on this thread without I/O; whatever they do,
             // the candle above is already handed to storage and the next message is read.
@@ -231,6 +272,34 @@ public class MarketStreamSupervisor {
                 updates.onUpdate(market, message);
             } catch (RuntimeException failure) {
                 log.warn("NSF-03 {} realtime update failed: {}", market, failure.toString());
+            }
+        }
+
+        private MarketTrade trade(StreamTarget target, AggTradeMessage message) {
+            return new MarketTrade(
+                    market,
+                    target.pairId(),
+                    message.aggregateTradeId(),
+                    message.price(),
+                    message.quantity(),
+                    message.tradeTime(),
+                    message.buyerMaker(),
+                    message.eventTime());
+        }
+
+        private static List<OrderBookDepth.PriceLevel> levels(List<Level> levels) {
+            return levels.stream()
+                    .map(level -> new OrderBookDepth.PriceLevel(level.price(), level.quantity()))
+                    .toList();
+        }
+
+        private void toTradeListeners(MarketTrade trade) {
+            for (MarketTradeListener listener : tradeListeners) {
+                try {
+                    listener.onTrade(trade);
+                } catch (RuntimeException failure) {
+                    log.warn("NSF-03 {} trade listener failed: {}", market, failure.toString());
+                }
             }
         }
 

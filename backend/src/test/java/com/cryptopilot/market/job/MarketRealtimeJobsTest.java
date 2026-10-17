@@ -30,6 +30,7 @@ class MarketRealtimeJobsTest {
     private final AtomicInteger flushes = new AtomicInteger();
     private final AtomicInteger updates = new AtomicInteger();
     private final AtomicInteger overviews = new AtomicInteger();
+    private final AtomicInteger tradings = new AtomicInteger();
 
     @Test
     void TD56_theCacheFlush_isScheduledOnlyWhenEnabled() {
@@ -56,20 +57,23 @@ class MarketRealtimeJobsTest {
         new MarketHubJob(
                         broadcast(),
                         scheduler(),
-                        new MarketHubProperties(false, Duration.ofSeconds(1), Duration.ofSeconds(2)))
+                        new MarketHubProperties(
+                                false, Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofMillis(100)))
                 .start();
         assertThat(periods).isEmpty();
 
         new MarketHubJob(
                         broadcast(),
                         scheduler(),
-                        new MarketHubProperties(true, Duration.ofSeconds(1), Duration.ofSeconds(2)))
+                        new MarketHubProperties(
+                                true, Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofMillis(100)))
                 .start();
 
-        assertThat(periods).containsExactly(Duration.ofSeconds(1), Duration.ofSeconds(2));
+        assertThat(periods).containsExactly(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofMillis(100));
         tasks.forEach(Runnable::run);
         assertThat(updates).hasValue(1);
         assertThat(overviews).hasValue(1);
+        assertThat(tradings).hasValue(1);
     }
 
     private TaskScheduler scheduler() {
@@ -114,6 +118,11 @@ class MarketRealtimeJobsTest {
             @Override
             public int pushOverviews() {
                 return overviews.incrementAndGet();
+            }
+
+            @Override
+            public int pushTrading() {
+                return tradings.incrementAndGet();
             }
         };
     }

@@ -3,12 +3,18 @@ package com.cryptopilot.market.client;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.cryptopilot.market.client.StreamMessage.AggTradeMessage;
+import com.cryptopilot.market.client.StreamMessage.BookTickerMessage;
+import com.cryptopilot.market.client.StreamMessage.DepthMessage;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
+import com.cryptopilot.market.client.StreamMessage.Level;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketInterval;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -123,6 +129,85 @@ class BinanceStreamParserTest {
         String frame = StreamFrames.SPOT_KLINE_CAPTURED.replace("\"x\":true", "\"x\":\"true\"");
 
         assertThatThrownBy(() -> parser.parse(frame)).hasMessageContaining("boolean closed flag");
+    }
+
+    @Test
+    void TR03_anAggregatedTrade_isReadExactly() {
+        Instant at = Instant.parse("2026-10-10T08:00:00.123Z");
+
+        AggTradeMessage trade =
+                (AggTradeMessage) parser.parse(StreamFrames.aggTrade("BTCUSDT", 12345, "84282.01", "0.00150", at, true))
+                        .orElseThrow();
+
+        assertThat(trade.symbol()).isEqualTo("BTCUSDT");
+        assertThat(trade.aggregateTradeId()).isEqualTo(12345);
+        assertThat(trade.price()).isEqualTo(new BigDecimal("84282.01"));
+        assertThat(trade.quantity()).isEqualTo(new BigDecimal("0.00150"));
+        assertThat(trade.tradeTime()).isEqualTo(at);
+        assertThat(trade.eventTime()).isEqualTo(at.plusMillis(3));
+        assertThat(trade.buyerMaker()).isTrue();
+    }
+
+    /** The Spot payload has no event type: the stream name says it is a book ticker, and the read instant stamps it. */
+    @Test
+    void TR03_aBookTicker_isReadByItsStreamName_andStampedWhenRead() {
+        Instant now = Instant.parse("2026-10-10T08:00:01Z");
+        BinanceStreamParser stamped =
+                new BinanceStreamParser(JsonMapper.builder().build(), Clock.fixed(now, ZoneOffset.UTC));
+
+        BookTickerMessage book =
+                (BookTickerMessage) stamped.parse(StreamFrames.bookTicker("BTCUSDT", 400900217, "84282.00", "84282.01"))
+                        .orElseThrow();
+
+        assertThat(book.symbol()).isEqualTo("BTCUSDT");
+        assertThat(book.updateId()).isEqualTo(400900217);
+        assertThat(book.bidPrice()).isEqualTo(new BigDecimal("84282.00"));
+        assertThat(book.bidQuantity()).isEqualTo(new BigDecimal("31.21"));
+        assertThat(book.askPrice()).isEqualTo(new BigDecimal("84282.01"));
+        assertThat(book.askQuantity()).isEqualTo(new BigDecimal("40.66"));
+        assertThat(book.eventTime()).isEqualTo(now);
+    }
+
+    /** The Spot payload names no symbol either: it comes from the stream name. */
+    @Test
+    void TR03_aPartialDepth_takesItsSymbolFromTheStreamName_bestLevelsFirst() {
+        Instant now = Instant.parse("2026-10-10T08:00:02Z");
+        BinanceStreamParser stamped =
+                new BinanceStreamParser(JsonMapper.builder().build(), Clock.fixed(now, ZoneOffset.UTC));
+
+        DepthMessage depth =
+                (DepthMessage) stamped.parse(StreamFrames.depth("ETHUSDT", 160)).orElseThrow();
+
+        assertThat(depth.symbol()).isEqualTo("ETHUSDT");
+        assertThat(depth.lastUpdateId()).isEqualTo(160);
+        assertThat(depth.bids())
+                .containsExactly(
+                        new Level(new BigDecimal("84282.00"), new BigDecimal("4.39")),
+                        new Level(new BigDecimal("84281.50"), new BigDecimal("0.10")));
+        assertThat(depth.asks())
+                .containsExactly(
+                        new Level(new BigDecimal("84282.01"), new BigDecimal("7.90")),
+                        new Level(new BigDecimal("84283.00"), new BigDecimal("1.25")));
+        assertThat(depth.eventTime()).isEqualTo(now);
+    }
+
+    @Test
+    void TR03_aPayloadWithoutAnEventTypeOnAStreamNotRead_yieldsNothing() {
+        assertThat(parser.parse("{\"stream\":\"btcusdt@trade\",\"data\":{\"t\":1}}"))
+                .isEmpty();
+        assertThat(parser.parse("{\"stream\":\"\",\"data\":{\"t\":1}}")).isEmpty();
+    }
+
+    @Test
+    void TR03_aMalformedTradingPayload_isRefused() {
+        String trade = StreamFrames.aggTrade("BTCUSDT", 1, "1", "1", Instant.EPOCH, false)
+                .replace("\"m\":false", "\"m\":\"false\"");
+        String depth = StreamFrames.depth("BTCUSDT", 1)
+                .replace("\"bids\":[[", "\"bids\":{\"x\":[[")
+                .replace("]],\"asks", "]]},\"asks");
+
+        assertThatThrownBy(() -> parser.parse(trade)).hasMessageContaining("buyer-maker");
+        assertThatThrownBy(() -> parser.parse(depth)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

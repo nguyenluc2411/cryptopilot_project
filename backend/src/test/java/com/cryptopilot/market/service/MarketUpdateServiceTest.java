@@ -102,6 +102,11 @@ class MarketUpdateServiceTest {
             public int pushOverviews() {
                 return 0;
             }
+
+            @Override
+            public int pushTrading() {
+                return 0;
+            }
         };
     }
 }

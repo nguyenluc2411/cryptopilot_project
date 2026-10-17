@@ -1,5 +1,6 @@
 package com.cryptopilot.common.web;
 
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -46,7 +47,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
             "cryptopilot.web.rate-limit.enabled=true",
             "cryptopilot.web.rate-limit.login=2",
             "cryptopilot.web.rate-limit.auth=3",
-            "cryptopilot.web.rate-limit.api=2"
+            "cryptopilot.web.rate-limit.api=2",
+            "cryptopilot.web.rate-limit.paper-orders=3"
         })
 @AutoConfigureMockMvc
 @Import({TestcontainersConfig.class, RateLimitFilterTest.TestClock.class})
@@ -143,6 +145,36 @@ class RateLimitFilterTest {
         watchlist(second).andExpect(status().isOk());
     }
 
+    /** Binance counts new orders apart from request weight: placing one is not an {@code api} call. */
+    @Test
+    void TR06_placingAPaperOrder_hasItsOwnLimit_inItsOwnWindow() throws Exception {
+        String trader = bearer(UUID.randomUUID());
+
+        for (int i = 0; i < 3; i++) {
+            placeOrder(trader).andExpect(status().is(not(429)));
+        }
+        placeOrder(trader)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string(HttpHeaders.RETRY_AFTER, "5"));
+
+        watchlist(trader).andExpect(status().isOk());
+        watchlist(trader).andExpect(status().isOk());
+
+        clock.set(Instant.parse("2026-10-04T10:00:20Z"));
+
+        placeOrder(trader).andExpect(status().is(not(429)));
+    }
+
+    @Test
+    void TR06_thePaperOrderLimit_isPerAccount() throws Exception {
+        String first = bearer(UUID.randomUUID());
+        for (int i = 0; i < 4; i++) {
+            placeOrder(first);
+        }
+
+        placeOrder(bearer(UUID.randomUUID())).andExpect(status().is(not(429)));
+    }
+
     @Test
     void TD53_publicReadsAndRefusedCalls_areNotCounted() throws Exception {
         for (int i = 0; i < 5; i++) {
@@ -161,6 +193,13 @@ class RateLimitFilterTest {
         return mvc.perform(withPeer(post("/api/v1/auth/refresh"), peer)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"refreshToken\": \"not-a-token\"}"));
+    }
+
+    private ResultActions placeOrder(String bearer) throws Exception {
+        return mvc.perform(post("/api/v1/paper/orders")
+                .header(HttpHeaders.AUTHORIZATION, bearer)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"));
     }
 
     private ResultActions watchlist(String bearer) throws Exception {

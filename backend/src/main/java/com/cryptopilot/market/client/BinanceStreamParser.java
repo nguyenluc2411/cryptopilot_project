@@ -1,7 +1,11 @@
 package com.cryptopilot.market.client;
 
 import com.cryptopilot.market.model.enums.MarketInterval;
+import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -10,8 +14,10 @@ import tools.jackson.databind.json.JsonMapper;
  * Reads one text frame of a combined stream, {@code {"stream":"<name>","data":<payload>}}, into a
  * {@link StreamMessage}.
  *
- * <p>The payload's event type decides the reading: {@code kline}, {@code 24hrTicker} and
- * {@code markPriceUpdate}. Any other event — a {@code serverShutdown} notice, a subscription answer, a type
+ * <p>The payload's event type decides the reading: {@code kline}, {@code 24hrTicker}, {@code markPriceUpdate} and
+ * {@code aggTrade}. The Spot {@code bookTicker} and partial {@code depth} payloads carry no event type, so the stream
+ * name decides those: {@code <symbol>@bookTicker} and {@code <symbol>@depth<levels>[@100ms]}; they carry no event
+ * time either, and the instant this server read them stands for it (TR-03). Any other event — a {@code serverShutdown} notice, a subscription answer, a type
  * the exchange adds later — is not an error and yields nothing; the connection's own handling covers a
  * shutdown. A message of a known type that is not the documented shape (a decimal that is not a string, a
  * missing field, an interval this system never asked for) is {@link IllegalArgumentException}: one bad frame
@@ -24,15 +30,26 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>Rule: NSF-03; BR-08; TECHNICAL_DESIGN 5.4 and 7.1.
  *
  * <p>Reference: Binance. <i>WebSocket Streams for Binance</i> (Spot), "Kline/Candlestick Streams" and
- * "Individual Symbol Ticker Streams"; <i>USDⓈ-M Futures</i>, "Kline/Candlestick Streams" and "Mark Price
+ * "Individual Symbol Ticker Streams", "Aggregate Trade Streams", "Individual Symbol Book Ticker Streams" and "Partial
+ * Book Depth Streams"; <i>USDⓈ-M Futures</i>, "Kline/Candlestick Streams" and "Mark Price
  * Stream".
  */
 public final class BinanceStreamParser {
 
     private final JsonMapper json;
+    private final Clock clock;
 
+    /** A parser that stamps the payloads without an event time with the system clock. */
     public BinanceStreamParser(JsonMapper json) {
+        this(json, Clock.systemUTC());
+    }
+
+    /**
+     * @param clock stamps the {@code bookTicker} and {@code depth} payloads, which carry no event time
+     */
+    public BinanceStreamParser(JsonMapper json, Clock clock) {
         this.json = json;
+        this.clock = clock;
     }
 
     /**
@@ -41,9 +58,11 @@ public final class BinanceStreamParser {
      * @throws IllegalArgumentException when the frame is not a combined-stream message of the documented shape
      */
     public Optional<StreamMessage> parse(String frame) {
+        JsonNode root;
         JsonNode data;
         try {
-            data = json.readTree(frame).required("data");
+            root = json.readTree(frame);
+            data = root.required("data");
         } catch (RuntimeException notJson) {
             throw new IllegalArgumentException("not a combined-stream message: " + notJson.getMessage(), notJson);
         }
@@ -52,6 +71,8 @@ public final class BinanceStreamParser {
                 case "kline" -> Optional.of(kline(data));
                 case "24hrTicker" -> Optional.of(ticker(data));
                 case "markPriceUpdate" -> Optional.of(markPrice(data));
+                case "aggTrade" -> Optional.of(aggTrade(data));
+                case "" -> byStreamName(root.path("stream").asString(""), data);
                 default -> Optional.empty();
             };
         } catch (IllegalArgumentException malformed) {
@@ -62,6 +83,71 @@ public final class BinanceStreamParser {
                             + malformed.getMessage(),
                     malformed);
         }
+    }
+
+    /** The payloads without an event type, read by the name of the stream that carried them. */
+    private Optional<StreamMessage> byStreamName(String stream, JsonNode data) {
+        int at = stream.indexOf('@');
+        if (at <= 0) {
+            return Optional.empty();
+        }
+        String symbol = stream.substring(0, at).toUpperCase(Locale.ROOT);
+        String kind = stream.substring(at + 1);
+        if (kind.equals("bookTicker")) {
+            return Optional.of(bookTicker(data));
+        }
+        if (kind.startsWith("depth")) {
+            return Optional.of(depth(symbol, data));
+        }
+        return Optional.empty();
+    }
+
+    private static StreamMessage aggTrade(JsonNode data) {
+        JsonNode buyerMaker = data.required("m");
+        if (!buyerMaker.isBoolean()) {
+            throw new IllegalArgumentException("expected a boolean buyer-maker flag, found " + buyerMaker);
+        }
+        return new StreamMessage.AggTradeMessage(
+                symbol(data),
+                BinanceResponseParser.count(data.required("a")),
+                BinanceResponseParser.decimal(data.required("p")),
+                BinanceResponseParser.decimal(data.required("q")),
+                BinanceResponseParser.instant(data.required("T")),
+                buyerMaker.booleanValue(),
+                eventTime(data));
+    }
+
+    private StreamMessage bookTicker(JsonNode data) {
+        return new StreamMessage.BookTickerMessage(
+                symbol(data),
+                BinanceResponseParser.count(data.required("u")),
+                BinanceResponseParser.decimal(data.required("b")),
+                BinanceResponseParser.decimal(data.required("B")),
+                BinanceResponseParser.decimal(data.required("a")),
+                BinanceResponseParser.decimal(data.required("A")),
+                clock.instant());
+    }
+
+    private StreamMessage depth(String symbol, JsonNode data) {
+        return new StreamMessage.DepthMessage(
+                symbol,
+                BinanceResponseParser.count(data.required("lastUpdateId")),
+                levels(data.required("bids")),
+                levels(data.required("asks")),
+                clock.instant());
+    }
+
+    private static List<StreamMessage.Level> levels(JsonNode side) {
+        if (!side.isArray()) {
+            throw new IllegalArgumentException("expected an array of price levels, found " + side);
+        }
+        List<StreamMessage.Level> levels = new ArrayList<>(side.size());
+        for (JsonNode level : side) {
+            levels.add(new StreamMessage.Level(
+                    BinanceResponseParser.decimal(level.required(0)),
+                    BinanceResponseParser.decimal(level.required(1))));
+        }
+        return levels;
     }
 
     private static StreamMessage kline(JsonNode data) {

@@ -3,11 +3,13 @@ package com.cryptopilot.market.client;
 import com.cryptopilot.market.model.enums.MarketInterval;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * One message of a Binance market stream, in the client's own types.
  *
- * <p>The three kinds NSF-03 subscribes to and nothing else. Every price, rate and volume is a {@link BigDecimal}
+ * <p>The three kinds NSF-03 subscribes to, and the three of the trading screen and the paper engine (TR-03), and
+ * nothing else. Every price, rate and volume is a {@link BigDecimal}
  * parsed from the exchange's string, as on the REST side (TECHNICAL_DESIGN 5.4); times are UTC instants.
  *
  * <p>Rule: NSF-03; BR-08, BR-09; TECHNICAL_DESIGN 7.1.
@@ -79,4 +81,76 @@ public sealed interface StreamMessage {
             Instant nextFundingTime,
             Instant eventTime)
             implements StreamMessage {}
+
+    /**
+     * One aggregated trade, {@code <symbol>@aggTrade}: the trades of one taker order at one price, pushed as they
+     * happen. The paper engine fills resting orders on it and the trading screen lists it (TR-03).
+     *
+     * @param symbol the pair
+     * @param aggregateTradeId the exchange's id of the aggregated trade, increasing per pair
+     * @param price the traded price
+     * @param quantity the traded base quantity
+     * @param tradeTime when the trade happened
+     * @param buyerMaker whether the buyer was the maker, so the taker sold
+     * @param eventTime when the exchange produced the message
+     */
+    record AggTradeMessage(
+            String symbol,
+            long aggregateTradeId,
+            BigDecimal price,
+            BigDecimal quantity,
+            Instant tradeTime,
+            boolean buyerMaker,
+            Instant eventTime)
+            implements StreamMessage {}
+
+    /**
+     * The best bid and ask, {@code <symbol>@bookTicker}, pushed whenever either changes. The Spot payload carries no
+     * event time, so {@code eventTime} is when this server read it (TR-03).
+     *
+     * @param symbol the pair
+     * @param updateId the order book update id the values belong to
+     * @param bidPrice the best bid
+     * @param bidQuantity the quantity at the best bid
+     * @param askPrice the best ask
+     * @param askQuantity the quantity at the best ask
+     * @param eventTime when this server read the message
+     */
+    record BookTickerMessage(
+            String symbol,
+            long updateId,
+            BigDecimal bidPrice,
+            BigDecimal bidQuantity,
+            BigDecimal askPrice,
+            BigDecimal askQuantity,
+            Instant eventTime)
+            implements StreamMessage {}
+
+    /**
+     * The top levels of the order book, {@code <symbol>@depth<levels>@100ms}: a full snapshot of those levels each time,
+     * best first. The Spot payload carries neither the symbol nor an event time, so the symbol comes from the stream
+     * name and {@code eventTime} is when this server read it (TR-03).
+     *
+     * @param symbol the pair
+     * @param lastUpdateId the order book update id of the snapshot
+     * @param bids the bids, highest price first
+     * @param asks the asks, lowest price first
+     * @param eventTime when this server read the message
+     */
+    record DepthMessage(String symbol, long lastUpdateId, List<Level> bids, List<Level> asks, Instant eventTime)
+            implements StreamMessage {
+
+        public DepthMessage {
+            bids = List.copyOf(bids);
+            asks = List.copyOf(asks);
+        }
+    }
+
+    /**
+     * One price level of a {@link DepthMessage}.
+     *
+     * @param price the level's price
+     * @param quantity the base quantity resting at it
+     */
+    record Level(BigDecimal price, BigDecimal quantity) {}
 }

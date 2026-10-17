@@ -2,13 +2,16 @@ package com.cryptopilot.market.controller;
 
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.market.dto.response.CandlesResponse;
+import com.cryptopilot.market.dto.response.DepthResponse;
 import com.cryptopilot.market.dto.response.FuturesMetricsResponse;
 import com.cryptopilot.market.dto.response.FuturesStatsResponse;
+import com.cryptopilot.market.dto.response.MarketTradesResponse;
 import com.cryptopilot.market.dto.response.PairResponse;
 import com.cryptopilot.market.dto.response.SpotStatsResponse;
 import com.cryptopilot.market.service.CandleService;
 import com.cryptopilot.market.service.MarketStatsService;
 import com.cryptopilot.market.service.PairService;
+import com.cryptopilot.market.service.TradingDataService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -43,6 +46,7 @@ public class MarketController {
     private final PairService pairs;
     private final CandleService candles;
     private final MarketStatsService stats;
+    private final TradingDataService trading;
 
     /** The pairs enabled on a market (BR-07), a page at a time, in display order. */
     @Operation(summary = "Pairs enabled on a market, a page at a time (BR-07)")
@@ -77,6 +81,37 @@ public class MarketController {
                     @RequestParam(required = false)
                     Instant to) {
         return candles.closedCandles(market, symbol, tf, limit, from, to);
+    }
+
+    /** The latest top levels of a pair's order book, before {@code /topic/depth} takes over (TR-03). */
+    @Operation(summary = "Latest order book levels of a pair, the first state of the order book panel (TR-03)")
+    @ApiResponse(
+            responseCode = "200",
+            description = "The levels, best first; empty with no lastUpdateId when no current depth is held")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(
+            responseCode = "404",
+            description = "MSG41: no pair with that symbol is enabled on that market (BR-07)")
+    @GetMapping("/{market}/{symbol}/depth")
+    public DepthResponse depth(
+            @Parameter(description = "spot or futures, in any case") @PathVariable String market,
+            @PathVariable String symbol) {
+        return trading.depth(market, symbol);
+    }
+
+    /** The latest trades of a pair, newest first, before {@code /topic/trades} takes over (TR-03). */
+    @Operation(summary = "Latest market trades of a pair, newest first, the first state of the trades panel (TR-03)")
+    @ApiResponse(responseCode = "200", description = "The trades; empty when none was streamed yet")
+    @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(
+            responseCode = "404",
+            description = "MSG41: no pair with that symbol is enabled on that market (BR-07)")
+    @GetMapping("/{market}/{symbol}/trades")
+    public MarketTradesResponse trades(
+            @Parameter(description = "spot or futures, in any case") @PathVariable String market,
+            @PathVariable String symbol,
+            @Parameter(description = "1 to 50; default 50") @RequestParam(required = false) Integer limit) {
+        return trading.trades(market, symbol, limit);
     }
 
     /** The latest stored ticker of a Spot pair. */

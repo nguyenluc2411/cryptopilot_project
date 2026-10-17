@@ -9,6 +9,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.MarketTrade;
+import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.OrderBookDepth.PriceLevel;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.support.FixedClockConfig;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.jayway.jsonpath.JsonPath;
@@ -55,6 +60,9 @@ class MarketControllerTest {
     @Autowired
     private JdbcClient sql;
 
+    @Autowired
+    private TradingMarketData trading;
+
     private MarketTestData data;
     private Instant minute;
 
@@ -76,7 +84,7 @@ class MarketControllerTest {
     @Test
     void BR07_pairs_listOnlyThePairsEnabledOnTheMarket_inDisplayOrder() throws Exception {
         data.pair("ETHUSDT", true, true, "TRADING", "TRADING", 2);
-        data.pair("BTCUSDT", true, false, "TRADING", null, 1);
+        UUID btc = data.pair("BTCUSDT", true, false, "TRADING", null, 1);
         data.pair("SOLUSDT", false, true, null, "TRADING", 0);
         data.pair("XRPUSDT", false, false, "TRADING", "TRADING", 0);
 
@@ -85,6 +93,7 @@ class MarketControllerTest {
                 .andExpect(jsonPath("$.total").value(2))
                 .andExpect(jsonPath("$.page").value(1))
                 .andExpect(jsonPath("$.pageSize").value(20))
+                .andExpect(jsonPath("$.items[0].pairId").value(btc.toString()))
                 .andExpect(jsonPath("$.items[0].symbol").value("BTCUSDT"))
                 .andExpect(jsonPath("$.items[0].market").value("SPOT"))
                 .andExpect(jsonPath("$.items[0].baseAsset").value("BTC"))
@@ -138,6 +147,20 @@ class MarketControllerTest {
         assertMsg01(mvc.perform(get(BASE + "/pairs").param("market", "spot").param("page", "0")));
         assertMsg01(mvc.perform(get(BASE + "/pairs").param("market", "spot").param("pageSize", "0")));
         assertMsg01(mvc.perform(get(BASE + "/pairs").param("market", "spot").param("pageSize", "101")));
+    }
+
+    /**
+     * CR-04: the page check every list shares (Paging) keeps MSG01 and names the rejected parameter as well, the same
+     * shape as every other list endpoint. The `errors` property is an addition; nothing the response held before moved.
+     */
+    @Test
+    void CR04_pairs_aPageOutOfRange_namesTheRejectedParameter() throws Exception {
+        mvc.perform(get(BASE + "/pairs").param("market", "spot").param("page", "0"))
+                .andExpect(jsonPath("$.messageCode").value("MSG01"))
+                .andExpect(jsonPath("$.errors.page").value("MSG15"));
+        mvc.perform(get(BASE + "/pairs").param("market", "spot").param("pageSize", "101"))
+                .andExpect(jsonPath("$.messageCode").value("MSG01"))
+                .andExpect(jsonPath("$.errors.pageSize").value("MSG15"));
     }
 
     // ------------------------------------------------------------------ candles
@@ -402,6 +425,67 @@ class MarketControllerTest {
     }
 
     // ------------------------------------------------------------------ access
+
+    // ------------------------------------------------------------------ trading snapshots (TR-03)
+
+    /** TR-03: the order book panel's first state is the latest depth held, best levels first, decimals as strings. */
+    @Test
+    void TR03_depth_isTheLatestSnapshotHeld_andEmptyWhenNoneIsCurrent() throws Exception {
+        UUID btc = data.pair("BTCUSDT", true, true, "TRADING", "TRADING", 0);
+
+        mvc.perform(get(BASE + "/spot/BTCUSDT/depth"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.symbol").value("BTCUSDT"))
+                .andExpect(jsonPath("$.lastUpdateId").doesNotExist())
+                .andExpect(jsonPath("$.bids").isEmpty());
+
+        trading.recordDepth(new OrderBookDepth(
+                MarketType.SPOT,
+                btc,
+                160,
+                List.of(new PriceLevel(new BigDecimal("63000.10"), new BigDecimal("0.5"))),
+                List.of(new PriceLevel(new BigDecimal("63000.20"), new BigDecimal("1.25"))),
+                FixedClockConfig.NOW));
+
+        mvc.perform(get(BASE + "/SPOT/btcusdt/depth"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.market").value("SPOT"))
+                .andExpect(jsonPath("$.lastUpdateId").value(160))
+                .andExpect(jsonPath("$.bids[0][0]").value("63000.10"))
+                .andExpect(jsonPath("$.bids[0][1]").value("0.5"))
+                .andExpect(jsonPath("$.asks[0][0]").value("63000.20"));
+        assertMsg41(mvc.perform(get(BASE + "/spot/NOPEUSDT/depth")));
+        assertMsg01(mvc.perform(get(BASE + "/margin/BTCUSDT/depth")));
+    }
+
+    /** TR-03: the trades panel's first state is the latest trades, newest first, at most the limit asked for. */
+    @Test
+    void TR03_trades_areTheLatestNewestFirst_upToTheLimit() throws Exception {
+        UUID btc = data.pair("BTCUSDT", true, false, "TRADING", null, 0);
+        for (long id = 1; id <= 3; id++) {
+            trading.recordTrade(new MarketTrade(
+                    MarketType.SPOT,
+                    btc,
+                    id,
+                    new BigDecimal("63000." + id),
+                    new BigDecimal("0.01"),
+                    FixedClockConfig.NOW.plusMillis(id),
+                    id == 2,
+                    FixedClockConfig.NOW));
+        }
+
+        mvc.perform(get(BASE + "/spot/BTCUSDT/trades").param("limit", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.trades.length()").value(2))
+                .andExpect(jsonPath("$.trades[0].id").value(3))
+                .andExpect(jsonPath("$.trades[0].price").value("63000.3"))
+                .andExpect(jsonPath("$.trades[1].buyerMaker").value(true));
+        mvc.perform(get(BASE + "/spot/BTCUSDT/trades"))
+                .andExpect(jsonPath("$.trades.length()").value(3));
+        assertMsg01(mvc.perform(get(BASE + "/spot/BTCUSDT/trades").param("limit", "0")));
+        assertMsg01(mvc.perform(get(BASE + "/spot/BTCUSDT/trades").param("limit", "51")));
+        assertMsg41(mvc.perform(get(BASE + "/futures/BTCUSDT/trades")));
+    }
 
     /** SRS 3.1.3: the market data is readable without a token, and only readable: a write needs a session and has none. */
     @Test

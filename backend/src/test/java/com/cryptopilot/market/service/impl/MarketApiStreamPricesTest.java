@@ -8,6 +8,7 @@ import com.cryptopilot.market.client.StreamFrames;
 import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.config.PriceCacheProperties;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
@@ -18,6 +19,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -60,9 +62,12 @@ class MarketApiStreamPricesTest {
         cache = new PriceCacheServiceImpl(redis, PROPERTIES, clock, new SimpleMeterRegistry());
         api = new MarketApiImpl(
                 mock(CryptoPairRepository.class),
+                mock(CoinRepository.class),
                 mock(LeverageBracketRepository.class),
                 cache,
                 mock(MinuteKlineService.class),
+                mock(CoinWriter.class),
+                mock(TradingMarketData.class),
                 mock(FuturesMetricsRepository.class));
     }
 
@@ -105,6 +110,17 @@ class MarketApiStreamPricesTest {
         stream(MarketType.SPOT, StreamFrames.ticker("BTCUSDT", CAPTURED_AT));
 
         assertThat(api.currentLastPrice(MarketType.SPOT, "BTCUSDT")).contains(new BigDecimal("84282.01"));
+    }
+
+    /** TR-04: the batch read gives the same answer as one read per pair, in one round trip. */
+    @Test
+    void TR04_theBatchRead_givesTheCurrentPrices_andLeavesOutAPairWithoutOne() {
+        stream(MarketType.SPOT, StreamFrames.ticker("BTCUSDT", CAPTURED_AT));
+
+        assertThat(api.currentLastPrices(MarketType.SPOT, List.of("BTCUSDT", "ETHUSDT")))
+                .containsOnlyKeys("BTCUSDT")
+                .containsEntry("BTCUSDT", new BigDecimal("84282.01"));
+        assertThat(api.currentLastPrices(MarketType.SPOT, List.of())).isEmpty();
     }
 
     private void stream(MarketType market, String frame) {

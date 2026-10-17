@@ -73,6 +73,7 @@ public class SymbolSyncWriter {
 
     private final CryptoPairRepository pairs;
     private final CoinRepository coins;
+    private final CoinWriter coinWriter;
 
     /** Applies one market's exchange information to the table, all of it or none of it. */
     @Transactional
@@ -82,6 +83,7 @@ public class SymbolSyncWriter {
                 listed.stream().collect(Collectors.toMap(ExchangeSymbol::symbol, Function.identity(), (a, b) -> a));
         List<CryptoPair> universe = new ArrayList<>(pairs.findAllForSync());
         List<String> created = createMissingSeeds(market, bySymbol, seedSymbols, universe);
+        placeSeeds(seedSymbols, universe);
         List<String> filterChanges = new ArrayList<>();
         List<String> flagged = new ArrayList<>();
 
@@ -186,8 +188,34 @@ public class SymbolSyncWriter {
         return created;
     }
 
+    /**
+     * A seed pair takes its place in lists from its place in the seed list, which is written in the order the
+     * pairs should be shown (BTCUSDT first); a pair outside the list keeps its own. Without this every pair has
+     * the default 0 and lists fall back to the alphabet, ADAUSDT first.
+     */
+    private void placeSeeds(Collection<String> seeds, List<CryptoPair> universe) {
+        List<String> ordered = List.copyOf(seeds);
+        for (CryptoPair pair : universe) {
+            int index = ordered.indexOf(pair.getSymbol());
+            if (index >= 0) {
+                pair.placeAt(index + 1);
+            }
+        }
+    }
+
+    /**
+     * The coin of an asset, stored if it is not yet. The paper accounts store coins too (TR-04), so the insert is the
+     * one that cannot collide, and it commits by itself ({@link CoinWriter}): if another writer stored the symbol
+     * between the lookup and the insert, the insert does nothing and the lookup after it reads that writer's row,
+     * instead of failing on {@code uq_coin_symbol}; and no coin lock is held across the synchronisation, so it cannot
+     * deadlock with an opening that stores coins in another order.
+     */
     private Coin coinFor(String asset) {
-        return coins.findBySymbol(asset).orElseGet(() -> coins.save(Coin.fromExchange(asset)));
+        return coins.findBySymbol(asset).orElseGet(() -> {
+            coinWriter.storeIfAbsent(asset);
+            return coins.findBySymbol(asset)
+                    .orElseThrow(() -> new IllegalStateException("coin " + asset + " was stored but is not read back"));
+        });
     }
 
     private static void flag(MarketType market, CryptoPair pair, String reason, List<String> flagged) {

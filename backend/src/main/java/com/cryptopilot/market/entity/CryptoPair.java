@@ -256,6 +256,14 @@ public class CryptoPair extends BaseEntity {
         }
     }
 
+    /** Places the pair at this position in lists; lower first. */
+    public void placeAt(int displayOrder) {
+        if (displayOrder < 0) {
+            throw new IllegalArgumentException("displayOrder must not be negative: " + displayOrder);
+        }
+        this.displayOrder = displayOrder;
+    }
+
     /** Records that NSF-01 reached this pair at this instant, from the injected clock. */
     public void markSynced(Instant at) {
         this.lastSyncedAt = Objects.requireNonNull(at, "at must not be null");

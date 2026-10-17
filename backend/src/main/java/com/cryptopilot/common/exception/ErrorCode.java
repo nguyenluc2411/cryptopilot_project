@@ -272,7 +272,35 @@ public enum ErrorCode {
      * PAUSED (SRS 3.4.3). SRS section 5.3 has no text for this, so it borrows MSG43 like
      * {@link #TRADING_PLAN_STATUS_TRANSITION_INVALID} (A-38).
      */
-    ALERT_STATUS_TRANSITION_INVALID(HttpStatus.CONFLICT, "MSG43");
+    ALERT_STATUS_TRANSITION_INVALID(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A paper wallet does not hold the free amount a transfer or an order needs (TR-04). SRS 5.3 has no message for
+     * it yet, so it borrows MSG01; the stable code tells the client which text to show, and the message arguments
+     * carry the coin, the amount needed and the amount free.
+     */
+    PAPER_INSUFFICIENT_BALANCE(HttpStatus.BAD_REQUEST, "MSG01"),
+
+    /**
+     * The paper order has finished (filled, cancelled or expired), so it cannot be cancelled (TR-02). SRS 5.3 has no
+     * text for this, so it borrows MSG43 like {@link #TRADING_PLAN_STATUS_TRANSITION_INVALID} (A-38). 409: the request
+     * is valid and the order's current status refuses it; the response's message argument is that status.
+     */
+    PAPER_ORDER_NOT_OPEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A paper LIMIT_MAKER order would execute on arrival, taking liquidity, so it is refused and not stored, as the
+     * exchange refuses it (TR-12). SRS 5.3 has no text for this, so it borrows MSG43 like {@link #PAPER_ORDER_NOT_OPEN}
+     * (A-38). 409: the request is valid and the current market refuses it.
+     */
+    PAPER_ORDER_WOULD_TAKE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A paper stop limit's stop is the last price itself, so it would trigger at once, and the side of the price it
+     * waits on cannot be told; it is refused and not stored, as the exchange refuses it (TR-09). Borrows MSG43 like
+     * {@link #PAPER_ORDER_NOT_OPEN} (A-38). 409: the request is valid and the current market refuses it.
+     */
+    PAPER_ORDER_WOULD_TRIGGER(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;
