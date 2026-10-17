@@ -81,6 +81,11 @@
 			<groupId>org.springframework.modulith</groupId>
 			<artifactId>spring-modulith-starter-jdbc</artifactId>
 		</dependency>
+		<!-- T-057: Jakarta Mail and JavaMailSender for the SMTP adapter of notification.client. In the Spring Boot BOM. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
+		</dependency>
 
 		<!-- Spring Security arrives with the first credential the system stores: it publishes the
 		     BCryptPasswordEncoder of TECHNICAL_DESIGN 1.3 and the filter chain that decides which

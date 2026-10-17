@@ -13,6 +13,11 @@ cryptopilot:
   outbox:
     # T-056 runs in this profile: failed event deliveries (mail) are retried.
     enabled: true
+  notification:
+    mail:
+      # From the environment only, no default: a production mail must come from a real sender and link to the real site.
+      from: ${SMTP_FROM}
+      public-base-url: ${PUBLIC_BASE_URL}
   web:
     # From the environment only: the Nginx address or network. No default, so nothing is trusted until it is set.
     trusted-proxies: ${TRUSTED_PROXIES:}
