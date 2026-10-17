@@ -16,6 +16,9 @@ logging:
     com.cryptopilot: DEBUG
 
 cryptopilot:
+  outbox:
+    # T-056 runs in this profile: failed event deliveries (mail) are retried.
+    enabled: true
   web:
     # A local proxy (e.g. a dev server forwarding /api) may pass the browser's address.
     trusted-proxies: ${TRUSTED_PROXIES:127.0.0.1,::1}

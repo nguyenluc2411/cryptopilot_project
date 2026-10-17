@@ -21,6 +21,20 @@ spring:
       timeout: 2s
   application:
     name: cryptopilot
+  modulith:
+    events:
+      # ADR-010, T-056: the transactional outbox. Flyway owns event_publication (V1), so the registry never creates it.
+      jdbc:
+        schema-initialization:
+          enabled: false
+      # Only @ApplicationModuleListener deliveries are recorded; the in-memory @TransactionalEventListener hand-offs of
+      # the market, trading, paper and watchlist workers stay as they were.
+      registry-trigger-annotation: org.springframework.modulith.events.ApplicationModuleListener
+      # A delivered publication is deleted at once: the auth events carry a working link (A-18), which must not stay
+      # in the table after the mail went out.
+      completion-mode: delete
+      # Left off: OutboxProcessorJob runs at start-up instead, after the application is ready and within the retry cap.
+      republish-outstanding-events-on-restart: false
   threads:
     virtual:
       enabled: true
@@ -60,6 +74,18 @@ spring:
       demo_password_hash: ${DEMO_PASSWORD_HASH:!DEMO_PASSWORD_HASH_NOT_SET}
 
 cryptopilot:
+  outbox:
+    # T-056, ADR-010: resubmits the event publications whose listener failed. Off here, on in the dev and prod
+    # profiles, so a test context schedules nothing.
+    enabled: false
+    interval: 1m
+    # A failed delivery is retried after 1, 2 and then 4 minutes, at most max-retries times.
+    first-retry-after: 1m
+    max-retries: 3
+    # A publication still unfinished this long after its last attempt is taken for crashed and retried.
+    stale-after: 5m
+    # Anything older is deleted, delivered or not: the longest link an event carries lives 24 hours (BR-01).
+    retention: 24h
   web:
     # Reverse proxies whose X-Forwarded-For is believed: addresses or CIDR ranges, comma-separated. Empty trusts none,
     # so the direct peer is the client. Set wherever Nginx sits in front.

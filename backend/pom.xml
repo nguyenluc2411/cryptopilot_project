@@ -75,6 +75,12 @@
 			<groupId>org.springframework.modulith</groupId>
 			<artifactId>spring-modulith-starter-core</artifactId>
 		</dependency>
+		<!-- ADR-010, T-056: the event publication registry over JDBC. Its rows live in event_publication, which V1
+		     creates; the registry's own schema initializer stays off (application.yml). -->
+		<dependency>
+			<groupId>org.springframework.modulith</groupId>
+			<artifactId>spring-modulith-starter-jdbc</artifactId>
+		</dependency>
 
 		<!-- Spring Security arrives with the first credential the system stores: it publishes the
 		     BCryptPasswordEncoder of TECHNICAL_DESIGN 1.3 and the filter chain that decides which

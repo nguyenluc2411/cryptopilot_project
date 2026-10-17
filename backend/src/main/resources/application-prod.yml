@@ -10,6 +10,9 @@ logging:
       console: ecs
 
 cryptopilot:
+  outbox:
+    # T-056 runs in this profile: failed event deliveries (mail) are retried.
+    enabled: true
   web:
     # From the environment only: the Nginx address or network. No default, so nothing is trusted until it is set.
     trusted-proxies: ${TRUSTED_PROXIES:}

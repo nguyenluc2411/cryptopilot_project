@@ -42,8 +42,17 @@ public class TestcontainersConfig {
      */
     private static final int MAX_CONNECTIONS = 300;
 
-    private static final PostgreSQLContainer TIMESCALE = new PostgreSQLContainer(TIMESCALE_IMAGE)
-            .withDatabaseName("cryptopilot")
+    /**
+     * No context stops the shared database: the first context closed at the end of the run would otherwise stop it
+     * under the others, whose event publication registry still reads it while closing (T-056). Testcontainers removes
+     * the container when the JVM exits.
+     */
+    private static final PostgreSQLContainer TIMESCALE = new PostgreSQLContainer(TIMESCALE_IMAGE) {
+        @Override
+        public void stop() {
+            // Shared by every context; see above.
+        }
+    }.withDatabaseName("cryptopilot")
             .withUsername("cryptopilot")
             .withPassword("cryptopilot")
             .withCommand("postgres", "-c", "max_connections=" + MAX_CONNECTIONS);
