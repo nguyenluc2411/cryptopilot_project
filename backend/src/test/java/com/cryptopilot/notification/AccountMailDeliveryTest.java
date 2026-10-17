@@ -187,16 +187,51 @@ class AccountMailDeliveryTest {
         await().atMost(WAIT).until(() -> unfinishedDeliveries() == 0);
     }
 
-    /** NSF-15: a delivery that has used its three retries is left alone. */
+    /** NSF-15: a delivery that has used its three retries is left alone, and reported once without its payload. */
     @Test
-    void NSF15_aDeliveryOutOfRetries_isNotResubmitted() {
+    void NSF15_aDeliveryOutOfRetries_isNotResubmittedAndReportedOnce(CapturedOutput output) {
         failOneDelivery("exhausted");
         sql.sql("update event_publication set completion_attempts = 4").update();
+        String id = sql.sql("select id::text from event_publication")
+                .query(String.class)
+                .single();
 
+        assertThat(outbox.retryFailedDeliveries()).isZero();
         assertThat(outbox.retryFailedDeliveries()).isZero();
 
         assertThat(failedDeliveries()).hasSize(1);
         assertThat(smtp.sent()).isEmpty();
+        List<String> giveUps = output.getAll()
+                .lines()
+                .filter(line -> line.contains("giving up on publication " + id))
+                .toList();
+        assertThat(giveUps).hasSize(1);
+        assertThat(giveUps.get(0))
+                .contains("WARN")
+                .contains("com.cryptopilot.auth.event.VerificationTokenIssued")
+                .contains("AccountLinkMailListener")
+                .doesNotContain("exhausted" + TEST_DOMAIN)
+                .doesNotContain("token");
+    }
+
+    /** NSF-15: the stale sweep measures from the last attempt, so a delivery still in flight is not touched. */
+    @Test
+    void NSF15_aDeliveryInFlight_isNotCountedAsFailed() {
+        failOneDelivery("in-flight");
+        sql.sql("update event_publication set status = 'PROCESSING', publication_date = :old,"
+                        + " last_resubmission_date = :recent")
+                .param("old", Timestamp.from(Instant.now().minus(Duration.ofMinutes(10))))
+                .param("recent", Timestamp.from(Instant.now().minus(Duration.ofMinutes(1))))
+                .update();
+
+        assertThat(outbox.retryFailedDeliveries()).isZero();
+
+        assertThat(sql.sql("select status from event_publication")
+                        .query(String.class)
+                        .single())
+                .isEqualTo("PROCESSING");
+        assertThat(smtp.sent()).isEmpty();
+        sql.sql("delete from event_publication").update();
     }
 
     /** A-18: past the retention a publication is deleted, so its link does not stay in the table. */

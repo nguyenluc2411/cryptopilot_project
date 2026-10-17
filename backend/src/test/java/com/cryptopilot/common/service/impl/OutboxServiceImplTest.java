@@ -87,6 +87,16 @@ class OutboxServiceImplTest {
                 .isFalse();
     }
 
+    @Test
+    void NSF15_onlyAFailureOnTheLastAllowedAttempt_isExhausted() {
+        assertThat(OutboxServiceImpl.isExhausted(publication(Status.FAILED, 4, PUBLISHED), PROPERTIES))
+                .isTrue();
+        assertThat(OutboxServiceImpl.isExhausted(publication(Status.FAILED, 3, PUBLISHED), PROPERTIES))
+                .isFalse();
+        assertThat(OutboxServiceImpl.isExhausted(publication(Status.PROCESSING, 4, PUBLISHED), PROPERTIES))
+                .isFalse();
+    }
+
     private static EventPublication publication(Status status, int attempts, Instant lastResubmission) {
         EventPublication publication = mock(EventPublication.class);
         when(publication.getStatus()).thenReturn(status);

@@ -37,7 +37,8 @@ spring:
       republish-outstanding-events-on-restart: false
   mail:
     # T-057: the SMTP server of the mail adapter. Empty host: no mail is sent and the links are logged instead (never
-    # in prod, which refuses to start). STARTTLS is used whenever the server offers it (port 587).
+    # in prod, which refuses to start). STARTTLS is required: a server that does not offer it gets neither the login nor
+    # the mail, and the delivery fails and is retried. Only a local sink such as Mailpit sets SMTP_STARTTLS_REQUIRED=false.
     host: ${SMTP_HOST:}
     port: ${SMTP_PORT:587}
     username: ${SMTP_USER:}
@@ -45,6 +46,8 @@ spring:
     default-encoding: UTF-8
     properties:
       "[mail.smtp.starttls.enable]": true
+      "[mail.smtp.starttls.required]": ${SMTP_STARTTLS_REQUIRED:true}
+      "[mail.smtp.ssl.checkserveridentity]": true
       "[mail.smtp.connectiontimeout]": 5000
       "[mail.smtp.timeout]": 10000
       "[mail.smtp.writetimeout]": 10000
@@ -92,7 +95,8 @@ cryptopilot:
     # profiles, so a test context schedules nothing.
     enabled: false
     interval: 1m
-    # A failed delivery is retried after 1, 2 and then 4 minutes, at most max-retries times.
+    # A failed delivery is retried at least 1, 2 and then 4 minutes after its last attempt, at most max-retries times.
+    # A retry runs on the first run after it is due, so with a 1-minute interval the waits are about 2, 2 and 4 minutes.
     first-retry-after: 1m
     max-retries: 3
     # A publication still unfinished this long after its last attempt is taken for crashed and retried.

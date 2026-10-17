@@ -7,9 +7,10 @@ package com.cryptopilot.common.service;
 public interface OutboxService {
 
     /**
-     * Counts crashed deliveries as failed, then resubmits every failed one whose next retry is due.
+     * Counts crashed deliveries as failed, then resubmits every failed one whose next retry is due, and reports once
+     * each delivery that has run out of retries.
      *
-     * @return how many publications were resubmitted
+     * @return how many publications were due for a retry
      */
     int retryFailedDeliveries();
 

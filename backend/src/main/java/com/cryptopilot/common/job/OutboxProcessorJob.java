@@ -11,8 +11,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Runs the outbox processor of T-056 once the application is ready and then every {@code interval}, so the deliveries
- * a restart interrupted are retried as well. Orchestration only; the rules are in {@link OutboxService}. One instance,
- * no distributed lock: a resubmission claims its row first, so two runs never resubmit the same one.
+ * a restart interrupted are retried as well. Orchestration only; the rules are in {@link OutboxService}. Written for the
+ * single backend instance of TD 1.3, so there is no distributed lock; a second instance would need one (ShedLock).
  *
  * <p>Rule: NSF-15; ADR-010.
  */
