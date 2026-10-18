@@ -12,9 +12,9 @@ import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
-import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
+import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperMatchingWatermarkRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -58,6 +58,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final PaperMatchingWatermarkRepository watermarks;
     private final UserLock lock;
     private final MarketApi market;
+    private final QuoteUsdtRate usdtRates;
     private final Clock clock;
 
     @Override
@@ -149,9 +150,9 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     }
 
     /**
-     * The price a replayed market stop executes at: for a STOP_LOSS, the open of the candle that triggered it when that
-     * candle opened past the stop — below it for a SELL, above it for a BUY — as the market had gapped through it;
-     * otherwise, and for a TAKE_PROFIT, the stop itself (Q-51).
+     * The price a replayed STOP_LOSS or TAKE_PROFIT executes at: the open of the candle that triggered it when its
+     * trigger condition already held at that open, as the market had gapped through the stop; otherwise the stop
+     * (Q-51). A trailing stop triggers on the pullback, the way of a STOP_LOSS of its side.
      *
      * <p>Rule: TR-09; PT-R14.
      *
@@ -159,12 +160,13 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
      * University Press, ch. 4 (a triggered stop becomes a market order and executes at the next available price).
      */
     static BigDecimal replayedStopPrice(PaperOrder order, BigDecimal stopPrice, BigDecimal candleOpen) {
-        if (candleOpen == null || order.getOrderType() != OrderType.STOP_LOSS) {
+        if (candleOpen == null) {
             return stopPrice;
         }
-        int side = candleOpen.compareTo(stopPrice);
-        boolean gapped = order.getSide() == OrderSide.SELL ? side < 0 : side > 0;
-        return gapped ? candleOpen : stopPrice;
+        TriggerCondition condition = order.getCallbackRate() != null
+                ? OrderType.STOP_LOSS.triggerConditionFor(order.getSide())
+                : order.getTriggerCondition();
+        return condition.isMet(candleOpen, stopPrice) ? candleOpen : stopPrice;
     }
 
     private TradablePair pairOf(PaperOrder order) {
@@ -182,6 +184,19 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             if (order.awaitsTrigger()) {
                 order.moveExtreme(extremes.get(order.getId()));
             }
+        }
+    }
+
+    /** No transaction: no connection is held while the exchange answers. */
+    @Override
+    public void prefetchQuoteRates(MarketType market, UUID pairId, Instant from, Instant to) {
+        if (market != MarketType.SPOT) {
+            return;
+        }
+        try {
+            this.market.pairCoins(pairId).ifPresent(coins -> usdtRates.prefetch(coins, from, to));
+        } catch (RuntimeException failure) {
+            log.warn("Q-52 quote rates of pair {} not prefetched: {}", pairId, failure.toString());
         }
     }
 

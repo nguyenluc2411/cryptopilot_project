@@ -3,8 +3,11 @@ package com.cryptopilot.paper.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -349,10 +352,13 @@ class PaperCrossPairCostTest {
                         closedMinute(quoteUsdt, minute.plusSeconds(60), "57100"))))
                 .when(market)
                 .closedMinuteKlines(MarketType.SPOT, quoteUsdt, minute);
+        matching.prefetchQuoteRates(MarketType.SPOT, cross, minute, minute.plusSeconds(60));
+        clearInvocations(market);
 
         assertThat(matching.fill(resting(trader, id, "0.04"), minute, FillSource.REPLAY))
                 .isTrue();
 
+        verify(market, never()).closedMinuteKlines(any(), any(), any());
         // 0.04 QX at the close of 57,000 of the minute it traded in, not today's 60,000.
         assertThat(costBasis(trader, base)).isEqualByComparingTo("2280.00000000");
         assertThat(lastFill(trader, cross))
@@ -362,22 +368,60 @@ class PaperCrossPairCostTest {
         assertLedgerInvariant(trader);
     }
 
-    /** PT-R19: when the candle of the minute cannot be read, a replayed fill is valued at the rate of now. */
+    /**
+     * PT-R19, Q-52: when the prefetch of the minute's candle fails or is refused, the prefetch returns all the same and
+     * the replayed fill is valued at the rate of now.
+     */
     @Test
     void PTR19_aReplayedFillWhoseCandleCannotBeRead_isValuedAtTheRateOfNow() throws Exception {
         UUID trader = trader();
         price(quote + "USDT", "60000");
         price(base + quote, "0.05");
         place(trader, market(quoteUsdt, "BUY", "0.1")).andExpect(status().isCreated());
-        String id = id(place(trader, limit(cross, "BUY", "0.04", "1")).andExpect(status().isCreated()));
-        Instant minute = Instant.now().truncatedTo(ChronoUnit.MINUTES).minus(Duration.ofMinutes(40));
+        String first = id(place(trader, limit(cross, "BUY", "0.04", "1")).andExpect(status().isCreated()));
+        String second = id(place(trader, limit(cross, "BUY", "0.04", "1")).andExpect(status().isCreated()));
+        Instant failed = Instant.now().truncatedTo(ChronoUnit.MINUTES).minus(Duration.ofMinutes(40));
+        Instant refused = failed.plusSeconds(60);
         doThrow(new IllegalStateException("exchange down"))
                 .when(market)
+                .closedMinuteKlines(MarketType.SPOT, quoteUsdt, failed);
+        doReturn(MinuteKlineBatch.refusedUntil(Instant.now().plusSeconds(60)))
+                .when(market)
+                .closedMinuteKlines(MarketType.SPOT, quoteUsdt, refused);
+
+        matching.prefetchQuoteRates(MarketType.SPOT, cross, failed, failed);
+        matching.prefetchQuoteRates(MarketType.SPOT, cross, refused, refused);
+        assertThat(matching.fill(resting(trader, first, "0.04"), failed, FillSource.REPLAY))
+                .isTrue();
+        assertThat(matching.fill(resting(trader, second, "0.04"), refused, FillSource.REPLAY))
+                .isTrue();
+
+        assertThat(costBasis(trader, base)).isEqualByComparingTo("4800.00000000");
+        assertThat(lastFill(trader, cross)).containsEntry("quote_usdt_price_source", "LIVE");
+        assertLedgerInvariant(trader);
+    }
+
+    /**
+     * Q-52: a replayed fill never reads the exchange, as it runs under the Trader's lock; without a prefetched close it
+     * takes the rate of now.
+     */
+    @Test
+    void Q52_aReplayedFill_makesNoNetworkCall_andWithoutAPrefetchedClose_takesTheRateOfNow() throws Exception {
+        UUID trader = trader();
+        price(quote + "USDT", "60000");
+        price(base + quote, "0.05");
+        place(trader, market(quoteUsdt, "BUY", "0.1")).andExpect(status().isCreated());
+        String id = id(place(trader, limit(cross, "BUY", "0.04", "1")).andExpect(status().isCreated()));
+        Instant minute = Instant.now().truncatedTo(ChronoUnit.MINUTES).minus(Duration.ofMinutes(40));
+        doReturn(MinuteKlineBatch.of(List.of(closedMinute(quoteUsdt, minute, "57000"))))
+                .when(market)
                 .closedMinuteKlines(MarketType.SPOT, quoteUsdt, minute);
+        clearInvocations(market);
 
         assertThat(matching.fill(resting(trader, id, "0.04"), minute, FillSource.REPLAY))
                 .isTrue();
 
+        verify(market, never()).closedMinuteKlines(any(), any(), any());
         assertThat(costBasis(trader, base)).isEqualByComparingTo("2400.00000000");
         assertThat(lastFill(trader, cross)).containsEntry("quote_usdt_price_source", "LIVE");
         assertLedgerInvariant(trader);

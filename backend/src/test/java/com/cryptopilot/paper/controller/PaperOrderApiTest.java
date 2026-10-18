@@ -41,6 +41,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1567,7 +1568,7 @@ class PaperOrderApiTest {
     /**
      * PT-R14: a replayed STOP_LOSS sell executes at the open of a candle that opened below its stop, and at its stop
      * when the candle opened above it and traded down through it; a live one takes the book as before, and a replayed
-     * TAKE_PROFIT executes at its stop (Q-51).
+     * TAKE_PROFIT sell executes at the open of a candle that opened above its stop (Q-51).
      */
     @Test
     void PTR14_aReplayedMarketStop_fillsAtTheOpenOfACandleThatGappedPastIt_elseAtItsStop() throws Exception {
@@ -1604,12 +1605,75 @@ class PaperOrderApiTest {
                 .andExpect(jsonPath("$.avgPrice").value(59500.0));
         as(trader, get(PAPER + "/orders/" + takeProfit), null)
                 .andExpect(jsonPath("$.status").value("FILLED"))
-                .andExpect(jsonPath("$.avgPrice").value(62000.0));
+                .andExpect(jsonPath("$.avgPrice").value(62500.0));
         assertThat(sql.sql("select fill_source from paper_fill where order_id = ?")
                         .param(UUID.fromString(gapped))
                         .query(String.class)
                         .single())
                 .isEqualTo("REPLAY");
+        PaperLedgerInvariant.assertHolds(sql, accountOf(trader));
+    }
+
+    /**
+     * Q-51: a replayed STOP_LOSS or TAKE_PROFIT, either side, fills at the triggering candle's open when its trigger
+     * condition already held there, and at its stop when the candle opened on the other side and crossed it; a live
+     * TAKE_PROFIT takes the book as before.
+     */
+    @Test
+    void Q51_aReplayedMarketStop_fillsAtTheOpenWhenItsConditionHeldThere_elseAtItsStop() throws Exception {
+        UUID trader = trader();
+        fineSteps();
+        price("61000");
+        place(trader, market("BUY", "\"quantity\": 0.05")).andExpect(status().isCreated());
+        Map<String, String> filledAt = new LinkedHashMap<>();
+        Map<String, String> openAt = new LinkedHashMap<>();
+        // Placed above 60,000: a STOP_LOSS sell and a TAKE_PROFIT buy wait below it.
+        for (String type : List.of("STOP_LOSS SELL", "TAKE_PROFIT BUY")) {
+            String[] parts = type.split(" ");
+            String gap = id(place(trader, stop(parts[0], parts[1], "60000", null, null, "0.002")));
+            String cross = id(place(trader, stop(parts[0], parts[1], "60000", null, null, "0.002")));
+            boolean sell = parts[1].equals("SELL");
+            openAt.put(gap, sell ? "58000" : "59000");
+            filledAt.put(gap, sell ? "58000" : "59000");
+            openAt.put(cross, "60500");
+            filledAt.put(cross, "60000");
+        }
+        price("59000");
+        // Placed below 60,000: a TAKE_PROFIT sell and a STOP_LOSS buy wait above it.
+        for (String type : List.of("TAKE_PROFIT SELL", "STOP_LOSS BUY")) {
+            String[] parts = type.split(" ");
+            String gap = id(place(trader, stop(parts[0], parts[1], "60000", null, null, "0.002")));
+            String cross = id(place(trader, stop(parts[0], parts[1], "60000", null, null, "0.002")));
+            openAt.put(gap, "61000");
+            filledAt.put(gap, "61000");
+            openAt.put(cross, "59500");
+            filledAt.put(cross, "60000");
+        }
+        String live = id(place(trader, stop("TAKE_PROFIT", "SELL", "60000", null, null, "0.002")));
+        Instant at = Instant.now().truncatedTo(ChronoUnit.MINUTES).plus(Duration.ofMinutes(1));
+        BigDecimal stop = new BigDecimal("60000");
+
+        for (Map.Entry<String, String> replayed : openAt.entrySet()) {
+            assertThat(matching.trigger(
+                            watched(replayed.getKey()),
+                            at,
+                            stop,
+                            FillSource.REPLAY,
+                            new BigDecimal(replayed.getValue())))
+                    .isTrue();
+        }
+        depth(List.of(level("60200", "5")), List.of(level("60100", "5")));
+        assertThat(matching.trigger(watched(live), at, stop, FillSource.LIVE, new BigDecimal("61000")))
+                .isTrue();
+
+        for (Map.Entry<String, String> expected : filledAt.entrySet()) {
+            as(trader, get(PAPER + "/orders/" + expected.getKey()), null)
+                    .andExpect(jsonPath("$.status").value("FILLED"))
+                    .andExpect(jsonPath("$.avgPrice").value(Double.parseDouble(expected.getValue())));
+        }
+        as(trader, get(PAPER + "/orders/" + live), null)
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.avgPrice").value(60100.0));
         PaperLedgerInvariant.assertHolds(sql, accountOf(trader));
     }
 

@@ -33,8 +33,9 @@ import org.springframework.stereotype.Component;
  * tells which pairs paper trading accepts: those whose base and quote can both be valued in USDT.
  *
  * <p>A replayed fill traded in the past, so it is valued at the close of the {@code QUOTEUSDT} 1-minute candle of the
- * minute it traded in, fetched from the exchange through the market module and kept for the rest of the replay; the
- * rate of now only when that candle cannot be had.
+ * minute it traded in. The replay thread fetches those closes through the market module before it queues the pair's
+ * candles ({@link #prefetch}); a fill only reads what was kept, never the network, since it runs under the Trader's
+ * lock (Q-52). Without a kept close it takes the rate of now.
  *
  * <p>Rule: TR-13; D-96; PT-R19.
  *
@@ -119,29 +120,43 @@ class QuoteUsdtRate {
     }
 
     /**
-     * The close of the symbol's closed 1-minute candle that covers {@code at}: kept from an earlier fetch, or fetched
-     * with the candles after it; empty when the exchange refuses, fails or has none.
+     * Keeps the {@code QUOTEUSDT} closes of the minutes {@code from} to {@code to} a replay of a pair quoted in another
+     * coin than USDT is about to fill in: one page of closed 1-minute candles, fetched once unless both ends are kept.
+     * Never throws: a refusal or a failure is logged and the fills of those minutes take the rate of now.
      */
-    private Optional<BigDecimal> closeAt(String symbol, Instant at) {
-        Instant minute = at.truncatedTo(ChronoUnit.MINUTES);
-        BigDecimal kept = closes.get(new Minute(symbol, minute));
-        if (kept != null) {
-            return Optional.of(kept);
+    void prefetch(PairCoins coins, Instant from, Instant to) {
+        if (isUsdt(coins.quote())) {
+            return;
+        }
+        String symbol = coins.quote().symbol() + USDT;
+        Instant first = from.truncatedTo(ChronoUnit.MINUTES);
+        if (closes.containsKey(new Minute(symbol, first))
+                && closes.containsKey(new Minute(symbol, to.truncatedTo(ChronoUnit.MINUTES)))) {
+            return;
         }
         try {
-            Optional<MinuteKlineBatch> batch = market.pairListing(symbol)
-                    .map(pair -> market.closedMinuteKlines(MarketType.SPOT, pair.pairId(), minute));
-            if (batch.isEmpty() || batch.get().refused()) {
-                return Optional.empty();
+            Optional<PairListing> pair = market.pairListing(symbol);
+            if (pair.isEmpty()) {
+                log.warn("Q-52 no pair {} to fetch the 1m closes of from {}", symbol, first);
+                return;
             }
-            for (MinuteKline kline : batch.get().klines()) {
+            MinuteKlineBatch batch =
+                    market.closedMinuteKlines(MarketType.SPOT, pair.get().pairId(), first);
+            if (batch.refused()) {
+                log.warn("Q-52 1m closes of {} from {} refused until {}", symbol, first, batch.retryAt());
+                return;
+            }
+            for (MinuteKline kline : batch.klines()) {
                 closes.put(new Minute(symbol, kline.openTime()), kline.close());
             }
         } catch (RuntimeException failure) {
-            log.warn("PT-R19 1m candle of {} at {} not fetched: {}", symbol, minute, failure.toString());
-            return Optional.empty();
+            log.warn("Q-52 1m closes of {} from {} not fetched: {}", symbol, first, failure.toString());
         }
-        return Optional.ofNullable(closes.get(new Minute(symbol, minute)));
+    }
+
+    /** The kept close of the symbol's 1-minute candle that covers {@code at}; never fetched here. */
+    private Optional<BigDecimal> closeAt(String symbol, Instant at) {
+        return Optional.ofNullable(closes.get(new Minute(symbol, at.truncatedTo(ChronoUnit.MINUTES))));
     }
 
     /**

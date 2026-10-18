@@ -49,6 +49,12 @@ public interface PaperMatchingService {
      */
     boolean fill(RestingOrder order, Instant tradedAt, FillSource source);
 
+    /**
+     * Before a replay queues the pair's candles opened {@code from} to {@code to}: fetches what their fills will be
+     * valued at when the pair is quoted in another coin than USDT (Q-52). Never throws.
+     */
+    void prefetchQuoteRates(MarketType market, UUID pairId, Instant from, Instant to);
+
     /** The open time of the pair's last closed and fully matched candle, from which a replay starts; or empty. */
     Optional<Instant> watermark(MarketType market, UUID pairId);
 

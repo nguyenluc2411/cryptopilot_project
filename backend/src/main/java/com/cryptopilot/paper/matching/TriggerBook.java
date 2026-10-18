@@ -5,7 +5,6 @@ import com.cryptopilot.paper.matching.PaperOrderBook.BookKey;
 import com.cryptopilot.paper.model.PriceRange;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.OrderSide;
-import com.cryptopilot.paper.model.enums.TriggerCondition;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.time.Instant;
@@ -168,8 +167,7 @@ public final class TriggerBook {
 
         /** Whether the stop condition is met at {@code price}. */
         private boolean met(BigDecimal price) {
-            int side = price.compareTo(order.stopPrice());
-            return order.condition() == TriggerCondition.AT_OR_BELOW ? side <= 0 : side >= 0;
+            return order.condition().isMet(price, order.stopPrice());
         }
 
         private Triggered stop(Point point) {
