@@ -426,7 +426,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     private void triggerReached(PriceRange range) {
         for (TriggerBook.Triggered fired : triggers.onRange(range)) {
             try {
-                if (!matching.trigger(fired.order(), fired.at(), fired.stopPrice(), range.source())) {
+                if (!matching.trigger(fired.order(), fired.at(), fired.stopPrice(), range.source(), range.open())) {
                     log.debug(
                             "TR-09 paper order {} no longer waits for a trigger",
                             fired.order().orderId());
@@ -737,7 +737,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                             kline.high(),
                             kline.openTime(),
                             true,
-                            FillSource.REPLAY)));
+                            FillSource.REPLAY,
+                            kline.open())));
                     cursor = kline.openTime().plus(MINUTE);
                     advanced = true;
                 }

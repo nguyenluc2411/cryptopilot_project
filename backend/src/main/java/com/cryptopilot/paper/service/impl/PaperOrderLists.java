@@ -11,6 +11,7 @@ import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.config.PaperOrderProperties;
 import com.cryptopilot.paper.dto.request.PlaceOrderListRequest;
 import com.cryptopilot.paper.dto.request.PlaceOrderListRequest.Leg;
 import com.cryptopilot.paper.dto.request.PlaceOrderListRequest.Oco;
@@ -72,7 +73,8 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>The pending order of an OTO, or the pending OCO of an OTOCO, locks nothing while it waits. Once the working order
  * has filled in full, it is placed: it locks what it needs and meets the market as an order placed then does. When too
  * little is free by then — the fee of a buy is taken in the coin bought — it is REJECTED
- * ({@code INSUFFICIENT_BALANCE}) and the working order's fill stands.
+ * ({@code INSUFFICIENT_BALANCE}) and the working order's fill stands. An OTOCO that gives no OCO quantity gets the one
+ * its working order leaves, net of the fee, so its OCO can be placed.
  *
  * <p>Cancelling any order of a group cancels the group: what its working orders locked is given back, once for an
  * OCO. A group is ALL_DONE once none of its orders works or waits.
@@ -107,6 +109,7 @@ public class PaperOrderLists {
     private final ApplicationEventPublisher events;
     private final MarketApi market;
     private final QuoteUsdtRate usdtRates;
+    private final PaperOrderProperties fees;
     private final Clock clock;
 
     /** Places a group: see the class comment and {@link PlaceOrderListRequest}. A refusal stores nothing. */
@@ -129,8 +132,8 @@ public class PaperOrderLists {
             case OCO -> {
                 Oco oco = request.oco();
                 requireOcoAroundLast(oco, filters, last);
-                PaperOrder takeProfit = takeProfit(account, pair, key, oco, filters, false);
-                PaperOrder stop = stop(account, pair, key, oco, filters, false);
+                PaperOrder takeProfit = takeProfit(account, pair, key, oco, oco.quantity(), filters, false);
+                PaperOrder stop = stop(account, pair, key, oco, oco.quantity(), filters, false);
                 startOco(account, pair, coins, takeProfit, stop, now);
             }
             case OTO -> {
@@ -141,8 +144,11 @@ public class PaperOrderLists {
             case OTOCO -> {
                 PaperOrder working = working(account, pair, key, request.working(), filters);
                 requireOcoOrdered(request.oco(), filters);
-                takeProfit(account, pair, key, request.oco(), filters, true);
-                stop(account, pair, key, request.oco(), filters, true);
+                BigDecimal quantity = request.oco().quantity() != null
+                        ? request.oco().quantity()
+                        : ocoQuantityAfter(working, filters);
+                takeProfit(account, pair, key, request.oco(), quantity, filters, true);
+                stop(account, pair, key, request.oco(), quantity, filters, true);
                 startWorking(account, pair, coins, working, now);
             }
         }
@@ -425,22 +431,49 @@ public class PaperOrderLists {
         }
     }
 
+    /**
+     * The quantity the pending OCO of an OTOCO sells or buys when the request gives none: all a BUY working order
+     * brings in once the largest Spot fee is taken from it in the coin bought, floored to the step, so the OCO can
+     * lock it; all a SELL working order sold, as its fee is taken in the quote.
+     *
+     * <p>Rule: TR-10; PT-R04.
+     */
+    private BigDecimal ocoQuantityAfter(PaperOrder working, PairFilters filters) {
+        if (working.getSide() == OrderSide.SELL) {
+            return working.getOrigQuantity();
+        }
+        BigDecimal fee = fees.spotMakerFeeRate().max(fees.spotTakerFeeRate());
+        return filters.floorQuantity(working.getOrigQuantity().multiply(BigDecimal.ONE.subtract(fee)));
+    }
+
     private PaperOrder takeProfit(
-            PaperAccount account, TradablePair pair, String key, Oco oco, PairFilters filters, boolean pending) {
+            PaperAccount account,
+            TradablePair pair,
+            String key,
+            Oco oco,
+            BigDecimal ocoQuantity,
+            PairFilters filters,
+            boolean pending) {
         BigDecimal price = price(filters, oco.takeProfitPrice(), "oco.takeProfitPrice");
-        BigDecimal quantity = quantity(filters, oco.quantity(), price, "oco.quantity");
+        BigDecimal quantity = quantity(filters, ocoQuantity, price, "oco.quantity");
         return orders.save(PaperOrder.spotLimitMaker(
                         account.getId(), pair.pairId(), key + TAKE_PROFIT, oco.side(), price, quantity)
                 .inList(UUID.fromString(key), pending));
     }
 
     private PaperOrder stop(
-            PaperAccount account, TradablePair pair, String key, Oco oco, PairFilters filters, boolean pending) {
+            PaperAccount account,
+            TradablePair pair,
+            String key,
+            Oco oco,
+            BigDecimal ocoQuantity,
+            PairFilters filters,
+            boolean pending) {
         BigDecimal stopPrice = price(filters, oco.stopPrice(), "oco.stopPrice");
         // Without a limit price the stop executes as a MARKET order once triggered, as the exchange's STOP_LOSS.
         boolean market = oco.stopLimitPrice() == null;
         BigDecimal limit = market ? null : price(filters, oco.stopLimitPrice(), "oco.stopLimitPrice");
-        BigDecimal quantity = quantity(filters, oco.quantity(), market ? stopPrice : limit, "oco.quantity");
+        BigDecimal quantity = quantity(filters, ocoQuantity, market ? stopPrice : limit, "oco.quantity");
         return orders.save(PaperOrder.spotStop(
                         account.getId(),
                         pair.pairId(),
@@ -471,6 +504,12 @@ public class PaperOrderLists {
         requirePart(errors, "oco", request.oco(), oco);
         requirePart(errors, "working", request.working(), working);
         requirePart(errors, "pending", request.pending(), pending);
+        // Only an OTOCO derives the OCO's quantity from its working order.
+        if (request.type() == OrderListType.OCO
+                && request.oco() != null
+                && request.oco().quantity() == null) {
+            errors.put("oco.quantity", "MSG01");
+        }
         if (request.working() != null && working) {
             requireLeg(errors, "working", request.working(), List.of(OrderType.LIMIT, OrderType.LIMIT_MAKER));
         }

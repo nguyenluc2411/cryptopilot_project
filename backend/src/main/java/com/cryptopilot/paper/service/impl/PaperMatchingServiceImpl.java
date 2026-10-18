@@ -12,7 +12,9 @@ import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
+import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperMatchingWatermarkRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -103,7 +105,8 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
 
     @Override
     @Transactional
-    public boolean trigger(TriggerOrder watched, Instant at, BigDecimal stopPrice, FillSource source) {
+    public boolean trigger(
+            TriggerOrder watched, Instant at, BigDecimal stopPrice, FillSource source, BigDecimal candleOpen) {
         PaperAccount account = accounts.findById(watched.accountId())
                 .orElseThrow(() -> new IllegalStateException("account " + watched.accountId() + " is not stored"));
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.getUserId());
@@ -127,11 +130,13 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
         boolean replayed = source == FillSource.REPLAY;
         if (order.getOrderType().isSpotMarketStop()) {
-            // Replayed, the book of then is not known: it executes at the price that triggered it.
+            // Replayed, the book of then is not known: the stop, or the open of a candle that gapped past it.
             Optional<SpotArrival.Book> book = replayed
-                    ? Optional.of(new SpotArrival.Book(List.of(new PriceLevel(stopPrice, BigDecimal.ZERO)), false))
+                    ? Optional.of(new SpotArrival.Book(
+                            List.of(new PriceLevel(replayedStopPrice(order, stopPrice, candleOpen), BigDecimal.ZERO)),
+                            false))
                     : arrival.bookFor(pairOf(order), order.getSide());
-            arrival.marketOnTrigger(account, order, coins, book, replayed ? at : clock.instant());
+            arrival.marketOnTrigger(account, order, coins, book, replayed ? at : clock.instant(), source);
         } else if (replayed) {
             // The candles replayed after this one fill it at its price; the book of now is not the book of then.
             arrival.rest(account, order);
@@ -141,6 +146,25 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         }
         lists.afterExecution(account, order, at);
         return true;
+    }
+
+    /**
+     * The price a replayed market stop executes at: for a STOP_LOSS, the open of the candle that triggered it when that
+     * candle opened past the stop — below it for a SELL, above it for a BUY — as the market had gapped through it;
+     * otherwise, and for a TAKE_PROFIT, the stop itself (Q-51).
+     *
+     * <p>Rule: TR-09; PT-R14.
+     *
+     * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges: Market Microstructure for Practitioners</i>. Oxford
+     * University Press, ch. 4 (a triggered stop becomes a market order and executes at the next available price).
+     */
+    static BigDecimal replayedStopPrice(PaperOrder order, BigDecimal stopPrice, BigDecimal candleOpen) {
+        if (candleOpen == null || order.getOrderType() != OrderType.STOP_LOSS) {
+            return stopPrice;
+        }
+        int side = candleOpen.compareTo(stopPrice);
+        boolean gapped = order.getSide() == OrderSide.SELL ? side < 0 : side > 0;
+        return gapped ? candleOpen : stopPrice;
     }
 
     private TradablePair pairOf(PaperOrder order) {

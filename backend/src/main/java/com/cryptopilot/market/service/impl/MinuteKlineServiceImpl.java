@@ -94,7 +94,8 @@ public class MinuteKlineServiceImpl implements MinuteKlineService {
                         kline.high(),
                         kline.close(),
                         true,
-                        kline.closeTime()))
+                        kline.closeTime(),
+                        kline.open()))
                 .toList());
     }
 

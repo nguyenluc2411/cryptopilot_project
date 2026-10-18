@@ -22,6 +22,7 @@ import java.util.UUID;
  * @param close the last price of the candle so far: the latest trade while it forms, its close once closed
  * @param closed whether the candle is closed, so its low and high are final
  * @param eventTime when the exchange produced this state of the candle; for a fetched candle, its close time
+ * @param open the first price of the candle; {@code null} where the source did not give it
  */
 public record MinuteKline(
         MarketType market,
@@ -31,7 +32,8 @@ public record MinuteKline(
         BigDecimal high,
         BigDecimal close,
         boolean closed,
-        Instant eventTime) {
+        Instant eventTime,
+        BigDecimal open) {
 
     public MinuteKline {
         Objects.requireNonNull(market, "market");
@@ -41,5 +43,18 @@ public record MinuteKline(
         Objects.requireNonNull(high, "high");
         Objects.requireNonNull(close, "close");
         Objects.requireNonNull(eventTime, "eventTime");
+    }
+
+    /** A candle whose open is not known. */
+    public MinuteKline(
+            MarketType market,
+            UUID pairId,
+            Instant openTime,
+            BigDecimal low,
+            BigDecimal high,
+            BigDecimal close,
+            boolean closed,
+            Instant eventTime) {
+        this(market, pairId, openTime, low, high, close, closed, eventTime, null);
     }
 }

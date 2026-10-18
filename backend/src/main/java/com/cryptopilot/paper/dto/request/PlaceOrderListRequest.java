@@ -72,7 +72,8 @@ public record PlaceOrderListRequest(
      * The two orders of an OCO, on one side and one quantity.
      *
      * @param side BUY or SELL
-     * @param quantity the base quantity of each
+     * @param quantity the base quantity of each; required for an OCO. Absent in an OTOCO, it is what the working
+     *     order leaves: a BUY's quantity less the largest Spot fee rate, floored to the step; a SELL's quantity
      * @param takeProfitPrice the take profit LIMIT_MAKER's price
      * @param stopPrice the stop's stopPrice
      * @param stopLimitPrice the STOP_LOSS_LIMIT's price; absent for a STOP_LOSS, executed as a MARKET order
@@ -80,7 +81,6 @@ public record PlaceOrderListRequest(
     public record Oco(
             @NotNull(message = "MSG01") OrderSide side,
 
-            @NotNull(message = "MSG01")
             @DecimalMin(value = "0", inclusive = false, message = "MSG15")
             @Digits(integer = 16, fraction = 12, message = "MSG15")
             BigDecimal quantity,
