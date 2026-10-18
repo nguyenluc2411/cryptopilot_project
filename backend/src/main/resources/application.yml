@@ -343,6 +343,15 @@ cryptopilot:
       enabled: false
       cron: "0 0 0 * * *"
       zone: UTC
+      # PT-R02: an account with a coin that has no current price gets no snapshot; it is tried again this often,
+      # until this time of the day.
+      retry-interval: 5m
+      retry-until: "23:55"
+    grant-cost:
+      # PT-R13: the granted coins that had no price at the opening get their cost once they have one. Off here, on in
+      # the dev and prod profiles.
+      enabled: false
+      interval: 5m
     matching:
       # TR-05, Q-T8: a price through a waiting LIMIT order's own always fills it. At exactly its price: QUEUE, as
       # Binance's price-time priority, once the quantity the exchange's book showed ahead of it there is traded; CROSS

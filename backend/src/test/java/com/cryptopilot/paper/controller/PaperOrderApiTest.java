@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -1033,19 +1034,19 @@ class PaperOrderApiTest {
         place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
 
         // Opened with 10,000 USDT in Spot and 5,000 in Futures, the other coins without a price: 15,000.
-        // Now 9,800 USDT and 1.998 of the coin at 100: 14,999.8, the fee of 0.002 × 100 less.
+        // Now 9,800 USDT and 1.998 of the coin at 100: 14,999.8, the fee of 0.002 × 100 less. The granted BTC, ETH
+        // and BNB have no price, so no snapshot of the day is taken and today's PnL is not known (PT-R02).
         as(trader, get(PAPER + "/equity").param("days", "7"), null)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalEquity").value(14999.8))
-                .andExpect(jsonPath("$.todayPnl").value(-0.2))
-                .andExpect(jsonPath("$.history.length()").value(1))
-                .andExpect(jsonPath("$.history[0].totalEquity").value(15000.0));
+                .andExpect(jsonPath("$.todayPnl").value(nullValue()))
+                .andExpect(jsonPath("$.history.length()").value(0));
 
         pnl.snapshotAll();
 
         assertThat(sql.sql("""
                         select count(*) from paper_equity_snapshot s join paper_account a on a.account_id = s.account_id
-                         where a.user_id = ?""").param(trader).query(Long.class).single()).isEqualTo(1L);
+                         where a.user_id = ?""").param(trader).query(Long.class).single()).isZero();
         as(trader, get(PAPER + "/equity").param("days", "0"), null)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.days").value("MSG01"));

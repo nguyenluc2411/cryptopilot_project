@@ -36,8 +36,8 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>A buy pays its price times its quantity rounded up to the amount scale, and a sale brings it rounded down
  *       ({@link PaperOrder#buyCost}, {@link PaperOrder#saleProceeds}): the wallet never gains from a rounding.
  *   <li>The commission is the fee rate of the fill's liquidity times what came in, rounded up to the amount scale.
- *   <li>Costs are in USDT (D-96): what came in is valued at the quote coin's USDT rate now; what went out keeps its
- *       average cost; USDT carries no cost.
+ *   <li>Costs are in USDT (D-96): what came in is valued at the quote coin's USDT rate when the fill traded; what
+ *       went out keeps its average cost; USDT carries no cost.
  *   <li>A LIMIT order pays from what it locked, and its lock shrinks to what the rest of it needs
  *       ({@link PaperOrder#lockedAfter}); a buy that executes below its price gets the difference back at once. A buy
  *       at its price pays what its lock shrinks by, so all its executions together cost what one would have, never a
@@ -97,7 +97,7 @@ public class SpotSettlement {
                 .multiply(liquidity == Liquidity.MAKER ? fees.spotMakerFeeRate() : fees.spotTakerFeeRate())
                 .setScale(Rounding.AMOUNT_SCALE, RoundingMode.UP);
 
-        UsdtRate quoteUsdt = usdtRates.of(coins.quote());
+        UsdtRate quoteUsdt = usdtRates.of(coins.quote(), source, tradedAt);
         PaperFill fill = PaperFill.of(
                 order,
                 new Execution(price, quantity, quoteAmount, fee, received.coinId(), liquidity, source, tradedAt),

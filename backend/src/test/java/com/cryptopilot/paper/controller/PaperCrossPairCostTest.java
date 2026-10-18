@@ -2,19 +2,25 @@ package com.cryptopilot.paper.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKline;
+import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
+import com.cryptopilot.paper.PaperLedgerInvariant;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderSide;
@@ -48,6 +54,7 @@ import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -91,6 +98,9 @@ class PaperCrossPairCostTest {
     @Autowired
     private PaperMatchingService matching;
 
+    @MockitoSpyBean
+    private MarketApi market;
+
     private final List<UUID> traders = new ArrayList<>();
     private final List<UUID> pairs = new ArrayList<>();
     private final List<String> coins = new ArrayList<>();
@@ -111,6 +121,8 @@ class PaperCrossPairCostTest {
         quoteUsdt = pair(quote, "USDT", true, "0.01", "0.00000001", "5");
         pair(base, "USDT", true, "0.01", "0.001", "5");
         cross = pair(base, quote, true, "0.000001", "0.001", "0.0001");
+        // No test reads the exchange: a replay finds no historical candle unless the test gives one.
+        doReturn(MinuteKlineBatch.of(List.of())).when(market).closedMinuteKlines(any(), any(), any());
     }
 
     @AfterEach
@@ -320,6 +332,57 @@ class PaperCrossPairCostTest {
         assertLedgerInvariant(trader);
     }
 
+    /**
+     * PT-R19: a replayed fill traded 40 minutes ago is valued at the close of the quote coin's USDT candle of that
+     * minute, not at the rate of now.
+     */
+    @Test
+    void PTR19_aReplayedFill_isValuedAtTheQuoteUsdtCloseOfTheMinuteItTraded() throws Exception {
+        UUID trader = trader();
+        price(quote + "USDT", "60000");
+        price(base + quote, "0.05");
+        place(trader, market(quoteUsdt, "BUY", "0.1")).andExpect(status().isCreated());
+        String id = id(place(trader, limit(cross, "BUY", "0.04", "1")).andExpect(status().isCreated()));
+        Instant minute = Instant.now().truncatedTo(ChronoUnit.MINUTES).minus(Duration.ofMinutes(40));
+        doReturn(MinuteKlineBatch.of(List.of(
+                        closedMinute(quoteUsdt, minute, "57000"),
+                        closedMinute(quoteUsdt, minute.plusSeconds(60), "57100"))))
+                .when(market)
+                .closedMinuteKlines(MarketType.SPOT, quoteUsdt, minute);
+
+        assertThat(matching.fill(resting(trader, id, "0.04"), minute, FillSource.REPLAY))
+                .isTrue();
+
+        // 0.04 QX at the close of 57,000 of the minute it traded in, not today's 60,000.
+        assertThat(costBasis(trader, base)).isEqualByComparingTo("2280.00000000");
+        assertThat(lastFill(trader, cross))
+                .containsEntry("quote_usdt_price_source", "CANDLE_1M")
+                .satisfies(fill ->
+                        assertThat((BigDecimal) fill.get("quote_usdt_price")).isEqualByComparingTo("57000"));
+        assertLedgerInvariant(trader);
+    }
+
+    /** PT-R19: when the candle of the minute cannot be read, a replayed fill is valued at the rate of now. */
+    @Test
+    void PTR19_aReplayedFillWhoseCandleCannotBeRead_isValuedAtTheRateOfNow() throws Exception {
+        UUID trader = trader();
+        price(quote + "USDT", "60000");
+        price(base + quote, "0.05");
+        place(trader, market(quoteUsdt, "BUY", "0.1")).andExpect(status().isCreated());
+        String id = id(place(trader, limit(cross, "BUY", "0.04", "1")).andExpect(status().isCreated()));
+        Instant minute = Instant.now().truncatedTo(ChronoUnit.MINUTES).minus(Duration.ofMinutes(40));
+        doThrow(new IllegalStateException("exchange down"))
+                .when(market)
+                .closedMinuteKlines(MarketType.SPOT, quoteUsdt, minute);
+
+        assertThat(matching.fill(resting(trader, id, "0.04"), minute, FillSource.REPLAY))
+                .isTrue();
+
+        assertThat(costBasis(trader, base)).isEqualByComparingTo("2400.00000000");
+        assertThat(lastFill(trader, cross)).containsEntry("quote_usdt_price_source", "LIVE");
+        assertLedgerInvariant(trader);
+    }
+
     @Test
     void D96_aPairWhoseQuoteOrBaseHasNoActiveUsdtPair_isRefused_forAnOrderAndAnOrderList() throws Exception {
         UUID trader = trader();
@@ -392,6 +455,11 @@ class PaperCrossPairCostTest {
                     coins.add(symbol);
                     return id;
                 });
+    }
+
+    private static MinuteKline closedMinute(UUID pair, Instant openTime, String close) {
+        BigDecimal price = new BigDecimal(close);
+        return new MinuteKline(MarketType.SPOT, pair, openTime, price, price, price, true, openTime.plusSeconds(60));
     }
 
     /** Streams a Spot ticker into the cache, newer than every earlier one. */
@@ -524,63 +592,7 @@ class PaperCrossPairCostTest {
 
     /** Both parts of the ledger invariant of the P6b review (section 4), for this Trader's account only. */
     private void assertLedgerInvariant(UUID trader) {
-        UUID account = accountOf(trader);
-        List<Map<String, Object>> balances = sql.sql("""
-                        with sums as (
-                            select account_id, wallet_type, coin_id, sum(amount) as ledger_total
-                              from paper_ledger_entry
-                             group by account_id, wallet_type, coin_id
-                        ), last_entry as (
-                            select distinct on (account_id, wallet_type, coin_id)
-                                   account_id, wallet_type, coin_id, balance_after_amount
-                              from paper_ledger_entry
-                             order by account_id, wallet_type, coin_id, created_at desc, entry_id desc
-                        ), broken as (
-                            select b.account_id, b.wallet_type, b.coin_id
-                              from paper_balance b
-                              left join sums s       using (account_id, wallet_type, coin_id)
-                              left join last_entry l using (account_id, wallet_type, coin_id)
-                             where b.free_amount + b.locked_amount <> coalesce(s.ledger_total, 0)
-                                or (l.balance_after_amount is not null
-                                    and l.balance_after_amount <> b.free_amount + b.locked_amount)
-                                or b.free_amount < 0 or b.locked_amount < 0
-                            union all
-                            select s.account_id, s.wallet_type, s.coin_id
-                              from sums s
-                             where not exists (select 1 from paper_balance b
-                                                where b.account_id = s.account_id and b.wallet_type = s.wallet_type
-                                                  and b.coin_id = s.coin_id)
-                        )
-                        select * from broken where account_id = ?""").param(account).query().listOfRows();
-        List<Map<String, Object>> locks = sql.sql("""
-                        with need as (
-                            select o.account_id,
-                                   case when o.side = 'BUY' then p.quote_coin_id else p.base_coin_id end as coin_id,
-                                   case when o.client_order_id ~ ':(tp|sl)$' then o.list_id end as oco_list,
-                                   case when o.side = 'BUY'
-                                        then ceil(coalesce(o.limit_price, o.stop_price)
-                                                  * (o.orig_quantity - o.executed_quantity) * 1e8) / 1e8
-                                        else o.orig_quantity - o.executed_quantity end as amount
-                              from paper_order o
-                              join crypto_pair p on p.pair_id = o.pair_id
-                             where o.market_type = 'SPOT' and o.order_type <> 'MARKET'
-                               and o.order_status in ('NEW', 'PARTIALLY_FILLED')
-                        ), per_group as (
-                            select account_id, coin_id, max(amount) as amount from need where oco_list is not null
-                             group by account_id, coin_id, oco_list
-                            union all
-                            select account_id, coin_id, amount from need where oco_list is null
-                        ), expected as (
-                            select account_id, coin_id, sum(amount) as locked from per_group
-                             group by account_id, coin_id
-                        )
-                        select b.account_id, b.coin_id, b.locked_amount, coalesce(e.locked, 0) as expected_locked
-                          from paper_balance b
-                          left join expected e using (account_id, coin_id)
-                         where b.wallet_type = 'SPOT' and b.locked_amount <> coalesce(e.locked, 0)
-                           and b.account_id = ?""").param(account).query().listOfRows();
-        assertThat(balances).as("balances that disagree with their ledger").isEmpty();
-        assertThat(locks).as("locked amounts the working orders do not need").isEmpty();
+        PaperLedgerInvariant.assertHolds(sql, accountOf(trader));
     }
 
     /** A Trader with an opened paper account. */

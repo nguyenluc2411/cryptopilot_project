@@ -17,11 +17,13 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,13 +31,16 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * What a paper account is worth in USDT (TR-13): each wallet's balances at the current Spot last prices, USDT at par.
  * A coin without a current price is left out, as the wallet screen leaves it out of its estimate. Takes the daily
- * snapshot of that worth: once per account and day, in the zone of {@link PaperEquityProperties}.
+ * snapshot of that worth: once per account and day, in the zone of {@link PaperEquityProperties}, and only while every
+ * coin held has a price, so a lost stream never stores a low worth as the start of the day.
  *
- * <p>Rule: TR-13.
+ * <p>Rule: TR-13; PT-R02.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class PaperEquity {
+
+    private static final Logger log = LoggerFactory.getLogger(PaperEquity.class);
 
     private final PaperBalanceRepository balances;
     private final PaperEquitySnapshotRepository snapshots;
@@ -61,15 +66,21 @@ public class PaperEquity {
                 .map(asset -> asset + PaperAccountServiceImpl.USDT)
                 .collect(Collectors.toSet());
         Map<String, BigDecimal> prices = pairs.isEmpty() ? Map.of() : market.currentLastPrices(MarketType.SPOT, pairs);
-        Map<WalletType, BigDecimal> byWallet = held.stream()
-                .collect(Collectors.groupingBy(
-                        PaperBalance::getWalletType,
-                        Collectors.mapping(
-                                balance -> valueOf(assets.get(balance.getCoinId()), balance.total(), prices),
-                                Collectors.reducing(BigDecimal.ZERO, Function.identity(), BigDecimal::add))));
-        return new Worth(
-                Rounding.toAmount(byWallet.getOrDefault(WalletType.SPOT, BigDecimal.ZERO)),
-                Rounding.toAmount(byWallet.getOrDefault(WalletType.FUTURES, BigDecimal.ZERO)));
+        BigDecimal spot = BigDecimal.ZERO;
+        BigDecimal futures = BigDecimal.ZERO;
+        Set<String> unpriced = new TreeSet<>();
+        for (PaperBalance balance : held) {
+            String asset = assets.get(balance.getCoinId());
+            BigDecimal value = asset == null ? null : PaperAccountServiceImpl.usdtValue(asset, balance.total(), prices);
+            if (value == null) {
+                unpriced.add(asset == null ? balance.getCoinId().toString() : asset);
+            } else if (balance.getWalletType() == WalletType.SPOT) {
+                spot = spot.add(value);
+            } else {
+                futures = futures.add(value);
+            }
+        }
+        return new Worth(Rounding.toAmount(spot), Rounding.toAmount(futures), Set.copyOf(unpriced));
     }
 
     /** Takes today's snapshot of the account, unless one was taken already. */
@@ -78,7 +89,10 @@ public class PaperEquity {
         snapshot(account.getId());
     }
 
-    /** Takes today's snapshot of the account, unless one was taken already; whether this call took it. */
+    /**
+     * Takes today's snapshot of the account, unless one was taken already or a coin held has no current price; whether
+     * this call took it. One left untaken is taken by a later call of the same day.
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean snapshot(UUID accountId) {
         LocalDate day = today();
@@ -86,25 +100,27 @@ public class PaperEquity {
             return false;
         }
         Worth worth = worth(accountId);
+        if (!worth.complete()) {
+            log.debug("TR-13 no snapshot of paper account {} yet: no price of {}", accountId, worth.unpriced());
+            return false;
+        }
         snapshots.save(PaperEquitySnapshot.of(accountId, day, worth.spot(), worth.futures()));
         return true;
-    }
-
-    private static BigDecimal valueOf(String asset, BigDecimal amount, Map<String, BigDecimal> prices) {
-        if (asset == null) {
-            return BigDecimal.ZERO;
-        }
-        BigDecimal value = PaperAccountServiceImpl.usdtValue(asset, amount, prices);
-        return value == null ? BigDecimal.ZERO : value;
     }
 
     /**
      * What the two wallets of an account are worth, in USDT.
      *
-     * @param spot the Spot wallet
+     * @param spot the Spot wallet, the coins without a current price left out
      * @param futures the Futures wallet
+     * @param unpriced the coins held, not zero, that have no current price
      */
-    public record Worth(BigDecimal spot, BigDecimal futures) {
+    public record Worth(BigDecimal spot, BigDecimal futures, Set<String> unpriced) {
+
+        /** Whether every coin held has a price, so the worth is the account's full worth. */
+        public boolean complete() {
+            return unpriced.isEmpty();
+        }
 
         public BigDecimal total() {
             return spot.add(futures);

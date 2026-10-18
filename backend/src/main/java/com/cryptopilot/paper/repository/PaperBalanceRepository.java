@@ -1,11 +1,13 @@
 package com.cryptopilot.paper.repository;
 
 import com.cryptopilot.paper.entity.PaperBalance;
+import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.WalletType;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +35,20 @@ public interface PaperBalanceRepository extends Repository<PaperBalance, UUID> {
     @Transactional(readOnly = true)
     List<PaperBalance> findByAccountIdAndWalletTypeAndCoinIdIn(
             UUID accountId, WalletType walletType, Collection<UUID> coinIds);
+
+    /**
+     * The balances of a wallet held, not zero, whose cost is not known and whose only ledger entries are of
+     * {@code onlyType}: the granted coins that had no price when the account opened (PT-R13).
+     */
+    @Transactional(readOnly = true)
+    @Query("""
+            select b from PaperBalance b
+             where b.walletType = :wallet and b.costBasisAmount is null and b.freeAmount + b.lockedAmount > 0
+               and not exists (select 1 from PaperLedgerEntry e
+                                where e.accountId = b.accountId and e.walletType = b.walletType
+                                  and e.coinId = b.coinId and e.entryType <> :onlyType)
+             order by b.accountId, b.coinId""")
+    List<PaperBalance> findWithoutCostChangedOnlyBy(WalletType wallet, LedgerEntryType onlyType);
 
     /** Writes a balance. Not transactional here; the unit of work is the calling service's. */
     PaperBalance save(PaperBalance balance);

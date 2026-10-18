@@ -17,6 +17,9 @@ public interface PaperPnlService {
     /** @param days how many days of snapshots back from today, 1 to 365; 30 when absent */
     EquityResponse equity(UUID userId, Integer days);
 
-    /** Takes today's snapshot of every account that has none yet; how many it took. */
+    /**
+     * Takes today's snapshot of every account that has none yet and whose coins all have a current price; how many it
+     * took.
+     */
     int snapshotAll();
 }
