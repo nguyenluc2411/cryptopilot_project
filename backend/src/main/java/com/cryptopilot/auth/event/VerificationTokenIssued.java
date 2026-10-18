@@ -8,16 +8,14 @@ import java.util.UUID;
  *
  * <p>Published after the transaction that created it commits, never inside it: a mail sent for a
  * transaction that then rolls back cannot be recalled, and SRS UC-01 is explicit that a failure to
- * send must leave the account in place rather than undo it. The module that sends mail does not
- * exist yet, so nothing listens today; this is the seam it will attach to, and the test asserts the
- * event is published with the values a mail needs.
+ * send must leave the account in place rather than undo it. The notification module mails it
+ * (T-057) through the event publication registry (T-056).
  *
  * <p>It carries the token itself, which nothing else does — the database holds only a digest. That
- * is unavoidable, because a link cannot be rebuilt from a digest, and it is safe only while the
- * event stays in memory. The moment the persistent event publication registry is switched on, this
- * value would be written to {@code event_publication.serialized_event} in the clear and would
- * survive there until the completed rows are swept. That is recorded as an alignment item to
- * decide before the registry lands, not after.
+ * is unavoidable, because a link cannot be rebuilt from a digest. The registry therefore writes the
+ * value to {@code event_publication.serialized_event} in the clear; per D-95 (A-18) the row is
+ * deleted as soon as the mail is sent, and one that could not be delivered is deleted after at most
+ * 24 hours, the lifetime of this link.
  *
  * <p>Rule: BR-01; SRS UC-01, UC-02.
  *
