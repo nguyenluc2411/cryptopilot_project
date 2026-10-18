@@ -9,6 +9,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.MinuteKline;
+import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
@@ -277,6 +279,44 @@ class PaperCrossPairCostTest {
         assertThat(lastFill(trader, cross))
                 .containsEntry("quote_usdt_price_source", "NONE")
                 .containsEntry("quote_usdt_price", null);
+        assertLedgerInvariant(trader);
+    }
+
+    @Test
+    void D96_aCrossLimitFilledInParts_costsEachPartAtTheUsdtRate_andThePaidCoinKeepsItsAverage() throws Exception {
+        UUID trader = trader();
+        price(quote + "USDT", "60000");
+        price(base + quote, "0.05");
+        place(trader, market(quoteUsdt, "BUY", "0.1")).andExpect(status().isCreated());
+        trading.recordDepth(new OrderBookDepth(
+                MarketType.SPOT,
+                cross,
+                TICKS.incrementAndGet(),
+                List.of(new PriceLevel(new BigDecimal("0.048"), BigDecimal.ONE)),
+                List.of(
+                        new PriceLevel(new BigDecimal("0.049"), new BigDecimal("0.4")),
+                        new PriceLevel(new BigDecimal("0.051"), new BigDecimal("5"))),
+                Instant.now()));
+
+        String id = id(place(trader, limit(cross, "BUY", "0.05", "1"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("PARTIALLY_FILLED")));
+
+        // 0.4 taken at 0.049: 0.0196 QX at 60,000; 0.0004 QX of the lock released, 0.03 still locked.
+        assertThat(costBasis(trader, base)).isEqualByComparingTo("1176.00000000");
+        assertThat(spot(trader, base)).isEqualByComparingTo("0.3996");
+        assertThat(spot(trader, quote)).isEqualByComparingTo("0.0803");
+        assertThat(costBasis(trader, quote)).isEqualByComparingTo("4822.82282282");
+        assertLedgerInvariant(trader);
+
+        assertThat(matching.fill(resting(trader, id, "0.05"), Instant.now(), FillSource.LIVE))
+                .isTrue();
+
+        // The 0.6 left at 0.05: 0.03 QX at 60,000 more.
+        assertThat(costBasis(trader, base)).isEqualByComparingTo("2976.00000000");
+        assertThat(spot(trader, base)).isEqualByComparingTo("0.999");
+        assertThat(spot(trader, quote)).isEqualByComparingTo("0.0503");
+        assertThat(costBasis(trader, quote)).isEqualByComparingTo("3021.02102102");
         assertLedgerInvariant(trader);
     }
 
