@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.MarketTrade;
+import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.client.BinanceStreamProperties;
@@ -56,6 +57,20 @@ class TradingMarketDataTest {
         clock.set(AT.plusSeconds(10).plusMillis(1));
         assertThat(data.currentBookTop(MarketType.SPOT, BTC)).isEmpty();
         assertThat(data.currentDepth(MarketType.SPOT, BTC)).isEmpty();
+    }
+
+    @Test
+    void D96_theLatestClosedMinute_isKept_aFormingOrOlderOneIsNot_andAPairNoLongerStreamedIsDropped() {
+        data.recordClosedMinute(minute(BTC, AT, "100", true));
+        data.recordClosedMinute(minute(BTC, AT.minusSeconds(60), "99", true));
+        data.recordClosedMinute(minute(BTC, AT.plusSeconds(60), "101", false));
+
+        assertThat(data.latestClosedMinute(MarketType.SPOT, BTC).orElseThrow().close())
+                .isEqualByComparingTo("100");
+        assertThat(data.latestClosedMinute(MarketType.SPOT, ETH)).isEmpty();
+
+        data.retainOnly(MarketType.SPOT, List.of(ETH));
+        assertThat(data.latestClosedMinute(MarketType.SPOT, BTC)).isEmpty();
     }
 
     @Test
@@ -144,5 +159,11 @@ class TradingMarketDataTest {
                 4,
                 10000,
                 new BinanceStreamProperties.Trading(true, 20, Duration.ofSeconds(10), recentTrades));
+    }
+
+    private static MinuteKline minute(UUID pairId, Instant openTime, String close, boolean closed) {
+        BigDecimal price = new BigDecimal(close);
+        return new MinuteKline(
+                MarketType.SPOT, pairId, openTime, price, price, price, closed, openTime.plusSeconds(60));
     }
 }

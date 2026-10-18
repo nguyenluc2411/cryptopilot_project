@@ -300,7 +300,14 @@ public enum ErrorCode {
      * waits on cannot be told; it is refused and not stored, as the exchange refuses it (TR-09). Borrows MSG43 like
      * {@link #PAPER_ORDER_NOT_OPEN} (A-38). 409: the request is valid and the current market refuses it.
      */
-    PAPER_ORDER_WOULD_TRIGGER(HttpStatus.CONFLICT, "MSG43");
+    PAPER_ORDER_WOULD_TRIGGER(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A coin of the paper Spot pair is neither USDT nor the base of an active Spot USDT pair, so what it holds could not
+     * be valued in USDT (D-96); the order is refused and not stored. Borrows MSG43 like {@link #PAPER_ORDER_WOULD_TAKE}
+     * (A-38); the message argument is the coin. 409: the request is valid and the market's listing refuses it.
+     */
+    PAPER_PAIR_NOT_VALUED(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

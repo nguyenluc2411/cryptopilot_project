@@ -10,6 +10,7 @@ import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperFill.Execution;
 import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.LedgerRefType;
@@ -35,6 +36,8 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>A buy pays its price times its quantity rounded up to the amount scale, and a sale brings it rounded down
  *       ({@link PaperOrder#buyCost}, {@link PaperOrder#saleProceeds}): the wallet never gains from a rounding.
  *   <li>The commission is the fee rate of the fill's liquidity times what came in, rounded up to the amount scale.
+ *   <li>Costs are in USDT (D-96): what came in is valued at the quote coin's USDT rate now; what went out keeps its
+ *       average cost; USDT carries no cost.
  *   <li>A LIMIT order pays from what it locked, and its lock shrinks to what the rest of it needs
  *       ({@link PaperOrder#lockedAfter}); a buy that executes below its price gets the difference back at once. A buy
  *       at its price pays what its lock shrinks by, so all its executions together cost what one would have, never a
@@ -44,7 +47,9 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Runs inside the caller's transaction, which holds the Trader's paper lock and has checked that the order works.
  * The fill and the order it changed are noted for the Trader's queues ({@link PaperUserFeed}).
  *
- * <p>Rule: TR-02, TR-04, TR-08, TR-13; BR-21 (Spot owns what it sells).
+ * <p>Rule: TR-02, TR-04, TR-08, TR-13; BR-21 (Spot owns what it sells); D-96.
+ *
+ * <p>Reference: Binance FAQ, "How to View or Reset the Average Cost in My Binance Wallet".
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -54,6 +59,7 @@ public class SpotSettlement {
     private final PaperFillRepository fills;
     private final PaperOrderProperties fees;
     private final PaperUserFeed feed;
+    private final QuoteUsdtRate usdtRates;
 
     /**
      * Executes {@code quantity} of the order at {@code price} and records the fill.
@@ -91,30 +97,35 @@ public class SpotSettlement {
                 .multiply(liquidity == Liquidity.MAKER ? fees.spotMakerFeeRate() : fees.spotTakerFeeRate())
                 .setScale(Rounding.AMOUNT_SCALE, RoundingMode.UP);
 
+        UsdtRate quoteUsdt = usdtRates.of(coins.quote());
         PaperFill fill = PaperFill.of(
                 order,
-                new Execution(price, quantity, quoteAmount, fee, received.coinId(), liquidity, source, tradedAt));
+                new Execution(price, quantity, quoteAmount, fee, received.coinId(), liquidity, source, tradedAt),
+                quoteUsdt);
         Ref ref = Ref.to(LedgerRefType.FILL, fill.getId());
+        PaperBalance out;
         if (fromLocked) {
-            PaperBalance out =
-                    wallets.spendLocked(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
-            if (!buy) {
-                out.reduceCost(quantity);
-            }
+            out = wallets.spendLocked(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
             if (released.signum() > 0) {
                 wallets.unlock(account, WalletType.SPOT, paid, released);
             }
         } else {
-            PaperBalance out = wallets.debit(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
-            if (!buy) {
-                out.reduceCost(quantity);
-            }
+            out = wallets.debit(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
+        }
+        if (!QuoteUsdtRate.isUsdt(paid)) {
+            out.reduceCost(paidAmount);
         }
         PaperBalance in =
                 wallets.credit(account, WalletType.SPOT, received, receivedAmount, LedgerEntryType.TRADE, ref);
-        if (buy) {
-            // What the buy paid is the cost of what it brought, the fee taken from it included (TR-13).
-            in.addCost(quoteAmount, in.total().subtract(receivedAmount));
+        if (!QuoteUsdtRate.isUsdt(received)) {
+            // A buy costs what it paid, the fee taken from what it brought included (TR-13); a sale, what it netted.
+            BigDecimal quoteCost = buy ? quoteAmount : receivedAmount.subtract(fee);
+            BigDecimal totalBefore = in.total().subtract(receivedAmount);
+            if (quoteUsdt.known()) {
+                in.addCost(quoteUsdt.valueOf(quoteCost), totalBefore);
+            } else {
+                in.addUnknownCost();
+            }
         }
         if (fee.signum() > 0) {
             wallets.debit(account, WalletType.SPOT, received, fee, LedgerEntryType.FEE, ref);

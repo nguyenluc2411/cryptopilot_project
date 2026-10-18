@@ -4,6 +4,7 @@ import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.OpenInterestSample;
 import com.cryptopilot.market.OrderBookDepth;
@@ -79,6 +80,17 @@ public class MarketApiImpl implements MarketApi {
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<PairListing> pairListing(String symbol) {
+        return pairs.findBySymbol(symbol)
+                .map(pair -> new PairListing(
+                        pair.getId(),
+                        pair.getSymbol(),
+                        pair.isEnabledOn(MarketType.SPOT),
+                        pair.isEnabledOn(MarketType.FUTURES)));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Optional<PairCoins> pairCoins(UUID pairId) {
         return pairs.findById(pairId).map(pair -> {
             Map<UUID, CoinListing> found =
@@ -146,6 +158,11 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public Optional<BigDecimal> currentLastPrice(MarketType market, String symbol) {
         return current(market, symbol, CachedPrice::lastPrice);
+    }
+
+    @Override
+    public Optional<MinuteKline> latestClosedMinuteKline(MarketType market, UUID pairId) {
+        return trading.latestClosedMinute(market, pairId);
     }
 
     @Override

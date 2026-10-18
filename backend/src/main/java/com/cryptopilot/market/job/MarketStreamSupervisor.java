@@ -59,8 +59,8 @@ import org.springframework.stereotype.Component;
  * <h2>Routing, without blocking a reader</h2>
  *
  * <ul>
- *   <li>A 1-minute candle, forming or closed, goes to every {@link MinuteKlineListener} (the matching engine) and
- *       nowhere else: it is not stored, cached or broadcast.
+ *   <li>A 1-minute candle, forming or closed, goes to every {@link MinuteKlineListener} (the matching engine); the
+ *       latest closed one of each pair is also held in {@link TradingMarketData}. It is not stored or broadcast.
  *   <li>A closed candle of a stored timeframe goes to the {@link ClosedCandlePipeline}; a forming one is not
  *       stored (BR-08).
  *   <li>A Spot ticker or a futures mark price overwrites the pair's entry in {@link LatestMarketData}.
@@ -313,6 +313,7 @@ public class MarketStreamSupervisor {
                     kline.kline().close(),
                     kline.closed(),
                     kline.eventTime());
+            trading.recordClosedMinute(update);
             for (MinuteKlineListener listener : minuteListeners) {
                 try {
                     listener.onMinuteKline(update);

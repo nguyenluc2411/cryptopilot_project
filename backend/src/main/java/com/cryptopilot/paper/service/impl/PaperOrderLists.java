@@ -106,6 +106,7 @@ public class PaperOrderLists {
     private final PaperUserFeed feed;
     private final ApplicationEventPublisher events;
     private final MarketApi market;
+    private final QuoteUsdtRate usdtRates;
     private final Clock clock;
 
     /** Places a group: see the class comment and {@link PlaceOrderListRequest}. A refusal stores nothing. */
@@ -116,6 +117,7 @@ public class PaperOrderLists {
                 .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", request.pairId()));
         PairCoins coins = market.pairCoins(pair.pairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + pair.pairId() + " is tradable but not stored"));
+        usdtRates.requireValued(coins);
         PairFilters filters = pair.filters();
         BigDecimal last = market.currentLastPrice(MarketType.SPOT, pair.symbol())
                 .orElseThrow(() -> new BusinessException(
