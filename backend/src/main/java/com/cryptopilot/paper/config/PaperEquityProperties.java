@@ -2,6 +2,8 @@ package com.cryptopilot.paper.config;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import java.time.Duration;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
@@ -15,10 +17,14 @@ import org.springframework.validation.annotation.Validated;
  * @param enabled whether the snapshot is scheduled; off without a profile so a test context schedules nothing
  * @param cron the Spring cron expression of the daily run
  * @param zone the zone the cron expression is read in, and the day a snapshot belongs to
+ * @param retryInterval how often the accounts without a snapshot of the day are tried again (PT-R02)
+ * @param retryUntil the time of day, in {@code zone}, after which they are no longer tried that day
  */
 @Validated
 @ConfigurationProperties(prefix = "cryptopilot.paper.equity-snapshot")
 public record PaperEquityProperties(
         @DefaultValue("false") boolean enabled,
         @NotBlank @DefaultValue("0 0 0 * * *") String cron,
-        @NotNull @DefaultValue("UTC") ZoneId zone) {}
+        @NotNull @DefaultValue("UTC") ZoneId zone,
+        @NotNull @DefaultValue("5m") Duration retryInterval,
+        @NotNull @DefaultValue("23:55") LocalTime retryUntil) {}

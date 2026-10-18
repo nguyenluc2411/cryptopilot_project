@@ -426,7 +426,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     private void triggerReached(PriceRange range) {
         for (TriggerBook.Triggered fired : triggers.onRange(range)) {
             try {
-                if (!matching.trigger(fired.order(), fired.at(), fired.stopPrice(), range.source())) {
+                if (!matching.trigger(fired.order(), fired.at(), fired.stopPrice(), range.source(), range.open())) {
                     log.debug(
                             "TR-09 paper order {} no longer waits for a trigger",
                             fired.order().orderId());
@@ -727,6 +727,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                 Thread.sleep(wait.isPositive() ? wait : properties.replay().retryDelay());
                 continue;
             }
+            prefetchQuoteRates(key, batch.klines(), cursor);
             boolean advanced = false;
             for (MinuteKline kline : batch.klines()) {
                 if (!kline.openTime().isBefore(cursor)) {
@@ -737,7 +738,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                             kline.high(),
                             kline.openTime(),
                             true,
-                            FillSource.REPLAY)));
+                            FillSource.REPLAY,
+                            kline.open())));
                     cursor = kline.openTime().plus(MINUTE);
                     advanced = true;
                 }
@@ -748,6 +750,25 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
         queue.offer(new Command.ReplayDone(key, cursor));
         log.info("TR-02 {} {} paper replay done up to {}", key.market(), key.pairId(), cursor);
+    }
+
+    /** Before the candles are queued, so their fills read the quote rates without a network call (Q-52). */
+    private void prefetchQuoteRates(BookKey key, List<MinuteKline> klines, Instant from) {
+        List<MinuteKline> fresh = klines.stream()
+                .filter(kline -> !kline.openTime().isBefore(from))
+                .toList();
+        if (fresh.isEmpty()) {
+            return;
+        }
+        try {
+            matching.prefetchQuoteRates(
+                    key.market(),
+                    key.pairId(),
+                    fresh.get(0).openTime(),
+                    fresh.get(fresh.size() - 1).openTime());
+        } catch (RuntimeException failure) {
+            log.warn("Q-52 {} {} quote rates not prefetched: {}", key.market(), key.pairId(), failure.toString());
+        }
     }
 
     private void startThread(String name, Runnable task) {

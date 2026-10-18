@@ -4,15 +4,23 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MinuteKline;
+import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.model.UsdtRate;
+import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.UsdtRateSource;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -24,7 +32,12 @@ import org.springframework.stereotype.Component;
  * Values a Spot fill's quote coin in USDT, so the cost of every coin stays in USDT whatever the pair is quoted in, and
  * tells which pairs paper trading accepts: those whose base and quote can both be valued in USDT.
  *
- * <p>Rule: TR-13; D-96.
+ * <p>A replayed fill traded in the past, so it is valued at the close of the {@code QUOTEUSDT} 1-minute candle of the
+ * minute it traded in. The replay thread fetches those closes through the market module before it queues the pair's
+ * candles ({@link #prefetch}); a fill only reads what was kept, never the network, since it runs under the Trader's
+ * lock (Q-52). Without a kept close it takes the rate of now.
+ *
+ * <p>Rule: TR-13; D-96; PT-R19.
  *
  * <p>Reference: Fowler, M. (2002). <i>Patterns of Enterprise Application Architecture</i>, "Money" (an amount is
  * always carried with its currency). Binance FAQ, "How to View or Reset the Average Cost in My Binance Wallet" (the
@@ -37,12 +50,22 @@ class QuoteUsdtRate {
     /** The oldest closed 1-minute candle whose close still values a coin. */
     static final Duration CANDLE_MAX_AGE = Duration.ofMinutes(15);
 
+    /** How many fetched closes are kept: a day of minutes for a few quote coins. */
+    static final int CACHED_CLOSES = 10_000;
+
     private static final String USDT = PaperAccountServiceImpl.USDT;
     private static final Duration MINUTE = Duration.ofMinutes(1);
     private static final Logger log = LoggerFactory.getLogger(QuoteUsdtRate.class);
 
     private final MarketApi market;
     private final Clock clock;
+
+    private final Map<Minute, BigDecimal> closes = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Minute, BigDecimal> eldest) {
+            return size() > CACHED_CLOSES;
+        }
+    });
 
     /** Whether the coin is USDT, which never carries a cost. */
     static boolean isUsdt(CoinListing coin) {
@@ -54,6 +77,31 @@ class QuoteUsdtRate {
      * close of that pair's latest closed 1-minute candle no older than {@link #CANDLE_MAX_AGE}, else none.
      */
     UsdtRate of(CoinListing quote) {
+        UsdtRate rate = current(quote);
+        if (!rate.known()) {
+            log.warn(
+                    "D-96 no USDT rate of {} known; the fill executes and the coin it brings has no known cost",
+                    quote.symbol() + USDT);
+        }
+        return rate;
+    }
+
+    /**
+     * The USDT value of one unit of {@code quote} for a fill: a replayed one at the close of its USDT pair's 1-minute
+     * candle of the minute it traded in, else as {@link #of(CoinListing)}.
+     */
+    UsdtRate of(CoinListing quote, FillSource source, Instant tradedAt) {
+        if (source == FillSource.REPLAY && !isUsdt(quote)) {
+            Optional<BigDecimal> close = closeAt(quote.symbol() + USDT, tradedAt);
+            if (close.isPresent()) {
+                return new UsdtRate(close.get(), UsdtRateSource.CANDLE_1M);
+            }
+        }
+        return of(quote);
+    }
+
+    /** As {@link #of(CoinListing)}, without the warning: for a coin valued outside a fill, such as the grant. */
+    UsdtRate current(CoinListing quote) {
         if (isUsdt(quote)) {
             return UsdtRate.ONE;
         }
@@ -68,11 +116,47 @@ class QuoteUsdtRate {
                 .flatMap(pair -> market.latestClosedMinuteKline(MarketType.SPOT, pair.pairId()))
                 .filter(kline -> !kline.openTime().plus(MINUTE).isBefore(oldest))
                 .map(kline -> new UsdtRate(kline.close(), UsdtRateSource.CANDLE_1M));
-        if (candle.isPresent()) {
-            return candle.get();
+        return candle.orElse(UsdtRate.NONE);
+    }
+
+    /**
+     * Keeps the {@code QUOTEUSDT} closes of the minutes {@code from} to {@code to} a replay of a pair quoted in another
+     * coin than USDT is about to fill in: one page of closed 1-minute candles, fetched once unless both ends are kept.
+     * Never throws: a refusal or a failure is logged and the fills of those minutes take the rate of now.
+     */
+    void prefetch(PairCoins coins, Instant from, Instant to) {
+        if (isUsdt(coins.quote())) {
+            return;
         }
-        log.warn("D-96 no USDT rate of {} known; the fill executes and the coin it brings has no known cost", symbol);
-        return UsdtRate.NONE;
+        String symbol = coins.quote().symbol() + USDT;
+        Instant first = from.truncatedTo(ChronoUnit.MINUTES);
+        if (closes.containsKey(new Minute(symbol, first))
+                && closes.containsKey(new Minute(symbol, to.truncatedTo(ChronoUnit.MINUTES)))) {
+            return;
+        }
+        try {
+            Optional<PairListing> pair = market.pairListing(symbol);
+            if (pair.isEmpty()) {
+                log.warn("Q-52 no pair {} to fetch the 1m closes of from {}", symbol, first);
+                return;
+            }
+            MinuteKlineBatch batch =
+                    market.closedMinuteKlines(MarketType.SPOT, pair.get().pairId(), first);
+            if (batch.refused()) {
+                log.warn("Q-52 1m closes of {} from {} refused until {}", symbol, first, batch.retryAt());
+                return;
+            }
+            for (MinuteKline kline : batch.klines()) {
+                closes.put(new Minute(symbol, kline.openTime()), kline.close());
+            }
+        } catch (RuntimeException failure) {
+            log.warn("Q-52 1m closes of {} from {} not fetched: {}", symbol, first, failure.toString());
+        }
+    }
+
+    /** The kept close of the symbol's 1-minute candle that covers {@code at}; never fetched here. */
+    private Optional<BigDecimal> closeAt(String symbol, Instant at) {
+        return Optional.ofNullable(closes.get(new Minute(symbol, at.truncatedTo(ChronoUnit.MINUTES))));
     }
 
     /**
@@ -99,4 +183,6 @@ class QuoteUsdtRate {
             }
         }
     }
+
+    private record Minute(String symbol, Instant openTime) {}
 }

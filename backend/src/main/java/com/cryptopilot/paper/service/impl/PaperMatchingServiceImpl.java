@@ -13,6 +13,8 @@ import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.model.enums.OrderType;
+import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperMatchingWatermarkRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -56,6 +58,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final PaperMatchingWatermarkRepository watermarks;
     private final UserLock lock;
     private final MarketApi market;
+    private final QuoteUsdtRate usdtRates;
     private final Clock clock;
 
     @Override
@@ -103,7 +106,8 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
 
     @Override
     @Transactional
-    public boolean trigger(TriggerOrder watched, Instant at, BigDecimal stopPrice, FillSource source) {
+    public boolean trigger(
+            TriggerOrder watched, Instant at, BigDecimal stopPrice, FillSource source, BigDecimal candleOpen) {
         PaperAccount account = accounts.findById(watched.accountId())
                 .orElseThrow(() -> new IllegalStateException("account " + watched.accountId() + " is not stored"));
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.getUserId());
@@ -127,11 +131,13 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
         boolean replayed = source == FillSource.REPLAY;
         if (order.getOrderType().isSpotMarketStop()) {
-            // Replayed, the book of then is not known: it executes at the price that triggered it.
+            // Replayed, the book of then is not known: the stop, or the open of a candle that gapped past it.
             Optional<SpotArrival.Book> book = replayed
-                    ? Optional.of(new SpotArrival.Book(List.of(new PriceLevel(stopPrice, BigDecimal.ZERO)), false))
+                    ? Optional.of(new SpotArrival.Book(
+                            List.of(new PriceLevel(replayedStopPrice(order, stopPrice, candleOpen), BigDecimal.ZERO)),
+                            false))
                     : arrival.bookFor(pairOf(order), order.getSide());
-            arrival.marketOnTrigger(account, order, coins, book, replayed ? at : clock.instant());
+            arrival.marketOnTrigger(account, order, coins, book, replayed ? at : clock.instant(), source);
         } else if (replayed) {
             // The candles replayed after this one fill it at its price; the book of now is not the book of then.
             arrival.rest(account, order);
@@ -141,6 +147,26 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         }
         lists.afterExecution(account, order, at);
         return true;
+    }
+
+    /**
+     * The price a replayed STOP_LOSS or TAKE_PROFIT executes at: the open of the candle that triggered it when its
+     * trigger condition already held at that open, as the market had gapped through the stop; otherwise the stop
+     * (Q-51). A trailing stop triggers on the pullback, the way of a STOP_LOSS of its side.
+     *
+     * <p>Rule: TR-09; PT-R14.
+     *
+     * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges: Market Microstructure for Practitioners</i>. Oxford
+     * University Press, ch. 4 (a triggered stop becomes a market order and executes at the next available price).
+     */
+    static BigDecimal replayedStopPrice(PaperOrder order, BigDecimal stopPrice, BigDecimal candleOpen) {
+        if (candleOpen == null) {
+            return stopPrice;
+        }
+        TriggerCondition condition = order.getCallbackRate() != null
+                ? OrderType.STOP_LOSS.triggerConditionFor(order.getSide())
+                : order.getTriggerCondition();
+        return condition.isMet(candleOpen, stopPrice) ? candleOpen : stopPrice;
     }
 
     private TradablePair pairOf(PaperOrder order) {
@@ -158,6 +184,19 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             if (order.awaitsTrigger()) {
                 order.moveExtreme(extremes.get(order.getId()));
             }
+        }
+    }
+
+    /** No transaction: no connection is held while the exchange answers. */
+    @Override
+    public void prefetchQuoteRates(MarketType market, UUID pairId, Instant from, Instant to) {
+        if (market != MarketType.SPOT) {
+            return;
+        }
+        try {
+            this.market.pairCoins(pairId).ifPresent(coins -> usdtRates.prefetch(coins, from, to));
+        } catch (RuntimeException failure) {
+            log.warn("Q-52 quote rates of pair {} not prefetched: {}", pairId, failure.toString());
         }
     }
 

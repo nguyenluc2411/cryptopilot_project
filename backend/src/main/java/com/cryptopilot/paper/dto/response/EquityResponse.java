@@ -10,7 +10,7 @@ import java.util.List;
  * @param spotEquity the Spot wallet now, in USDT, at the current last prices
  * @param futuresEquity the Futures wallet now, in USDT
  * @param totalEquity the two together
- * @param todayPnl the total now less the total at 00:00 UTC today; {@code null} before the first snapshot of the day
+ * @param todayPnl the total now less the total at the day's snapshot; {@code null}, not known, while the day has none
  * @param todayPnlPercent that as a percent of the snapshot, 2 decimals; {@code null} without it
  * @param history the start of each day of the period asked for, oldest first
  */

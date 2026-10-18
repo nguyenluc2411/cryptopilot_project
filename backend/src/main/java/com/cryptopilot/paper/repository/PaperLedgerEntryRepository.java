@@ -39,6 +39,11 @@ public interface PaperLedgerEntryRepository extends Repository<PaperLedgerEntry,
             Instant to,
             Pageable pageable);
 
+    /** Whether the wallet's coin has an entry of another type than {@code type}. */
+    @Transactional(readOnly = true)
+    boolean existsByAccountIdAndWalletTypeAndCoinIdAndEntryTypeNot(
+            UUID accountId, WalletType walletType, UUID coinId, LedgerEntryType type);
+
     /** Writes an entry. Not transactional here; the unit of work is the calling service's. */
     PaperLedgerEntry save(PaperLedgerEntry entry);
 }

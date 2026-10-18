@@ -121,7 +121,7 @@ public class SpotArrival {
         rest(account, order);
     }
 
-    /** Settles each slice of a sweep as one fill, as a taker. */
+    /** Settles each slice of a sweep as one live fill, as a taker. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void execute(
             PaperAccount account,
@@ -130,17 +130,20 @@ public class SpotArrival {
             BookSweep.Result sweep,
             Instant at,
             boolean fromLocked) {
+        execute(account, order, coins, sweep, at, fromLocked, FillSource.LIVE);
+    }
+
+    private void execute(
+            PaperAccount account,
+            PaperOrder order,
+            PairCoins coins,
+            BookSweep.Result sweep,
+            Instant at,
+            boolean fromLocked,
+            FillSource source) {
         for (Slice slice : sweep.slices()) {
             settlement.execute(
-                    account,
-                    order,
-                    coins,
-                    slice.price(),
-                    slice.quantity(),
-                    Liquidity.TAKER,
-                    FillSource.LIVE,
-                    at,
-                    fromLocked);
+                    account, order, coins, slice.price(), slice.quantity(), Liquidity.TAKER, source, at, fromLocked);
         }
     }
 
@@ -178,7 +181,12 @@ public class SpotArrival {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void marketOnTrigger(
-            PaperAccount account, PaperOrder order, PairCoins coins, Optional<Book> found, Instant now) {
+            PaperAccount account,
+            PaperOrder order,
+            PairCoins coins,
+            Optional<Book> found,
+            Instant now,
+            FillSource source) {
         CoinListing locked = lockedCoin(order, coins);
         wallets.unlock(account, WalletType.SPOT, locked, order.lockedAmount());
         if (found.isEmpty()) {
@@ -196,7 +204,7 @@ public class SpotArrival {
             order.expire(sweep.isEmpty() ? NOT_FILLABLE : INSUFFICIENT_BALANCE, now);
             return;
         }
-        execute(account, order, coins, sweep, now, false);
+        execute(account, order, coins, sweep, now, false, source);
         if (sweep.pastBook() && book.shown()) {
             order.flagDepthExhausted();
         }

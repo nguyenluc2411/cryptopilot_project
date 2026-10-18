@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -21,6 +22,7 @@ import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
+import com.cryptopilot.paper.PaperLedgerInvariant;
 import com.cryptopilot.paper.job.PaperMatchingWorker;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
@@ -39,11 +41,13 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -65,6 +69,7 @@ import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
@@ -508,7 +513,7 @@ class PaperOrderApiTest {
                 .andExpect(jsonPath("$.status").value("CANCELED"));
 
         assertThat(locked(trader, "USDT")).isZero();
-        assertThat(matching.trigger(watched, Instant.now(), watched.stopPrice(), FillSource.LIVE))
+        assertThat(matching.trigger(watched, Instant.now(), watched.stopPrice(), FillSource.LIVE, null))
                 .isFalse();
         assertThat(matching.triggerOrders())
                 .noneMatch(order -> order.orderId().toString().equals(id));
@@ -527,7 +532,7 @@ class PaperOrderApiTest {
                 .orElseThrow();
         Instant at = Instant.now().plusSeconds(1);
 
-        assertThat(matching.trigger(watched, at, watched.stopPrice(), FillSource.REPLAY))
+        assertThat(matching.trigger(watched, at, watched.stopPrice(), FillSource.REPLAY, null))
                 .isTrue();
 
         as(trader, get(PAPER + "/orders/" + id), null)
@@ -1033,19 +1038,19 @@ class PaperOrderApiTest {
         place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
 
         // Opened with 10,000 USDT in Spot and 5,000 in Futures, the other coins without a price: 15,000.
-        // Now 9,800 USDT and 1.998 of the coin at 100: 14,999.8, the fee of 0.002 × 100 less.
+        // Now 9,800 USDT and 1.998 of the coin at 100: 14,999.8, the fee of 0.002 × 100 less. The granted BTC, ETH
+        // and BNB have no price, so no snapshot of the day is taken and today's PnL is not known (PT-R02).
         as(trader, get(PAPER + "/equity").param("days", "7"), null)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalEquity").value(14999.8))
-                .andExpect(jsonPath("$.todayPnl").value(-0.2))
-                .andExpect(jsonPath("$.history.length()").value(1))
-                .andExpect(jsonPath("$.history[0].totalEquity").value(15000.0));
+                .andExpect(jsonPath("$.todayPnl").value(nullValue()))
+                .andExpect(jsonPath("$.history.length()").value(0));
 
         pnl.snapshotAll();
 
         assertThat(sql.sql("""
                         select count(*) from paper_equity_snapshot s join paper_account a on a.account_id = s.account_id
-                         where a.user_id = ?""").param(trader).query(Long.class).single()).isEqualTo(1L);
+                         where a.user_id = ?""").param(trader).query(Long.class).single()).isZero();
         as(trader, get(PAPER + "/equity").param("days", "0"), null)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.days").value("MSG01"));
@@ -1489,8 +1494,316 @@ class PaperOrderApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // PT-F2
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * PT-R04: an OTOCO buy without an OCO quantity sells what the buy brings in net of the fee, floored to the step,
+     * so its OCO is placed instead of REJECTED; the quantity shows on the pending legs before the buy fills.
+     */
+    @Test
+    void PTR04_anOtocoBuyWithoutAnOcoQuantity_sellsWhatTheBuyLeavesAfterItsFee() throws Exception {
+        UUID trader = trader();
+        fineSteps();
+        price("60000");
+
+        String waiting = placeList(trader, otoco("59000", "0.01", null, "66000", "55000", "54900"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orders[1].status").value("PENDING_NEW"))
+                .andExpect(jsonPath("$.orders[1].quantity").value(0.00999))
+                .andExpect(jsonPath("$.orders[2].quantity").value(0.00999))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        as(trader, post(PAPER + "/order-lists/" + JsonPath.read(waiting, "$.listId") + "/cancel"), null)
+                .andExpect(status().isOk());
+
+        depth(List.of(level("59990", "5")), List.of(level("59980", "5")));
+        placeList(trader, otoco("60000", "0.01", null, "66000", "55000", "54900"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("EXECUTING"))
+                .andExpect(jsonPath("$.orders[0].status").value("FILLED"))
+                .andExpect(jsonPath("$.orders[1].status").value("NEW"))
+                .andExpect(jsonPath("$.orders[1].quantity").value(0.00999))
+                .andExpect(jsonPath("$.orders[2].status").value("NEW"));
+
+        assertThat(locked(trader, base())).isEqualByComparingTo("0.00999");
+        PaperLedgerInvariant.assertHolds(sql, accountOf(trader));
+    }
+
+    /** PT-R04: an OTOCO that gives its OCO quantity keeps it, so selling the whole buy is still REJECTED. */
+    @Test
+    void PTR04_anOtocoBuyWithTheBuysQuantityAsOcoQuantity_isStillRejected() throws Exception {
+        UUID trader = trader();
+        fineSteps();
+        price("60000");
+        depth(List.of(level("59990", "5")), List.of(level("59980", "5")));
+
+        placeList(trader, otoco("60000", "0.01", "0.01", "66000", "55000", "54900"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("ALL_DONE"))
+                .andExpect(jsonPath("$.orders[0].status").value("FILLED"))
+                .andExpect(jsonPath("$.orders[1].status").value("REJECTED"))
+                .andExpect(jsonPath("$.orders[1].statusReason").value("INSUFFICIENT_BALANCE"))
+                .andExpect(jsonPath("$.orders[2].status").value("REJECTED"));
+
+        assertThat(spot(trader, base())).isEqualByComparingTo("0.00999");
+        PaperLedgerInvariant.assertHolds(sql, accountOf(trader));
+    }
+
+    /** PT-R04: a plain OCO still needs its quantity. */
+    @Test
+    void PTR04_anOcoWithoutAQuantity_isMsg01() throws Exception {
+        UUID trader = trader();
+        price("100");
+
+        placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OCO\", \"oco\": {\"side\":"
+                                + " \"SELL\", \"takeProfitPrice\": 110, \"stopPrice\": 95, \"stopLimitPrice\": 94}}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors['oco.quantity']").value("MSG01"));
+    }
+
+    /**
+     * PT-R14: a replayed STOP_LOSS sell executes at the open of a candle that opened below its stop, and at its stop
+     * when the candle opened above it and traded down through it; a live one takes the book as before, and a replayed
+     * TAKE_PROFIT sell executes at the open of a candle that opened above its stop (Q-51).
+     */
+    @Test
+    void PTR14_aReplayedMarketStop_fillsAtTheOpenOfACandleThatGappedPastIt_elseAtItsStop() throws Exception {
+        UUID trader = trader();
+        fineSteps();
+        price("61000");
+        place(trader, market("BUY", "\"quantity\": 0.03")).andExpect(status().isCreated());
+        String gapped = id(place(trader, stop("STOP_LOSS", "SELL", "60000", null, null, "0.009")));
+        String crossed = id(place(trader, stop("STOP_LOSS", "SELL", "60000", null, null, "0.009")));
+        String live = id(place(trader, stop("STOP_LOSS", "SELL", "60000", null, null, "0.009")));
+        String takeProfit = id(place(trader, stop("TAKE_PROFIT", "SELL", "62000", null, null, "0.002")));
+        Instant at = Instant.now().truncatedTo(ChronoUnit.MINUTES).plus(Duration.ofMinutes(1));
+        BigDecimal stop = new BigDecimal("60000");
+
+        assertThat(matching.trigger(watched(gapped), at, stop, FillSource.REPLAY, new BigDecimal("58000")))
+                .isTrue();
+        assertThat(matching.trigger(watched(crossed), at, stop, FillSource.REPLAY, new BigDecimal("60500")))
+                .isTrue();
+        assertThat(matching.trigger(
+                        watched(takeProfit), at, new BigDecimal("62000"), FillSource.REPLAY, new BigDecimal("62500")))
+                .isTrue();
+        depth(List.of(level("59600", "5")), List.of(level("59500", "5")));
+        assertThat(matching.trigger(watched(live), at, stop, FillSource.LIVE, new BigDecimal("58000")))
+                .isTrue();
+
+        as(trader, get(PAPER + "/orders/" + gapped), null)
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.avgPrice").value(58000.0));
+        as(trader, get(PAPER + "/orders/" + crossed), null)
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.avgPrice").value(60000.0));
+        as(trader, get(PAPER + "/orders/" + live), null)
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.avgPrice").value(59500.0));
+        as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.avgPrice").value(62500.0));
+        assertThat(sql.sql("select fill_source from paper_fill where order_id = ?")
+                        .param(UUID.fromString(gapped))
+                        .query(String.class)
+                        .single())
+                .isEqualTo("REPLAY");
+        PaperLedgerInvariant.assertHolds(sql, accountOf(trader));
+    }
+
+    /**
+     * Q-51: a replayed STOP_LOSS or TAKE_PROFIT, either side, fills at the triggering candle's open when its trigger
+     * condition already held there, and at its stop when the candle opened on the other side and crossed it; a live
+     * TAKE_PROFIT takes the book as before.
+     */
+    @Test
+    void Q51_aReplayedMarketStop_fillsAtTheOpenWhenItsConditionHeldThere_elseAtItsStop() throws Exception {
+        UUID trader = trader();
+        fineSteps();
+        price("61000");
+        place(trader, market("BUY", "\"quantity\": 0.05")).andExpect(status().isCreated());
+        Map<String, String> filledAt = new LinkedHashMap<>();
+        Map<String, String> openAt = new LinkedHashMap<>();
+        // Placed above 60,000: a STOP_LOSS sell and a TAKE_PROFIT buy wait below it.
+        for (String type : List.of("STOP_LOSS SELL", "TAKE_PROFIT BUY")) {
+            String[] parts = type.split(" ");
+            String gap = id(place(trader, stop(parts[0], parts[1], "60000", null, null, "0.002")));
+            String cross = id(place(trader, stop(parts[0], parts[1], "60000", null, null, "0.002")));
+            boolean sell = parts[1].equals("SELL");
+            openAt.put(gap, sell ? "58000" : "59000");
+            filledAt.put(gap, sell ? "58000" : "59000");
+            openAt.put(cross, "60500");
+            filledAt.put(cross, "60000");
+        }
+        price("59000");
+        // Placed below 60,000: a TAKE_PROFIT sell and a STOP_LOSS buy wait above it.
+        for (String type : List.of("TAKE_PROFIT SELL", "STOP_LOSS BUY")) {
+            String[] parts = type.split(" ");
+            String gap = id(place(trader, stop(parts[0], parts[1], "60000", null, null, "0.002")));
+            String cross = id(place(trader, stop(parts[0], parts[1], "60000", null, null, "0.002")));
+            openAt.put(gap, "61000");
+            filledAt.put(gap, "61000");
+            openAt.put(cross, "59500");
+            filledAt.put(cross, "60000");
+        }
+        String live = id(place(trader, stop("TAKE_PROFIT", "SELL", "60000", null, null, "0.002")));
+        Instant at = Instant.now().truncatedTo(ChronoUnit.MINUTES).plus(Duration.ofMinutes(1));
+        BigDecimal stop = new BigDecimal("60000");
+
+        for (Map.Entry<String, String> replayed : openAt.entrySet()) {
+            assertThat(matching.trigger(
+                            watched(replayed.getKey()),
+                            at,
+                            stop,
+                            FillSource.REPLAY,
+                            new BigDecimal(replayed.getValue())))
+                    .isTrue();
+        }
+        depth(List.of(level("60200", "5")), List.of(level("60100", "5")));
+        assertThat(matching.trigger(watched(live), at, stop, FillSource.LIVE, new BigDecimal("61000")))
+                .isTrue();
+
+        for (Map.Entry<String, String> expected : filledAt.entrySet()) {
+            as(trader, get(PAPER + "/orders/" + expected.getKey()), null)
+                    .andExpect(jsonPath("$.status").value("FILLED"))
+                    .andExpect(jsonPath("$.avgPrice").value(Double.parseDouble(expected.getValue())));
+        }
+        as(trader, get(PAPER + "/orders/" + live), null)
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.avgPrice").value(60100.0));
+        PaperLedgerInvariant.assertHolds(sql, accountOf(trader));
+    }
+
+    /**
+     * PT-R03: a cancel and an engine fill of the same LIMIT order, released together, never both win: the order ends
+     * either CANCELED with its lock given back, or FILLED paid from its lock, and the ledger adds up each time.
+     */
+    @Test
+    void PTR03_aCancelAndAFillOfTheSameOrder_atOnce_exactlyOneWins() throws Exception {
+        UUID trader = trader();
+        price("100");
+        UUID account = accountOf(trader);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        int fills = 0;
+        try {
+            for (int i = 0; i < 50; i++) {
+                String id = id(place(trader, limit("BUY", "90", "1", null)).andExpect(status().isCreated()));
+                RestingOrder resting = new RestingOrder(
+                        UUID.fromString(id),
+                        account,
+                        MarketType.SPOT,
+                        pair,
+                        OrderSide.BUY,
+                        new BigDecimal("90"),
+                        Instant.now().minusSeconds(1));
+                CyclicBarrier start = new CyclicBarrier(2);
+                Future<Integer> cancel = pool.submit(() -> {
+                    start.await();
+                    return as(trader, post(PAPER + "/orders/" + id + "/cancel"), null)
+                            .andReturn()
+                            .getResponse()
+                            .getStatus();
+                });
+                Future<Boolean> fill = pool.submit(() -> {
+                    start.await();
+                    return matching.fill(resting, Instant.now(), FillSource.LIVE);
+                });
+                boolean filled = fill.get(30, TimeUnit.SECONDS);
+                int cancelled = cancel.get(30, TimeUnit.SECONDS);
+
+                assertThat(filled)
+                        .as("iteration %s: the cancel answered %s", i, cancelled)
+                        .isEqualTo(cancelled != 200);
+                assertThat(sql.sql("select order_status from paper_order where order_id = ?")
+                                .param(UUID.fromString(id))
+                                .query(String.class)
+                                .single())
+                        .isEqualTo(filled ? "FILLED" : "CANCELED");
+                fills += filled ? 1 : 0;
+                assertThat(locked(trader, "USDT")).isZero();
+                assertThat(spot(trader, "USDT")).isEqualByComparingTo(BigDecimal.valueOf(10000 - 90L * fills));
+                PaperLedgerInvariant.assertHolds(sql, account);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /**
+     * PT-R03: two LIMIT buys of one Trader, each needing more than half of the free USDT, placed together: one is
+     * accepted and the other refused, and the free balance never goes below zero.
+     */
+    @Test
+    void PTR03_twoBuysOfOneTraderRacingForTheSameBalance_oneIsRefused() throws Exception {
+        UUID trader = trader();
+        price("100");
+        UUID account = accountOf(trader);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 50; i++) {
+                CyclicBarrier start = new CyclicBarrier(2);
+                List<Future<MvcResult>> placed = new ArrayList<>();
+                for (int buyer = 0; buyer < 2; buyer++) {
+                    placed.add(pool.submit(() -> {
+                        start.await();
+                        return place(trader, limit("BUY", "90", "60", null)).andReturn();
+                    }));
+                }
+                List<MvcResult> results = new ArrayList<>();
+                for (Future<MvcResult> result : placed) {
+                    results.add(result.get(30, TimeUnit.SECONDS));
+                }
+
+                assertThat(results)
+                        .extracting(result -> result.getResponse().getStatus())
+                        .as("iteration %s", i)
+                        .containsExactlyInAnyOrder(201, 400);
+                MvcResult accepted = results.stream()
+                        .filter(result -> result.getResponse().getStatus() == 201)
+                        .findFirst()
+                        .orElseThrow();
+                MvcResult refused = results.stream()
+                        .filter(result -> result.getResponse().getStatus() == 400)
+                        .findFirst()
+                        .orElseThrow();
+                assertThat(JsonPath.<String>read(refused.getResponse().getContentAsString(), "$.code"))
+                        .isEqualTo("PAPER_INSUFFICIENT_BALANCE");
+                assertThat(free(trader, "USDT")).isEqualByComparingTo("4600");
+                PaperLedgerInvariant.assertHolds(sql, account);
+                String id = JsonPath.read(accepted.getResponse().getContentAsString(), "$.orderId");
+                as(trader, post(PAPER + "/orders/" + id + "/cancel"), null).andExpect(status().isOk());
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(free(trader, "USDT")).isEqualByComparingTo("10000");
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
+
+    /** Gives the test's pair a step of 0.00001, so it trades at BTC-like prices. */
+    private void fineSteps() {
+        sql.sql("update crypto_pair set spot_step_size = 0.00001 where pair_id = ?")
+                .param(pair)
+                .update();
+    }
+
+    /** The stop as the engine watches it. */
+    private TriggerOrder watched(String id) {
+        return matching.triggerOrders().stream()
+                .filter(order -> order.orderId().toString().equals(id))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private BigDecimal free(UUID trader, String coin) {
+        return spot(trader, coin).subtract(locked(trader, coin));
+    }
 
     private String market(String side, String size) {
         return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"" + side + "\", \"type\": \"MARKET\", "
@@ -1513,8 +1826,10 @@ class PaperOrderApiTest {
                 + buyQuantity + "}, \"oco\": " + ocoPart("SELL", ocoQuantity, takeProfit, stop, stopLimit) + "}";
     }
 
+    /** The OCO part of a group; a {@code null} quantity is left out. */
     private static String ocoPart(String side, String quantity, String takeProfit, String stop, String stopLimit) {
-        return "{\"side\": \"" + side + "\", \"quantity\": " + quantity + ", \"takeProfitPrice\": " + takeProfit
+        return "{\"side\": \"" + side + "\"" + (quantity == null ? "" : ", \"quantity\": " + quantity)
+                + ", \"takeProfitPrice\": " + takeProfit
                 + ", \"stopPrice\": " + stop + ", \"stopLimitPrice\": " + stopLimit + "}";
     }
 

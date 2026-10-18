@@ -87,6 +87,9 @@ cryptopilot:
     equity-snapshot:
       # TR-13 runs in this profile: every paper account's worth is recorded at 00:00 UTC.
       enabled: true
+    grant-cost:
+      # PT-R13 runs in this profile: the granted coins without a cost get one once they have a price.
+      enabled: true
     matching:
       replay:
         # TR-02, Q-T6 run in this profile: after a restart or a lost stream, the closed 1-minute candles the

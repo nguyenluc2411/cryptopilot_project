@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -21,9 +23,11 @@ import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
 import com.cryptopilot.paper.model.RestingOrder;
+import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.LimitFillMode;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.MutableTestClock;
 import java.math.BigDecimal;
@@ -39,6 +43,7 @@ import java.util.concurrent.ThreadFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 /**
  * The paper matching engine around its book, with the storage side and the exchange mocked: what fills, on which
@@ -214,6 +219,67 @@ class PaperMatchingWorkerTest {
         verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
         verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2);
         verify(matching, never()).fill(order, MINUTE_0, FillSource.REPLAY);
+    }
+
+    @Test
+    void Q52_aReplay_prefetchesTheQuoteRatesOfItsCandles_beforeTheirFills() {
+        RestingOrder order = buy("100");
+        when(matching.restingOrders()).thenReturn(List.of(order));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_0))
+                .thenReturn(MinuteKlineBatch.of(
+                        List.of(kline(MINUTE_0, "101", "110", true), kline(MINUTE_1, "99", "110", true))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+
+        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.REPLAY);
+        InOrder sequence = inOrder(matching);
+        sequence.verify(matching).prefetchQuoteRates(MarketType.SPOT, PAIR, MINUTE_0, MINUTE_1);
+        sequence.verify(matching).fill(order, MINUTE_1, FillSource.REPLAY);
+    }
+
+    @Test
+    void Q52_aPrefetchThatFails_neitherStopsNorDelaysTheReplay() {
+        RestingOrder order = buy("100");
+        when(matching.restingOrders()).thenReturn(List.of(order));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_0))
+                .thenReturn(MinuteKlineBatch.of(List.of(kline(MINUTE_1, "99", "110", true))));
+        doThrow(new IllegalStateException("exchange down"))
+                .when(matching)
+                .prefetchQuoteRates(any(), any(), any(), any());
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+
+        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.REPLAY);
+        verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
+    }
+
+    @Test
+    void Q51_aReplayedCandle_passesItsOpenToTheStopItTriggers() {
+        TriggerOrder stop = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("100"),
+                null,
+                null,
+                PLACED);
+        when(matching.triggerOrders()).thenReturn(List.of(stop));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_0))
+                .thenReturn(MinuteKlineBatch.of(List.of(new MinuteKline(
+                        MarketType.SPOT,
+                        PAIR,
+                        MINUTE_1,
+                        new BigDecimal("90"),
+                        new BigDecimal("96"),
+                        new BigDecimal("92"),
+                        true,
+                        MINUTE_1.plusSeconds(59),
+                        new BigDecimal("95")))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+
+        verify(matching, timeout(WAIT))
+                .trigger(stop, MINUTE_1, new BigDecimal("100"), FillSource.REPLAY, new BigDecimal("95"));
     }
 
     @Test

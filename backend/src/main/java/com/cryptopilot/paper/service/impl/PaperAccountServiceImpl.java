@@ -28,6 +28,7 @@ import com.cryptopilot.paper.entity.PaperTransfer;
 import com.cryptopilot.paper.model.LedgerQuery;
 import com.cryptopilot.paper.model.OpenedAccount;
 import com.cryptopilot.paper.model.RecordedTransfer;
+import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.LedgerRefType;
 import com.cryptopilot.paper.model.enums.WalletType;
@@ -99,6 +100,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     private final PaperAccountProperties properties;
     private final MarketApi market;
     private final PaperEquity equity;
+    private final QuoteUsdtRate usdtRates;
 
     @Override
     @Transactional
@@ -274,15 +276,6 @@ public class PaperAccountServiceImpl implements PaperAccountService {
             Map<String, BigDecimal> grant,
             Map<String, CoinListing> coins,
             Ref ref) {
-        // The coins of the Spot grant are valued at their last price now, the cost their PnL starts from (TR-13).
-        Map<String, BigDecimal> prices = wallet == WalletType.SPOT
-                ? market.currentLastPrices(
-                        MarketType.SPOT,
-                        grant.keySet().stream()
-                                .filter(symbol -> !USDT.equals(symbol))
-                                .map(symbol -> symbol + USDT)
-                                .collect(Collectors.toSet()))
-                : Map.of();
         grant.forEach((symbol, amount) -> {
             CoinListing coin = coins.get(symbol);
             if (coin == null) {
@@ -290,9 +283,13 @@ public class PaperAccountServiceImpl implements PaperAccountService {
                 throw new IllegalStateException("coin " + symbol + " of the paper grant is not stored");
             }
             PaperBalance balance = wallets.grant(account, wallet, coin, amount, ref);
-            BigDecimal price = prices.get(symbol + USDT);
-            if (price != null && !USDT.equals(symbol)) {
-                balance.addCost(amount.multiply(price), BigDecimal.ZERO);
+            // The coins of the Spot grant are valued at their price now, the cost their PnL starts from (TR-13);
+            // without one, GrantCosts values them later (PT-R13).
+            if (wallet == WalletType.SPOT && !QuoteUsdtRate.isUsdt(coin)) {
+                UsdtRate price = usdtRates.current(coin);
+                if (price.known()) {
+                    balance.addCost(price.valueOf(amount), BigDecimal.ZERO);
+                }
             }
         });
     }

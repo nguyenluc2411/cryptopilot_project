@@ -32,9 +32,10 @@ public interface PaperMatchingService {
      *
      * @param at when the price that triggered it traded
      * @param stopPrice the stop it triggered at
+     * @param candleOpen the first price of the replayed candle that triggered it; {@code null} when not known or live
      * @return whether this call triggered it; {@code false} when it was cancelled or triggered first
      */
-    boolean trigger(TriggerOrder order, Instant at, BigDecimal stopPrice, FillSource source);
+    boolean trigger(TriggerOrder order, Instant at, BigDecimal stopPrice, FillSource source, BigDecimal candleOpen);
 
     /** Stores the best prices the trailing stops of these ids followed to, for those that still wait. */
     void saveExtremes(Map<UUID, BigDecimal> extremes);
@@ -47,6 +48,12 @@ public interface PaperMatchingService {
      * @return whether this call filled it; {@code false} when it was cancelled or filled first
      */
     boolean fill(RestingOrder order, Instant tradedAt, FillSource source);
+
+    /**
+     * Before a replay queues the pair's candles opened {@code from} to {@code to}: fetches what their fills will be
+     * valued at when the pair is quoted in another coin than USDT (Q-52). Never throws.
+     */
+    void prefetchQuoteRates(MarketType market, UUID pairId, Instant from, Instant to);
 
     /** The open time of the pair's last closed and fully matched candle, from which a replay starts; or empty. */
     Optional<Instant> watermark(MarketType market, UUID pairId);

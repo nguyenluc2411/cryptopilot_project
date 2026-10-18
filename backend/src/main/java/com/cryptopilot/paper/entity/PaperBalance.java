@@ -140,6 +140,20 @@ public class PaperBalance extends BaseEntity {
         }
     }
 
+    /**
+     * Gives a holding whose cost is not known the cost it was valued at later, as the granted coins that had no price
+     * at the opening (PT-R13); a known cost is kept.
+     */
+    public void valueUnknownCost(BigDecimal cost) {
+        Objects.requireNonNull(cost, "cost must not be null");
+        if (cost.signum() < 0) {
+            throw new IllegalArgumentException("cost must not be negative, was " + cost.toPlainString());
+        }
+        if (costBasisAmount == null) {
+            costBasisAmount = scaled(cost);
+        }
+    }
+
     /** An acquisition whose USDT cost is not known: the holding's cost is not known from now on (D-96). */
     public void addUnknownCost() {
         costBasisAmount = null;

@@ -34,6 +34,8 @@ import java.util.UUID;
  * @param highAt when the high was traded; a candle's open time
  * @param soldAt the base quantity takers sold at each price: it hit the bids there, ahead of a BUY waiting at it
  * @param boughtAt the base quantity takers bought at each price: it lifted the asks there, ahead of a SELL waiting at it
+ * @param open a replayed candle's first price, which a market stop it triggers executes at when it opened past the
+ *     stop; {@code null} otherwise
  */
 public record PriceRange(
         MarketType market,
@@ -46,7 +48,8 @@ public record PriceRange(
         Instant lowAt,
         Instant highAt,
         NavigableMap<BigDecimal, BigDecimal> soldAt,
-        NavigableMap<BigDecimal, BigDecimal> boughtAt) {
+        NavigableMap<BigDecimal, BigDecimal> boughtAt,
+        BigDecimal open) {
 
     public PriceRange {
         Objects.requireNonNull(market, "market");
@@ -65,6 +68,22 @@ public record PriceRange(
         }
     }
 
+    /** A range without a candle's open. */
+    public PriceRange(
+            MarketType market,
+            UUID pairId,
+            BigDecimal low,
+            BigDecimal high,
+            Instant from,
+            boolean closed,
+            FillSource source,
+            Instant lowAt,
+            Instant highAt,
+            NavigableMap<BigDecimal, BigDecimal> soldAt,
+            NavigableMap<BigDecimal, BigDecimal> boughtAt) {
+        this(market, pairId, low, high, from, closed, source, lowAt, highAt, soldAt, boughtAt, null);
+    }
+
     /** A 1-minute candle's range: its low and high both recorded at its open time (D-78), with no volume by price. */
     public PriceRange(
             MarketType market,
@@ -74,7 +93,20 @@ public record PriceRange(
             Instant from,
             boolean closed,
             FillSource source) {
-        this(market, pairId, low, high, from, closed, source, from, from, new TreeMap<>(), new TreeMap<>());
+        this(market, pairId, low, high, from, closed, source, null);
+    }
+
+    /** A 1-minute candle's range with its first price. */
+    public PriceRange(
+            MarketType market,
+            UUID pairId,
+            BigDecimal low,
+            BigDecimal high,
+            Instant from,
+            boolean closed,
+            FillSource source,
+            BigDecimal open) {
+        this(market, pairId, low, high, from, closed, source, from, from, new TreeMap<>(), new TreeMap<>(), open);
     }
 
     /** One live market trade, at its price and its trade time, with its quantity on the side its taker took. */
@@ -106,7 +138,14 @@ public record PriceRange(
             return later.from.isAfter(from) ? later : this;
         }
         return new PriceRange(
-                market, pairId, low.min(later.low), high.max(later.high), from, closed || later.closed, source);
+                market,
+                pairId,
+                low.min(later.low),
+                high.max(later.high),
+                from,
+                closed || later.closed,
+                source,
+                open != null ? open : later.open);
     }
 
     /**

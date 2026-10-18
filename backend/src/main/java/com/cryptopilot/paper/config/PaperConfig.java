@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Configuration;
     PaperAccountProperties.class,
     PaperOrderProperties.class,
     PaperMatchingProperties.class,
-    PaperEquityProperties.class
+    PaperEquityProperties.class,
+    PaperGrantCostProperties.class
 })
 public class PaperConfig {}

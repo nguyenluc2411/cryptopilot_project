@@ -42,7 +42,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * account's worth now against its snapshot at the start of the day.
  *
  * <p>The snapshots are taken once a day for every account, each in its own transaction, so one account that fails
- * does not keep the others from theirs.
+ * does not keep the others from theirs. An account with a coin that has no current price gets none, and today's PnL
+ * stays unknown until a retry of the same day takes it.
  *
  * <p>Rule: TR-13.
  */
@@ -139,7 +140,7 @@ public class PaperPnlServiceImpl implements PaperPnlService {
     @Override
     public int snapshotAll() {
         int taken = 0;
-        for (UUID accountId : accounts.findAllIds()) {
+        for (UUID accountId : accounts.findIdsWithoutSnapshotOn(equity.today())) {
             try {
                 Boolean took = transactions.execute(status -> equity.snapshot(accountId));
                 if (Boolean.TRUE.equals(took)) {
