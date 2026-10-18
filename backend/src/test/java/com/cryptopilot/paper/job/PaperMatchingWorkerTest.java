@@ -23,9 +23,11 @@ import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
 import com.cryptopilot.paper.model.RestingOrder;
+import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.LimitFillMode;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.MutableTestClock;
 import java.math.BigDecimal;
@@ -247,6 +249,37 @@ class PaperMatchingWorkerTest {
 
         verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.REPLAY);
         verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
+    }
+
+    @Test
+    void Q51_aReplayedCandle_passesItsOpenToTheStopItTriggers() {
+        TriggerOrder stop = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("100"),
+                null,
+                null,
+                PLACED);
+        when(matching.triggerOrders()).thenReturn(List.of(stop));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_0))
+                .thenReturn(MinuteKlineBatch.of(List.of(new MinuteKline(
+                        MarketType.SPOT,
+                        PAIR,
+                        MINUTE_1,
+                        new BigDecimal("90"),
+                        new BigDecimal("96"),
+                        new BigDecimal("92"),
+                        true,
+                        MINUTE_1.plusSeconds(59),
+                        new BigDecimal("95")))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+
+        verify(matching, timeout(WAIT))
+                .trigger(stop, MINUTE_1, new BigDecimal("100"), FillSource.REPLAY, new BigDecimal("95"));
     }
 
     @Test
