@@ -114,6 +114,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     private final PaperOrderListRepository groups;
     private final UserLock lock;
     private final MarketApi market;
+    private final QuoteUsdtRate usdtRates;
     private final ApplicationEventPublisher events;
     private final PaperUserFeed feed;
     private final Clock clock;
@@ -137,6 +138,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         }
         PairCoins coins = market.pairCoins(pair.pairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + pair.pairId() + " is tradable but not stored"));
+        usdtRates.requireValued(coins);
         Optional<SpotArrival.Book> book = arrival.bookFor(pair, terms.side());
         String key = request.clientOrderId() == null ? UuidV7.next().toString() : request.clientOrderId();
         PaperOrder order =

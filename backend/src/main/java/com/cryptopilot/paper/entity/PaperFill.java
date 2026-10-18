@@ -2,9 +2,11 @@ package com.cryptopilot.paper.entity;
 
 import com.cryptopilot.common.entity.BaseEntity;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.UsdtRateSource;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -77,10 +79,18 @@ public class PaperFill extends BaseEntity {
     @Column(name = "traded_at", nullable = false, updatable = false)
     private Instant tradedAt;
 
+    /** The USDT value of one unit of the quote coin the fill was valued at (D-96); {@code null} when none was known. */
+    @Column(name = "quote_usdt_price", precision = 28, scale = 12, updatable = false)
+    private BigDecimal quoteUsdtPrice;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "quote_usdt_price_source", length = 32, updatable = false)
+    private UsdtRateSource quoteUsdtPriceSource;
+
     /** For JPA only. */
     protected PaperFill() {}
 
-    private PaperFill(PaperOrder order, Execution execution) {
+    private PaperFill(PaperOrder order, Execution execution, UsdtRate quoteUsdt) {
         this.orderId = order.getId();
         this.accountId = order.getAccountId();
         this.pairId = order.getPairId();
@@ -94,11 +104,21 @@ public class PaperFill extends BaseEntity {
         this.liquidity = execution.liquidity();
         this.fillSource = execution.source();
         this.tradedAt = execution.tradedAt();
+        if (quoteUsdt != null) {
+            this.quoteUsdtPrice = quoteUsdt.rate();
+            this.quoteUsdtPriceSource = quoteUsdt.source();
+        }
     }
 
-    /** The fill of {@code order} the execution describes. */
+    /** The fill of {@code order} the execution describes, with no USDT rate recorded. */
     public static PaperFill of(PaperOrder order, Execution execution) {
-        return new PaperFill(Objects.requireNonNull(order, "order"), Objects.requireNonNull(execution, "execution"));
+        return of(order, execution, null);
+    }
+
+    /** The fill of {@code order} the execution describes, valued at {@code quoteUsdt} (D-96). */
+    public static PaperFill of(PaperOrder order, Execution execution, UsdtRate quoteUsdt) {
+        return new PaperFill(
+                Objects.requireNonNull(order, "order"), Objects.requireNonNull(execution, "execution"), quoteUsdt);
     }
 
     /**

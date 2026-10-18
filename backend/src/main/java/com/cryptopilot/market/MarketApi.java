@@ -24,6 +24,9 @@ public interface MarketApi {
     /** The stored pairs among these ids, listed or not, in no particular order; an unknown id is left out. */
     List<PairListing> pairListings(Collection<UUID> pairIds);
 
+    /** The stored pair with this exchange symbol, e.g. {@code BTCUSDT}, listed or not; empty when none is stored. */
+    Optional<PairListing> pairListing(String symbol);
+
     /** The base and quote coins of a stored pair, listed or not; empty for an unknown pair (TR-02). */
     Optional<PairCoins> pairCoins(UUID pairId);
 
@@ -42,6 +45,12 @@ public interface MarketApi {
 
     /** The last traded price, when the cache holds a current one; empty when it is missing, old or unreadable. */
     Optional<BigDecimal> currentLastPrice(MarketType market, String symbol);
+
+    /**
+     * The pair's latest closed 1-minute candle the stream delivered, kept in memory, however old; empty when none was
+     * delivered since start-up or the pair is no longer streamed. The caller judges its age.
+     */
+    Optional<MinuteKline> latestClosedMinuteKline(MarketType market, UUID pairId);
 
     /**
      * The pair's best bid and ask from the {@code bookTicker} stream, when a current one is held (TR-03); empty for a

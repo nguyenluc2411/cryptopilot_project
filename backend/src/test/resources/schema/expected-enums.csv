@@ -31,6 +31,7 @@ paper_fill,fill_source,ck_paper_fill_fill_source,LIVE|REPLAY
 paper_fill,liquidity,ck_paper_fill_liquidity,MAKER|TAKER
 paper_fill,market_type,ck_paper_fill_market_type,SPOT|FUTURES
 paper_fill,position_side,ck_paper_fill_position_side,BOTH|LONG|SHORT
+paper_fill,quote_usdt_price_source,ck_paper_fill_quote_usdt_price_source,ONE|LIVE|CANDLE_1M|NONE
 paper_fill,side,ck_paper_fill_side,BUY|SELL
 paper_futures_setting,margin_mode,ck_paper_futures_setting_margin_mode,CROSS|ISOLATED
 paper_ledger_entry,entry_type,ck_paper_ledger_entry_entry_type,INITIAL_GRANT|TRADE|FEE|REALIZED_PNL|FUNDING_FEE|TRANSFER|LIQUIDATION_FEE

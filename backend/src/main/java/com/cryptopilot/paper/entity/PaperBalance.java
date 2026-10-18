@@ -140,6 +140,11 @@ public class PaperBalance extends BaseEntity {
         }
     }
 
+    /** An acquisition whose USDT cost is not known: the holding's cost is not known from now on (D-96). */
+    public void addUnknownCost() {
+        costBasisAmount = null;
+    }
+
     /**
      * Takes away the share of the cost a sale of {@code sold} took, the average cost method: what is left keeps its
      * average cost. Called once the sale has been taken from the balance; nothing left, nothing is left of the cost.

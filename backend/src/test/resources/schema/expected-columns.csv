@@ -281,6 +281,8 @@ paper_fill,order_id,uuid,,,NO
 paper_fill,pair_id,uuid,,,NO
 paper_fill,position_side,character varying,,,YES
 paper_fill,quote_amount,numeric,28,8,NO
+paper_fill,quote_usdt_price,numeric,28,12,YES
+paper_fill,quote_usdt_price_source,character varying,,,YES
 paper_fill,realized_pnl_amount,numeric,28,8,YES
 paper_fill,side,character varying,,,NO
 paper_fill,traded_at,timestamp with time zone,,,NO

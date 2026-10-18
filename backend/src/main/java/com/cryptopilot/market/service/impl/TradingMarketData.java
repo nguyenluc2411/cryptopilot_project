@@ -2,6 +2,7 @@ package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.MarketTrade;
+import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -21,7 +22,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * The latest best bid and ask, top of the order book and trades of each pair streamed with the trading streams
- * (TR-03), as the stream last read them.
+ * (TR-03), and its latest closed 1-minute candle, as the stream last read them.
  *
  * <p>In memory, overwritten by every message, like {@link LatestMarketData}: the stream reader only writes a map entry,
  * and a lost value is refilled by the next message, at most 100 ms later for the depth. A best bid and ask or a depth
@@ -39,6 +40,7 @@ public class TradingMarketData {
     private final Map<Key, BookTop> bookTops = new ConcurrentHashMap<>();
     private final Map<Key, OrderBookDepth> depths = new ConcurrentHashMap<>();
     private final Map<Key, Deque<MarketTrade>> trades = new ConcurrentHashMap<>();
+    private final Map<Key, MinuteKline> closedMinutes = new ConcurrentHashMap<>();
     private final Duration maxAge;
     private final int recentTrades;
     private final Clock clock;
@@ -74,6 +76,21 @@ public class TradingMarketData {
         }
     }
 
+    /** Records a closed 1-minute candle, unless a later one is already held; a forming candle is ignored. */
+    public void recordClosedMinute(MinuteKline kline) {
+        if (kline.closed()) {
+            closedMinutes.merge(
+                    key(kline.market(), kline.pairId()),
+                    kline,
+                    (old, now) -> now.openTime().isBefore(old.openTime()) ? old : now);
+        }
+    }
+
+    /** The pair's latest closed 1-minute candle the stream delivered, however old; the caller judges its age. */
+    public Optional<MinuteKline> latestClosedMinute(MarketType market, UUID pairId) {
+        return Optional.ofNullable(closedMinutes.get(key(market, pairId)));
+    }
+
     /** The pair's best bid and ask, when one no older than {@code maxAge} is held. */
     public Optional<BookTop> currentBookTop(MarketType market, UUID pairId) {
         return Optional.ofNullable(bookTops.get(key(market, pairId))).filter(top -> fresh(top.receivedAt()));
@@ -98,7 +115,7 @@ public class TradingMarketData {
     /** Drops the pairs of a market that are no longer streamed (BR-07). */
     public void retainOnly(MarketType market, Collection<UUID> streamed) {
         Set<UUID> keep = Set.copyOf(streamed);
-        for (Map<Key, ?> held : List.of(bookTops, depths, trades)) {
+        for (Map<Key, ?> held : List.of(bookTops, depths, trades, closedMinutes)) {
             held.keySet().removeIf(key -> key.market() == market && !keep.contains(key.pairId()));
         }
     }
