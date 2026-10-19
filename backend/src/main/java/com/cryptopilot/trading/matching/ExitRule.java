@@ -14,29 +14,34 @@ import java.util.Optional;
  *
  * <ul>
  *   <li>Take profit and stop loss by the last price range: a LONG stop at or below its level, a LONG take profit at
- *       or above it, and the mirror for SHORT. Both bounds count; the exit is at the level.
+ *       or above it, and the mirror for SHORT. Both bounds count; the exit is at the level, or at the candle's open
+ *       when the candle opened beyond it (a gap).
  *   <li>When one range reaches both, the stop loss is applied.
- *   <li>Liquidation by the mark price only, at the liquidation price.
+ *   <li>Liquidation by the mark price only, always at the liquidation price.
  * </ul>
  *
- * <p>Rule: BR-35; NSF-07; TECHNICAL_DESIGN 7.7; D-78.
+ * <p>Rule: BR-35; NSF-07; TECHNICAL_DESIGN 7.7; D-78; Q-51, Q-53, Q-59.
  */
 public final class ExitRule {
 
     private ExitRule() {}
 
-    /** The take profit or stop loss the range reached, stop loss first; recorded at the candle's open time. */
-    public static Optional<Exit> byRange(OpenPosition position, PriceRange range) {
+    /**
+     * The take profit or stop loss the range reached, stop loss first; recorded at the candle's open time.
+     *
+     * @param open the candle's first price, or {@code null} when unknown; a level the candle opened beyond fills there
+     */
+    public static Optional<Exit> byRange(OpenPosition position, PriceRange range, BigDecimal open) {
         boolean isLong = position.direction() == Direction.LONG;
         BigDecimal stop = position.stopLoss();
         if (stop != null
                 && (isLong ? range.low().compareTo(stop) <= 0 : range.high().compareTo(stop) >= 0)) {
-            return Optional.of(new Exit(position.planId(), CloseReason.STOP_LOSS, stop, range.from()));
+            return Optional.of(exit(position, CloseReason.STOP_LOSS, fill(stop, open, isLong ? -1 : 1), range));
         }
         BigDecimal target = position.takeProfit();
         if (target != null
                 && (isLong ? range.high().compareTo(target) >= 0 : range.low().compareTo(target) <= 0)) {
-            return Optional.of(new Exit(position.planId(), CloseReason.TAKE_PROFIT, target, range.from()));
+            return Optional.of(exit(position, CloseReason.TAKE_PROFIT, fill(target, open, isLong ? 1 : -1), range));
         }
         return Optional.empty();
     }
@@ -52,5 +57,14 @@ public final class ExitRule {
         return reached
                 ? Optional.of(new Exit(position.planId(), CloseReason.LIQUIDATION, liquidation, at))
                 : Optional.empty();
+    }
+
+    // The open when it is beyond the level in the direction the level is reached (sign −1: below, +1: above).
+    private static BigDecimal fill(BigDecimal level, BigDecimal open, int beyond) {
+        return open != null && open.compareTo(level) * beyond > 0 ? open : level;
+    }
+
+    private static Exit exit(OpenPosition position, CloseReason reason, BigDecimal price, PriceRange range) {
+        return new Exit(position.planId(), reason, price, range.from());
     }
 }

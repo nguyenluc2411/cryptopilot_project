@@ -4,9 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
+import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.FeeSchedule;
 import com.cryptopilot.trading.model.LeverageBracket;
+import com.cryptopilot.trading.model.LiquidationEstimate;
+import com.cryptopilot.trading.model.LiquidationInput;
 import com.cryptopilot.trading.model.TradeClose;
 import com.cryptopilot.trading.model.TradeResult;
 import com.cryptopilot.trading.model.enums.CloseReason;
@@ -15,12 +18,14 @@ import com.cryptopilot.trading.model.enums.EntryType;
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * Realized profit and loss, fees and net of a closed trade against the amounts of the T-044 acceptance criteria and
  * the TECHNICAL_DESIGN 7.8 worked example.
  *
- * <p>Rule: BR-35, BR-36, BR-38; D-97; Q-54; TECHNICAL_DESIGN 7.8.
+ * <p>Rule: BR-35, BR-36, BR-38; D-97; Q-54, Q-58; TECHNICAL_DESIGN 7.8.
  */
 class TradeResultCalculatorTest {
 
@@ -166,33 +171,185 @@ class TradeResultCalculatorTest {
         assertAmounts(r, "-10", "1.145", "-11.145");
     }
 
-    /** The bracket is the one of the notional at the liquidation price, with its derived maintenance amount. */
+    /**
+     * Review P1-1: LONG qty 1, LIMIT 50000 in bracket 2, 10x, LP 45175.88. N_liq 45175.88 lies in bracket 1, but MM
+     * uses bracket 2, the bracket of the liquidation price: 45175.88 × 0.005 − 50 = 175.8794, below 564.6985. Bracket
+     * 1 would give 180.70352, more than the 5000 − 4824.12 = 175.88 left in the position.
+     */
     @Test
-    void BR27_clearanceFee_usesTheBracketOfTheLiquidationNotional() {
+    void Q58_liquidationNotionalInALowerBracket_usesTheBracketOfTheLiquidationPrice() {
+        assertThat(liquidation(Direction.LONG, "50000", 10).liquidationPrice()).isEqualByComparingTo("45175.88");
+
+        TradeResult r = calculate(
+                MarketType.FUTURES,
+                Direction.LONG,
+                EntryType.LIMIT,
+                "50000",
+                "1",
+                CloseReason.LIQUIDATION,
+                "45175.88",
+                FUTURES,
+                BRACKETS);
+
+        // entry fee 50000 × 0.0002 = 10
+        assertAmounts(r, "-4824.12", "185.8794", "-5009.9994");
+        assertThat(r.exitFee()).isEqualByComparingTo("175.8794").isLessThanOrEqualTo(new BigDecimal("175.88"));
+    }
+
+    /** A SHORT whose N_liq is above the largest bracket pays the MM of its entry bracket instead of failing. */
+    @Test
+    void Q58_liquidationNotionalAboveTheLargestBracket_usesTheEntryBracket() {
+        // 1 × 240000 in bracket 2; at 260000: MM = 1300 − 50 = 1250, below 260000 × 1.25 % = 3250
+        TradeResult r = calculate(
+                MarketType.FUTURES,
+                Direction.SHORT,
+                EntryType.LIMIT,
+                "240000",
+                "1",
+                CloseReason.LIQUIDATION,
+                "260000",
+                FUTURES,
+                BRACKETS);
+
+        assertThat(r.exitFee()).isEqualByComparingTo("1250");
+    }
+
+    /** At each bracket boundary and either side of it, the fee is at most the initial margin plus realized. */
+    @ParameterizedTest(name = "{0} {1} {2}x")
+    @CsvSource({
+        "LONG, 100, 10",
+        "LONG, 49999.99, 10",
+        "LONG, 50000, 10",
+        "LONG, 50000.01, 10",
+        "LONG, 49999.99, 50",
+        "LONG, 50000, 50",
+        "LONG, 249999.99, 20",
+        "SHORT, 100, 10",
+        "SHORT, 49999.99, 10",
+        "SHORT, 50000, 10",
+        "SHORT, 50000.01, 10",
+        "SHORT, 49999.99, 50",
+        "SHORT, 50000, 50",
+        "SHORT, 249999.99, 20"
+    })
+    void Q58_liquidation_neverChargesMoreThanTheMarginLeft(Direction direction, String entry, int leverage) {
+        LiquidationEstimate lp = liquidation(direction, entry, leverage);
+
+        TradeResult r = calculate(
+                MarketType.FUTURES,
+                direction,
+                EntryType.LIMIT,
+                entry,
+                "1",
+                CloseReason.LIQUIDATION,
+                lp.liquidationPrice().toPlainString(),
+                FUTURES,
+                BRACKETS);
+
+        BigDecimal marginLeft = Rounding.toAmount(lp.initialMargin().add(r.realizedPnl()));
+        assertThat(r.exitFee()).isPositive().isLessThanOrEqualTo(marginLeft);
+    }
+
+    /** With a derived maintenance amount the fee is the same as with the source one: 60000 × 0.005 − 50 = 250. */
+    @Test
+    void BR27_clearanceFee_derivesTheMaintenanceAmount() {
+        BigDecimal n = new BigDecimal("60000");
         List<LeverageBracket> derived = List.of(B1, B2.withMaintenanceAmount(null));
 
-        // 60000 × 0.005 − 50 = 250, below 60000 × 0.0125 = 750
-        assertThat(TradeResultCalculator.clearanceFee(new BigDecimal("60000"), rate("0.0125"), BRACKETS))
+        assertThat(TradeResultCalculator.clearanceFee(n, rate("0.0125"), bracketOf(BRACKETS, n)))
                 .isEqualByComparingTo("250");
-        assertThat(TradeResultCalculator.clearanceFee(new BigDecimal("60000"), rate("0.0125"), derived))
+        assertThat(TradeResultCalculator.clearanceFee(n, rate("0.0125"), bracketOf(derived, n)))
                 .isEqualByComparingTo("250");
     }
 
     /** No maintenance margin left (a source amount above N × MMR): nothing is charged. */
     @Test
     void BR36_noMaintenanceMarginLeft_paysNoClearanceFee() {
-        List<LeverageBracket> odd = List.of(bracket(1, "0", "1000", "0.01", "5"));
+        LeverageBracket odd = bracket(1, "0", "1000", "0.01", "5");
 
         assertThat(TradeResultCalculator.clearanceFee(new BigDecimal("100"), rate("0.0125"), odd))
                 .isZero();
     }
 
+    /**
+     * Worked by hand, scale 8 HALF_EVEN. qty 0.123456789, LIMIT 12345.67, manual close 12400: entry notional
+     * 1524.15677625363 × 0.0002 = 0.304831355250726 → 0.30483136; exit 1530.8641836 × 0.0005 = 0.7654320918 →
+     * 0.76543209; realized 54.33 × qty = 6.70740734637 → 6.70740735.
+     */
     @Test
-    void Q58_notionalAboveTheLargestBracket_isRejected() {
+    void BR36_amountsWithMoreDecimals_roundToScale8() {
+        TradeResult r = calculate(
+                MarketType.FUTURES,
+                Direction.LONG,
+                EntryType.LIMIT,
+                "12345.67",
+                "0.123456789",
+                CloseReason.MANUAL,
+                "12400",
+                FUTURES,
+                List.of());
+
+        assertThat(r.entryFee()).isEqualByComparingTo("0.30483136");
+        assertThat(r.exitFee()).isEqualByComparingTo("0.76543209");
+        assertAmounts(r, "6.70740735", "1.07026345", "5.63714390");
+        assertThat(r.entryFee().scale()).isEqualTo(8);
+        assertThat(r.exitFee().scale()).isEqualTo(8);
+    }
+
+    /**
+     * A tie: 5 × 0.123456789 = 0.617283945 → 0.61728394 (HALF_UP would give 0.61728395). Entry 12.3456789 × 0.0002 =
+     * 0.00246913578 → 0.00246914; exit 12.962962845 × 0.0002 = 0.002592592569 → 0.00259259.
+     */
+    @Test
+    void BR36_tieAtTheNinthDecimal_roundsToEven() {
+        TradeResult r = calculate(
+                MarketType.FUTURES,
+                Direction.LONG,
+                EntryType.LIMIT,
+                "100",
+                "0.123456789",
+                CloseReason.TAKE_PROFIT,
+                "105",
+                FUTURES,
+                List.of());
+
+        assertThat(r.realizedPnl()).isEqualByComparingTo("0.61728394");
+        assertThat(r.entryFee()).isEqualByComparingTo("0.00246914");
+        assertThat(r.exitFee()).isEqualByComparingTo("0.00259259");
+    }
+
+    /** N_liq 90.37 × 0.123456789 = 11.15679002193; MM × 0.004 = 0.04462716008772 → 0.04462716; realized → −1.18888888. */
+    @Test
+    void BR36_clearanceFee_roundsToScale8() {
+        TradeResult r = calculate(
+                MarketType.FUTURES,
+                Direction.LONG,
+                EntryType.LIMIT,
+                "100",
+                "0.123456789",
+                CloseReason.LIQUIDATION,
+                "90.37",
+                FUTURES,
+                BRACKETS);
+
+        assertThat(r.exitFee()).isEqualByComparingTo("0.04462716");
+        assertThat(r.realizedPnl()).isEqualByComparingTo("-1.18888888");
+    }
+
+    @Test
+    void BR27_entryNotionalOutsideTheBrackets_isRejected() {
         assertThatIllegalArgumentException()
-                .isThrownBy(
-                        () -> TradeResultCalculator.clearanceFee(new BigDecimal("250000"), rate("0.0125"), BRACKETS))
-                .withMessageContaining("above the largest bracket");
+                .isThrownBy(() -> calculate(
+                        MarketType.FUTURES,
+                        Direction.LONG,
+                        EntryType.LIMIT,
+                        "250000",
+                        "1",
+                        CloseReason.LIQUIDATION,
+                        "230000",
+                        FUTURES,
+                        BRACKETS))
+                .withMessageContaining("outside the brackets");
     }
 
     @Test
@@ -221,6 +378,32 @@ class TradeResultCalculatorTest {
                         BigDecimal.ZERO,
                         CloseReason.MANUAL,
                         BigDecimal.ONE,
+                        SPOT,
+                        List.of()));
+    }
+
+    @Test
+    void BR35_priceAtOrBelowZero_isRejected() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> calculate(
+                        MarketType.SPOT,
+                        Direction.LONG,
+                        EntryType.MARKET,
+                        "0",
+                        "1",
+                        CloseReason.MANUAL,
+                        "1",
+                        SPOT,
+                        List.of()));
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> calculate(
+                        MarketType.SPOT,
+                        Direction.LONG,
+                        EntryType.MARKET,
+                        "1",
+                        "1",
+                        CloseReason.MANUAL,
+                        "-1",
                         SPOT,
                         List.of()));
     }
@@ -265,6 +448,26 @@ class TradeResultCalculatorTest {
                 new BigDecimal(exit),
                 fees,
                 brackets));
+    }
+
+    /** The liquidation price of qty 1 at this entry, from the same calculation a plan uses (tick 0.01). */
+    private static LiquidationEstimate liquidation(Direction direction, String entry, int leverage) {
+        BigDecimal price = new BigDecimal(entry);
+        BigDecimal stop = price.multiply(new BigDecimal(direction == Direction.LONG ? "0.99" : "1.01"));
+        return (LiquidationEstimate) LiquidationCalculator.calculate(new LiquidationInput(
+                direction,
+                price,
+                stop,
+                BigDecimal.ONE,
+                leverage,
+                new BigDecimal("1000000"),
+                new BigDecimal("0.01"),
+                BRACKETS));
+    }
+
+    private static LeverageBracket bracketOf(List<LeverageBracket> brackets, BigDecimal notional) {
+        return LiquidationCalculator.positionBracket(brackets, BigDecimal.ONE, notional)
+                .orElseThrow();
     }
 
     private static void assertAmounts(TradeResult r, String realized, String fee, String net) {

@@ -15,9 +15,9 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
- * Take profit, stop loss and their precedence by the last price range; liquidation by the mark price.
+ * Take profit, stop loss and their precedence by the last price range; liquidation by the mark price; gaps.
  *
- * <p>Rule: BR-35; TECHNICAL_DESIGN 7.7.
+ * <p>Rule: BR-35; TECHNICAL_DESIGN 7.7; Q-53, Q-59.
  */
 class ExitRuleTest {
 
@@ -30,44 +30,69 @@ class ExitRuleTest {
 
     @Test
     void BR35_longStopLoss_reachedAtItsLevel_exitsAtTheStop() {
-        assertExit(ExitRule.byRange(LONG, range("95", "100")), CloseReason.STOP_LOSS, "95", FROM);
+        assertExit(ExitRule.byRange(LONG, range("95", "100"), null), CloseReason.STOP_LOSS, "95", FROM);
     }
 
     @Test
     void BR35_longTakeProfit_reachedAtItsLevel_exitsAtTheTarget() {
-        assertExit(ExitRule.byRange(LONG, range("100", "115")), CloseReason.TAKE_PROFIT, "115", FROM);
+        assertExit(ExitRule.byRange(LONG, range("100", "115"), null), CloseReason.TAKE_PROFIT, "115", FROM);
     }
 
     @Test
     void BR35_bothReachedInOneRange_appliesTheStopLoss() {
-        assertExit(ExitRule.byRange(LONG, range("94", "116")), CloseReason.STOP_LOSS, "95", FROM);
-        assertExit(ExitRule.byRange(SHORT, range("84", "106")), CloseReason.STOP_LOSS, "105", FROM);
+        assertExit(ExitRule.byRange(LONG, range("94", "116"), null), CloseReason.STOP_LOSS, "95", FROM);
+        assertExit(ExitRule.byRange(SHORT, range("84", "106"), null), CloseReason.STOP_LOSS, "105", FROM);
     }
 
     @Test
     void BR35_shortLevels_areTheMirror() {
-        assertExit(ExitRule.byRange(SHORT, range("100", "105")), CloseReason.STOP_LOSS, "105", FROM);
-        assertExit(ExitRule.byRange(SHORT, range("85", "100")), CloseReason.TAKE_PROFIT, "85", FROM);
+        assertExit(ExitRule.byRange(SHORT, range("100", "105"), null), CloseReason.STOP_LOSS, "105", FROM);
+        assertExit(ExitRule.byRange(SHORT, range("85", "100"), null), CloseReason.TAKE_PROFIT, "85", FROM);
     }
 
     @Test
     void BR35_rangeInsideTheLevels_doesNotExit() {
-        assertThat(ExitRule.byRange(LONG, range("95.01", "114.99"))).isEmpty();
-        assertThat(ExitRule.byRange(SHORT, range("85.01", "104.99"))).isEmpty();
+        assertThat(ExitRule.byRange(LONG, range("95.01", "114.99"), null)).isEmpty();
+        assertThat(ExitRule.byRange(SHORT, range("85.01", "104.99"), null)).isEmpty();
     }
 
     @Test
     void BR35_positionWithoutLevels_neverExitsByRange() {
         OpenPosition bare = position(Direction.LONG, null, null, null);
 
-        assertThat(ExitRule.byRange(bare, range("1", "1000"))).isEmpty();
+        assertThat(ExitRule.byRange(bare, range("1", "1000"), null)).isEmpty();
     }
 
     @Test
     void BR35_lastPriceRange_neverLiquidates() {
         OpenPosition noStop = position(Direction.LONG, null, null, "90.37");
 
-        assertThat(ExitRule.byRange(noStop, range("80", "100"))).isEmpty();
+        assertThat(ExitRule.byRange(noStop, range("80", "100"), null)).isEmpty();
+    }
+
+    @Test
+    void Q53_candleOpenedBeyondTheStop_fillsAtTheOpen() {
+        assertExit(ExitRule.byRange(LONG, range("90", "93"), decimal("93")), CloseReason.STOP_LOSS, "93", FROM);
+        assertExit(ExitRule.byRange(SHORT, range("106", "110"), decimal("107")), CloseReason.STOP_LOSS, "107", FROM);
+    }
+
+    @Test
+    void Q53_candleOpenedBeyondTheTarget_fillsAtTheOpen() {
+        assertExit(ExitRule.byRange(LONG, range("117", "120"), decimal("118")), CloseReason.TAKE_PROFIT, "118", FROM);
+        assertExit(ExitRule.byRange(SHORT, range("80", "84"), decimal("83")), CloseReason.TAKE_PROFIT, "83", FROM);
+    }
+
+    @Test
+    void Q53_candleOpenedInsideOrAtTheLevel_fillsAtTheLevel() {
+        assertExit(ExitRule.byRange(LONG, range("94", "100"), decimal("99")), CloseReason.STOP_LOSS, "95", FROM);
+        assertExit(ExitRule.byRange(LONG, range("95", "100"), decimal("95")), CloseReason.STOP_LOSS, "95", FROM);
+        assertExit(ExitRule.byRange(SHORT, range("84", "90"), decimal("88")), CloseReason.TAKE_PROFIT, "85", FROM);
+    }
+
+    @Test
+    void Q53_markGappedPastTheLiquidationPrice_stillLiquidatesAtThatPrice() {
+        assertExit(ExitRule.byMark(LONG, decimal("80"), AT), CloseReason.LIQUIDATION, "90.37", AT);
+        assertExit(ExitRule.byMark(SHORT, decimal("130"), AT), CloseReason.LIQUIDATION, "109.56", AT);
     }
 
     @Test

@@ -42,7 +42,8 @@ public final class LiquidationCalculator {
     public static LiquidationOutcome calculate(LiquidationInput in) {
         BigDecimal quantity = in.quantity();
         BigDecimal notional = quantity.multiply(in.entryPrice());
-        LeverageBracket bracket = bracketFor(in.brackets(), notional).orElse(null);
+        LeverageBracket bracket =
+                positionBracket(in.brackets(), quantity, in.entryPrice()).orElse(null);
         if (bracket == null) {
             return reject("notional", "the notional " + notional + " is above the largest leverage bracket");
         }
@@ -83,6 +84,17 @@ public final class LiquidationCalculator {
                 liquidationPrice,
                 initialMargin.compareTo(in.capital()) > 0,
                 stopBeyondLiquidation);
+    }
+
+    /**
+     * The bracket of a position's entry notional, {@code quantity × entry price}: the one its margin and liquidation
+     * price are derived from, and whose maintenance margin caps the clearance fee of a liquidation (Q-58).
+     *
+     * <p>Rule: BR-26, BR-27; TECHNICAL_DESIGN 7.6 and 7.8.
+     */
+    public static Optional<LeverageBracket> positionBracket(
+            List<LeverageBracket> brackets, BigDecimal quantity, BigDecimal entryPrice) {
+        return bracketFor(brackets, quantity.multiply(entryPrice));
     }
 
     /**

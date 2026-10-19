@@ -21,7 +21,8 @@ import java.util.Objects;
  * @param reason why the position closed
  * @param exitPrice the exit fill price; the liquidation price for a liquidation
  * @param fees the fee rates of the market
- * @param brackets the leverage brackets of the pair; used by a liquidation only, may be empty otherwise
+ * @param brackets the leverage brackets of the pair; used by a liquidation only, may be empty otherwise. The
+ *     bracket of the entry notional sets the maintenance margin that caps the clearance fee (Q-58)
  */
 public record TradeClose(
         MarketType market,
@@ -44,8 +45,9 @@ public record TradeClose(
         Objects.requireNonNull(exitPrice, "exitPrice");
         Objects.requireNonNull(fees, "fees");
         brackets = List.copyOf(brackets);
-        if (quantity.signum() <= 0) {
-            throw new IllegalArgumentException("quantity must be above 0, was " + quantity);
+        if (quantity.signum() <= 0 || entryPrice.signum() <= 0 || exitPrice.signum() <= 0) {
+            throw new IllegalArgumentException("quantity, entry price and exit price must be above 0, were " + quantity
+                    + ", " + entryPrice + ", " + exitPrice);
         }
         if (reason == CloseReason.LIQUIDATION) {
             if (market != MarketType.FUTURES) {

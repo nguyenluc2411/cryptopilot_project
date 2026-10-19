@@ -8,7 +8,6 @@ import com.cryptopilot.trading.model.TradeResult;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import java.math.BigDecimal;
-import java.util.List;
 
 /**
  * The realized profit and loss and the fees of a closed position. Realized is the price result only. Each fill pays
@@ -34,31 +33,36 @@ public final class TradeResultCalculator {
                 switch (in.reason()) {
                     case TAKE_PROFIT -> exitNotional.multiply(fees.maker());
                     case STOP_LOSS, MANUAL -> exitNotional.multiply(fees.taker());
-                    case LIQUIDATION -> clearanceFee(exitNotional, fees.liquidationClearance(), in.brackets());
+                    case LIQUIDATION -> clearanceFee(exitNotional, fees.liquidationClearance(), liquidationBracket(in));
                 };
         return new TradeResult(Rounding.toAmount(realized), Rounding.toAmount(entryFee), Rounding.toAmount(exitFee));
     }
 
     /**
      * The liquidation clearance fee: notional at the liquidation price × rate, but never more than the maintenance
-     * margin left in the position at that price. The bracket is the one that contains that notional.
+     * margin at that notional. The maintenance margin uses the bracket the liquidation price was derived from, so the
+     * fee never exceeds the margin left in the position.
      *
-     * <p>Rule: BR-27, BR-36; D-97 rule 2 as amended by Q-54; TECHNICAL_DESIGN 7.6 and 7.8.
+     * <p>Rule: BR-27, BR-36; D-97 rule 2 as amended by Q-54; Q-58; TECHNICAL_DESIGN 7.6 and 7.8.
      * <p>Reference: Binance FAQ, <i>Binance Futures Liquidation Protocols</i> (clearance fee = notional × rate, taken
      * from the assets that maintain the position).
      * <p>Reference: Binance, <i>Trading Rules of Futures Contracts</i> (rate 1.25 % for BTCUSDT and ETHUSDT).
      * <p>Reference: Binance FAQ, <i>How to Calculate Profit and Loss for Futures Contracts</i> (realized PnL excludes
      * commission, funding and the clearance fee).
      *
-     * @throws IllegalArgumentException when the notional is above the largest bracket (Q-58)
+     * @param liquidationBracket the bracket of the entry notional, from {@link LiquidationCalculator#positionBracket}
      */
     public static BigDecimal clearanceFee(
-            BigDecimal notionalAtLiquidation, BigDecimal rate, List<LeverageBracket> brackets) {
-        LeverageBracket bracket = LiquidationCalculator.bracketFor(brackets, notionalAtLiquidation)
-                .orElseThrow(() -> new IllegalArgumentException("the notional " + notionalAtLiquidation
-                        + " at the liquidation price is above the largest bracket"));
+            BigDecimal notionalAtLiquidation, BigDecimal rate, LeverageBracket liquidationBracket) {
         BigDecimal maintenanceMargin =
-                bracket.maintenanceMargin(notionalAtLiquidation).max(BigDecimal.ZERO);
+                liquidationBracket.maintenanceMargin(notionalAtLiquidation).max(BigDecimal.ZERO);
         return notionalAtLiquidation.multiply(rate).min(maintenanceMargin);
+    }
+
+    // Outside the brackets the position never had a liquidation price (MSG15).
+    private static LeverageBracket liquidationBracket(TradeClose in) {
+        return LiquidationCalculator.positionBracket(in.brackets(), in.quantity(), in.entryPrice())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "the entry notional is outside the brackets, so the position has no liquidation price"));
     }
 }
