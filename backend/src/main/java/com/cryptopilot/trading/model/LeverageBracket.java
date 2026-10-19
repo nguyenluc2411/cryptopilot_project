@@ -51,6 +51,20 @@ public record LeverageBracket(
         return notional.compareTo(notionalFloor) >= 0 && notional.compareTo(notionalCap) < 0;
     }
 
+    /**
+     * The maintenance margin of a position of this notional in the bracket, {@code notional × MMR − cum}.
+     *
+     * <p>Rule: BR-27; TECHNICAL_DESIGN 7.6.
+     *
+     * @throws IllegalStateException when the maintenance amount is not known yet
+     */
+    public BigDecimal maintenanceMargin(BigDecimal notional) {
+        if (maintenanceAmount == null) {
+            throw new IllegalStateException("bracket " + bracketNo + " has no maintenance amount yet");
+        }
+        return notional.multiply(maintenanceMarginRate).subtract(maintenanceAmount);
+    }
+
     /** The same bracket with the given maintenance amount. */
     public LeverageBracket withMaintenanceAmount(BigDecimal amount) {
         return new LeverageBracket(bracketNo, notionalFloor, notionalCap, maxLeverage, maintenanceMarginRate, amount);

@@ -72,11 +72,11 @@ class SeedDataTest {
     /**
      * The tables the seed writes, with the number of rows each one holds after every migration: V3 seeds sixteen
      * settings, V10 removes the watchlist and active alert limits, which are the plan's (BR-62), and V13 the
-     * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V11 seeds the
-     * five packages.
+     * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V26 adds the
+     * liquidation clearance fee (BR-36); V11 seeds the five packages.
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
-            "system_setting", 12,
+            "system_setting", 13,
             "trading_strategy", 3,
             "user_account", 1,
             "user_profile", 1,
@@ -114,7 +114,7 @@ class SeedDataTest {
 
     @ParameterizedTest(name = "{0} holds {1} seeded rows")
     @CsvSource({
-        "system_setting, 12",
+        "system_setting, 13",
         "trading_strategy, 3",
         "user_account, 1",
         "user_profile, 1",
@@ -297,10 +297,21 @@ class SeedDataTest {
         "SPOT_MAKER_FEE, 0.00100000",
         "SPOT_TAKER_FEE, 0.00100000",
         "FUTURES_MAKER_FEE, 0.00020000",
-        "FUTURES_TAKER_FEE, 0.00050000"
+        "FUTURES_TAKER_FEE, 0.00050000",
+        "LIQUIDATION_CLEARANCE_FEE, 0.01250000"
     })
     void BR36_simulatedFeeRate_isSeededWithTheDefaultTheRuleStates(String key, String expected) {
         assertThat(settingValue(key)).isEqualTo(expected);
+    }
+
+    /** BR-36: Spot has no liquidation, so V26 drops it from the Spot taker fee description (D-97, Q-54). */
+    @Test
+    void BR36_theSpotTakerFeeDescription_namesNoLiquidation() {
+        String description = jdbc.sql("select description from system_setting where setting_key = 'SPOT_TAKER_FEE'")
+                .query(String.class)
+                .single();
+
+        assertThat(description).doesNotContainIgnoringCase("liquidation").contains("manual closes");
     }
 
     /** BR-44: the media limits the rule calls configurable — four images of 5 MB, or one video of 100 MB and five minutes. */
@@ -328,7 +339,7 @@ class SeedDataTest {
                 .query()
                 .listOfRows();
 
-        assertThat(settings).hasSize(12).allSatisfy(setting -> {
+        assertThat(settings).hasSize(13).allSatisfy(setting -> {
             String key = (String) setting.get("setting_key");
             String value = (String) setting.get("setting_value");
             switch ((String) setting.get("value_type")) {
