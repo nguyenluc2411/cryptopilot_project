@@ -35,7 +35,7 @@ public final class PlanFixtures {
             new PlanEntitlements(false, false, 3, 5, 3, false, false, false, false, 0, false, false);
 
     public static final PlanEntitlements PRO =
-            new PlanEntitlements(true, true, null, 50, 20, true, true, true, true, 30, false, false);
+            new PlanEntitlements(true, true, null, 50, 20, true, true, true, true, 30, false, true);
     public static final PlanEntitlements PREMIUM =
             new PlanEntitlements(true, true, null, 100, 50, true, true, true, true, 100, true, true);
 
