@@ -25,6 +25,7 @@ import java.util.UUID;
  * @param status PUBLISHED, or HIDDEN when the caller is its author (BR-47)
  * @param sentiment BULLISH or BEARISH as the author labelled it, or {@code null} (D-99)
  * @param coins the symbols it is tagged with, alphabetical
+ * @param hashtags its hashtags without the {@code #}, alphabetical (D-99)
  * @param media its images or its video, in order
  * @param likeCount its likes
  * @param commentCount its published comments
@@ -46,6 +47,7 @@ public record PostDetailResponse(
         PostStatus status,
         Sentiment sentiment,
         List<String> coins,
+        List<String> hashtags,
         List<MediaResponse> media,
         long likeCount,
         long commentCount,

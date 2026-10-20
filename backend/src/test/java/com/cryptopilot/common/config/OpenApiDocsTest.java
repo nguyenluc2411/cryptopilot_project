@@ -108,9 +108,10 @@ class OpenApiDocsTest {
             "/api/v1/community/members/{memberId}",
             "/api/v1/community/members/{memberId}/follow",
             "/api/v1/community/members/{memberId}/followers",
-            "/api/v1/community/members/{memberId}/following");
+            "/api/v1/community/members/{memberId}/following",
+            "/api/v1/posts/trending");
 
-    private static final int OPERATIONS = 97;
+    private static final int OPERATIONS = 98;
 
     @Autowired
     private MockMvc mvc;

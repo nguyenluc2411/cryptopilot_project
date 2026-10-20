@@ -93,6 +93,12 @@ public class ForumPost extends BaseEntity {
     @Column(name = "coin_id", nullable = false)
     private Set<UUID> coinIds = new HashSet<>();
 
+    /** The hashtags of the title and text, lower case without the {@code #} (D-99); kept by {@link #revise}. */
+    @ElementCollection
+    @CollectionTable(name = "post_hashtag", joinColumns = @JoinColumn(name = "post_id"))
+    @Column(name = "hashtag", nullable = false, length = 50)
+    private Set<String> hashtags = new HashSet<>();
+
     /** For JPA only. */
     protected ForumPost() {}
 
@@ -150,6 +156,9 @@ public class ForumPost extends BaseEntity {
         }
         this.coinIds.retainAll(tags);
         this.coinIds.addAll(tags);
+        Set<String> topics = Hashtags.of(this.title, this.content);
+        this.hashtags.retainAll(topics);
+        this.hashtags.addAll(topics);
     }
 
     /** Labels the post bullish or bearish, or neither with {@code null} (D-99). */

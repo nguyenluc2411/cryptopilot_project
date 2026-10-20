@@ -1,5 +1,6 @@
 package com.cryptopilot.community.repository;
 
+import com.cryptopilot.community.dto.response.TrendingResponse;
 import com.cryptopilot.community.model.CoinDiscussion;
 import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.FeedQuery;
@@ -89,6 +90,15 @@ public class PostFeedRepository {
         if (query.coinId() != null) {
             where.append(" and exists (select 1 from post_coin c where c.post_id = p.post_id and c.coin_id = :coin)");
             params.put("coin", query.coinId());
+        }
+        if (query.hashtag() != null) {
+            where.append(
+                    " and exists (select 1 from post_hashtag h where h.post_id = p.post_id and h.hashtag = :hashtag)");
+            params.put("hashtag", query.hashtag());
+        }
+        if (query.text() != null) {
+            where.append(" and (p.title ilike :text escape '\\' or p.content ilike :text escape '\\')");
+            params.put("text", "%" + likeEscaped(query.text()) + "%");
         }
         if (query.authorId() != null) {
             where.append(" and p.author_id = :author");
@@ -208,6 +218,58 @@ public class PostFeedRepository {
                 .param("member", memberId)
                 .query((row, index) -> new MemberActivity(row.getLong("posts"), row.getLong("likes")))
                 .single();
+    }
+
+    /** The hashtags of each of these posts, alphabetical; a post without one is left out (D-99). */
+    public Map<UUID, List<String>> hashtags(Collection<UUID> postIds) {
+        Map<UUID, List<String>> result = new HashMap<>();
+        if (postIds.isEmpty()) {
+            return result;
+        }
+        sql.sql("select post_id, hashtag from post_hashtag where post_id in (:posts) order by hashtag")
+                .param("posts", postIds)
+                .query((row, index) -> result.computeIfAbsent(
+                                row.getObject("post_id", UUID.class), key -> new java.util.ArrayList<>())
+                        .add(row.getString("hashtag")))
+                .list();
+        return result;
+    }
+
+    /** The most used hashtags of the published posts since an instant, most posts first (D-99). */
+    public List<TrendingResponse.Topic> trendingHashtags(Instant since, int limit) {
+        return sql.sql("""
+                        select h.hashtag as topic, count(*) as posts
+                          from post_hashtag h
+                          join forum_post p on p.post_id = h.post_id
+                         where p.post_status = 'PUBLISHED' and p.created_at >= :since
+                         group by h.hashtag
+                         order by posts desc, topic
+                         limit :limit""")
+                .param("since", Timestamp.from(since))
+                .param("limit", limit)
+                .query((row, index) -> new TrendingResponse.Topic(row.getString("topic"), row.getLong("posts")))
+                .list();
+    }
+
+    /** The coins tagged on the most published posts since an instant, as (coin, posts), most first (D-99). */
+    public List<Object[]> trendingCoins(Instant since, int limit) {
+        return sql.sql("""
+                        select c.coin_id, count(*) as posts
+                          from post_coin c
+                          join forum_post p on p.post_id = c.post_id
+                         where p.post_status = 'PUBLISHED' and p.created_at >= :since
+                         group by c.coin_id
+                         order by posts desc, c.coin_id
+                         limit :limit""")
+                .param("since", Timestamp.from(since))
+                .param("limit", limit)
+                .query((row, index) -> new Object[] {row.getObject("coin_id", UUID.class), row.getLong("posts")})
+                .list();
+    }
+
+    // A LIKE pattern matches the text literally: its own wildcards and the escape are escaped.
+    private static String likeEscaped(String text) {
+        return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     /** The coin keys each of these posts is tagged with; a post without tags is left out. */

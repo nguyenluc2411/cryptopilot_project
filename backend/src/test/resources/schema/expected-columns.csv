@@ -408,6 +408,8 @@ paper_transfer,updated_at,timestamp with time zone,,,NO
 paper_transfer,version,bigint,64,0,NO
 post_coin,coin_id,uuid,,,NO
 post_coin,post_id,uuid,,,NO
+post_hashtag,hashtag,character varying,,,NO
+post_hashtag,post_id,uuid,,,NO
 post_media,created_at,timestamp with time zone,,,NO
 post_media,duration_seconds,integer,32,0,YES
 post_media,file_size_bytes,bigint,64,0,YES

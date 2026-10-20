@@ -5,10 +5,11 @@ import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.CoinDiscussionResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
+import com.cryptopilot.community.dto.response.TrendingResponse;
+import com.cryptopilot.community.model.FeedFilter;
 import com.cryptopilot.community.model.enums.FeedTab;
 import com.cryptopilot.community.model.enums.OfficialCategory;
-import com.cryptopilot.community.model.enums.Sentiment;
-import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.community.model.enums.TrendingWindow;
 import java.util.UUID;
 
 /**
@@ -24,24 +25,15 @@ import java.util.UUID;
 public interface PostService {
 
     /**
-     * One page of a feed tab.
+     * One page of a feed tab, filtered.
      *
-     * @param coin only posts tagged with this coin symbol, e.g. {@code BTC}, or {@code null}
-     * @param market only posts about this market, or {@code null}
-     * @param sentiment only posts labelled so, or {@code null} (D-99)
-     * @param author only posts of this member, or {@code null} (D-99)
      * @param page from 1, or {@code null} for 1
      * @param pageSize 1 to 100, or {@code null} for 20
      */
-    PageResponse<PostSummaryResponse> feed(
-            UUID caller,
-            FeedTab tab,
-            String coin,
-            MarketType market,
-            Sentiment sentiment,
-            UUID author,
-            Integer page,
-            Integer pageSize);
+    PageResponse<PostSummaryResponse> feed(UUID caller, FeedTab tab, FeedFilter filter, Integer page, Integer pageSize);
+
+    /** The hashtags and coins of the most published posts of a window (D-99); public. */
+    TrendingResponse trending(TrendingWindow window);
 
     /** One page of the published announcements, newest first (BR-61), of one category or all (D-99). */
     PageResponse<PostSummaryResponse> pinned(UUID caller, OfficialCategory category, Integer page, Integer pageSize);
