@@ -8,6 +8,7 @@ import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.model.enums.FeedTab;
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import com.cryptopilot.community.model.enums.Sentiment;
 import com.cryptopilot.community.service.PostService;
 import com.cryptopilot.market.model.enums.MarketType;
 import io.swagger.v3.oas.annotations.Operation;
@@ -63,9 +64,11 @@ public class PostController {
                     @RequestParam(required = false)
                     String coin,
             @Parameter(description = "Only posts about this market") @RequestParam(required = false) MarketType market,
+            @Parameter(description = "Only posts labelled BULLISH or BEARISH (D-99)") @RequestParam(required = false)
+                    Sentiment sentiment,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer pageSize) {
-        return service.feed(callerOf(caller), tab, coin, market, page, pageSize);
+        return service.feed(callerOf(caller), tab, coin, market, sentiment, page, pageSize);
     }
 
     @Operation(summary = "The published announcements pinned above the feed, newest first (BR-61)")

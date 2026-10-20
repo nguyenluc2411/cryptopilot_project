@@ -7,6 +7,7 @@ import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.model.enums.FeedTab;
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import com.cryptopilot.community.model.enums.Sentiment;
 import com.cryptopilot.market.model.enums.MarketType;
 import java.util.UUID;
 
@@ -27,11 +28,18 @@ public interface PostService {
      *
      * @param coin only posts tagged with this coin symbol, e.g. {@code BTC}, or {@code null}
      * @param market only posts about this market, or {@code null}
+     * @param sentiment only posts labelled so, or {@code null} (D-99)
      * @param page from 1, or {@code null} for 1
      * @param pageSize 1 to 100, or {@code null} for 20
      */
     PageResponse<PostSummaryResponse> feed(
-            UUID caller, FeedTab tab, String coin, MarketType market, Integer page, Integer pageSize);
+            UUID caller,
+            FeedTab tab,
+            String coin,
+            MarketType market,
+            Sentiment sentiment,
+            Integer page,
+            Integer pageSize);
 
     /** One page of the published announcements, newest first (BR-61), of one category or all (D-99). */
     PageResponse<PostSummaryResponse> pinned(UUID caller, OfficialCategory category, Integer page, Integer pageSize);

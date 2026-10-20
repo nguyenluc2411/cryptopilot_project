@@ -5,6 +5,7 @@ import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.FeedQuery;
 import com.cryptopilot.community.model.PostEngagement;
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import com.cryptopilot.community.model.enums.Sentiment;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
@@ -82,6 +83,10 @@ public class PostFeedRepository {
         if (query.coinId() != null) {
             where.append(" and exists (select 1 from post_coin c where c.post_id = p.post_id and c.coin_id = :coin)");
             params.put("coin", query.coinId());
+        }
+        if (query.sentiment() != null) {
+            where.append(" and p.sentiment = :sentiment");
+            params.put("sentiment", query.sentiment().name());
         }
         if (query.market() != null) {
             where.append(" and p.market_type = :market");
@@ -163,6 +168,23 @@ public class PostFeedRepository {
                                 ? null
                                 : row.getTimestamp("last_at").toInstant()))
                 .single();
+    }
+
+    /** The published posts tagged with a coin since an instant, counted by label; unlabelled ones left out (D-99). */
+    public Map<Sentiment, Long> sentimentOfPosts(UUID coinId, Instant since) {
+        Map<Sentiment, Long> result = new java.util.EnumMap<>(Sentiment.class);
+        sql.sql("""
+                        select p.sentiment, count(*) as posts
+                          from forum_post p
+                          join post_coin c on c.post_id = p.post_id
+                         where c.coin_id = :coin and p.post_status = 'PUBLISHED' and p.sentiment is not null
+                           and p.created_at >= :since
+                         group by p.sentiment""")
+                .param("coin", coinId)
+                .param("since", Timestamp.from(since))
+                .query((row, index) -> result.put(Sentiment.valueOf(row.getString("sentiment")), row.getLong("posts")))
+                .list();
+        return result;
     }
 
     /** The coin keys each of these posts is tagged with; a post without tags is left out. */

@@ -15,6 +15,7 @@ import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.FeedQuery;
 import com.cryptopilot.community.model.enums.FeedTab;
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import com.cryptopilot.community.model.enums.Sentiment;
 import com.cryptopilot.community.repository.ForumPostRepository;
 import com.cryptopilot.community.repository.PostFeedRepository;
 import com.cryptopilot.community.service.PostService;
@@ -65,7 +66,13 @@ public class PostServiceImpl implements PostService {
     @Override
     @Transactional(readOnly = true)
     public PageResponse<PostSummaryResponse> feed(
-            UUID caller, FeedTab tab, String coin, MarketType market, Integer page, Integer pageSize) {
+            UUID caller,
+            FeedTab tab,
+            String coin,
+            MarketType market,
+            Sentiment sentiment,
+            Integer page,
+            Integer pageSize) {
         if (caller == null && (tab == FeedTab.SAVED || tab == FeedTab.MINE)) {
             throw new BusinessException(ErrorCode.AUTHENTICATION_REQUIRED, "the " + tab + " tab is a Trader's own");
         }
@@ -80,7 +87,10 @@ public class PostServiceImpl implements PostService {
             coinId = stored.get();
         }
         FeedPage found = feeds.feed(
-                new FeedQuery(tab, coinId, market), caller, clock.instant().minus(MOST_LIKED_WINDOW), request);
+                new FeedQuery(tab, coinId, market, sentiment),
+                caller,
+                clock.instant().minus(MOST_LIKED_WINDOW),
+                request);
         return assembler.page(found, request, caller);
     }
 

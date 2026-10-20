@@ -72,6 +72,14 @@ coin,logo_url,character varying,,,YES
 coin,symbol,character varying,,,NO
 coin,updated_at,timestamp with time zone,,,NO
 coin,version,bigint,64,0,NO
+coin_sentiment_vote,coin_id,uuid,,,NO
+coin_sentiment_vote,created_at,timestamp with time zone,,,NO
+coin_sentiment_vote,sentiment,character varying,,,NO
+coin_sentiment_vote,updated_at,timestamp with time zone,,,NO
+coin_sentiment_vote,user_id,uuid,,,NO
+coin_sentiment_vote,version,bigint,64,0,NO
+coin_sentiment_vote,vote_date,date,,,NO
+coin_sentiment_vote,vote_id,uuid,,,NO
 crypto_pair,base_coin_id,uuid,,,NO
 crypto_pair,created_at,timestamp with time zone,,,NO
 crypto_pair,display_order,integer,32,0,NO
@@ -139,6 +147,7 @@ forum_post,official_category,character varying,,,YES
 forum_post,post_id,uuid,,,NO
 forum_post,post_status,character varying,,,NO
 forum_post,post_type,character varying,,,NO
+forum_post,sentiment,character varying,,,YES
 forum_post,title,character varying,,,NO
 forum_post,updated_at,timestamp with time zone,,,NO
 forum_post,version,bigint,64,0,NO

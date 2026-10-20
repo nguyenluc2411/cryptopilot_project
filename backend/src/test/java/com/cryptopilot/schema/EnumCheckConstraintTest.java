@@ -216,6 +216,7 @@ class EnumCheckConstraintTest {
             case "bigint" -> 1L;
             case "numeric" -> java.math.BigDecimal.ONE;
             case "timestamp with time zone" -> java.sql.Timestamp.valueOf("2026-09-20 00:00:00");
+            case "date" -> java.sql.Date.valueOf("2026-09-20");
             case "jsonb" -> "{}";
             default -> "x";
         };

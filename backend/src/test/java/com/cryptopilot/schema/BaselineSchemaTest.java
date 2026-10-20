@@ -83,7 +83,8 @@ class BaselineSchemaTest {
             "paper_fill",
             "paper_position",
             "paper_funding_payment",
-            "paper_equity_snapshot");
+            "paper_equity_snapshot",
+            "coin_sentiment_vote");
 
     @Autowired
     private JdbcClient jdbc;
@@ -110,7 +111,7 @@ class BaselineSchemaTest {
     @Test
     void schema_holdsTheFiftyBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(50);
+        assertThat(BUSINESS_TABLES).hasSize(51);
     }
 
     @Test

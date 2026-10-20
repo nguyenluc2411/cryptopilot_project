@@ -9,6 +9,7 @@ alert,market_type,ck_alert_market_type,SPOT|FUTURES
 alert,timeframe,ck_alert_timeframe,15m|1h|4h|1d
 alert,trigger_mode,ck_alert_trigger_mode,ONCE|ONCE_PER_BAR|EVERY_TIME
 binance_ban,market_type,ck_binance_ban_market_type,SPOT|FUTURES
+coin_sentiment_vote,sentiment,ck_coin_sentiment_vote_sentiment,BULLISH|BEARISH
 crypto_pair,futures_exchange_status,ck_crypto_pair_futures_exchange_status,TRADING|NOT_TRADING|DELISTED
 crypto_pair,pair_status,ck_crypto_pair_status,ACTIVE|INACTIVE
 crypto_pair,spot_exchange_status,ck_crypto_pair_spot_exchange_status,TRADING|NOT_TRADING|DELISTED
@@ -19,6 +20,7 @@ forum_post,market_type,ck_forum_post_market_type,SPOT|FUTURES
 forum_post,official_category,ck_forum_post_official_category,ANNOUNCEMENT|PLATFORM_UPDATE|EDUCATION
 forum_post,post_status,ck_forum_post_status,PUBLISHED|HIDDEN|DELETED
 forum_post,post_type,ck_forum_post_type,TEXT|VIDEO
+forum_post,sentiment,ck_forum_post_sentiment,BULLISH|BEARISH
 matching_watermark,market_type,ck_matching_watermark_market_type,SPOT|FUTURES
 news_article,sentiment_label,ck_news_article_sentiment,BULLISH|NEUTRAL|BEARISH
 news_crawl_log,crawl_status,ck_news_crawl_log_status,SUCCESS|PARTIAL|FAILED

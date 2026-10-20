@@ -1,6 +1,7 @@
 package com.cryptopilot.community.dto.request;
 
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import com.cryptopilot.community.model.enums.Sentiment;
 import com.cryptopilot.market.model.enums.MarketType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -22,6 +23,7 @@ import java.util.Locale;
  *     symbol counts once; {@code null} for none
  * @param media the uploaded files in the order they are shown: up to 4 images or 1 video (BR-44); {@code null} for
  *     none. On an edit, the files of the post not named again are deleted
+ * @param sentiment BULLISH or BEARISH, or {@code null} for neither (D-99)
  * @param officialCategory what an announcement is, ANNOUNCEMENT when absent (D-99); a Trader's post has none
  */
 public record PostRequest(
@@ -34,7 +36,8 @@ public record PostRequest(
         MarketType marketType,
         @Size(max = 5, message = "MSG01") List<@NotNull(message = "MSG01") String> coins,
         List<@NotNull(message = "MSG01") @Valid MediaRequest> media,
-        OfficialCategory officialCategory) {
+        OfficialCategory officialCategory,
+        Sentiment sentiment) {
 
     public PostRequest {
         title = title == null ? null : title.strip();
@@ -50,6 +53,6 @@ public record PostRequest(
 
     /** A post with these fields and no media. */
     public PostRequest(String title, String content, MarketType marketType, List<String> coins) {
-        this(title, content, marketType, coins, List.of(), null);
+        this(title, content, marketType, coins, List.of(), null, null);
     }
 }

@@ -113,6 +113,7 @@ public class PostAssembler {
                 post.isOfficial(),
                 post.getOfficialCategory(),
                 post.getStatus(),
+                post.getSentiment(),
                 coins(post.getCoinIds(), symbols),
                 media.findAllByPostIdOrderBySortOrderAsc(post.getId()).stream()
                         .map(PostAssembler::media)
@@ -138,6 +139,7 @@ public class PostAssembler {
                 post.isOfficial(),
                 post.getOfficialCategory(),
                 post.getStatus(),
+                post.getSentiment(),
                 coins,
                 cover,
                 counts.likes(),

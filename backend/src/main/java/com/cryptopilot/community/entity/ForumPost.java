@@ -4,6 +4,7 @@ import com.cryptopilot.common.entity.BaseEntity;
 import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.model.enums.PostStatus;
 import com.cryptopilot.community.model.enums.PostType;
+import com.cryptopilot.community.model.enums.Sentiment;
 import com.cryptopilot.market.model.enums.MarketType;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.CollectionTable;
@@ -82,6 +83,11 @@ public class ForumPost extends BaseEntity {
     @Column(name = "post_status", nullable = false, length = 32)
     private PostStatus status;
 
+    /** Whether the author is bullish or bearish, or {@code null} for neither (D-99). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "sentiment", length = 32)
+    private Sentiment sentiment;
+
     @ElementCollection
     @CollectionTable(name = "post_coin", joinColumns = @JoinColumn(name = "post_id"))
     @Column(name = "coin_id", nullable = false)
@@ -144,6 +150,11 @@ public class ForumPost extends BaseEntity {
         }
         this.coinIds.retainAll(tags);
         this.coinIds.addAll(tags);
+    }
+
+    /** Labels the post bullish or bearish, or neither with {@code null} (D-99). */
+    public void lean(Sentiment sentiment) {
+        this.sentiment = sentiment;
     }
 
     /** Records what the post carries besides its text: a video makes it a VIDEO post (BR-43, BR-44). */
