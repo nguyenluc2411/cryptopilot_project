@@ -1,6 +1,8 @@
 package com.cryptopilot.user.repository;
 
 import com.cryptopilot.user.entity.UserProfile;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.repository.Repository;
@@ -48,6 +50,10 @@ public interface UserProfileRepository extends Repository<UserProfile, UUID> {
      */
     @Transactional(readOnly = true)
     Optional<UserProfile> findById(UUID userId);
+
+    /** The profiles of these accounts; an account without one is left out. */
+    @Transactional(readOnly = true)
+    List<UserProfile> findAllByIdIn(Collection<UUID> userIds);
 
     /**
      * Writes a profile.

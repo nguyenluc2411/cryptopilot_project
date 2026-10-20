@@ -3,6 +3,7 @@ package com.cryptopilot.user.service.impl;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.user.AuthorCard;
 import com.cryptopilot.user.LoginCredentials;
 import com.cryptopilot.user.UserApi;
 import com.cryptopilot.user.UserSummary;
@@ -15,6 +16,8 @@ import com.cryptopilot.user.repository.UserProfileRepository;
 import com.cryptopilot.user.service.DeviceService;
 import com.cryptopilot.user.service.UserService;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -222,6 +225,17 @@ public class UserServiceImpl implements UserService {
     @Transactional
     public void deactivateDevice(UUID userId, String fcmToken) {
         devices.deactivateByToken(userId, fcmToken);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<AuthorCard> authors(Collection<UUID> userIds) {
+        if (userIds.isEmpty()) {
+            return List.of();
+        }
+        return profiles.findAllByIdIn(userIds).stream()
+                .map(profile -> new AuthorCard(profile.getId(), profile.getDisplayName(), profile.getAvatarUrl()))
+                .toList();
     }
 
     /**

@@ -127,6 +127,17 @@ public class MarketApiImpl implements MarketApi {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<CoinListing> listedCoinsBySymbol(Collection<String> symbols) {
+        if (symbols.isEmpty()) {
+            return List.of();
+        }
+        return coins.findListedBySymbolIn(symbols).stream()
+                .map(MarketApiImpl::listing)
+                .toList();
+    }
+
+    @Override
     @Transactional
     public List<CoinListing> ensureCoins(Collection<String> symbols) {
         if (symbols.isEmpty()) {
