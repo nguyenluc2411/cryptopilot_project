@@ -195,4 +195,15 @@ public interface UserApi {
      * left out; the order is not defined.
      */
     List<AuthorCard> authors(Collection<UUID> userIds);
+
+    /**
+     * Bans a Trader's account for a moderation decision (UC-43, BAN_USER) and ends every session it holds (BR-06),
+     * in the caller's transaction. An account that is already banned is left as it is.
+     *
+     * @return {@code true} when this call banned the account, {@code false} when it was banned already
+     * @throws com.cryptopilot.common.exception.BusinessException {@code RESOURCE_NOT_FOUND} when no such account
+     *     exists, {@code ACCOUNT_STATUS_TRANSITION_INVALID} (MSG39) for an administrator, whom moderation never bans
+     *     (BR-58)
+     */
+    boolean banForModeration(UUID userId, Instant at);
 }
