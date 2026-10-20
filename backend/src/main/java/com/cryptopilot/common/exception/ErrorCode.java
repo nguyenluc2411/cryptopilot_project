@@ -320,7 +320,19 @@ public enum ErrorCode {
      * The media storage could not be reached or is not configured, so a file could be neither signed for nor checked.
      * Borrows MSG43 (A-38). 503: the request may succeed later.
      */
-    MEDIA_STORAGE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43");
+    MEDIA_STORAGE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43"),
+
+    /**
+     * The Trader already reported this post (BR-46); nothing is stored. MSG34 in its "already reported" form. 409: the
+     * request is valid and an earlier report conflicts with it.
+     */
+    POST_ALREADY_REPORTED(HttpStatus.CONFLICT, "MSG34"),
+
+    /**
+     * A Trader cannot report their own post (BR-46); the client offers no Report on it. Borrows MSG43 (A-38): SRS 5.3
+     * has no message for it. 409: the request is valid and the post's author refuses it.
+     */
+    POST_REPORT_OWN_POST(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

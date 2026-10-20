@@ -96,9 +96,10 @@ class OpenApiDocsTest {
             "/api/v1/comments/{id}",
             "/api/v1/posts/{id}/like",
             "/api/v1/posts/{id}/save",
-            "/api/v1/comments/{id}/like");
+            "/api/v1/comments/{id}/like",
+            "/api/v1/posts/{id}/reports");
 
-    private static final int OPERATIONS = 83;
+    private static final int OPERATIONS = 84;
 
     @Autowired
     private MockMvc mvc;
