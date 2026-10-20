@@ -18,4 +18,11 @@ public interface SystemSettingApi {
      *     a deployment defect, not a request error
      */
     BigDecimal decimal(String key);
+
+    /**
+     * The whole-number value of a setting, such as an upload limit of BR-44.
+     *
+     * @throws IllegalStateException when the setting is not stored or is not an {@code INT}
+     */
+    int integer(String key);
 }
