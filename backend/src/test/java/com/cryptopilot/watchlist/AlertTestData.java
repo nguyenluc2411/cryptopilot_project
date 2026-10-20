@@ -186,19 +186,7 @@ public final class AlertTestData {
             sql.sql("delete from watchlist where user_id = ?").param(account).update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
-        for (UUID pair : pairs) {
-            List<UUID> coins = sql.sql("select base_coin_id from crypto_pair where pair_id = ?")
-                    .param(pair)
-                    .query(UUID.class)
-                    .list();
-            sql.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
-            for (UUID coin : coins) {
-                sql.sql("""
-                                delete from coin where coin_id = ?
-                                   and not exists (select 1 from crypto_pair
-                                                    where base_coin_id = coin.coin_id or quote_coin_id = coin.coin_id)""").param(coin).update();
-            }
-        }
+        pairs.forEach(market::remove);
     }
 
     private static OffsetDateTime now() {
