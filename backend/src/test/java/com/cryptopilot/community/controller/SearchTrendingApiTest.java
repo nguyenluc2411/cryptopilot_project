@@ -78,13 +78,19 @@ class SearchTrendingApiTest {
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
         for (UUID pair : pairs) {
-            List<UUID> coins = sql.sql("select base_coin_id from crypto_pair where pair_id = ?")
-                    .param(pair)
+            List<UUID> coins = sql.sql("select base_coin_id from crypto_pair where pair_id = ?"
+                            + " union select quote_coin_id from crypto_pair where pair_id = ?")
+                    .params(pair, pair)
                     .query(UUID.class)
                     .list();
             sql.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
-            coins.forEach(id ->
-                    sql.sql("delete from coin where coin_id = ?").param(id).update());
+            for (UUID id : coins) {
+                sql.sql("""
+                                delete from coin where coin_id = ?
+                                   and not exists (select 1 from crypto_pair
+                                                    where base_coin_id = coin.coin_id or quote_coin_id = coin.coin_id)
+                                   and not exists (select 1 from post_coin c where c.coin_id = coin.coin_id)""").param(id).update();
+            }
         }
     }
 
