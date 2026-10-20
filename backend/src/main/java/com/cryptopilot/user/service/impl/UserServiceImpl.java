@@ -5,6 +5,7 @@ import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.user.AuthorCard;
 import com.cryptopilot.user.LoginCredentials;
+import com.cryptopilot.user.PublicProfile;
 import com.cryptopilot.user.UserApi;
 import com.cryptopilot.user.UserSummary;
 import com.cryptopilot.user.entity.UserAccount;
@@ -248,6 +249,16 @@ public class UserServiceImpl implements UserService {
         accounts.save(account);
         events.publishEvent(new AccountSuspended(userId, at));
         return true;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<PublicProfile> publicProfile(UUID userId) {
+        return accounts.findById(userId)
+                .filter(account -> account.getAccountStatus() != AccountStatus.BANNED)
+                .flatMap(account -> profiles.findById(userId)
+                        .map(profile -> new PublicProfile(
+                                userId, profile.getDisplayName(), profile.getAvatarUrl(), account.getCreatedAt())));
     }
 
     @Override

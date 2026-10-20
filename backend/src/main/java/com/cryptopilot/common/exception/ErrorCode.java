@@ -338,7 +338,10 @@ public enum ErrorCode {
      * Only a hidden post can be restored (UC-43); this one is published or deleted. Borrows MSG43 (A-38). 409: the
      * request is valid and the post's status refuses it.
      */
-    POST_NOT_HIDDEN(HttpStatus.CONFLICT, "MSG43");
+    POST_NOT_HIDDEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /** A member cannot follow themselves (D-99). Borrows MSG43 (A-38). 409: the target refuses the request. */
+    FOLLOW_SELF(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

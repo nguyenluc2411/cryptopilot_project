@@ -3,6 +3,7 @@ package com.cryptopilot.community.repository;
 import com.cryptopilot.community.model.CoinDiscussion;
 import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.FeedQuery;
+import com.cryptopilot.community.model.MemberActivity;
 import com.cryptopilot.community.model.PostEngagement;
 import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.model.enums.Sentiment;
@@ -75,6 +76,11 @@ public class PostFeedRepository {
                                 + " or (p.post_status = 'HIDDEN' and p.author_id = :caller))");
                         yield " order by s.created_at desc, p.post_id desc";
                     }
+                    case FOLLOWING -> {
+                        from.append(" join user_follow f on f.followee_id = p.author_id and f.follower_id = :caller");
+                        where.append(" and p.post_status = 'PUBLISHED' and not p.is_official");
+                        yield " order by p.created_at desc, p.post_id desc";
+                    }
                     case MINE -> {
                         where.append(" and p.author_id = :caller and p.post_status in ('PUBLISHED', 'HIDDEN')");
                         yield " order by p.created_at desc, p.post_id desc";
@@ -83,6 +89,10 @@ public class PostFeedRepository {
         if (query.coinId() != null) {
             where.append(" and exists (select 1 from post_coin c where c.post_id = p.post_id and c.coin_id = :coin)");
             params.put("coin", query.coinId());
+        }
+        if (query.authorId() != null) {
+            where.append(" and p.author_id = :author");
+            params.put("author", query.authorId());
         }
         if (query.sentiment() != null) {
             where.append(" and p.sentiment = :sentiment");
@@ -185,6 +195,19 @@ public class PostFeedRepository {
                 .query((row, index) -> result.put(Sentiment.valueOf(row.getString("sentiment")), row.getLong("posts")))
                 .list();
         return result;
+    }
+
+    /** A member's published posts and the likes they received (D-99). */
+    public MemberActivity memberActivity(UUID memberId) {
+        return sql.sql("""
+                        select count(*) as posts,
+                               coalesce(sum((select count(*) from engagement e
+                                              where e.post_id = p.post_id and e.action_type = 'LIKE')), 0) as likes
+                          from forum_post p
+                         where p.author_id = :member and p.post_status = 'PUBLISHED'""")
+                .param("member", memberId)
+                .query((row, index) -> new MemberActivity(row.getLong("posts"), row.getLong("likes")))
+                .single();
     }
 
     /** The coin keys each of these posts is tagged with; a post without tags is left out. */

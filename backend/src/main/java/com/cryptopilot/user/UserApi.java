@@ -206,4 +206,10 @@ public interface UserApi {
      *     (BR-58)
      */
     boolean banForModeration(UUID userId, Instant at);
+
+    /**
+     * The public profile of a member (D-99): empty when there is no such account, when it has no profile, or when it
+     * is banned, so a banned member's page is gone like their posts.
+     */
+    Optional<PublicProfile> publicProfile(UUID userId);
 }

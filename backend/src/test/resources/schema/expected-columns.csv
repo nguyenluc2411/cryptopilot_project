@@ -614,6 +614,12 @@ user_device,platform,character varying,,,NO
 user_device,updated_at,timestamp with time zone,,,NO
 user_device,user_id,uuid,,,NO
 user_device,version,bigint,64,0,NO
+user_follow,created_at,timestamp with time zone,,,NO
+user_follow,follow_id,uuid,,,NO
+user_follow,followee_id,uuid,,,NO
+user_follow,follower_id,uuid,,,NO
+user_follow,updated_at,timestamp with time zone,,,NO
+user_follow,version,bigint,64,0,NO
 user_profile,avatar_url,character varying,,,YES
 user_profile,created_at,timestamp with time zone,,,NO
 user_profile,default_capital,numeric,28,8,YES

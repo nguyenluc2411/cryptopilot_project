@@ -57,7 +57,7 @@ public class PostController {
     @GetMapping
     public PageResponse<PostSummaryResponse> feed(
             @AuthenticationPrincipal Jwt caller,
-            @Parameter(description = "LATEST (default), MOST_LIKED (last 7 days), SAVED or MINE")
+            @Parameter(description = "LATEST (default), MOST_LIKED (last 7 days), SAVED, MINE or FOLLOWING")
                     @RequestParam(defaultValue = "LATEST")
                     FeedTab tab,
             @Parameter(description = "Only posts tagged with this coin symbol, e.g. BTC")
@@ -66,9 +66,10 @@ public class PostController {
             @Parameter(description = "Only posts about this market") @RequestParam(required = false) MarketType market,
             @Parameter(description = "Only posts labelled BULLISH or BEARISH (D-99)") @RequestParam(required = false)
                     Sentiment sentiment,
+            @Parameter(description = "Only posts of this member (D-99)") @RequestParam(required = false) UUID author,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer pageSize) {
-        return service.feed(callerOf(caller), tab, coin, market, sentiment, page, pageSize);
+        return service.feed(callerOf(caller), tab, coin, market, sentiment, author, page, pageSize);
     }
 
     @Operation(summary = "The published announcements pinned above the feed, newest first (BR-61)")

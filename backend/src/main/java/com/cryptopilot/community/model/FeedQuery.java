@@ -13,8 +13,9 @@ import java.util.UUID;
  * @param coinId only posts tagged with this coin, or {@code null} for any
  * @param market only posts about this market, or {@code null} for any
  * @param sentiment only posts labelled so, or {@code null} for any (D-99)
+ * @param authorId only posts of this member, or {@code null} for anyone's (D-99)
  */
-public record FeedQuery(FeedTab tab, UUID coinId, MarketType market, Sentiment sentiment) {
+public record FeedQuery(FeedTab tab, UUID coinId, MarketType market, Sentiment sentiment, UUID authorId) {
 
     public FeedQuery {
         Objects.requireNonNull(tab, "tab");

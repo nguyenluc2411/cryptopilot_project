@@ -71,9 +71,10 @@ public class PostServiceImpl implements PostService {
             String coin,
             MarketType market,
             Sentiment sentiment,
+            UUID author,
             Integer page,
             Integer pageSize) {
-        if (caller == null && (tab == FeedTab.SAVED || tab == FeedTab.MINE)) {
+        if (caller == null && (tab == FeedTab.SAVED || tab == FeedTab.MINE || tab == FeedTab.FOLLOWING)) {
             throw new BusinessException(ErrorCode.AUTHENTICATION_REQUIRED, "the " + tab + " tab is a Trader's own");
         }
         PageRequest request = Paging.of(page, pageSize);
@@ -87,7 +88,7 @@ public class PostServiceImpl implements PostService {
             coinId = stored.get();
         }
         FeedPage found = feeds.feed(
-                new FeedQuery(tab, coinId, market, sentiment),
+                new FeedQuery(tab, coinId, market, sentiment, author),
                 caller,
                 clock.instant().minus(MOST_LIKED_WINDOW),
                 request);

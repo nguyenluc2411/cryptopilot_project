@@ -16,8 +16,8 @@ import java.util.UUID;
  * exist (MSG41), and so does another Trader's post the caller tries to change. Implemented by
  * {@link com.cryptopilot.community.service.impl.PostServiceImpl}.
  *
- * <p>The reads take a {@code null} caller for a Guest, who sees what every Trader sees (D-99); the SAVED and MINE
- * tabs are a Trader's own and answer MSG44 to a Guest.
+ * <p>The reads take a {@code null} caller for a Guest, who sees what every Trader sees (D-99); the SAVED, MINE and
+ * FOLLOWING tabs are a Trader's own and answer MSG44 to a Guest.
  *
  * <p>Rule: UC-26, UC-27, UC-29; BR-47, BR-61; D-48, D-99.
  */
@@ -29,6 +29,7 @@ public interface PostService {
      * @param coin only posts tagged with this coin symbol, e.g. {@code BTC}, or {@code null}
      * @param market only posts about this market, or {@code null}
      * @param sentiment only posts labelled so, or {@code null} (D-99)
+     * @param author only posts of this member, or {@code null} (D-99)
      * @param page from 1, or {@code null} for 1
      * @param pageSize 1 to 100, or {@code null} for 20
      */
@@ -38,6 +39,7 @@ public interface PostService {
             String coin,
             MarketType market,
             Sentiment sentiment,
+            UUID author,
             Integer page,
             Integer pageSize);
 
