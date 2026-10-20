@@ -103,6 +103,19 @@ cryptopilot:
     stale-after: 5m
     # Anything older is deleted, delivered or not: the longest link an event carries lives 24 hours (BR-01).
     retention: 24h
+  media:
+    cloudinary:
+      # T-061 (D-98): the account post images and videos are stored in. The browser uploads straight to Cloudinary
+      # with a form the backend signs; the secret never leaves the backend. All three empty: posts with media are
+      # refused and text posts work (dev and tests); the prod profile refuses to start.
+      cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+      api-key: ${CLOUDINARY_API_KEY:}
+      api-secret: ${CLOUDINARY_API_SECRET:}
+      api-base-url: https://api.cloudinary.com
+      # Every file of a post is stored under <folder>/<uploader account>/<random key>.
+      folder: cryptopilot/posts
+      connect-timeout: 5s
+      read-timeout: 10s
   notification:
     mail:
       # T-057: the sender address, and the web application the mailed links open (/verify-email, /reset-password).
