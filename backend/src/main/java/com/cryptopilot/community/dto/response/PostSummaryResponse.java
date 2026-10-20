@@ -21,6 +21,7 @@ import java.util.UUID;
  * @param official whether it is an announcement, pinned above the feed (BR-61)
  * @param status PUBLISHED, or HIDDEN in the author's own tabs (BR-47)
  * @param coins the symbols it is tagged with, alphabetical
+ * @param cover its first image or its video, as the card previews it; {@code null} for a post without media
  * @param likeCount its likes
  * @param commentCount its published comments
  * @param likedByMe whether the caller liked it
@@ -38,6 +39,7 @@ public record PostSummaryResponse(
         boolean official,
         PostStatus status,
         List<String> coins,
+        MediaResponse cover,
         long likeCount,
         long commentCount,
         boolean likedByMe,

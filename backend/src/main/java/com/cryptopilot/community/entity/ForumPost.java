@@ -126,6 +126,11 @@ public class ForumPost extends BaseEntity {
         this.coinIds.addAll(tags);
     }
 
+    /** Records what the post carries besides its text: a video makes it a VIDEO post (BR-43, BR-44). */
+    public void carry(PostType type) {
+        this.postType = Objects.requireNonNull(type, "type must not be null");
+    }
+
     /** Deletes the post for everyone but Admin (BR-47); deleting it again changes nothing. */
     public void delete() {
         this.status = PostStatus.DELETED;

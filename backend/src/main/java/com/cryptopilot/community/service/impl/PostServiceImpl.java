@@ -34,6 +34,9 @@ import org.springframework.transaction.annotation.Transactional;
  * through a lookup by its key <em>and</em> its author, so another Trader's post, a hidden post of someone else and a
  * deleted post all answer MSG41 — never "forbidden", which would confirm that the key exists.
  *
+ * <p>Posts and their files are written by {@link PostWriter}, which checks the files against the media storage
+ * before its transaction opens.
+ *
  * <p>The {@code MOST_LIKED} tab ranks the posts published in the last seven days by their likes (SRS 3.7.1).
  *
  * <p>Rule: UC-26, UC-27, UC-29; BR-47, BR-61; SRS 3.7.1, 3.7.2; CR-04.
@@ -50,6 +53,7 @@ public class PostServiceImpl implements PostService {
     private final ForumPostRepository posts;
     private final PostFeedRepository feeds;
     private final PostAssembler assembler;
+    private final PostWriter writer;
     private final MarketApi market;
     private final Clock clock;
 
@@ -89,34 +93,18 @@ public class PostServiceImpl implements PostService {
     }
 
     @Override
-    @Transactional
     public PostDetailResponse create(UUID caller, PostRequest request) {
-        ForumPost post = ForumPost.publish(
-                caller, request.title(), request.content(), request.marketType(), assembler.coinTags(request.coins()));
-        posts.save(post);
-        posts.flush();
-        return assembler.detail(post, caller);
+        return writer.create(caller, request, false);
     }
 
     @Override
-    @Transactional
     public PostDetailResponse update(UUID caller, UUID postId, PostRequest request) {
-        ForumPost post = owned(caller, postId);
-        post.revise(request.title(), request.content(), request.marketType(), assembler.coinTags(request.coins()));
-        posts.flush();
-        return assembler.detail(post, caller);
+        return writer.update(caller, postId, request, id -> posts.findByIdAndAuthorId(id, caller), true);
     }
 
     @Override
-    @Transactional
     public void delete(UUID caller, UUID postId) {
-        owned(caller, postId).delete();
-    }
-
-    private ForumPost owned(UUID caller, UUID postId) {
-        return posts.findByIdAndAuthorId(postId, caller)
-                .filter(post -> !post.isDeleted())
-                .orElseThrow(() -> notFound(postId));
+        writer.delete(postId, id -> posts.findByIdAndAuthorId(id, caller));
     }
 
     private Optional<UUID> coinId(String symbol) {

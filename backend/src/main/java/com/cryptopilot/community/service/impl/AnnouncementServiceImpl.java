@@ -1,12 +1,10 @@
 package com.cryptopilot.community.service.impl;
 
-import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
-import com.cryptopilot.community.entity.ForumPost;
 import com.cryptopilot.community.repository.ForumPostRepository;
 import com.cryptopilot.community.repository.PostFeedRepository;
 import com.cryptopilot.community.service.AnnouncementService;
@@ -30,6 +28,7 @@ public class AnnouncementServiceImpl implements AnnouncementService {
     private final ForumPostRepository posts;
     private final PostFeedRepository feeds;
     private final PostAssembler assembler;
+    private final PostWriter writer;
 
     @Override
     @Transactional(readOnly = true)
@@ -39,33 +38,17 @@ public class AnnouncementServiceImpl implements AnnouncementService {
     }
 
     @Override
-    @Transactional
     public PostDetailResponse create(UUID admin, PostRequest request) {
-        ForumPost post = ForumPost.announce(
-                admin, request.title(), request.content(), request.marketType(), assembler.coinTags(request.coins()));
-        posts.save(post);
-        posts.flush();
-        return assembler.detail(post, admin);
+        return writer.create(admin, request, true);
     }
 
     @Override
-    @Transactional
     public PostDetailResponse update(UUID admin, UUID postId, PostRequest request) {
-        ForumPost post = announcement(postId);
-        post.revise(request.title(), request.content(), request.marketType(), assembler.coinTags(request.coins()));
-        posts.flush();
-        return assembler.detail(post, admin);
+        return writer.update(admin, postId, request, posts::findByIdAndOfficialTrue, false);
     }
 
     @Override
-    @Transactional
     public void delete(UUID admin, UUID postId) {
-        announcement(postId).delete();
-    }
-
-    private ForumPost announcement(UUID postId) {
-        return posts.findByIdAndOfficialTrue(postId)
-                .filter(post -> !post.isDeleted())
-                .orElseThrow(() -> new ResourceNotFoundException("Announcement", postId));
+        writer.delete(postId, posts::findByIdAndOfficialTrue);
     }
 }

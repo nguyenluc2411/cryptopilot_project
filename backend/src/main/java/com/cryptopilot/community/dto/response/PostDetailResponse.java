@@ -21,6 +21,7 @@ import java.util.UUID;
  * @param official whether it is an announcement (BR-61)
  * @param status PUBLISHED, or HIDDEN when the caller is its author (BR-47)
  * @param coins the symbols it is tagged with, alphabetical
+ * @param media its images or its video, in order
  * @param likeCount its likes
  * @param commentCount its published comments
  * @param likedByMe whether the caller liked it
@@ -39,6 +40,7 @@ public record PostDetailResponse(
         boolean official,
         PostStatus status,
         List<String> coins,
+        List<MediaResponse> media,
         long likeCount,
         long commentCount,
         boolean likedByMe,

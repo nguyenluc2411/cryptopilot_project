@@ -54,7 +54,9 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.PAPER_ORDER_NOT_OPEN, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_ORDER_WOULD_TAKE, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_ORDER_WOULD_TRIGGER, "MSG43 409"),
-            Map.entry(ErrorCode.PAPER_PAIR_NOT_VALUED, "MSG43 409"));
+            Map.entry(ErrorCode.PAPER_PAIR_NOT_VALUED, "MSG43 409"),
+            Map.entry(ErrorCode.MEDIA_INVALID, "MSG32 400"),
+            Map.entry(ErrorCode.MEDIA_STORAGE_UNAVAILABLE, "MSG43 503"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

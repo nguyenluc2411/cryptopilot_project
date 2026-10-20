@@ -307,7 +307,20 @@ public enum ErrorCode {
      * be valued in USDT (D-96); the order is refused and not stored. Borrows MSG43 like {@link #PAPER_ORDER_WOULD_TAKE}
      * (A-38); the message argument is the coin. 409: the request is valid and the market's listing refuses it.
      */
-    PAPER_PAIR_NOT_VALUED(HttpStatus.CONFLICT, "MSG43");
+    PAPER_PAIR_NOT_VALUED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A file named for a post is not one the post may carry (BR-44): not uploaded, not the caller's, already attached
+     * to another post, of a type or size outside the limits, a video too long, or a combination of files a post may
+     * not hold. MSG32; the message argument is the limit that applies, e.g. {@code 5 MB}. 400: the request names it.
+     */
+    MEDIA_INVALID(HttpStatus.BAD_REQUEST, "MSG32"),
+
+    /**
+     * The media storage could not be reached or is not configured, so a file could be neither signed for nor checked.
+     * Borrows MSG43 (A-38). 503: the request may succeed later.
+     */
+    MEDIA_STORAGE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

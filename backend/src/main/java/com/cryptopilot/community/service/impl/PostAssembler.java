@@ -3,18 +3,22 @@ package com.cryptopilot.community.service.impl;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.community.dto.response.AuthorResponse;
+import com.cryptopilot.community.dto.response.MediaResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.entity.ForumPost;
+import com.cryptopilot.community.entity.PostMedia;
 import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.PostEngagement;
 import com.cryptopilot.community.repository.ForumPostRepository;
 import com.cryptopilot.community.repository.PostFeedRepository;
+import com.cryptopilot.community.repository.PostMediaRepository;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.user.AuthorCard;
 import com.cryptopilot.user.UserApi;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +47,7 @@ public class PostAssembler {
 
     private final ForumPostRepository posts;
     private final PostFeedRepository feeds;
+    private final PostMediaRepository media;
     private final UserApi users;
     private final MarketApi market;
 
@@ -78,11 +83,16 @@ public class PostAssembler {
         Map<UUID, AuthorCard> authors =
                 authors(ordered.stream().map(ForumPost::getAuthorId).toList());
         Map<UUID, PostEngagement> engagement = feeds.engagement(page.postIds(), caller);
+        Map<UUID, MediaResponse> covers = new HashMap<>();
+        for (PostMedia file : media.findAllByPostIdInOrderBySortOrderAsc(page.postIds())) {
+            covers.putIfAbsent(file.getPostId(), media(file));
+        }
         List<PostSummaryResponse> items = ordered.stream()
                 .map(post -> summary(
                         post,
                         authors.get(post.getAuthorId()),
                         coins(tags.getOrDefault(post.getId(), Set.of()), symbols),
+                        covers.get(post.getId()),
                         engagement.getOrDefault(post.getId(), PostEngagement.NONE)))
                 .toList();
         return new PageResponse<>(items, request.getPageNumber() + 1, request.getPageSize(), page.total());
@@ -103,6 +113,9 @@ public class PostAssembler {
                 post.isOfficial(),
                 post.getStatus(),
                 coins(post.getCoinIds(), symbols),
+                media.findAllByPostIdOrderBySortOrderAsc(post.getId()).stream()
+                        .map(PostAssembler::media)
+                        .toList(),
                 counts.likes(),
                 counts.comments(),
                 counts.likedByCaller(),
@@ -112,7 +125,8 @@ public class PostAssembler {
                 post.getUpdatedAt());
     }
 
-    private PostSummaryResponse summary(ForumPost post, AuthorCard author, List<String> coins, PostEngagement counts) {
+    private PostSummaryResponse summary(
+            ForumPost post, AuthorCard author, List<String> coins, MediaResponse cover, PostEngagement counts) {
         return new PostSummaryResponse(
                 post.getId(),
                 author(post.getAuthorId(), author),
@@ -123,6 +137,7 @@ public class PostAssembler {
                 post.isOfficial(),
                 post.getStatus(),
                 coins,
+                cover,
                 counts.likes(),
                 counts.comments(),
                 counts.likedByCaller(),
@@ -139,6 +154,17 @@ public class PostAssembler {
     private Map<UUID, String> symbols(Collection<UUID> coinIds) {
         return market.coins(Set.copyOf(coinIds)).stream()
                 .collect(Collectors.toMap(CoinListing::coinId, CoinListing::symbol));
+    }
+
+    private static MediaResponse media(PostMedia file) {
+        return new MediaResponse(
+                file.getStoragePublicId(),
+                file.getMediaType(),
+                file.getMediaUrl(),
+                file.getThumbnailUrl(),
+                file.getWidth(),
+                file.getHeight(),
+                file.getDurationSeconds());
     }
 
     private static AuthorResponse author(UUID userId, AuthorCard card) {
