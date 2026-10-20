@@ -1,5 +1,6 @@
 package com.cryptopilot.community.dto.response;
 
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.model.enums.PostStatus;
 import com.cryptopilot.community.model.enums.PostType;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -19,6 +20,7 @@ import java.util.UUID;
  * @param postType TEXT or VIDEO
  * @param marketType the market it is about, or {@code null}
  * @param official whether it is an announcement (BR-61)
+ * @param officialCategory what an official post is; {@code null} for a Trader's post
  * @param status PUBLISHED, or HIDDEN when the caller is its author (BR-47)
  * @param coins the symbols it is tagged with, alphabetical
  * @param media its images or its video, in order
@@ -38,6 +40,7 @@ public record PostDetailResponse(
         PostType postType,
         MarketType marketType,
         boolean official,
+        OfficialCategory officialCategory,
         PostStatus status,
         List<String> coins,
         List<MediaResponse> media,

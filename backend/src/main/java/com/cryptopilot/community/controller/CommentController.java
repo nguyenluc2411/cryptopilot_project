@@ -27,7 +27,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The comments of SCR-25 (UC-30), Trader only. A post or comment the caller may not see or change answers 404.
+ * The comments of SCR-25 (UC-30). A Guest reads them (D-99); writing is for Traders. A post or comment the caller may not see or change answers 404.
  *
  * <p>Rule: UC-30; BR-47; SRS 3.7.3; TECHNICAL_DESIGN 8.
  */
@@ -87,7 +87,8 @@ public class CommentController {
         service.delete(callerOf(caller), id);
     }
 
+    /** The caller's account, or {@code null} for a Guest on a public read (D-99). */
     private static UUID callerOf(Jwt caller) {
-        return UUID.fromString(caller.getSubject());
+        return caller == null ? null : UUID.fromString(caller.getSubject());
     }
 }

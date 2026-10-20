@@ -1,5 +1,6 @@
 package com.cryptopilot.community.service.impl;
 
+import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
@@ -7,6 +8,7 @@ import com.cryptopilot.community.entity.ForumPost;
 import com.cryptopilot.community.entity.PostMedia;
 import com.cryptopilot.community.event.PostMediaReleased;
 import com.cryptopilot.community.model.CheckedMedia;
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.model.enums.PostMediaType;
 import com.cryptopilot.community.model.enums.PostType;
 import com.cryptopilot.community.repository.ForumPostRepository;
@@ -56,11 +58,18 @@ public class PostWriter {
      *     {@code MEDIA_STORAGE_UNAVAILABLE}
      */
     PostDetailResponse create(UUID author, PostRequest request, boolean official) {
+        requireCategoryOnlyWhenOfficial(request, official);
         Set<UUID> coins = assembler.coinTags(request.coins());
         List<CheckedMedia> files = rules.check(author, request.media(), Map.of(), !official);
         return transactions.execute(status -> {
             ForumPost post = official
-                    ? ForumPost.announce(author, request.title(), request.content(), request.marketType(), coins)
+                    ? ForumPost.announce(
+                            author,
+                            categoryOf(request),
+                            request.title(),
+                            request.content(),
+                            request.marketType(),
+                            coins)
                     : ForumPost.publish(author, request.title(), request.content(), request.marketType(), coins);
             post.carry(typeOf(files));
             posts.save(post);
@@ -79,11 +88,15 @@ public class PostWriter {
     PostDetailResponse update(
             UUID caller, UUID postId, PostRequest request, Function<UUID, Optional<ForumPost>> lookup, boolean trader) {
         ForumPost found = editable(postId, lookup);
+        requireCategoryOnlyWhenOfficial(request, found.isOfficial());
         Set<UUID> coins = assembler.coinTags(request.coins());
         List<CheckedMedia> files = rules.check(caller, request.media(), byKey(found.getId()), trader);
         return transactions.execute(status -> {
             ForumPost post = editable(postId, lookup);
             post.revise(request.title(), request.content(), request.marketType(), coins);
+            if (post.isOfficial()) {
+                post.categorize(categoryOf(request));
+            }
             post.carry(typeOf(files));
             write(post, files, byKey(post.getId()));
             flush(files);
@@ -167,6 +180,18 @@ public class PostWriter {
         return lookup.apply(postId)
                 .filter(post -> !post.isDeleted())
                 .orElseThrow(() -> new ResourceNotFoundException("Post", postId));
+    }
+
+    /** A Trader's post has no category; an announcement without one is an ANNOUNCEMENT (D-99). */
+    private static void requireCategoryOnlyWhenOfficial(PostRequest request, boolean official) {
+        if (!official && request.officialCategory() != null) {
+            throw new FieldValidationException(
+                    "only an official post has a category", Map.of("officialCategory", "MSG01"));
+        }
+    }
+
+    private static OfficialCategory categoryOf(PostRequest request) {
+        return request.officialCategory() == null ? OfficialCategory.ANNOUNCEMENT : request.officialCategory();
     }
 
     private static PostType typeOf(List<CheckedMedia> files) {

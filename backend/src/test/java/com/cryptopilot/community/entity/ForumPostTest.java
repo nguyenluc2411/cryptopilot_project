@@ -3,6 +3,7 @@ package com.cryptopilot.community.entity;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.model.enums.PostStatus;
 import com.cryptopilot.market.model.enums.MarketType;
 import java.util.List;
@@ -33,8 +34,36 @@ class ForumPostTest {
 
     @Test
     void BR61_anAnnouncement_isOfficial() {
-        assertThat(ForumPost.announce(AUTHOR, "Title", "Text", null, List.of()).isOfficial())
+        assertThat(ForumPost.announce(AUTHOR, OfficialCategory.EDUCATION, "Title", "Text", null, List.of())
+                        .isOfficial())
                 .isTrue();
+    }
+
+    @Test
+    void D99_anOfficialPost_hasACategory_andATradersPostHasNone() {
+        ForumPost official = ForumPost.announce(AUTHOR, OfficialCategory.EDUCATION, "Title", "Text", null, List.of());
+        ForumPost trader = ForumPost.publish(AUTHOR, "Title", "Text", null, List.of());
+
+        assertThat(official.getOfficialCategory()).isEqualTo(OfficialCategory.EDUCATION);
+        official.categorize(OfficialCategory.PLATFORM_UPDATE);
+        assertThat(official.getOfficialCategory()).isEqualTo(OfficialCategory.PLATFORM_UPDATE);
+        assertThat(trader.getOfficialCategory()).isNull();
+        assertThatThrownBy(() -> trader.categorize(OfficialCategory.EDUCATION))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void D99_aRemovedPost_isDeleted_andAHiddenOneRestores() {
+        ForumPost removed = ForumPost.publish(AUTHOR, "Title", "Text", null, List.of());
+        removed.remove();
+        assertThat(removed.getStatus()).isEqualTo(PostStatus.DELETED);
+        assertThatThrownBy(removed::restore).isInstanceOf(IllegalStateException.class);
+
+        ForumPost hidden = ForumPost.publish(AUTHOR, "Title", "Text", null, List.of());
+        hidden.hide();
+        assertThat(hidden.isVisibleTo(OTHER)).isFalse();
+        hidden.restore();
+        assertThat(hidden.getStatus()).isEqualTo(PostStatus.PUBLISHED);
     }
 
     @Test

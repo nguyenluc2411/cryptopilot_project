@@ -2,9 +2,11 @@ package com.cryptopilot.community.service;
 
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.community.dto.request.PostRequest;
+import com.cryptopilot.community.dto.response.CoinDiscussionResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.model.enums.FeedTab;
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.market.model.enums.MarketType;
 import java.util.UUID;
 
@@ -13,7 +15,10 @@ import java.util.UUID;
  * exist (MSG41), and so does another Trader's post the caller tries to change. Implemented by
  * {@link com.cryptopilot.community.service.impl.PostServiceImpl}.
  *
- * <p>Rule: UC-26, UC-27, UC-29; BR-47, BR-61; D-48.
+ * <p>The reads take a {@code null} caller for a Guest, who sees what every Trader sees (D-99); the SAVED and MINE
+ * tabs are a Trader's own and answer MSG44 to a Guest.
+ *
+ * <p>Rule: UC-26, UC-27, UC-29; BR-47, BR-61; D-48, D-99.
  */
 public interface PostService {
 
@@ -28,8 +33,11 @@ public interface PostService {
     PageResponse<PostSummaryResponse> feed(
             UUID caller, FeedTab tab, String coin, MarketType market, Integer page, Integer pageSize);
 
-    /** One page of the published announcements, newest first (BR-61). */
-    PageResponse<PostSummaryResponse> pinned(UUID caller, Integer page, Integer pageSize);
+    /** One page of the published announcements, newest first (BR-61), of one category or all (D-99). */
+    PageResponse<PostSummaryResponse> pinned(UUID caller, OfficialCategory category, Integer page, Integer pageSize);
+
+    /** How much the community talks about a coin (D-99); MSG41 for a coin that is not stored. */
+    CoinDiscussionResponse coinDiscussion(String symbol);
 
     /** A post the caller may see (BR-47); MSG41 otherwise. */
     PostDetailResponse detail(UUID caller, UUID postId);

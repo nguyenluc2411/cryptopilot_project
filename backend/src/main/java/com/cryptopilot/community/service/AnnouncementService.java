@@ -4,6 +4,7 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import java.util.UUID;
 
 /**
@@ -16,7 +17,7 @@ import java.util.UUID;
 public interface AnnouncementService {
 
     /** One page of the announcements that are not deleted, hidden ones included, newest first. */
-    PageResponse<PostSummaryResponse> list(UUID admin, Integer page, Integer pageSize);
+    PageResponse<PostSummaryResponse> list(UUID admin, OfficialCategory category, Integer page, Integer pageSize);
 
     /** Publishes an announcement written by {@code admin}. */
     PostDetailResponse create(UUID admin, PostRequest request);

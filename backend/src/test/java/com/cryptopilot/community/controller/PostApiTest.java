@@ -95,8 +95,9 @@ class PostApiTest {
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
         for (UUID pair : pairs) {
-            List<UUID> coins = sql.sql("select base_coin_id from crypto_pair where pair_id = ?")
-                    .param(pair)
+            List<UUID> coins = sql.sql("select base_coin_id from crypto_pair where pair_id = ?"
+                            + " union select quote_coin_id from crypto_pair where pair_id = ?")
+                    .params(pair, pair)
                     .query(UUID.class)
                     .list();
             sql.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
@@ -440,13 +441,111 @@ class PostApiTest {
     // ------------------------------------------------------------------------------------------
 
     @Test
-    void theCommunity_isForTradersAndTheConsoleForAdmins() throws Exception {
+    void D99_aGuest_readsTheCommunity_butWritesNothing() throws Exception {
+        UUID author = trader("Alice");
+        String id = id(as(author, post(POSTS), body("Public post", "Readable by anyone", "SPOT", coinA)));
+        sql.sql("""
+                        insert into forum_comment (comment_id, post_id, author_id, content, comment_status, created_at,
+                                                   updated_at)
+                        values (?, ?, ?, 'a comment', 'PUBLISHED', now(), now())""").params(UUID.randomUUID(), UUID.fromString(id), author).update();
+
+        mvc.perform(get(POSTS + "?coin=" + coinA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].likedByMe").value(false))
+                .andExpect(jsonPath("$.items[0].savedByMe").value(false));
+        mvc.perform(get(POSTS + "?tab=MOST_LIKED&coin=" + coinA)).andExpect(status().isOk());
+        mvc.perform(get(POSTS + "/" + id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").value("Readable by anyone"))
+                .andExpect(jsonPath("$.mine").value(false));
+        mvc.perform(get(POSTS + "/" + id + "/comments"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].content").value("a comment"))
+                .andExpect(jsonPath("$.items[0].likedByMe").value(false));
+        mvc.perform(get(POSTS + "/pinned")).andExpect(status().isOk());
+
+        // The Trader's own tabs and every write need a session.
+        mvc.perform(get(POSTS + "?tab=SAVED")).andExpect(status().isUnauthorized());
+        mvc.perform(get(POSTS + "?tab=MINE"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.messageCode").value("MSG44"));
+        mvc.perform(post(POSTS).contentType(MediaType.APPLICATION_JSON).content(body("Guest post", "text", null)))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post(POSTS + "/" + id + "/like")).andExpect(status().isUnauthorized());
+        // A hidden post stays hidden from a Guest too.
+        sql.sql("update forum_post set post_status = 'HIDDEN' where post_id = ?")
+                .param(UUID.fromString(id))
+                .update();
+        mvc.perform(get(POSTS + "/" + id)).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void D99_aCoinsDiscussion_countsItsPublishedPosts_forAnyone() throws Exception {
+        UUID author = trader("Alice");
+        String recent = id(as(author, post(POSTS), body("Recent", "text", null, coinA)));
+        String lastWeek = id(as(author, post(POSTS), body("Last week", "text", null, coinA)));
+        String old = id(as(author, post(POSTS), body("Long ago", "text", null, coinA, coinB)));
+        String deleted = id(as(author, post(POSTS), body("Deleted", "text", null, coinA)));
+        createdAgo(recent, Duration.ofHours(2));
+        createdAgo(lastWeek, Duration.ofDays(3));
+        createdAgo(old, Duration.ofDays(30));
+        as(author, delete(POSTS + "/" + deleted), null).andExpect(status().isNoContent());
+
+        mvc.perform(get(POSTS + "/coins/" + coinA.toLowerCase() + "/discussion"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.symbol").value(coinA))
+                .andExpect(jsonPath("$.postsLastDay").value(1))
+                .andExpect(jsonPath("$.postsLastWeek").value(2))
+                .andExpect(jsonPath("$.totalPosts").value(3))
+                .andExpect(jsonPath("$.lastPostAt").exists());
+        mvc.perform(get(POSTS + "/coins/" + unlistedCoin + "/discussion"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalPosts").value(0))
+                .andExpect(jsonPath("$.lastPostAt").doesNotExist());
+        mvc.perform(get(POSTS + "/coins/NOSUCHCOIN/discussion")).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void D99_anOfficialPost_hasACategory_andThePinnedPostsFilterByIt() throws Exception {
         UUID admin = account(UserRole.ADMIN, "Admin");
         UUID trader = trader("Bob");
+        String education = id(as(
+                        admin,
+                        UserRole.ADMIN,
+                        post(ANNOUNCEMENTS),
+                        "{\"title\": \"What is funding\", \"content\": \"text\", \"officialCategory\": \"EDUCATION\"}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.officialCategory").value("EDUCATION")));
+        String announcement = id(as(admin, UserRole.ADMIN, post(ANNOUNCEMENTS), body("Maintenance", "text", null))
+                .andExpect(jsonPath("$.officialCategory").value("ANNOUNCEMENT")));
 
-        mvc.perform(get(POSTS)).andExpect(status().isUnauthorized());
+        mvc.perform(get(POSTS + "/pinned?category=EDUCATION&pageSize=100"))
+                .andExpect(jsonPath("$.items[?(@.id == '" + education + "')]").isNotEmpty())
+                .andExpect(
+                        jsonPath("$.items[?(@.id == '" + announcement + "')]").isEmpty());
+        as(
+                        admin,
+                        UserRole.ADMIN,
+                        put(ANNOUNCEMENTS + "/" + announcement),
+                        "{\"title\": \"Release 1.2\", \"content\": \"text\", \"officialCategory\": \"PLATFORM_UPDATE\"}")
+                .andExpect(jsonPath("$.officialCategory").value("PLATFORM_UPDATE"));
+        // A Trader's post has no category.
+        as(
+                        trader,
+                        post(POSTS),
+                        "{\"title\": \"Not official\", \"content\": \"text\", \"officialCategory\": \"EDUCATION\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.officialCategory").value("MSG01"));
+        as(trader, post(POSTS), body("Plain post", "text", null))
+                .andExpect(jsonPath("$.officialCategory").doesNotExist());
+    }
+
+    @Test
+    void theConsole_isForAdmins() throws Exception {
+        UUID trader = trader("Bob");
+
         mvc.perform(get(ANNOUNCEMENTS)).andExpect(status().isUnauthorized());
-        as(admin, UserRole.ADMIN, get(POSTS), null).andExpect(status().isForbidden());
         as(trader, post(ANNOUNCEMENTS), body("Fake news", "text", null)).andExpect(status().isForbidden());
     }
 

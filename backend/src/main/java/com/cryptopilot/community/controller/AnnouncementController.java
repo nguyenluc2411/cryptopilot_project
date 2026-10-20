@@ -5,6 +5,7 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.service.AnnouncementService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -49,9 +50,10 @@ public class AnnouncementController {
     @GetMapping
     public PageResponse<PostSummaryResponse> list(
             @AuthenticationPrincipal Jwt caller,
+            @RequestParam(required = false) OfficialCategory category,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer pageSize) {
-        return service.list(callerOf(caller), page, pageSize);
+        return service.list(callerOf(caller), category, page, pageSize);
     }
 
     @Operation(summary = "Publish an announcement (UC-44)")

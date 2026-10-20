@@ -16,6 +16,7 @@ dropped_backfill_gap,market_type,ck_dropped_backfill_gap_market_type,SPOT|FUTURE
 engagement,action_type,ck_engagement_action_type,LIKE|SAVE
 forum_comment,comment_status,ck_forum_comment_status,PUBLISHED|HIDDEN|DELETED
 forum_post,market_type,ck_forum_post_market_type,SPOT|FUTURES
+forum_post,official_category,ck_forum_post_official_category,ANNOUNCEMENT|PLATFORM_UPDATE|EDUCATION
 forum_post,post_status,ck_forum_post_status,PUBLISHED|HIDDEN|DELETED
 forum_post,post_type,ck_forum_post_type,TEXT|VIDEO
 matching_watermark,market_type,ck_matching_watermark_market_type,SPOT|FUTURES
@@ -60,7 +61,7 @@ post_media,media_type,ck_post_media_type,IMAGE|VIDEO
 post_media,processing_status,ck_post_media_processing_status,UPLOADING|READY|FAILED
 post_report,reason,ck_post_report_reason,SPAM|SCAM|ABUSE|MISLEADING|OTHER
 post_report,report_status,ck_post_report_status,OPEN|REVIEWING|RESOLVED
-post_report,resolution_action,ck_post_report_resolution_action,HIDE_POST|DISMISS|WARN_USER|BAN_USER
+post_report,resolution_action,ck_post_report_resolution_action,HIDE_POST|REMOVE_POST|DISMISS|WARN_USER|BAN_USER
 subscription_order,currency,ck_subscription_order_currency,VND
 subscription_order,order_status,ck_subscription_order_status,PENDING|PAID|FAILED|EXPIRED
 subscription_order,payment_gateway,ck_subscription_order_gateway,VNPAY|MOMO

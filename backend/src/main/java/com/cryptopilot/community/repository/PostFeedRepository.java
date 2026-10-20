@@ -1,9 +1,12 @@
 package com.cryptopilot.community.repository;
 
+import com.cryptopilot.community.model.CoinDiscussion;
 import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.FeedQuery;
 import com.cryptopilot.community.model.PostEngagement;
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
@@ -27,11 +30,16 @@ import org.springframework.stereotype.Repository;
  * the caller's own tabs, deleted posts nowhere. Official posts are left out of {@code LATEST} and {@code MOST_LIKED}
  * because they are pinned above the feed (BR-61) and would otherwise be listed twice.
  *
- * <p>Rule: UC-26, UC-32; BR-45, BR-47, BR-61; SRS 3.7.1; CR-04.
+ * <p>A Guest reads the shared tabs too (D-99): the caller is then {@code null} and has liked and saved nothing.
+ *
+ * <p>Rule: UC-26, UC-32; BR-45, BR-47, BR-61; SRS 3.7.1; CR-04; D-99.
  */
 @Repository
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class PostFeedRepository {
+
+    /** Stands for a Guest in the queries that ask what the caller liked or saved: no account has this key. */
+    private static final UUID NOBODY = new UUID(0L, 0L);
 
     private final JdbcClient sql;
 
@@ -43,7 +51,7 @@ public class PostFeedRepository {
      */
     public FeedPage feed(FeedQuery query, UUID caller, Instant likedSince, Pageable page) {
         Map<String, Object> params = new HashMap<>();
-        params.put("caller", caller);
+        params.put("caller", caller == null ? NOBODY : caller);
         StringBuilder from = new StringBuilder(" from forum_post p");
         StringBuilder where = new StringBuilder(" where true");
         String order =
@@ -86,14 +94,20 @@ public class PostFeedRepository {
      * One page of official posts, newest first (BR-61).
      *
      * @param includeHidden whether hidden announcements are listed too, as the administration console lists them
+     * @param category only official posts of this category, or {@code null} for all (D-99)
      */
-    public FeedPage official(boolean includeHidden, Pageable page) {
+    public FeedPage official(boolean includeHidden, OfficialCategory category, Pageable page) {
+        Map<String, Object> params = new HashMap<>();
         String from = " from forum_post p where p.is_official and p.post_status "
                 + (includeHidden ? "in ('PUBLISHED', 'HIDDEN')" : "= 'PUBLISHED'");
+        if (category != null) {
+            from += " and p.official_category = :category";
+            params.put("category", category.name());
+        }
         return page(
                 "select p.post_id" + from + " order by p.created_at desc, p.post_id desc",
                 "select count(*)" + from,
-                new HashMap<>(),
+                params,
                 page);
     }
 
@@ -115,7 +129,7 @@ public class PostFeedRepository {
                                           and e.user_id = :caller and e.action_type = 'SAVE') as saved
                           from forum_post p
                          where p.post_id in (:posts)""")
-                .param("caller", caller)
+                .param("caller", caller == null ? NOBODY : caller)
                 .param("posts", postIds)
                 .query((row, index) -> result.put(
                         row.getObject("post_id", UUID.class),
@@ -126,6 +140,29 @@ public class PostFeedRepository {
                                 row.getBoolean("saved"))))
                 .list();
         return result;
+    }
+
+    /** How much the published posts talk about one coin, counted from {@code now} back (D-99). */
+    public CoinDiscussion coinDiscussion(UUID coinId, Instant now) {
+        return sql.sql("""
+                        select count(*) filter (where p.created_at >= :day) as day,
+                               count(*) filter (where p.created_at >= :week) as week,
+                               count(*) as total,
+                               max(p.created_at) as last_at
+                          from forum_post p
+                          join post_coin c on c.post_id = p.post_id
+                         where c.coin_id = :coin and p.post_status = 'PUBLISHED'""")
+                .param("coin", coinId)
+                .param("day", Timestamp.from(now.minus(Duration.ofDays(1))))
+                .param("week", Timestamp.from(now.minus(Duration.ofDays(7))))
+                .query((row, index) -> new CoinDiscussion(
+                        row.getLong("day"),
+                        row.getLong("week"),
+                        row.getLong("total"),
+                        row.getTimestamp("last_at") == null
+                                ? null
+                                : row.getTimestamp("last_at").toInstant()))
+                .single();
     }
 
     /** The coin keys each of these posts is tagged with; a post without tags is left out. */

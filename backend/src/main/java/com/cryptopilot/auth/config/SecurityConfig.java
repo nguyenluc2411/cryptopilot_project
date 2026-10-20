@@ -162,6 +162,20 @@ public class SecurityConfig {
      */
     static final String PUBLIC_MARKET_DATA = "/api/v1/market/**";
 
+    /**
+     * The community a Guest reads (D-99, the registered topic: "view public forum posts and coin-related
+     * discussions"): the feed, the pinned posts, a post, its comments and the discussion of a coin. Read-only;
+     * writing, liking, saving and reporting stay in {@link #TRADER_AREA}, and the SAVED and MINE tabs answer
+     * MSG44 to a caller without a session.
+     */
+    static final String[] PUBLIC_COMMUNITY = {
+        "/api/v1/posts",
+        "/api/v1/posts/pinned",
+        "/api/v1/posts/*",
+        "/api/v1/posts/*/comments",
+        "/api/v1/posts/coins/*/discussion"
+    };
+
     /** Liveness and readiness. Narrower than {@code /actuator/**}, which describes the application. */
     static final String[] PUBLIC_HEALTH_PROBES = {"/actuator/health", "/actuator/health/**"};
 
@@ -234,6 +248,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(requests -> requests.requestMatchers(HttpMethod.POST, PUBLIC_AUTH_ENDPOINTS)
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, PUBLIC_MARKET_DATA)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_COMMUNITY)
                         .permitAll()
                         .requestMatchers(PUBLIC_HEALTH_PROBES)
                         .permitAll()

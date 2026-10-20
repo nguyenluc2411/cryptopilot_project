@@ -1,6 +1,7 @@
 package com.cryptopilot.community.entity;
 
 import com.cryptopilot.common.entity.BaseEntity;
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.model.enums.PostStatus;
 import com.cryptopilot.community.model.enums.PostType;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -72,6 +73,11 @@ public class ForumPost extends BaseEntity {
     @Column(name = "is_official", nullable = false, updatable = false)
     private boolean official;
 
+    /** What an official post is (D-99); {@code null} for a Trader's post. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "official_category", length = 32)
+    private OfficialCategory officialCategory;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "post_status", nullable = false, length = 32)
     private PostStatus status;
@@ -99,12 +105,26 @@ public class ForumPost extends BaseEntity {
         return post;
     }
 
-    /** An administrator's announcement, published at once and pinned (UC-44, BR-61). */
+    /** An administrator's official post of a category, published at once and pinned (UC-44, BR-61, D-99). */
     public static ForumPost announce(
-            UUID adminId, String title, String content, MarketType marketType, Collection<UUID> coinIds) {
+            UUID adminId,
+            OfficialCategory category,
+            String title,
+            String content,
+            MarketType marketType,
+            Collection<UUID> coinIds) {
         ForumPost post = new ForumPost(adminId, true);
+        post.categorize(category);
         post.revise(title, content, marketType, coinIds);
         return post;
+    }
+
+    /** Changes what an official post is (D-99). */
+    public void categorize(OfficialCategory category) {
+        if (!official) {
+            throw new IllegalStateException("post " + getId() + " is not official and has no category");
+        }
+        this.officialCategory = Objects.requireNonNull(category, "category must not be null");
     }
 
     /**
@@ -148,6 +168,14 @@ public class ForumPost extends BaseEntity {
             throw new IllegalStateException("post " + getId() + " is " + status + ", not hidden");
         }
         this.status = PostStatus.PUBLISHED;
+    }
+
+    /**
+     * Removes a reported post for everyone but Admin (UC-43, REMOVE_POST, D-99): it becomes DELETED as if its author
+     * had deleted it.
+     */
+    public void remove() {
+        this.status = PostStatus.DELETED;
     }
 
     /** Deletes the post for everyone but Admin (BR-47); deleting it again changes nothing. */

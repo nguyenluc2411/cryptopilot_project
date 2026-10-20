@@ -13,6 +13,9 @@ public enum AuditAction {
     ROLE_CHANGED,
     POST_HIDDEN,
     POST_RESTORED,
+
+    /** A moderator removed a reported post (UC-43, REMOVE_POST, D-99). */
+    POST_REMOVED,
     REPORTS_DISMISSED,
 
     /** A moderator warned the author of a reported post (UC-43, WARN_USER). */

@@ -61,6 +61,9 @@ class PostMediaApiTest {
     /** The PREMIUM package of 30 days that V11 seeded. */
     private static final UUID PREMIUM_PACKAGE = UUID.fromString("019b76da-a800-7002-8000-000000000004");
 
+    /** The PRO package of 30 days that V11 seeded. */
+    private static final UUID PRO_PACKAGE = UUID.fromString("019b76da-a800-7002-8000-000000000002");
+
     @TestConfiguration(proxyBeanMethods = false)
     static class Storage {
 
@@ -128,14 +131,19 @@ class PostMediaApiTest {
     }
 
     @Test
-    void BR43_aVideoForm_needsThePremiumPlan() throws Exception {
+    void BR43_aVideoForm_needsAPaidPlan() throws Exception {
         UUID free = trader();
+        UUID pro = trader();
         UUID premium = trader();
+        subscribe(pro, PRO_PACKAGE);
         subscribeToPremium(premium);
 
         as(free, post(SIGN), "{\"mediaType\": \"VIDEO\"}")
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.messageCode").value("MSG29"));
+                .andExpect(jsonPath("$.messageCode").value("MSG29"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("PRO"));
+        // D-99: the registered topic gives video posting to every active paid package.
+        as(pro, post(SIGN), "{\"mediaType\": \"VIDEO\"}").andExpect(status().isOk());
         as(premium, post(SIGN), "{\"mediaType\": \"VIDEO\"}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.allowedFormats[0]").value("mp4"))
@@ -478,6 +486,11 @@ class PostMediaApiTest {
 
     /** A PAID order for the PREMIUM package and an ACTIVE subscription that started a day ago. */
     private void subscribeToPremium(UUID trader) {
+        subscribe(trader, PREMIUM_PACKAGE);
+    }
+
+    /** A PAID order for a package and an ACTIVE subscription that started a day ago. */
+    private void subscribe(UUID trader, UUID packageId) {
         Instant start = Instant.now().minus(Duration.ofDays(1));
         UUID order = UUID.randomUUID();
         sql.sql("""
@@ -488,7 +501,7 @@ class PostMediaApiTest {
                 .params(
                         order,
                         trader,
-                        PREMIUM_PACKAGE,
+                        packageId,
                         "T061-" + order,
                         Timestamp.from(start),
                         Timestamp.from(start),

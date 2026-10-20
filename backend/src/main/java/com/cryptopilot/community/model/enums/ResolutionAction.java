@@ -10,6 +10,9 @@ public enum ResolutionAction {
     /** The post is hidden. */
     HIDE_POST,
 
+    /** The post is removed: deleted for everyone but Admin (D-99, "hide or remove"). */
+    REMOVE_POST,
+
     /** The reports are dismissed; the post stays. */
     DISMISS,
 

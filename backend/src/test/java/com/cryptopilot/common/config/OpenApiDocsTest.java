@@ -102,9 +102,10 @@ class OpenApiDocsTest {
             "/api/v1/admin/reports-queue/{postId}",
             "/api/v1/admin/reports-queue/{postId}/decision",
             "/api/v1/admin/posts/{id}",
-            "/api/v1/admin/posts/{id}/restore");
+            "/api/v1/admin/posts/{id}/restore",
+            "/api/v1/posts/coins/{symbol}/discussion");
 
-    private static final int OPERATIONS = 89;
+    private static final int OPERATIONS = 90;
 
     @Autowired
     private MockMvc mvc;

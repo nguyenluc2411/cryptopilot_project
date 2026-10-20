@@ -5,6 +5,7 @@ import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.repository.ForumPostRepository;
 import com.cryptopilot.community.repository.PostFeedRepository;
 import com.cryptopilot.community.service.AnnouncementService;
@@ -32,9 +33,10 @@ public class AnnouncementServiceImpl implements AnnouncementService {
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<PostSummaryResponse> list(UUID admin, Integer page, Integer pageSize) {
+    public PageResponse<PostSummaryResponse> list(
+            UUID admin, OfficialCategory category, Integer page, Integer pageSize) {
         PageRequest request = Paging.of(page, pageSize);
-        return assembler.page(feeds.official(true, request), request, admin);
+        return assembler.page(feeds.official(true, category, request), request, admin);
     }
 
     @Override

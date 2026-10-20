@@ -146,7 +146,11 @@ public class CommentServiceImpl implements CommentService {
         for (Object[] row : engagements.countLikesByComment(ids)) {
             likes.put((UUID) row[0], ((Number) row[1]).longValue());
         }
-        return new Context(authors, likes, new HashSet<>(engagements.commentsLikedBy(ids, caller)), caller);
+        return new Context(
+                authors,
+                likes,
+                caller == null ? Set.of() : new HashSet<>(engagements.commentsLikedBy(ids, caller)),
+                caller);
     }
 
     private static CommentResponse response(ForumComment comment, Context context, List<CommentResponse> replies) {

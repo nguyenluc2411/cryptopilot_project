@@ -3,9 +3,11 @@ package com.cryptopilot.community.controller;
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.community.dto.request.PostRequest;
+import com.cryptopilot.community.dto.response.CoinDiscussionResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.model.enums.FeedTab;
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.service.PostService;
 import com.cryptopilot.market.model.enums.MarketType;
 import io.swagger.v3.oas.annotations.Operation;
@@ -32,12 +34,13 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The community posts of SCR-24 to SCR-26 (UC-26, UC-27, UC-29), Trader only. A post the caller may not see or change
- * answers 404, whatever the reason (BR-47).
+ * The community posts of SCR-24 to SCR-26 (UC-26, UC-27, UC-29). A Guest reads the feed, the pinned posts, a post and
+ * a coin's discussion (D-99); writing is for Traders. A post the caller may not see or change answers 404, whatever
+ * the reason (BR-47).
  *
  * <p>Rule: UC-26, UC-27, UC-29; BR-47, BR-61; SRS 3.7.1, 3.7.2; TECHNICAL_DESIGN 8.
  */
-@Tag(name = "Community", description = "Posts of SCR-24 to SCR-26 (UC-26, UC-27, UC-29). Trader.")
+@Tag(name = "Community", description = "Posts of SCR-24 to SCR-26 (UC-26, UC-27, UC-29). Guest reads, Trader writes.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequestMapping("/api/v1/posts")
@@ -71,9 +74,19 @@ public class PostController {
     @GetMapping("/pinned")
     public PageResponse<PostSummaryResponse> pinned(
             @AuthenticationPrincipal Jwt caller,
+            @Parameter(description = "Only official posts of this category (D-99)") @RequestParam(required = false)
+                    OfficialCategory category,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer pageSize) {
-        return service.pinned(callerOf(caller), page, pageSize);
+        return service.pinned(callerOf(caller), category, page, pageSize);
+    }
+
+    @Operation(summary = "How much the community talks about a coin, for the coin page (D-99); public")
+    @ApiResponse(responseCode = "200", description = "Published posts tagged with the coin: last day, last week, all")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such coin")
+    @GetMapping("/coins/{symbol}/discussion")
+    public CoinDiscussionResponse coinDiscussion(@PathVariable String symbol) {
+        return service.coinDiscussion(symbol);
     }
 
     @Operation(summary = "A post with its full text (SCR-25)")
@@ -116,7 +129,8 @@ public class PostController {
         service.delete(callerOf(caller), id);
     }
 
+    /** The caller's account, or {@code null} for a Guest on a public read (D-99). */
     private static UUID callerOf(Jwt caller) {
-        return UUID.fromString(caller.getSubject());
+        return caller == null ? null : UUID.fromString(caller.getSubject());
     }
 }

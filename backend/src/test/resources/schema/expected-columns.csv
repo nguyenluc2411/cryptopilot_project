@@ -135,6 +135,7 @@ forum_post,content,text,,,NO
 forum_post,created_at,timestamp with time zone,,,NO
 forum_post,is_official,boolean,,,NO
 forum_post,market_type,character varying,,,YES
+forum_post,official_category,character varying,,,YES
 forum_post,post_id,uuid,,,NO
 forum_post,post_status,character varying,,,NO
 forum_post,post_type,character varying,,,NO

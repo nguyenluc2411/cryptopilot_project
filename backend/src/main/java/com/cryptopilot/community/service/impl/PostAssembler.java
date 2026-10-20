@@ -111,6 +111,7 @@ public class PostAssembler {
                 post.getPostType(),
                 post.getMarketType(),
                 post.isOfficial(),
+                post.getOfficialCategory(),
                 post.getStatus(),
                 coins(post.getCoinIds(), symbols),
                 media.findAllByPostIdOrderBySortOrderAsc(post.getId()).stream()
@@ -135,6 +136,7 @@ public class PostAssembler {
                 post.getPostType(),
                 post.getMarketType(),
                 post.isOfficial(),
+                post.getOfficialCategory(),
                 post.getStatus(),
                 coins,
                 cover,

@@ -49,7 +49,8 @@ import org.springframework.transaction.annotation.Transactional;
  * The moderation queue and its decisions (UC-43).
  *
  * <p>A decision resolves every OPEN and REVIEWING report of the post together, with the moderator, the action and the
- * time. HIDE_POST hides the post; BAN_USER hides it and bans its author, which ends every session of the author
+ * time. HIDE_POST hides the post; REMOVE_POST deletes it for everyone but Admin (D-99, the registered topic's "hide
+ * or remove"), keeping its files as the evidence of the decision; BAN_USER hides it and bans its author, which ends every session of the author
  * (BR-06) in the same transaction; WARN_USER and DISMISS leave the post as it is. The decision, the hidden post and the
  * ban are each written to the audit log in that transaction (BR-57), and {@link PostModerated} tells the author and
  * the reporters after it commits. A hidden post can be restored.
@@ -129,6 +130,7 @@ public class ModerationServiceImpl implements ModerationService {
         boolean banned = false;
         switch (action) {
             case HIDE_POST -> hide(moderator, post, before, request.note());
+            case REMOVE_POST -> remove(moderator, post, before, request.note());
             case BAN_USER -> {
                 hide(moderator, post, before, request.note());
                 banned = users.banForModeration(post.getAuthorId(), now);
@@ -197,6 +199,19 @@ public class ModerationServiceImpl implements ModerationService {
     @Transactional(readOnly = true)
     public PostDetailResponse post(UUID moderator, UUID postId) {
         return assembler.detail(post(postId), moderator);
+    }
+
+    private void remove(UUID moderator, ForumPost post, PostStatus before, String note) {
+        post.remove();
+        if (post.getStatus() != before) {
+            audit(
+                    moderator,
+                    AuditAction.POST_REMOVED,
+                    AuditedEntity.FORUM_POST,
+                    post.getId(),
+                    Map.of("postStatus", before.name()),
+                    values("postStatus", post.getStatus().name(), post, note));
+        }
     }
 
     private void hide(UUID moderator, ForumPost post, PostStatus before, String note) {

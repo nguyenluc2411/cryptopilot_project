@@ -1,15 +1,20 @@
 package com.cryptopilot.community.service.impl;
 
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.community.dto.request.PostRequest;
+import com.cryptopilot.community.dto.response.CoinDiscussionResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.entity.ForumPost;
+import com.cryptopilot.community.model.CoinDiscussion;
 import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.FeedQuery;
 import com.cryptopilot.community.model.enums.FeedTab;
+import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.repository.ForumPostRepository;
 import com.cryptopilot.community.repository.PostFeedRepository;
 import com.cryptopilot.community.service.PostService;
@@ -61,6 +66,9 @@ public class PostServiceImpl implements PostService {
     @Transactional(readOnly = true)
     public PageResponse<PostSummaryResponse> feed(
             UUID caller, FeedTab tab, String coin, MarketType market, Integer page, Integer pageSize) {
+        if (caller == null && (tab == FeedTab.SAVED || tab == FeedTab.MINE)) {
+            throw new BusinessException(ErrorCode.AUTHENTICATION_REQUIRED, "the " + tab + " tab is a Trader's own");
+        }
         PageRequest request = Paging.of(page, pageSize);
         UUID coinId = null;
         if (coin != null && !coin.isBlank()) {
@@ -78,9 +86,26 @@ public class PostServiceImpl implements PostService {
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<PostSummaryResponse> pinned(UUID caller, Integer page, Integer pageSize) {
+    public PageResponse<PostSummaryResponse> pinned(
+            UUID caller, OfficialCategory category, Integer page, Integer pageSize) {
         PageRequest request = Paging.of(page, pageSize);
-        return assembler.page(feeds.official(false, request), request, caller);
+        return assembler.page(feeds.official(false, category, request), request, caller);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public CoinDiscussionResponse coinDiscussion(String symbol) {
+        CoinListing coin = market.coinsBySymbol(List.of(symbol.strip().toUpperCase(Locale.ROOT))).stream()
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Coin", symbol));
+        CoinDiscussion discussion = feeds.coinDiscussion(coin.coinId(), clock.instant());
+        return new CoinDiscussionResponse(
+                coin.symbol(),
+                coin.name(),
+                discussion.postsLastDay(),
+                discussion.postsLastWeek(),
+                discussion.totalPosts(),
+                discussion.lastPostAt());
     }
 
     @Override

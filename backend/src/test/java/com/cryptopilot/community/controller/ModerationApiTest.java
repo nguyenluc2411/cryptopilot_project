@@ -202,6 +202,29 @@ class ModerationApiTest {
     }
 
     @Test
+    void D99_removePost_deletesThePostForEveryoneButAdmin_andIsAudited() throws Exception {
+        UUID admin = admin();
+        UUID author = trader();
+        String post = newPost(author);
+        report(trader(), post, "SCAM");
+
+        decide(admin, post, "{\"action\": \"REMOVE_POST\", \"note\": \"Fraud\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.postStatus").value("DELETED"))
+                .andExpect(jsonPath("$.authorBanned").value(false));
+
+        assertThat(postStatus(post)).isEqualTo("DELETED");
+        assertThat(statuses(post)).containsOnly("RESOLVED");
+        assertThat(audits(admin)).containsExactly("POST_REMOVED");
+        as(author, UserRole.TRADER, get(POSTS + "/" + post)).andExpect(status().isNotFound());
+        as(admin, UserRole.ADMIN, get("/api/v1/admin/posts/" + post))
+                .andExpect(jsonPath("$.status").value("DELETED"));
+        // A removed post is not restored like a hidden one.
+        as(admin, UserRole.ADMIN, post("/api/v1/admin/posts/" + post + "/restore"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
     void UC43_warnAndDismiss_leaveThePostPublished_andAreAudited() throws Exception {
         UUID admin = admin();
         String warned = newPost(trader());
