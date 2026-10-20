@@ -141,19 +141,7 @@ class AlertApiTest {
         List<UUID> all = new ArrayList<>(pairs);
         all.add(spotOnlyPair);
         all.add(unlistedPair);
-        for (UUID pair : all) {
-            List<UUID> coins = sql.sql("select base_coin_id from crypto_pair where pair_id = ?")
-                    .param(pair)
-                    .query(UUID.class)
-                    .list();
-            sql.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
-            for (UUID coin : coins) {
-                sql.sql("""
-                                delete from coin where coin_id = ?
-                                   and not exists (select 1 from crypto_pair
-                                                    where base_coin_id = coin.coin_id or quote_coin_id = coin.coin_id)""").param(coin).update();
-            }
-        }
+        all.forEach(market::remove);
     }
 
     // ------------------------------------------------------------------------------------------

@@ -418,9 +418,18 @@ class SchemaConstraintTest {
         return id;
     }
 
+    /** Reuses a coin another test class left behind, so these constraints do not depend on its cleanup. */
+    private UUID storedCoin(String symbol) {
+        return jdbc.sql("select coin_id from coin where symbol = ?")
+                .param(symbol)
+                .query(UUID.class)
+                .optional()
+                .orElseGet(() -> insertCoin(symbol));
+    }
+
     private UUID insertPair(String symbol) {
-        UUID base = insertCoin(symbol.replace("USDT", ""));
-        UUID quote = insertCoin("USDT");
+        UUID base = storedCoin(symbol.replace("USDT", ""));
+        UUID quote = storedCoin("USDT");
         UUID id = UUID.randomUUID();
         jdbc.sql("""
                         insert into crypto_pair (pair_id, base_coin_id, quote_coin_id, symbol,
