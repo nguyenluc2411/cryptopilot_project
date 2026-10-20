@@ -332,7 +332,13 @@ public enum ErrorCode {
      * A Trader cannot report their own post (BR-46); the client offers no Report on it. Borrows MSG43 (A-38): SRS 5.3
      * has no message for it. 409: the request is valid and the post's author refuses it.
      */
-    POST_REPORT_OWN_POST(HttpStatus.CONFLICT, "MSG43");
+    POST_REPORT_OWN_POST(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * Only a hidden post can be restored (UC-43); this one is published or deleted. Borrows MSG43 (A-38). 409: the
+     * request is valid and the post's status refuses it.
+     */
+    POST_NOT_HIDDEN(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

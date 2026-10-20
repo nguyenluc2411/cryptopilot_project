@@ -131,6 +131,25 @@ public class ForumPost extends BaseEntity {
         this.postType = Objects.requireNonNull(type, "type must not be null");
     }
 
+    /** Hides the post from everyone but its author and Admin (UC-43, BR-47); a deleted post stays deleted. */
+    public void hide() {
+        if (status == PostStatus.PUBLISHED) {
+            this.status = PostStatus.HIDDEN;
+        }
+    }
+
+    /**
+     * Shows a hidden post again (UC-43).
+     *
+     * @throws IllegalStateException when the post is not hidden
+     */
+    public void restore() {
+        if (status != PostStatus.HIDDEN) {
+            throw new IllegalStateException("post " + getId() + " is " + status + ", not hidden");
+        }
+        this.status = PostStatus.PUBLISHED;
+    }
+
     /** Deletes the post for everyone but Admin (BR-47); deleting it again changes nothing. */
     public void delete() {
         this.status = PostStatus.DELETED;

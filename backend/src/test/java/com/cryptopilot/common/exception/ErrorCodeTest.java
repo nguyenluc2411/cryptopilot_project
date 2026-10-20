@@ -58,7 +58,8 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.MEDIA_INVALID, "MSG32 400"),
             Map.entry(ErrorCode.MEDIA_STORAGE_UNAVAILABLE, "MSG43 503"),
             Map.entry(ErrorCode.POST_ALREADY_REPORTED, "MSG34 409"),
-            Map.entry(ErrorCode.POST_REPORT_OWN_POST, "MSG43 409"));
+            Map.entry(ErrorCode.POST_REPORT_OWN_POST, "MSG43 409"),
+            Map.entry(ErrorCode.POST_NOT_HIDDEN, "MSG43 409"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

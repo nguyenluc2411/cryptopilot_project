@@ -77,6 +77,24 @@ public class PostReport extends BaseEntity {
         this.status = ReportStatus.OPEN;
     }
 
+    /** Marks an OPEN report as being looked at by a moderator (UC-43); any other report is left as it is. */
+    public void review() {
+        if (status == ReportStatus.OPEN) {
+            this.status = ReportStatus.REVIEWING;
+        }
+    }
+
+    /** Records the moderator's decision on a report that is not resolved yet (UC-43). */
+    public void resolve(UUID moderatorId, ResolutionAction action, Instant at) {
+        if (status == ReportStatus.RESOLVED) {
+            throw new IllegalStateException("report " + getId() + " is resolved already");
+        }
+        this.resolvedBy = Objects.requireNonNull(moderatorId, "moderatorId must not be null");
+        this.resolutionAction = Objects.requireNonNull(action, "action must not be null");
+        this.resolvedAt = Objects.requireNonNull(at, "at must not be null");
+        this.status = ReportStatus.RESOLVED;
+    }
+
     /** Files an OPEN report of a post; {@code description} is required for {@link ReportReason#OTHER}. */
     public static PostReport file(UUID postId, UUID reporterId, ReportReason reason, String description) {
         return new PostReport(postId, reporterId, reason, description);
