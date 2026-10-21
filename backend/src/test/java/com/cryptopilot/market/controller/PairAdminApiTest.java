@@ -1,6 +1,7 @@
 package com.cryptopilot.market.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -14,10 +15,12 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.ExchangeSymbol;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -94,6 +97,7 @@ class PairAdminApiTest {
                     .update();
         }
         sql.sql("delete from audit_log where user_id = ?").param(admin).update();
+        InAppNotifications.remove(sql, accounts);
         for (UUID pair : pairs) {
             market.remove(pair);
         }
@@ -186,6 +190,13 @@ class PairAdminApiTest {
 
         assertThat(planStatus(active)).isEqualTo("CANCELLED");
         assertThat(planStatus(draft)).isEqualTo("DRAFT");
+        // The owner is told, once the change has committed.
+        await().atMost(Duration.ofSeconds(10)).until(() -> notificationsOf(trader) > 0);
+        assertThat(sql.sql("select notification_type || ':' || reference_id from notification where user_id = ?")
+                        .param(trader)
+                        .query(String.class)
+                        .list())
+                .containsExactly("PLAN:" + active);
         assertThat(marketApi.tradablePair(pair, com.cryptopilot.market.model.enums.MarketType.SPOT))
                 .isEmpty();
     }
@@ -348,6 +359,13 @@ class PairAdminApiTest {
                         values (?, ?, ?, ?, 'SIMULATED', 'SPOT', 'LONG', 100, 1, ?, 'OPEN', ?, ?)""")
                 .params(UUID.randomUUID(), trader, pair, plan, now, now, now)
                 .update();
+    }
+
+    private long notificationsOf(UUID user) {
+        return sql.sql("select count(*) from notification where user_id = ?")
+                .param(user)
+                .query(Long.class)
+                .single();
     }
 
     private String planStatus(UUID plan) {
