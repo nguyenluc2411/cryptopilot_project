@@ -3,6 +3,7 @@ package com.cryptopilot.market;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -72,6 +73,28 @@ public final class MarketTestData {
             "technical_indicator", "ohlcv", "spot_market_data", "futures_market_data", "crypto_pair", "coin"
         }) {
             sql.sql("delete from " + table).update();
+        }
+    }
+
+    /**
+     * Removes one pair written by {@link #pair}, its market rows, and both of its coins unless another pair still
+     * quotes or bases on them. Rows of other modules that point at the pair must be gone first.
+     */
+    public void remove(UUID pairId) {
+        List<UUID> coins = sql.sql("select base_coin_id from crypto_pair where pair_id = ?"
+                        + " union select quote_coin_id from crypto_pair where pair_id = ?")
+                .params(pairId, pairId)
+                .query(UUID.class)
+                .list();
+        for (String table : new String[] {"technical_indicator", "ohlcv", "spot_market_data", "futures_market_data"}) {
+            sql.sql("delete from " + table + " where pair_id = ?").param(pairId).update();
+        }
+        sql.sql("delete from crypto_pair where pair_id = ?").param(pairId).update();
+        for (UUID coin : coins) {
+            sql.sql("""
+                            delete from coin where coin_id = ?
+                               and not exists (select 1 from crypto_pair
+                                                where base_coin_id = coin.coin_id or quote_coin_id = coin.coin_id)""").param(coin).update();
         }
     }
 

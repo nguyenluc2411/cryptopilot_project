@@ -13,6 +13,7 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Estimates the margin and the liquidation price of an isolated, one-way Futures position, fees ignored. The
@@ -41,10 +42,8 @@ public final class LiquidationCalculator {
     public static LiquidationOutcome calculate(LiquidationInput in) {
         BigDecimal quantity = in.quantity();
         BigDecimal notional = quantity.multiply(in.entryPrice());
-        LeverageBracket bracket = withMaintenanceAmounts(in.brackets()).stream()
-                .filter(b -> b.contains(notional))
-                .findFirst()
-                .orElse(null);
+        LeverageBracket bracket =
+                positionBracket(in.brackets(), quantity, in.entryPrice()).orElse(null);
         if (bracket == null) {
             return reject("notional", "the notional " + notional + " is above the largest leverage bracket");
         }
@@ -57,8 +56,7 @@ public final class LiquidationCalculator {
         BigDecimal mmr = bracket.maintenanceMarginRate();
         BigDecimal cum = bracket.maintenanceAmount();
         BigDecimal initialMargin = Rounding.divide(notional, BigDecimal.valueOf(in.leverage()));
-        // Maintenance margin of the bracket: MM = N × MMR − cum.
-        BigDecimal maintenanceMargin = notional.multiply(mmr).subtract(cum);
+        BigDecimal maintenanceMargin = bracket.maintenanceMargin(notional);
 
         // Liquidated where WB + Q × (LP − E) = Q × LP × MMR − cum for LONG, and the mirror for SHORT:
         //   LONG:  LP = (Q × E − WB − cum) / (Q × (1 − MMR))
@@ -86,6 +84,29 @@ public final class LiquidationCalculator {
                 liquidationPrice,
                 initialMargin.compareTo(in.capital()) > 0,
                 stopBeyondLiquidation);
+    }
+
+    /**
+     * The bracket of a position's entry notional, {@code quantity × entry price}: the one its margin and liquidation
+     * price are derived from, and whose maintenance margin caps the clearance fee of a liquidation (Q-58).
+     *
+     * <p>Rule: BR-26, BR-27; TECHNICAL_DESIGN 7.6 and 7.8.
+     */
+    public static Optional<LeverageBracket> positionBracket(
+            List<LeverageBracket> brackets, BigDecimal quantity, BigDecimal entryPrice) {
+        return bracketFor(brackets, quantity.multiply(entryPrice));
+    }
+
+    /**
+     * The bracket that contains the notional, with its maintenance amount filled in, or empty when the notional is
+     * above the largest bracket.
+     *
+     * <p>Rule: BR-26, BR-27; TECHNICAL_DESIGN 7.6.
+     */
+    public static Optional<LeverageBracket> bracketFor(List<LeverageBracket> brackets, BigDecimal notional) {
+        return withMaintenanceAmounts(brackets).stream()
+                .filter(b -> b.contains(notional))
+                .findFirst();
     }
 
     /**
