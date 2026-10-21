@@ -38,7 +38,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 /**
  * The limits of ADR-014 at the HTTP edge: sign-in per client address, the other public auth calls per client address,
- * authenticated calls per account; over the limit, 429 with {@code Retry-After} and the standard problem body.
+ * authenticated calls per account, calls without an account per client address; over the limit, 429 with {@code Retry-After} and the standard problem body.
  *
  * <p>Rule: TECHNICAL_DESIGN 5.3; ADR-014.
  */
@@ -48,7 +48,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
             "cryptopilot.web.rate-limit.login=2",
             "cryptopilot.web.rate-limit.auth=3",
             "cryptopilot.web.rate-limit.api=2",
-            "cryptopilot.web.rate-limit.paper-orders=3"
+            "cryptopilot.web.rate-limit.paper-orders=3",
+            "cryptopilot.web.rate-limit.guest=2"
         })
 @AutoConfigureMockMvc
 @Import({TestcontainersConfig.class, RateLimitFilterTest.TestClock.class})
@@ -176,7 +177,20 @@ class RateLimitFilterTest {
     }
 
     @Test
-    void TD53_publicReadsAndRefusedCalls_areNotCounted() throws Exception {
+    void D99_aGuestsReads_areLimitedPerClientAddress_apartFromAnyAccount() throws Exception {
+        guestRead("203.0.113.7").andExpect(status().isOk());
+        guestRead("203.0.113.7").andExpect(status().isOk());
+        guestRead("203.0.113.7")
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().exists(HttpHeaders.RETRY_AFTER))
+                .andExpect(jsonPath("$.code").value("RATE_LIMITED"));
+
+        guestRead("203.0.113.8").andExpect(status().isOk());
+        watchlist(bearer(UUID.randomUUID())).andExpect(status().isOk());
+    }
+
+    @Test
+    void TD53_healthChecksAndRefusedCalls_areNotCounted() throws Exception {
         for (int i = 0; i < 5; i++) {
             mvc.perform(get("/actuator/health")).andExpect(status().isOk());
             mvc.perform(get("/api/v1/watchlist")).andExpect(status().isUnauthorized());
@@ -187,6 +201,10 @@ class RateLimitFilterTest {
         return mvc.perform(withPeer(post("/api/v1/auth/login"), peer)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(LOGIN));
+    }
+
+    private ResultActions guestRead(String peer) throws Exception {
+        return mvc.perform(withPeer(get("/api/v1/posts/pinned"), peer));
     }
 
     private ResultActions refresh(String peer) throws Exception {

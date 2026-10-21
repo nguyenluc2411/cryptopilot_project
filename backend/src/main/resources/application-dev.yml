@@ -32,6 +32,7 @@ cryptopilot:
       auth: ${RATE_LIMIT_AUTH:200}
       api: ${RATE_LIMIT_API:1200}
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:500}
+      guest: ${RATE_LIMIT_GUEST:3000}
   media:
     sweep:
       # Runs in this profile: files no post carries are deleted from Cloudinary daily.

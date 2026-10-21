@@ -146,12 +146,15 @@ cryptopilot:
       allowed-origins: ${CORS_ALLOWED_ORIGINS:}
     rate-limit:
       # ADR-014: requests per one-minute window and subject (login and the other public auth calls per client address,
-      # authenticated calls per account). Off here so a test context is not limited; on in the dev and prod profiles.
+      # authenticated calls per account, calls without an account per client address). Off here so a test context is
+      # not limited; on in the dev and prod profiles.
       enabled: false
       window: 1m
       login: ${RATE_LIMIT_LOGIN:10}
       auth: ${RATE_LIMIT_AUTH:20}
       api: ${RATE_LIMIT_API:120}
+      # Guests (public market data and forum reads, D-99), per client address: several Guests may share one.
+      guest: ${RATE_LIMIT_GUEST:300}
       # Placing a paper order is counted apart from the calls above, in a window of its own, as Binance does (50 new
       # orders in 10 seconds); cancels and reads are not counted.
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:50}
