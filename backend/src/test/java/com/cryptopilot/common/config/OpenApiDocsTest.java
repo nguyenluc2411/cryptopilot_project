@@ -112,9 +112,11 @@ class OpenApiDocsTest {
             "/api/v1/admin/pairs",
             "/api/v1/admin/pairs/exchange-symbols",
             "/api/v1/admin/pairs/{id}",
-            "/api/v1/admin/pairs/{id}/brackets");
+            "/api/v1/admin/pairs/{id}/brackets",
+            "/api/v1/admin/settings",
+            "/api/v1/admin/settings/{key}");
 
-    private static final int OPERATIONS = 102;
+    private static final int OPERATIONS = 105;
 
     @Autowired
     private MockMvc mvc;
