@@ -4,13 +4,17 @@ import com.cryptopilot.billing.EffectivePlan;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.billing.model.enums.PlanTier;
+import com.cryptopilot.billing.repository.SubscriberRepository;
 import com.cryptopilot.billing.repository.SubscriptionPackageRepository;
 import com.cryptopilot.billing.service.EntitlementService;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import java.time.Clock;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -39,6 +43,7 @@ public class EntitlementServiceImpl implements EntitlementService {
     private static final Logger log = LoggerFactory.getLogger(EntitlementServiceImpl.class);
 
     private final SubscriptionPackageRepository packages;
+    private final SubscriberRepository subscribers;
     private final Clock clock;
 
     @Override
@@ -54,6 +59,16 @@ public class EntitlementServiceImpl implements EntitlementService {
         }
         SubscriptionPackage plan = held.isEmpty() ? freePackage() : held.getFirst();
         return new EffectivePlan(plan.getTier(), plan.entitlements());
+    }
+
+    @Override
+    public Map<UUID, PlanTier> paidTiers(Collection<UUID> userIds) {
+        return subscribers.tiersOf(userIds, clock.instant());
+    }
+
+    @Override
+    public Set<UUID> holdersOf(PlanTier tier) {
+        return tier == PlanTier.FREE ? Set.of() : subscribers.holdersOf(tier, clock.instant());
     }
 
     @Override

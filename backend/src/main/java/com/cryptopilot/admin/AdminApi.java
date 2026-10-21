@@ -1,5 +1,9 @@
 package com.cryptopilot.admin;
 
+import com.cryptopilot.admin.model.enums.AuditedEntity;
+import java.util.List;
+import java.util.UUID;
+
 /**
  * What the {@code admin} module offers other modules for the audit trail: one call that records an administrative or
  * security-relevant action in {@code audit_log}. This module owns the table and is the only one that writes it; the
@@ -16,4 +20,12 @@ public interface AdminApi {
      * @throws org.springframework.transaction.IllegalTransactionStateException when called outside a transaction
      */
     void audit(AuditEntry entry);
+
+    /**
+     * The latest entries recorded about one object, newest first, for a detail screen such as SCR-35. The values are
+     * the stored JSON text, secrets already redacted.
+     *
+     * @param limit 1 to 100
+     */
+    List<AuditRecord> recentEntries(AuditedEntity entityType, UUID entityId, int limit);
 }

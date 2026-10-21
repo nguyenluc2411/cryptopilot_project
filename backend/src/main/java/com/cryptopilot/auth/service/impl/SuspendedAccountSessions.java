@@ -32,6 +32,9 @@ public class SuspendedAccountSessions {
     public void on(AccountSuspended suspended) {
         int revoked = tokens.invalidateUnused(suspended.userId(), TokenType.REFRESH, suspended.suspendedAt());
         liveSessions.evictAccountAfterCommit(suspended.userId());
-        log.info("Account {} was banned: revoked {} sessions", suspended.userId(), revoked);
+        log.info(
+                "Account {} was banned, locked or given another role: revoked {} sessions",
+                suspended.userId(),
+                revoked);
     }
 }

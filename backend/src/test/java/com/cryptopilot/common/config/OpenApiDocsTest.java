@@ -114,9 +114,15 @@ class OpenApiDocsTest {
             "/api/v1/admin/pairs/{id}",
             "/api/v1/admin/pairs/{id}/brackets",
             "/api/v1/admin/settings",
-            "/api/v1/admin/settings/{key}");
+            "/api/v1/admin/settings/{key}",
+            "/api/v1/admin/users",
+            "/api/v1/admin/users/{id}",
+            "/api/v1/admin/users/{id}/lock",
+            "/api/v1/admin/users/{id}/unlock",
+            "/api/v1/admin/users/{id}/ban",
+            "/api/v1/admin/users/{id}/role");
 
-    private static final int OPERATIONS = 105;
+    private static final int OPERATIONS = 111;
 
     @Autowired
     private MockMvc mvc;
