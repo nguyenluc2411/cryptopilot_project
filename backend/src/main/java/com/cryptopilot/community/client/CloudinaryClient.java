@@ -7,6 +7,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
@@ -22,11 +24,12 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.util.UriComponentsBuilder;
 
 /**
  * The {@link MediaStorage} on a Cloudinary account, over its REST API: a signed upload form for the browser, the
- * Admin API to read back a stored file, and the signed {@code destroy} call. No SDK: three calls do not justify a new
- * dependency (TECHNICAL_DESIGN 1.3), and the signature is a documented hash.
+ * Admin API to read back a stored file and to list a folder, and the signed {@code destroy} call. No SDK: four calls
+ * do not justify a new dependency (TECHNICAL_DESIGN 1.3), and the signature is a documented hash.
  *
  * <p>Only the backend holds the secret. A form is signed for one {@code public_id}, the formats it may have and the
  * issue time, and Cloudinary refuses a signed form whose time is more than an hour old, so a leaked form uploads at
@@ -39,11 +42,14 @@ import org.springframework.web.client.RestClientException;
  * <p>Rule: BR-44; D-98.
  *
  * <p>Reference: Cloudinary. <i>Upload API</i> (signed uploads), <i>Admin API</i> ("Get details of a single
- * resource"), <i>Authentication signatures</i> (Cloudinary documentation, 2025).
+ * resource", "Get resources" by prefix), <i>Authentication signatures</i> (Cloudinary documentation, 2025).
  */
 public class CloudinaryClient implements MediaStorage {
 
     private static final Pattern SAFE_PUBLIC_ID = Pattern.compile("[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*");
+
+    /** Files per page of a listing: the most the Admin API returns in one call. */
+    static final int LIST_PAGE_SIZE = 500;
 
     private static final ParameterizedTypeReference<Map<String, Object>> JSON_OBJECT =
             new ParameterizedTypeReference<>() {};
@@ -140,6 +146,41 @@ public class CloudinaryClient implements MediaStorage {
         if (!"ok".equals(result) && !"not found".equals(result)) {
             throw new MediaStorageException("Cloudinary answered " + result + " to destroying " + id);
         }
+    }
+
+    @Override
+    public StoredFilePage list(PostMediaType type, String prefix, String cursor) {
+        String folder = safe(prefix);
+        UriComponentsBuilder uri = UriComponentsBuilder.fromUri(properties.apiBaseUrl())
+                .path("/v1_1/" + properties.cloudName() + "/resources/" + resourceType(type) + "/upload")
+                .queryParam("prefix", folder + "/")
+                .queryParam("max_results", LIST_PAGE_SIZE)
+                .queryParam("direction", "asc");
+        if (cursor != null) {
+            uri.queryParam("next_cursor", cursor);
+        }
+        Map<String, Object> body;
+        try {
+            body = rest.get()
+                    .uri(uri.encode().build().toUri())
+                    .header(HttpHeaders.AUTHORIZATION, basicAuth)
+                    .retrieve()
+                    .body(JSON_OBJECT);
+        } catch (RestClientException failed) {
+            throw new MediaStorageException("Cloudinary did not list " + folder + ": " + failed.getMessage(), failed);
+        }
+        if (body == null || !(body.get("resources") instanceof List<?> resources)) {
+            throw new MediaStorageException("Cloudinary listed " + folder + " without resources");
+        }
+        List<StoredFilePage.File> files = new ArrayList<>();
+        for (Object resource : resources) {
+            if (resource instanceof Map<?, ?> file
+                    && file.get("public_id") instanceof String publicId
+                    && file.get("created_at") instanceof String createdAt) {
+                files.add(new StoredFilePage.File(publicId, Instant.parse(createdAt)));
+            }
+        }
+        return new StoredFilePage(files, text(body, "next_cursor"));
     }
 
     private String path(PostMediaType type, String action) {

@@ -20,7 +20,7 @@ import org.springframework.core.env.Environment;
  * <p>Rule: BR-44; D-98.
  */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(CloudinaryProperties.class)
+@EnableConfigurationProperties({CloudinaryProperties.class, MediaSweepProperties.class})
 public class MediaStorageConfig {
 
     private static final Logger log = LoggerFactory.getLogger(MediaStorageConfig.class);

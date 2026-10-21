@@ -13,6 +13,10 @@ cryptopilot:
   outbox:
     # T-056 runs in this profile: failed event deliveries (mail) are retried.
     enabled: true
+  media:
+    sweep:
+      # Runs in this profile: files no post carries are deleted from Cloudinary daily.
+      enabled: true
   notification:
     mail:
       # From the environment only, no default: a production mail must come from a real sender and link to the real site.

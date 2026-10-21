@@ -4,7 +4,9 @@ import com.cryptopilot.community.entity.PostMedia;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -25,6 +27,17 @@ public interface PostMediaRepository extends Repository<PostMedia, UUID> {
     /** Whether a file under this key is attached to any post. */
     @Transactional(readOnly = true)
     boolean existsByStoragePublicId(String storagePublicId);
+
+    /**
+     * Which of these keys a post that is not deleted still carries: the files the sweep of unattached files keeps. A
+     * deleted post's files were released (BR-47), so they are not among them.
+     */
+    @Transactional(readOnly = true)
+    @Query("""
+            select m.storagePublicId from PostMedia m, ForumPost p
+             where p.id = m.postId and p.status <> com.cryptopilot.community.model.enums.PostStatus.DELETED
+               and m.storagePublicId in :keys""")
+    List<String> keysStillCarried(@Param("keys") Collection<String> keys);
 
     /** Writes a file row. Not transactional here; the unit of work is the calling service's. */
     PostMedia save(PostMedia media);

@@ -1,6 +1,7 @@
 package com.cryptopilot.community.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -12,6 +13,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.community.InMemoryMediaStorage;
 import com.cryptopilot.community.client.MediaStorage;
+import com.cryptopilot.community.client.MediaStorageException;
+import com.cryptopilot.community.service.MediaSweepService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -85,6 +88,9 @@ class PostMediaApiTest {
 
     @Autowired
     private MediaStorage storageBean;
+
+    @Autowired
+    private MediaSweepService sweep;
 
     private final List<UUID> accounts = new ArrayList<>();
 
@@ -403,6 +409,56 @@ class PostMediaApiTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.official").value(true))
                 .andExpect(jsonPath("$.media[0].publicId").value(file));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // The sweep of files no post carries (plan 9.3)
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void D98_theSweep_deletesOldFilesNoLivePostCarries_andKeepsTheRest() throws Exception {
+        UUID trader = trader();
+        String carried = signed(trader, "IMAGE");
+        storage().uploadImage(carried, "jpg", 1_000);
+        as(trader, post(POSTS), postBody("A post with a picture", image(carried)))
+                .andExpect(status().isCreated());
+        String leftByADeletedPost = signed(trader, "IMAGE");
+        storage().uploadImage(leftByADeletedPost, "png", 1_000);
+        String deletedPost = id(as(trader, post(POSTS), postBody("A post deleted later", image(leftByADeletedPost)))
+                .andExpect(status().isCreated()));
+        // As if the release of its files had failed for good: the post is deleted, its file still stored.
+        sql.sql("update forum_post set post_status = 'DELETED' where post_id = ?")
+                .param(UUID.fromString(deletedPost))
+                .update();
+        String neverAttached = signed(trader, "IMAGE");
+        storage().uploadImage(neverAttached, "webp", 1_000);
+        String justUploaded = signed(trader, "IMAGE");
+        storage().uploadImage(justUploaded, "jpg", 1_000);
+        String oldVideo = "cryptopilot/posts/" + trader + "/" + UUID.randomUUID();
+        storage().uploadVideo(oldVideo, "mp4", 1_000, 10);
+        Instant twoDaysAgo = Instant.now().minus(Duration.ofDays(2));
+        for (String file : List.of(carried, leftByADeletedPost, neverAttached, oldVideo)) {
+            storage().uploadedAt(file, twoDaysAgo);
+        }
+
+        assertThat(sweep.removeUnattached()).isEqualTo(3);
+
+        assertThat(storage().destroyed()).containsExactlyInAnyOrder(leftByADeletedPost, neverAttached, oldVideo);
+    }
+
+    @Test
+    void D98_aSweepWhileTheStorageIsDown_fails_andTheNextRunDeletesTheFile() throws Exception {
+        UUID trader = trader();
+        String file = signed(trader, "IMAGE");
+        storage().uploadImage(file, "jpg", 1_000);
+        storage().uploadedAt(file, Instant.now().minus(Duration.ofDays(2)));
+        storage().failing(true);
+
+        assertThatThrownBy(sweep::removeUnattached).isInstanceOf(MediaStorageException.class);
+
+        storage().failing(false);
+        assertThat(sweep.removeUnattached()).isEqualTo(1);
+        assertThat(storage().destroyed()).containsExactly(file);
     }
 
     // ------------------------------------------------------------------------------------------

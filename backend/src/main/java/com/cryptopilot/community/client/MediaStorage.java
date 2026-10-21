@@ -24,4 +24,12 @@ public interface MediaStorage {
 
     /** Deletes the stored file with this key; a key with no file is not an error. */
     void destroy(PostMediaType type, String publicId);
+
+    /**
+     * One page of the files of this type stored under the folder {@code prefix}, oldest first, for the sweep of files
+     * no post carries.
+     *
+     * @param cursor the {@link StoredFilePage#nextCursor()} of the page before, or {@code null} for the first page
+     */
+    StoredFilePage list(PostMediaType type, String prefix, String cursor);
 }

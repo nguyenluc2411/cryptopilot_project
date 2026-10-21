@@ -3,9 +3,12 @@ package com.cryptopilot.community;
 import com.cryptopilot.community.client.CloudinarySignature;
 import com.cryptopilot.community.client.MediaStorage;
 import com.cryptopilot.community.client.MediaStorageException;
+import com.cryptopilot.community.client.StoredFilePage;
 import com.cryptopilot.community.client.StoredMedia;
 import com.cryptopilot.community.client.UploadTicket;
 import com.cryptopilot.community.model.enums.PostMediaType;
+import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -15,12 +18,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A media storage held in memory for the community API tests: a test "uploads" a file by storing what the storage
- * would report about it, and reads back which keys were destroyed. {@link #failing(boolean)} makes every call fail
+ * would report about it, and reads back which keys were destroyed. A listing names every file in one page, oldest
+ * first, uploaded now unless {@link #uploadedAt(String, Instant)} says otherwise. {@link #failing(boolean)} makes every call fail
  * as an unreachable storage does.
  */
 public class InMemoryMediaStorage implements MediaStorage {
 
     private final Map<String, StoredMedia> files = new ConcurrentHashMap<>();
+    private final Map<String, Instant> uploadedAt = new ConcurrentHashMap<>();
     private final List<String> destroyed = new CopyOnWriteArrayList<>();
     private final AtomicBoolean failing = new AtomicBoolean();
 
@@ -46,7 +51,28 @@ public class InMemoryMediaStorage implements MediaStorage {
     public void destroy(PostMediaType type, String publicId) {
         failIfAsked();
         files.remove(publicId);
+        uploadedAt.remove(publicId);
         destroyed.add(publicId);
+    }
+
+    @Override
+    public StoredFilePage list(PostMediaType type, String prefix, String cursor) {
+        failIfAsked();
+        List<StoredFilePage.File> listed = files.values().stream()
+                .filter(file -> file.type() == type && file.publicId().startsWith(prefix + "/"))
+                .map(file -> new StoredFilePage.File(file.publicId(), uploadedAt(file.publicId())))
+                .sorted(Comparator.comparing(StoredFilePage.File::createdAt))
+                .toList();
+        return new StoredFilePage(listed, null);
+    }
+
+    /** Makes a stored file look uploaded at this instant; a file not given one was uploaded now. */
+    public void uploadedAt(String publicId, Instant when) {
+        uploadedAt.put(publicId, when);
+    }
+
+    private Instant uploadedAt(String publicId) {
+        return uploadedAt.computeIfAbsent(publicId, key -> Instant.now());
     }
 
     /** Stores an image as the browser's upload would. */
@@ -91,6 +117,7 @@ public class InMemoryMediaStorage implements MediaStorage {
 
     public void clear() {
         files.clear();
+        uploadedAt.clear();
         destroyed.clear();
         failing.set(false);
     }

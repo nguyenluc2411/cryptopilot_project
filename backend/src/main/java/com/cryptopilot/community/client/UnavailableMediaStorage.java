@@ -29,6 +29,12 @@ public class UnavailableMediaStorage implements MediaStorage {
         log.info("No media storage is configured; {} {} was not deleted", type, publicId);
     }
 
+    @Override
+    public StoredFilePage list(PostMediaType type, String prefix, String cursor) {
+        // Nothing can have been uploaded without a storage, so there is nothing to sweep.
+        return StoredFilePage.empty();
+    }
+
     private static MediaStorageException unavailable() {
         return new MediaStorageException("no media storage is configured: set CLOUDINARY_CLOUD_NAME,"
                 + " CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET");

@@ -116,6 +116,14 @@ cryptopilot:
       folder: cryptopilot/posts
       connect-timeout: 5s
       read-timeout: 10s
+    sweep:
+      # Files uploaded with a signed form but never attached to a post, or left by a failed deletion, are deleted
+      # once older than the grace period. Daily; off here, on in the dev and prod profiles.
+      enabled: false
+      cron: "0 45 0 * * *"
+      zone: UTC
+      grace: 24h
+      max-pages: 20
   notification:
     mail:
       # T-057: the sender address, and the web application the mailed links open (/verify-email, /reset-password).

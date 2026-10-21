@@ -48,7 +48,7 @@ class CloudinaryClientTest {
 
     private record Answer(int status, String body) {}
 
-    private record Recorded(String method, String path, String authorization, String body) {}
+    private record Recorded(String method, String path, String query, String authorization, String body) {}
 
     @BeforeEach
     void start() throws IOException {
@@ -112,6 +112,44 @@ class CloudinaryClientTest {
         assertThat(request.authorization())
                 .isEqualTo("Basic "
                         + Base64.getEncoder().encodeToString((KEY + ":" + SECRET).getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void D98_aFolder_isListedOldestFirst_pageByPage_withBasicAuthentication() {
+        String listing = "/v1_1/" + CLOUD + "/resources/image/upload";
+        answers.put(listing + "?prefix=cryptopilot/posts/&max_results=500&direction=asc", new Answer(200, """
+                {"resources": [
+                   {"public_id": "cryptopilot/posts/a/1", "created_at": "2026-10-18T01:00:00Z"},
+                   {"public_id": "cryptopilot/posts/a/2", "created_at": "2026-10-19T01:00:00Z"}],
+                 "next_cursor": "page-2"}
+                """));
+        answers.put(
+                listing + "?prefix=cryptopilot/posts/&max_results=500&direction=asc&next_cursor=page-2",
+                new Answer(200, """
+                {"resources": [{"public_id": "cryptopilot/posts/b/3", "created_at": "2026-10-20T01:00:00Z"}]}
+                """));
+
+        StoredFilePage first = client.list(PostMediaType.IMAGE, "cryptopilot/posts", null);
+        StoredFilePage second = client.list(PostMediaType.IMAGE, "cryptopilot/posts", first.nextCursor());
+
+        assertThat(first.files())
+                .extracting(StoredFilePage.File::publicId)
+                .containsExactly("cryptopilot/posts/a/1", "cryptopilot/posts/a/2");
+        assertThat(first.files().getFirst().createdAt()).isEqualTo(Instant.parse("2026-10-18T01:00:00Z"));
+        assertThat(first.nextCursor()).isEqualTo("page-2");
+        assertThat(second.files()).extracting(StoredFilePage.File::publicId).containsExactly("cryptopilot/posts/b/3");
+        assertThat(second.nextCursor()).isNull();
+        assertThat(requests.getFirst().authorization()).startsWith("Basic ");
+    }
+
+    @Test
+    void D98_aListingTheStorageRefuses_isAStorageFailure() {
+        answers.put(
+                "/v1_1/" + CLOUD + "/resources/video/upload",
+                new Answer(420, "{\"error\": {\"message\": \"Rate Limited\"}}"));
+
+        assertThatThrownBy(() -> client.list(PostMediaType.VIDEO, "cryptopilot/posts", null))
+                .isInstanceOf(MediaStorageException.class);
     }
 
     @Test
@@ -198,9 +236,12 @@ class CloudinaryClientTest {
         requests.add(new Recorded(
                 exchange.getRequestMethod(),
                 exchange.getRequestURI().getPath(),
+                exchange.getRequestURI().getQuery(),
                 exchange.getRequestHeaders().getFirst("Authorization"),
                 body));
-        Answer answer = answers.getOrDefault(exchange.getRequestURI().getPath(), new Answer(404, "{}"));
+        String path = exchange.getRequestURI().getPath();
+        String query = exchange.getRequestURI().getQuery();
+        Answer answer = answers.getOrDefault(path + "?" + query, answers.getOrDefault(path, new Answer(404, "{}")));
         byte[] bytes = answer.body().getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(answer.status(), bytes.length);
