@@ -44,6 +44,15 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
     @Query("select p from TradingPlan p where p.id = :id and p.userId = :userId")
     Optional<TradingPlan> findForUpdate(UUID id, UUID userId);
 
+    /**
+     * The ACTIVE plans of one pair's market, row-locked until the transaction ends, so a fill in progress finishes
+     * first and its plan is then seen as EXECUTED, not cancelled (BR-59, NSF-07).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from TradingPlan p where p.pairId = :pairId and p.market = :market"
+            + " and p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE")
+    List<TradingPlan> findActiveForUpdate(UUID pairId, MarketType market);
+
     /** The user's ACTIVE plans, the plan half of {@code ACTIVE_PLAN_MAX} (BR-62). */
     @Transactional(readOnly = true)
     @Query("select count(p) from TradingPlan p where p.userId = :userId"

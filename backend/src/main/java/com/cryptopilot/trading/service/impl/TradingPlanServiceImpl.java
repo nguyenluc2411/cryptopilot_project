@@ -22,6 +22,7 @@ import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
+import com.cryptopilot.trading.event.TradingPlanWithdrawn;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.matching.EntryFillRule;
 import com.cryptopilot.trading.model.CalculatedPlan;
@@ -42,6 +43,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -54,6 +56,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -158,6 +161,26 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         plan.cancel(clock.instant());
         events.publishEvent(new TradingPlanCancelled(plan.getId(), plan.getMarket(), plan.getPairId()));
         return PlanResponses.detail(plans.save(plan));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public int cancelForDisabledMarket(UUID pairId, String symbol, MarketType market, Instant at) {
+        List<TradingPlan> active = plans.findActiveForUpdate(pairId, market);
+        for (TradingPlan plan : active) {
+            plan.cancel(at);
+            plans.save(plan);
+            events.publishEvent(new TradingPlanCancelled(plan.getId(), plan.getMarket(), plan.getPairId()));
+            events.publishEvent(new TradingPlanWithdrawn(plan.getId(), plan.getUserId(), symbol, market, at));
+        }
+        if (!active.isEmpty()) {
+            log.info(
+                    "BR-59: {} ACTIVE plans of {} {} cancelled, the market was disabled",
+                    active.size(),
+                    symbol,
+                    market);
+        }
+        return active.size();
     }
 
     @Override
