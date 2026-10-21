@@ -72,14 +72,6 @@ coin,logo_url,character varying,,,YES
 coin,symbol,character varying,,,NO
 coin,updated_at,timestamp with time zone,,,NO
 coin,version,bigint,64,0,NO
-coin_sentiment_vote,coin_id,uuid,,,NO
-coin_sentiment_vote,created_at,timestamp with time zone,,,NO
-coin_sentiment_vote,sentiment,character varying,,,NO
-coin_sentiment_vote,updated_at,timestamp with time zone,,,NO
-coin_sentiment_vote,user_id,uuid,,,NO
-coin_sentiment_vote,version,bigint,64,0,NO
-coin_sentiment_vote,vote_date,date,,,NO
-coin_sentiment_vote,vote_id,uuid,,,NO
 crypto_pair,base_coin_id,uuid,,,NO
 crypto_pair,created_at,timestamp with time zone,,,NO
 crypto_pair,display_order,integer,32,0,NO
@@ -147,7 +139,6 @@ forum_post,official_category,character varying,,,YES
 forum_post,post_id,uuid,,,NO
 forum_post,post_status,character varying,,,NO
 forum_post,post_type,character varying,,,NO
-forum_post,sentiment,character varying,,,YES
 forum_post,title,character varying,,,NO
 forum_post,updated_at,timestamp with time zone,,,NO
 forum_post,version,bigint,64,0,NO
@@ -409,8 +400,6 @@ paper_transfer,updated_at,timestamp with time zone,,,NO
 paper_transfer,version,bigint,64,0,NO
 post_coin,coin_id,uuid,,,NO
 post_coin,post_id,uuid,,,NO
-post_hashtag,hashtag,character varying,,,NO
-post_hashtag,post_id,uuid,,,NO
 post_media,created_at,timestamp with time zone,,,NO
 post_media,duration_seconds,integer,32,0,YES
 post_media,file_size_bytes,bigint,64,0,YES
@@ -617,12 +606,6 @@ user_device,platform,character varying,,,NO
 user_device,updated_at,timestamp with time zone,,,NO
 user_device,user_id,uuid,,,NO
 user_device,version,bigint,64,0,NO
-user_follow,created_at,timestamp with time zone,,,NO
-user_follow,follow_id,uuid,,,NO
-user_follow,followee_id,uuid,,,NO
-user_follow,follower_id,uuid,,,NO
-user_follow,updated_at,timestamp with time zone,,,NO
-user_follow,version,bigint,64,0,NO
 user_profile,avatar_url,character varying,,,YES
 user_profile,created_at,timestamp with time zone,,,NO
 user_profile,default_capital,numeric,28,8,YES

@@ -10,16 +10,13 @@ import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.CoinDiscussionResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
-import com.cryptopilot.community.dto.response.TrendingResponse;
 import com.cryptopilot.community.entity.ForumPost;
-import com.cryptopilot.community.entity.Hashtags;
 import com.cryptopilot.community.model.CoinDiscussion;
 import com.cryptopilot.community.model.FeedFilter;
 import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.FeedQuery;
 import com.cryptopilot.community.model.enums.FeedTab;
 import com.cryptopilot.community.model.enums.OfficialCategory;
-import com.cryptopilot.community.model.enums.TrendingWindow;
 import com.cryptopilot.community.repository.ForumPostRepository;
 import com.cryptopilot.community.repository.PostFeedRepository;
 import com.cryptopilot.community.service.PostService;
@@ -27,13 +24,11 @@ import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -67,9 +62,6 @@ public class PostServiceImpl implements PostService {
 
     static final int SEARCH_MAX_LENGTH = 100;
 
-    /** Topics of each kind the trending list names (D-99). */
-    static final int TRENDING_LIMIT = 10;
-
     private final ForumPostRepository posts;
     private final PostFeedRepository feeds;
     private final PostAssembler assembler;
@@ -81,7 +73,7 @@ public class PostServiceImpl implements PostService {
     @Transactional(readOnly = true)
     public PageResponse<PostSummaryResponse> feed(
             UUID caller, FeedTab tab, FeedFilter filter, Integer page, Integer pageSize) {
-        if (caller == null && (tab == FeedTab.SAVED || tab == FeedTab.MINE || tab == FeedTab.FOLLOWING)) {
+        if (caller == null && (tab == FeedTab.SAVED || tab == FeedTab.MINE)) {
             throw new BusinessException(ErrorCode.AUTHENTICATION_REQUIRED, "the " + tab + " tab is a Trader's own");
         }
         PageRequest request = Paging.of(page, pageSize);
@@ -100,27 +92,9 @@ public class PostServiceImpl implements PostService {
             }
             coinId = stored.get();
         }
-        String hashtag = blankToNull(filter.hashtag()) == null ? null : Hashtags.normalized(filter.hashtag());
-        FeedQuery query =
-                new FeedQuery(tab, coinId, filter.market(), filter.sentiment(), filter.author(), hashtag, text);
+        FeedQuery query = new FeedQuery(tab, coinId, filter.market(), filter.author(), text);
         FeedPage found = feeds.feed(query, caller, clock.instant().minus(MOST_LIKED_WINDOW), request);
         return assembler.page(found, request, caller);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public TrendingResponse trending(TrendingWindow window) {
-        Instant since = clock.instant().minus(window.length());
-        List<Object[]> coinRows = feeds.trendingCoins(since, TRENDING_LIMIT);
-        Map<UUID, String> symbols = market
-                .coins(coinRows.stream().map(row -> (UUID) row[0]).toList())
-                .stream()
-                .collect(Collectors.toMap(CoinListing::coinId, CoinListing::symbol));
-        List<TrendingResponse.Topic> coins = coinRows.stream()
-                .filter(row -> symbols.containsKey((UUID) row[0]))
-                .map(row -> new TrendingResponse.Topic(symbols.get((UUID) row[0]), (Long) row[1]))
-                .toList();
-        return new TrendingResponse(since, feeds.trendingHashtags(since, TRENDING_LIMIT), coins);
     }
 
     private static String blankToNull(String text) {

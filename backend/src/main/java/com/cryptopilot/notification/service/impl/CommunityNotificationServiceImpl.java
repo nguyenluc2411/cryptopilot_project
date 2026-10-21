@@ -2,7 +2,6 @@ package com.cryptopilot.notification.service.impl;
 
 import com.cryptopilot.community.event.PostCommented;
 import com.cryptopilot.community.event.PostModerated;
-import com.cryptopilot.community.event.UserFollowed;
 import com.cryptopilot.community.model.enums.ResolutionAction;
 import com.cryptopilot.notification.model.NewNotification;
 import com.cryptopilot.notification.model.enums.NotificationReference;
@@ -22,14 +21,12 @@ import org.springframework.transaction.annotation.Transactional;
  * written here in the style of MSG22 to MSG28: one short sentence naming what happened.
  *
  * <p>Each notification has a source key made of the event's own ids, so an event delivered again finds its rows
- * written and writes nothing. A follow is keyed by its time as well, so following again after an unfollow is a new
- * notification — unless the one before is still unread, which keeps a member who follows and unfollows in a loop from
- * filling the other's centre.
+ * written and writes nothing.
  *
  * <p>Dismissed reports are told to the reporters only: the post did not change, and the author learns nothing from
  * hearing it was reported.
  *
- * <p>Rule: SRS 3.7.3, 3.11.3; UC-30, UC-43; D-99; NSF-15.
+ * <p>Rule: SRS 3.7.3, 3.11.3; UC-30, UC-43; NSF-15.
  */
 @Service
 @RequiredArgsConstructor
@@ -86,24 +83,6 @@ public class CommunityNotificationServiceImpl implements CommunityNotificationSe
                     event.postId(),
                     "MODERATION:" + decision + ":" + reporter));
         }
-    }
-
-    @Override
-    @Transactional
-    public void followed(UserFollowed event) {
-        if (notifications.existsByUserIdAndTypeAndReferenceIdAndReadFalse(
-                event.followeeId(), NotificationType.FOLLOW, event.followerId())) {
-            return;
-        }
-        writer.write(new NewNotification(
-                event.followeeId(),
-                NotificationType.FOLLOW,
-                "New follower",
-                nameOf(event.followerId()) + " started following you.",
-                NotificationReference.MEMBER,
-                event.followerId(),
-                "FOLLOW:" + event.followerId() + ":" + event.followeeId() + ":"
-                        + event.followedAt().toEpochMilli()));
     }
 
     private String nameOf(UUID userId) {

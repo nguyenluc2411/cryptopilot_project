@@ -78,7 +78,6 @@ public class PostAssembler {
                 .filter(post -> post != null)
                 .toList();
         Map<UUID, Set<UUID>> tags = feeds.coinTags(page.postIds());
-        Map<UUID, List<String>> topics = feeds.hashtags(page.postIds());
         Map<UUID, String> symbols =
                 symbols(tags.values().stream().flatMap(Set::stream).toList());
         Map<UUID, AuthorCard> authors =
@@ -93,7 +92,6 @@ public class PostAssembler {
                         post,
                         authors.get(post.getAuthorId()),
                         coins(tags.getOrDefault(post.getId(), Set.of()), symbols),
-                        topics.getOrDefault(post.getId(), List.of()),
                         covers.get(post.getId()),
                         engagement.getOrDefault(post.getId(), PostEngagement.NONE)))
                 .toList();
@@ -115,9 +113,7 @@ public class PostAssembler {
                 post.isOfficial(),
                 post.getOfficialCategory(),
                 post.getStatus(),
-                post.getSentiment(),
                 coins(post.getCoinIds(), symbols),
-                post.getHashtags().stream().sorted().toList(),
                 media.findAllByPostIdOrderBySortOrderAsc(post.getId()).stream()
                         .map(PostAssembler::media)
                         .toList(),
@@ -131,12 +127,7 @@ public class PostAssembler {
     }
 
     private PostSummaryResponse summary(
-            ForumPost post,
-            AuthorCard author,
-            List<String> coins,
-            List<String> hashtags,
-            MediaResponse cover,
-            PostEngagement counts) {
+            ForumPost post, AuthorCard author, List<String> coins, MediaResponse cover, PostEngagement counts) {
         return new PostSummaryResponse(
                 post.getId(),
                 author(post.getAuthorId(), author),
@@ -147,9 +138,7 @@ public class PostAssembler {
                 post.isOfficial(),
                 post.getOfficialCategory(),
                 post.getStatus(),
-                post.getSentiment(),
                 coins,
-                hashtags,
                 cover,
                 counts.likes(),
                 counts.comments(),

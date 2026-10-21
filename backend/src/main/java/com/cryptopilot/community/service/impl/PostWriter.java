@@ -72,7 +72,6 @@ public class PostWriter {
                             coins)
                     : ForumPost.publish(author, request.title(), request.content(), request.marketType(), coins);
             post.carry(typeOf(files));
-            post.lean(request.sentiment());
             posts.save(post);
             write(post, files, Map.of());
             flush(files);
@@ -99,7 +98,6 @@ public class PostWriter {
                 post.categorize(categoryOf(request));
             }
             post.carry(typeOf(files));
-            post.lean(request.sentiment());
             write(post, files, byKey(post.getId()));
             flush(files);
             return assembler.detail(post, caller);

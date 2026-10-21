@@ -1,7 +1,6 @@
 package com.cryptopilot.notification.repository;
 
 import com.cryptopilot.notification.entity.Notification;
-import com.cryptopilot.notification.model.enums.NotificationType;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -77,10 +76,6 @@ public interface NotificationRepository extends Repository<Notification, UUID> {
     /** One page of the user's unread notifications, the newest first. */
     @Transactional(readOnly = true)
     Page<Notification> findByUserIdAndReadFalseOrderByCreatedAtDescIdDesc(UUID userId, Pageable page);
-
-    /** Whether the user has an unread notification of this type about this object. */
-    @Transactional(readOnly = true)
-    boolean existsByUserIdAndTypeAndReferenceIdAndReadFalse(UUID userId, NotificationType type, UUID referenceId);
 
     /** How many of the user's notifications are unread: the number on the bell. */
     @Transactional(readOnly = true)

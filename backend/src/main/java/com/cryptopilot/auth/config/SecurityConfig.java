@@ -174,10 +174,7 @@ public class SecurityConfig {
         "/api/v1/posts/*",
         "/api/v1/posts/*/comments",
         "/api/v1/posts/coins/*/discussion",
-        "/api/v1/posts/coins/*/sentiment",
-        "/api/v1/community/members/*",
-        "/api/v1/community/members/*/followers",
-        "/api/v1/community/members/*/following"
+        "/api/v1/community/members/*"
     };
 
     /** Liveness and readiness. Narrower than {@code /actuator/**}, which describes the application. */

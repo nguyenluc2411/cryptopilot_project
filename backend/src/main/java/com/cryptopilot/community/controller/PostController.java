@@ -6,12 +6,9 @@ import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.CoinDiscussionResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
-import com.cryptopilot.community.dto.response.TrendingResponse;
 import com.cryptopilot.community.model.FeedFilter;
 import com.cryptopilot.community.model.enums.FeedTab;
 import com.cryptopilot.community.model.enums.OfficialCategory;
-import com.cryptopilot.community.model.enums.Sentiment;
-import com.cryptopilot.community.model.enums.TrendingWindow;
 import com.cryptopilot.community.service.PostService;
 import com.cryptopilot.market.model.enums.MarketType;
 import io.swagger.v3.oas.annotations.Operation;
@@ -60,33 +57,20 @@ public class PostController {
     @GetMapping
     public PageResponse<PostSummaryResponse> feed(
             @AuthenticationPrincipal Jwt caller,
-            @Parameter(description = "LATEST (default), MOST_LIKED (last 7 days), SAVED, MINE or FOLLOWING")
+            @Parameter(description = "LATEST (default), MOST_LIKED (last 7 days), SAVED or MINE")
                     @RequestParam(defaultValue = "LATEST")
                     FeedTab tab,
             @Parameter(description = "Only posts tagged with this coin symbol, e.g. BTC")
                     @RequestParam(required = false)
                     String coin,
             @Parameter(description = "Only posts about this market") @RequestParam(required = false) MarketType market,
-            @Parameter(description = "Only posts labelled BULLISH or BEARISH (D-99)") @RequestParam(required = false)
-                    Sentiment sentiment,
             @Parameter(description = "Only posts of this member (D-99)") @RequestParam(required = false) UUID author,
-            @Parameter(description = "Only posts with this hashtag, with or without # (D-99)")
-                    @RequestParam(required = false)
-                    String hashtag,
             @Parameter(description = "Search in titles and texts, 2 to 100 characters (D-99)")
                     @RequestParam(required = false)
                     String q,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer pageSize) {
-        return service.feed(
-                callerOf(caller), tab, new FeedFilter(coin, market, sentiment, author, hashtag, q), page, pageSize);
-    }
-
-    @Operation(summary = "The hashtags and coins the community talks about most; public (D-99)")
-    @ApiResponse(responseCode = "200", description = "Top 10 hashtags and top 10 coins of the window")
-    @GetMapping("/trending")
-    public TrendingResponse trending(@RequestParam(defaultValue = "DAY") TrendingWindow window) {
-        return service.trending(window);
+        return service.feed(callerOf(caller), tab, new FeedFilter(coin, market, author, q), page, pageSize);
     }
 
     @Operation(summary = "The published announcements pinned above the feed, newest first (BR-61)")

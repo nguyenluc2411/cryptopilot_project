@@ -17,8 +17,5 @@ public enum FeedTab {
     SAVED,
 
     /** The caller's own posts, hidden ones included, newest first. */
-    MINE,
-
-    /** The published posts of the members the caller follows, newest first (D-99). */
-    FOLLOWING
+    MINE
 }

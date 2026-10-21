@@ -3,7 +3,6 @@ package com.cryptopilot.community.dto.response;
 import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.model.enums.PostStatus;
 import com.cryptopilot.community.model.enums.PostType;
-import com.cryptopilot.community.model.enums.Sentiment;
 import com.cryptopilot.market.model.enums.MarketType;
 import java.time.Instant;
 import java.util.List;
@@ -23,9 +22,7 @@ import java.util.UUID;
  * @param official whether it is an announcement (BR-61)
  * @param officialCategory what an official post is; {@code null} for a Trader's post
  * @param status PUBLISHED, or HIDDEN when the caller is its author (BR-47)
- * @param sentiment BULLISH or BEARISH as the author labelled it, or {@code null} (D-99)
  * @param coins the symbols it is tagged with, alphabetical
- * @param hashtags its hashtags without the {@code #}, alphabetical (D-99)
  * @param media its images or its video, in order
  * @param likeCount its likes
  * @param commentCount its published comments
@@ -45,9 +42,7 @@ public record PostDetailResponse(
         boolean official,
         OfficialCategory officialCategory,
         PostStatus status,
-        Sentiment sentiment,
         List<String> coins,
-        List<String> hashtags,
         List<MediaResponse> media,
         long likeCount,
         long commentCount,
