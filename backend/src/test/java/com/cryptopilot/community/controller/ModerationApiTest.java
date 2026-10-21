@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.community.event.PostModerated;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -84,6 +85,7 @@ class ModerationApiTest {
 
     @AfterEach
     void removeRows() {
+        InAppNotifications.remove(sql, accounts);
         // Children first, across all accounts: a resolved report names its moderator, an audit row its actor.
         for (UUID account : accounts) {
             sql.sql("delete from audit_log where user_id = ?").param(account).update();

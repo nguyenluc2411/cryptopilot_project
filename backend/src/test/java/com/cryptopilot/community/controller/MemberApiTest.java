@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -65,6 +66,7 @@ class MemberApiTest {
 
     @AfterEach
     void removeRows() {
+        InAppNotifications.remove(sql, accounts);
         for (UUID account : accounts) {
             sql.sql("delete from user_follow where follower_id = ? or followee_id = ?")
                     .params(account, account)

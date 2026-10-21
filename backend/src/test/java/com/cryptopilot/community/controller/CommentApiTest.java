@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.community.event.PostCommented;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -87,6 +88,7 @@ class CommentApiTest {
 
     @AfterEach
     void removeRows() {
+        InAppNotifications.remove(sql, accounts);
         for (UUID account : accounts) {
             sql.sql("delete from engagement where user_id = ?").param(account).update();
             sql.sql("delete from forum_comment where author_id = ?")

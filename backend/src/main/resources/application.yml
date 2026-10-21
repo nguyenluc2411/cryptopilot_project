@@ -121,6 +121,13 @@ cryptopilot:
       # T-057: the sender address, and the web application the mailed links open (/verify-email, /reset-password).
       from: ${SMTP_FROM:no-reply@cryptopilot.local}
       public-base-url: ${PUBLIC_BASE_URL:http://localhost:5173}
+    sweep:
+      # NSF-17, notifications: daily, deletes those older than the retention (90 days, SRS 3.4.5). Off here, on in
+      # the dev and prod profiles, so a test context schedules nothing.
+      enabled: false
+      cron: "0 30 0 * * *"
+      zone: UTC
+      retention: 90d
   web:
     # Reverse proxies whose X-Forwarded-For is believed: addresses or CIDR ranges, comma-separated. Empty trusts none,
     # so the direct peer is the client. Set wherever Nginx sits in front.

@@ -236,6 +236,7 @@ notification,reference_id,uuid,,,YES
 notification,reference_type,character varying,,,YES
 notification,sent_via_email,boolean,,,NO
 notification,sent_via_push,boolean,,,NO
+notification,source_key,character varying,,,YES
 notification,title,character varying,,,NO
 notification,updated_at,timestamp with time zone,,,NO
 notification,user_id,uuid,,,NO
