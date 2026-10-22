@@ -558,6 +558,44 @@ class PostMediaApiTest {
     }
 
     @Test
+    void D99_anEditOfAReportedPost_cannotDropItsFiles() throws Exception {
+        UUID author = trader();
+        String file = signed(author, "IMAGE");
+        storage().uploadImage(file, "jpg", 1_000);
+        String id =
+                id(as(author, post(POSTS), postBody("Reported", image(file))).andExpect(status().isCreated()));
+        report(trader(), id);
+
+        as(author, put(POSTS + "/" + id), postBody("Nothing to see"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.media").value("MSG32"));
+
+        assertThat(releases(id)).isZero();
+        assertThat(mediaRowsOf(id)).isEqualTo(1);
+        storage().uploadedAt(file, Instant.now().minus(Duration.ofDays(2)));
+        assertThat(sweep.removeUnattached()).isZero();
+        assertThat(storage().destroyed()).isEmpty();
+    }
+
+    @Test
+    void D99_afterADismiss_anEditMayDropTheFiles() throws Exception {
+        UUID author = trader();
+        String file = signed(author, "IMAGE");
+        storage().uploadImage(file, "jpg", 1_000);
+        String id =
+                id(as(author, post(POSTS), postBody("Dismissed", image(file))).andExpect(status().isCreated()));
+        report(trader(), id);
+        decide(account(UserRole.ADMIN), id, "DISMISS");
+
+        as(author, put(POSTS + "/" + id), postBody("Without the chart"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.media.length()").value(0));
+
+        assertThat(releases(id)).isEqualTo(1);
+        await().atMost(WAIT).until(() -> storage().destroyed().contains(file));
+    }
+
+    @Test
     void D98_aSecondUploadUnderTheSameKey_keepsTheFirstFile() throws Exception {
         UUID trader = trader();
         String file = signed(trader, "IMAGE");
@@ -623,6 +661,13 @@ class PostMediaApiTest {
         return sql.sql("select count(*) from event_publication where event_type like '%PostMediaReleased'"
                         + " and serialized_event like ?")
                 .param("%" + postId + "%")
+                .query(Long.class)
+                .single();
+    }
+
+    private long mediaRowsOf(String postId) {
+        return sql.sql("select count(*) from post_media where post_id = ?")
+                .param(UUID.fromString(postId))
                 .query(Long.class)
                 .single();
     }

@@ -39,7 +39,7 @@ import org.springframework.transaction.support.TransactionOperations;
  * while the storage answers; the transaction then writes the post and its file rows. Files a post no longer carries —
  * all of them when it is deleted, the ones an edit leaves out — are released with {@link PostMediaReleased} inside that
  * transaction and deleted from the storage after it commits (SRS 3.7.2). A deleted post that is hidden or reported
- * keeps its files as the evidence of the moderation.
+ * keeps its files as the evidence of the moderation, and an edit of a reported post cannot drop any.
  *
  * <p>Rule: UC-27, UC-28, UC-29, UC-44; BR-43, BR-44, BR-47; D-98.
  */
@@ -85,7 +85,13 @@ public class PostWriter {
 
     /**
      * Replaces the content and files of the post {@code lookup} finds and that is neither deleted nor hidden; MSG41
-     * otherwise. A hidden post is kept as moderation saw it.
+     * otherwise. A hidden post is kept as moderation saw it. A post whose files are the evidence of the moderation
+     * keeps every file it carries: its text, coins and market may change and files may be added, but an edit that
+     * drops one is refused with MSG32.
+     *
+     * <p>Rule: BR-47; D-99.
+     *
+     * <p>Reference: Evans, E. <i>Domain-Driven Design</i> (Addison-Wesley, 2003), ch. 6.
      *
      * @param caller who edits it, in whose folder new files must be
      * @param trader whether the caller is a Trader, whose new videos need video posting
@@ -95,15 +101,20 @@ public class PostWriter {
         ForumPost found = revisable(postId, lookup);
         requireCategoryOnlyWhenOfficial(request, found.isOfficial());
         Set<UUID> coins = assembler.coinTags(request.coins());
-        List<CheckedMedia> files = rules.check(caller, request.media(), byKey(found.getId()), trader);
+        Map<String, PostMedia> attached = byKey(found.getId());
+        List<CheckedMedia> files = rules.check(caller, request.media(), attached, trader);
+        requireEvidenceKept(found.getId(), files, attached);
         return transactions.execute(status -> {
             ForumPost post = revisable(postId, lookup);
+            Map<String, PostMedia> current = byKey(post.getId());
+            // A report may have come in since the check above.
+            requireEvidenceKept(post.getId(), files, current);
             post.revise(request.title(), request.content(), request.marketType(), coins);
             if (post.isOfficial()) {
                 post.categorize(categoryOf(request));
             }
             post.carry(typeOf(files));
-            write(post, files, byKey(post.getId()));
+            write(post, files, current);
             flush(files);
             return assembler.detail(post, caller);
         });
@@ -181,6 +192,15 @@ public class PostWriter {
             files.add(new PostMediaReleased.File(row.getMediaType(), row.getStoragePublicId()));
         }
         events.publishEvent(new PostMediaReleased(postId, files));
+    }
+
+    /** Refuses with MSG32 an edit that drops a file of a post whose files are the evidence of the moderation. */
+    private void requireEvidenceKept(UUID postId, List<CheckedMedia> files, Map<String, PostMedia> current) {
+        Set<String> named = files.stream().map(CheckedMedia::publicId).collect(Collectors.toSet());
+        if (!named.containsAll(current.keySet()) && reports.holdsEvidence(postId)) {
+            throw new FieldValidationException(
+                    "post " + postId + " keeps its files as the evidence of the moderation", Map.of("media", "MSG32"));
+        }
     }
 
     private Map<String, PostMedia> byKey(UUID postId) {
