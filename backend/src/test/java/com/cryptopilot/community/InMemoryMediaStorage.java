@@ -19,7 +19,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * A media storage held in memory for the community API tests: a test "uploads" a file by storing what the storage
  * would report about it, and reads back which keys were destroyed. A listing names every file in one page, oldest
- * first, uploaded now unless {@link #uploadedAt(String, Instant)} says otherwise. {@link #failing(boolean)} makes every call fail
+ * first, uploaded now unless {@link #uploadedAt(String, Instant)} says otherwise. Like a form signed with
+ * {@code overwrite=false}, a second upload under a key keeps the first file. {@link #failing(boolean)} makes every call fail
  * as an unreachable storage does.
  */
 public class InMemoryMediaStorage implements MediaStorage {
@@ -78,7 +79,7 @@ public class InMemoryMediaStorage implements MediaStorage {
 
     /** Stores an image as the browser's upload would. */
     public void uploadImage(String publicId, String format, long bytes) {
-        files.put(
+        files.putIfAbsent(
                 publicId,
                 new StoredMedia(
                         publicId,
@@ -94,7 +95,7 @@ public class InMemoryMediaStorage implements MediaStorage {
 
     /** Stores a video as the browser's upload would. */
     public void uploadVideo(String publicId, String format, long bytes, int seconds) {
-        files.put(
+        files.putIfAbsent(
                 publicId,
                 new StoredMedia(
                         publicId,

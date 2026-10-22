@@ -128,12 +128,15 @@ public class ForumPost extends BaseEntity {
     }
 
     /**
-     * Replaces the title, text, market and coin tags (UC-29). Allowed at any status but {@link PostStatus#DELETED}: a
-     * deleted post is gone for its author.
+     * Replaces the title, text, market and coin tags (UC-29). Allowed on a published post only: a deleted post is gone
+     * for its author, and a hidden one stays as moderation saw it (BR-47).
      */
     public void revise(String title, String content, MarketType marketType, Collection<UUID> coinIds) {
         if (status == PostStatus.DELETED) {
             throw new IllegalStateException("post " + getId() + " is deleted");
+        }
+        if (status == PostStatus.HIDDEN) {
+            throw new IllegalStateException("post " + getId() + " is hidden");
         }
         this.title = requireTitle(title);
         this.content = requireContent(content);

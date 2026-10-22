@@ -480,21 +480,98 @@ class PostMediaApiTest {
         storage().uploadImage(file, "jpg", 1_000);
         String id =
                 id(as(author, post(POSTS), postBody("Evidence", image(file))).andExpect(status().isCreated()));
-        as(reporter, post(POSTS + "/" + id + "/reports"), "{\"reason\": \"SCAM\"}")
-                .andExpect(status().isCreated());
-        as(
-                        admin,
-                        UserRole.ADMIN,
-                        post("/api/v1/admin/reports-queue/" + id + "/decision"),
-                        "{\"action\": \"REMOVE_POST\"}")
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.postStatus").value("DELETED"));
+        report(reporter, id);
+        decide(admin, id, "REMOVE_POST").andExpect(jsonPath("$.postStatus").value("DELETED"));
         storage().uploadedAt(file, Instant.now().minus(Duration.ofDays(2)));
 
         assertThat(sweep.removeUnattached()).isZero();
 
         assertThat(storage().destroyed()).isEmpty();
         assertThat(storage().describe(PostMediaType.IMAGE, file)).isPresent();
+    }
+
+    @Test
+    void D99_theAuthorDeletingAHiddenPost_releasesNoFile() throws Exception {
+        UUID author = trader();
+        String file = signed(author, "IMAGE");
+        storage().uploadImage(file, "jpg", 1_000);
+        String id = id(as(author, post(POSTS), postBody("Hidden", image(file))).andExpect(status().isCreated()));
+        report(trader(), id);
+        decide(account(UserRole.ADMIN), id, "HIDE_POST")
+                .andExpect(jsonPath("$.postStatus").value("HIDDEN"));
+
+        as(author, delete(POSTS + "/" + id), null).andExpect(status().isNoContent());
+        storage().uploadedAt(file, Instant.now().minus(Duration.ofDays(2)));
+
+        assertThat(releases(id)).isZero();
+        assertThat(sweep.removeUnattached()).isZero();
+        assertThat(storage().destroyed()).isEmpty();
+    }
+
+    @Test
+    void D99_theAuthorDeletingAReportedPost_keepsItsFiles_throughRemovalAndTheSweep() throws Exception {
+        UUID author = trader();
+        String file = signed(author, "IMAGE");
+        storage().uploadImage(file, "jpg", 1_000);
+        String id =
+                id(as(author, post(POSTS), postBody("Reported", image(file))).andExpect(status().isCreated()));
+        report(trader(), id);
+
+        as(author, delete(POSTS + "/" + id), null).andExpect(status().isNoContent());
+        decide(account(UserRole.ADMIN), id, "REMOVE_POST")
+                .andExpect(jsonPath("$.postStatus").value("DELETED"));
+        storage().uploadedAt(file, Instant.now().minus(Duration.ofDays(2)));
+
+        assertThat(releases(id)).isZero();
+        assertThat(sweep.removeUnattached()).isZero();
+        assertThat(storage().destroyed()).isEmpty();
+    }
+
+    @Test
+    void D99_aPostWhoseReportsWereDismissed_losesItsFiles_whenItsAuthorDeletesIt() throws Exception {
+        UUID author = trader();
+        UUID admin = account(UserRole.ADMIN);
+        String released = signed(author, "IMAGE");
+        storage().uploadImage(released, "jpg", 1_000);
+        String deleted = id(
+                as(author, post(POSTS), postBody("Dismissed", image(released))).andExpect(status().isCreated()));
+        report(trader(), deleted);
+        decide(admin, deleted, "DISMISS");
+        String swept = signed(author, "IMAGE");
+        storage().uploadImage(swept, "png", 1_000);
+        String lost = id(as(author, post(POSTS), postBody("Also dismissed", image(swept)))
+                .andExpect(status().isCreated()));
+        report(trader(), lost);
+        decide(admin, lost, "DISMISS");
+
+        as(author, delete(POSTS + "/" + deleted), null).andExpect(status().isNoContent());
+        assertThat(releases(deleted)).isEqualTo(1);
+        await().atMost(WAIT).until(() -> storage().destroyed().contains(released));
+
+        // As if the release of its files had failed for good: the sweep deletes them.
+        sql.sql("update forum_post set post_status = 'DELETED' where post_id = ?")
+                .param(UUID.fromString(lost))
+                .update();
+        storage().uploadedAt(swept, Instant.now().minus(Duration.ofDays(2)));
+        assertThat(sweep.removeUnattached()).isEqualTo(1);
+        assertThat(storage().destroyed()).containsExactlyInAnyOrder(released, swept);
+    }
+
+    @Test
+    void D98_aSecondUploadUnderTheSameKey_keepsTheFirstFile() throws Exception {
+        UUID trader = trader();
+        String file = signed(trader, "IMAGE");
+        storage().uploadImage(file, "jpg", 1_000);
+
+        storage().uploadImage(file, "png", 50 * MB);
+
+        assertThat(storage().describe(PostMediaType.IMAGE, file).orElseThrow()).satisfies(stored -> {
+            assertThat(stored.format()).isEqualTo("jpg");
+            assertThat(stored.bytes()).isEqualTo(1_000);
+        });
+        as(trader, post(POSTS), postBody("First file", image(file)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.media[0].publicId").value(file));
     }
 
     @Test
@@ -525,6 +602,29 @@ class PostMediaApiTest {
                         .getResponse()
                         .getContentAsString(),
                 "$.publicId");
+    }
+
+    private void report(UUID reporter, String postId) throws Exception {
+        as(reporter, post(POSTS + "/" + postId + "/reports"), "{\"reason\": \"SCAM\"}")
+                .andExpect(status().isCreated());
+    }
+
+    private ResultActions decide(UUID admin, String postId, String action) throws Exception {
+        return as(
+                        admin,
+                        UserRole.ADMIN,
+                        post("/api/v1/admin/reports-queue/" + postId + "/decision"),
+                        "{\"action\": \"" + action + "\"}")
+                .andExpect(status().isOk());
+    }
+
+    /** How many releases of this post's files were recorded for delivery. */
+    private long releases(String postId) {
+        return sql.sql("select count(*) from event_publication where event_type like '%PostMediaReleased'"
+                        + " and serialized_event like ?")
+                .param("%" + postId + "%")
+                .query(Long.class)
+                .single();
     }
 
     private boolean premium(UUID trader) {

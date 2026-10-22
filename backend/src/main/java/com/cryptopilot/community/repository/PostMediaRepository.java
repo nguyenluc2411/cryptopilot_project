@@ -30,8 +30,13 @@ public interface PostMediaRepository extends Repository<PostMedia, UUID> {
 
     /**
      * Which of these keys a post still carries: the files the sweep of unattached files keeps. A post that is not
-     * deleted carries its files, and so does a post moderation removed (REMOVE_POST), whose files are the evidence of
-     * the decision. A post its author deleted released its files (BR-47), so they are not among them.
+     * deleted carries its files. A deleted post keeps them while it has a report not decided yet or decided against
+     * it (HIDE_POST, REMOVE_POST, BAN_USER): they are the evidence of the moderation. A deleted post with no such
+     * report released its files (BR-47), so they are not among them.
+     *
+     * <p>Rule: BR-47; D-99.
+     *
+     * <p>Reference: Evans, E. <i>Domain-Driven Design</i> (Addison-Wesley, 2003), ch. 6.
      */
     @Transactional(readOnly = true)
     @Query("""
@@ -40,8 +45,12 @@ public interface PostMediaRepository extends Repository<PostMedia, UUID> {
                and (p.status <> com.cryptopilot.community.model.enums.PostStatus.DELETED
                     or exists (select r.id from PostReport r
                                 where r.postId = p.id
-                                  and r.resolutionAction
-                                      = com.cryptopilot.community.model.enums.ResolutionAction.REMOVE_POST))""")
+                                  and (r.status in (com.cryptopilot.community.model.enums.ReportStatus.OPEN,
+                                                    com.cryptopilot.community.model.enums.ReportStatus.REVIEWING)
+                                       or r.resolutionAction in (
+                                              com.cryptopilot.community.model.enums.ResolutionAction.HIDE_POST,
+                                              com.cryptopilot.community.model.enums.ResolutionAction.REMOVE_POST,
+                                              com.cryptopilot.community.model.enums.ResolutionAction.BAN_USER))))""")
     List<String> keysStillCarried(@Param("keys") Collection<String> keys);
 
     /** Writes a file row. Not transactional here; the unit of work is the calling service's. */

@@ -125,6 +125,8 @@ class ForumPostTest {
 
         assertThat(post.isVisibleTo(AUTHOR)).isTrue();
         assertThat(post.isVisibleTo(OTHER)).isFalse();
+        assertThatThrownBy(() -> post.revise("Title", "Text", null, List.of()))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test

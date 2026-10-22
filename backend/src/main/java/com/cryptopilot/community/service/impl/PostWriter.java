@@ -14,6 +14,7 @@ import com.cryptopilot.community.model.enums.PostStatus;
 import com.cryptopilot.community.model.enums.PostType;
 import com.cryptopilot.community.repository.ForumPostRepository;
 import com.cryptopilot.community.repository.PostMediaRepository;
+import com.cryptopilot.community.repository.PostReportRepository;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -37,7 +38,8 @@ import org.springframework.transaction.support.TransactionOperations;
  * <p>The files are checked against the media storage before the transaction opens, so no database connection is held
  * while the storage answers; the transaction then writes the post and its file rows. Files a post no longer carries —
  * all of them when it is deleted, the ones an edit leaves out — are released with {@link PostMediaReleased} inside that
- * transaction and deleted from the storage after it commits (SRS 3.7.2).
+ * transaction and deleted from the storage after it commits (SRS 3.7.2). A deleted post that is hidden or reported
+ * keeps its files as the evidence of the moderation.
  *
  * <p>Rule: UC-27, UC-28, UC-29, UC-44; BR-43, BR-44, BR-47; D-98.
  */
@@ -47,6 +49,7 @@ public class PostWriter {
 
     private final ForumPostRepository posts;
     private final PostMediaRepository media;
+    private final PostReportRepository reports;
     private final PostAssembler assembler;
     private final MediaRules rules;
     private final ApplicationEventPublisher events;
@@ -82,7 +85,7 @@ public class PostWriter {
 
     /**
      * Replaces the content and files of the post {@code lookup} finds and that is neither deleted nor hidden; MSG41
-     * otherwise. A hidden post is kept as moderation saw it, and the answer does not tell that it is hidden.
+     * otherwise. A hidden post is kept as moderation saw it.
      *
      * @param caller who edits it, in whose folder new files must be
      * @param trader whether the caller is a Trader, whose new videos need video posting
@@ -106,12 +109,19 @@ public class PostWriter {
         });
     }
 
-    /** Deletes the post {@code lookup} finds and that is not deleted (BR-47), releasing its files; MSG41 otherwise. */
+    /**
+     * Deletes the post {@code lookup} finds and that is not deleted (BR-47); MSG41 otherwise. Its files are released,
+     * unless the post is hidden or has a report not decided yet or decided against it: they are then kept as the
+     * evidence of the moderation (D-99).
+     */
     void delete(UUID postId, Function<UUID, Optional<ForumPost>> lookup) {
         transactions.executeWithoutResult(status -> {
             ForumPost post = editable(postId, lookup);
+            boolean evidence = post.getStatus() == PostStatus.HIDDEN || reports.holdsEvidence(post.getId());
             post.delete();
-            release(post.getId(), media.findAllByPostIdOrderBySortOrderAsc(post.getId()));
+            if (!evidence) {
+                release(post.getId(), media.findAllByPostIdOrderBySortOrderAsc(post.getId()));
+            }
         });
     }
 
