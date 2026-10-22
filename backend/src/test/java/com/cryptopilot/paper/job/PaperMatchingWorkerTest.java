@@ -20,6 +20,7 @@ import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
+import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
 import com.cryptopilot.paper.model.RestingOrder;
@@ -377,6 +378,102 @@ class PaperMatchingWorkerTest {
     }
 
     @Test
+    void D77_aTradeReadBeforeTheOrderWasTracked_fillsItOnceTracked_butNotOnePlacedAfterThatTrade() {
+        RestingOrder marker = sell("90");
+        when(matching.restingOrders()).thenReturn(List.of(marker));
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+        Instant traded = PLACED.plusSeconds(2);
+        worker.onTrade(trade("98.5", traded));
+        verify(matching, timeout(WAIT)).fill(marker, traded, FillSource.LIVE);
+        RestingOrder placedBefore = buy("99");
+        RestingOrder placedAfter = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.BUY,
+                new BigDecimal("99"),
+                traded.plusMillis(1));
+
+        worker.onRested(new PaperOrderRested(placedAfter));
+        worker.onRested(new PaperOrderRested(placedBefore));
+
+        verify(matching, timeout(WAIT)).fill(placedBefore, traded, FillSource.LIVE);
+        verify(matching, after(200).never()).fill(eq(placedAfter), any(), any());
+    }
+
+    @Test
+    void D77_aStopWatchedAfterATradeReadBeforeIt_isTriggeredByThatTrade() {
+        RestingOrder marker = sell("90");
+        when(matching.restingOrders()).thenReturn(List.of(marker));
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+        Instant traded = PLACED.plusSeconds(2);
+        worker.onTrade(trade("98.5", traded));
+        verify(matching, timeout(WAIT)).fill(marker, traded, FillSource.LIVE);
+        TriggerOrder stop = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("99"),
+                null,
+                null,
+                PLACED);
+        TriggerOrder later = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("99"),
+                null,
+                null,
+                traded);
+
+        worker.onAwaitingTrigger(new PaperOrderAwaitingTrigger(later));
+        worker.onAwaitingTrigger(new PaperOrderAwaitingTrigger(stop));
+
+        verify(matching, timeout(WAIT)).trigger(stop, traded, new BigDecimal("99"), FillSource.LIVE, null);
+        verify(matching, after(200).never()).trigger(eq(later), any(), any(), any(), any());
+    }
+
+    @Test
+    void D77_theRecentTradesKept_areBoundedByTimeAndByCount() {
+        RestingOrder marker = sell("90");
+        when(matching.restingOrders()).thenReturn(List.of(marker));
+        worker = started(properties(
+                true,
+                false,
+                Duration.ofMinutes(10),
+                LimitFillMode.CROSS,
+                new PaperMatchingProperties.RecentTrades(Duration.ofSeconds(10), 2)));
+        worker.onTrade(trade("98", PLACED.plusSeconds(1)));
+        verify(matching, timeout(WAIT)).fill(marker, PLACED.plusSeconds(1), FillSource.LIVE);
+        // Past the window of the first trade, which is dropped.
+        worker.onTrade(trade("120", PLACED.plusSeconds(20)));
+        RestingOrder firstMarker = sell("119");
+        worker.onRested(new PaperOrderRested(firstMarker));
+        verify(matching, timeout(WAIT)).fill(firstMarker, PLACED.plusSeconds(20), FillSource.LIVE);
+        RestingOrder buy = buy("99");
+        worker.onRested(new PaperOrderRested(buy));
+        // Three more trades: only the last two are kept.
+        worker.onTrade(trade("97", PLACED.plusSeconds(21)));
+        worker.onTrade(trade("130", PLACED.plusSeconds(22)));
+        worker.onTrade(trade("131", PLACED.plusSeconds(23)));
+        verify(matching, timeout(WAIT)).fill(buy, PLACED.plusSeconds(21), FillSource.LIVE);
+        RestingOrder lateBuy = buy("98");
+        RestingOrder lateSell = sell("130.5");
+        worker.onRested(new PaperOrderRested(lateBuy));
+        worker.onRested(new PaperOrderRested(lateSell));
+
+        verify(matching, timeout(WAIT)).fill(lateSell, PLACED.plusSeconds(23), FillSource.LIVE);
+        verify(matching, after(200).never()).fill(eq(lateBuy), any(), any());
+    }
+
+    @Test
     void QT8_aTradeAtTheOrdersOwnPrice_fillsItOnlyWithTouch() {
         RestingOrder crossOrder = buy("100");
         when(matching.restingOrders()).thenReturn(List.of(crossOrder));
@@ -509,6 +606,20 @@ class PaperMatchingWorkerTest {
 
     private static PaperMatchingProperties properties(
             boolean enabled, boolean replay, Duration deadline, LimitFillMode mode) {
+        return properties(
+                enabled,
+                replay,
+                deadline,
+                mode,
+                new PaperMatchingProperties.RecentTrades(Duration.ofSeconds(10), 1000));
+    }
+
+    private static PaperMatchingProperties properties(
+            boolean enabled,
+            boolean replay,
+            Duration deadline,
+            LimitFillMode mode,
+            PaperMatchingProperties.RecentTrades recentTrades) {
         return new PaperMatchingProperties(
                 enabled,
                 mode,
@@ -517,7 +628,8 @@ class PaperMatchingWorkerTest {
                 deadline,
                 4,
                 Duration.ofSeconds(5),
-                new PaperMatchingProperties.Replay(replay, Duration.ofHours(24), Duration.ZERO));
+                new PaperMatchingProperties.Replay(replay, Duration.ofHours(24), Duration.ZERO),
+                recentTrades);
     }
 
     @Test

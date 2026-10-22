@@ -5,7 +5,9 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.model.enums.FillSource;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.TreeMap;
@@ -21,7 +23,15 @@ import java.util.UUID;
  * a BUY the range reached is filled at the low's time, a SELL at the high's. Trades also keep how much takers sold and
  * bought at each price, which moves the queue of the orders waiting there (Q-T8); a candle carries no such volume.
  *
+ * <p>The trades merged into one range are also kept one by one, in the order they traded ({@link #prints()}), so an
+ * order placed between two of them is reached by the later one alone, and only the volume traded after its placement
+ * moves its queue (D-77). The low and the high alone, each with the time of its earliest trade, would lose a later
+ * trade at a price an earlier one already set.
+ *
  * <p>Rule: TR-02, TR-05; NSF-07; Q-T6, Q-T8; D-77, D-78; ADR-011.
+ *
+ * <p>Reference: Akidau, T. et al. (2015). The Dataflow Model. <i>PVLDB</i>, 8(12), 1792-1803 (each element is judged
+ * by its own event time, not by the time of the batch it was read in).
  *
  * @param market the market
  * @param pairId the pair
@@ -36,6 +46,7 @@ import java.util.UUID;
  * @param boughtAt the base quantity takers bought at each price: it lifted the asks there, ahead of a SELL waiting at it
  * @param open a replayed candle's first price, which a market stop it triggers executes at when it opened past the
  *     stop; {@code null} otherwise
+ * @param prints the trades of the range one by one, earliest first; empty for a candle, whose trades are not known
  */
 public record PriceRange(
         MarketType market,
@@ -49,7 +60,8 @@ public record PriceRange(
         Instant highAt,
         NavigableMap<BigDecimal, BigDecimal> soldAt,
         NavigableMap<BigDecimal, BigDecimal> boughtAt,
-        BigDecimal open) {
+        BigDecimal open,
+        List<Print> prints) {
 
     public PriceRange {
         Objects.requireNonNull(market, "market");
@@ -63,6 +75,7 @@ public record PriceRange(
         // Keyed by value, so 80000 and 80000.00 are one price.
         soldAt = Collections.unmodifiableNavigableMap(new TreeMap<>(soldAt));
         boughtAt = Collections.unmodifiableNavigableMap(new TreeMap<>(boughtAt));
+        prints = List.copyOf(prints);
         if (low.compareTo(high) > 0) {
             throw new IllegalArgumentException("low " + low + " is above high " + high);
         }
@@ -81,7 +94,7 @@ public record PriceRange(
             Instant highAt,
             NavigableMap<BigDecimal, BigDecimal> soldAt,
             NavigableMap<BigDecimal, BigDecimal> boughtAt) {
-        this(market, pairId, low, high, from, closed, source, lowAt, highAt, soldAt, boughtAt, null);
+        this(market, pairId, low, high, from, closed, source, lowAt, highAt, soldAt, boughtAt, null, List.of());
     }
 
     /** A 1-minute candle's range: its low and high both recorded at its open time (D-78), with no volume by price. */
@@ -106,26 +119,64 @@ public record PriceRange(
             boolean closed,
             FillSource source,
             BigDecimal open) {
-        this(market, pairId, low, high, from, closed, source, from, from, new TreeMap<>(), new TreeMap<>(), open);
+        this(
+                market,
+                pairId,
+                low,
+                high,
+                from,
+                closed,
+                source,
+                from,
+                from,
+                new TreeMap<>(),
+                new TreeMap<>(),
+                open,
+                List.of());
     }
 
     /** One live market trade, at its price and its trade time, with its quantity on the side its taker took. */
     public static PriceRange of(MarketTrade trade) {
-        NavigableMap<BigDecimal, BigDecimal> volume = new TreeMap<>();
-        volume.put(trade.price(), trade.quantity());
-        NavigableMap<BigDecimal, BigDecimal> none = new TreeMap<>();
-        return new PriceRange(
+        return ofPrints(
                 trade.market(),
                 trade.pairId(),
-                trade.price(),
-                trade.price(),
-                trade.tradeTime(),
+                List.of(new Print(trade.price(), trade.quantity(), trade.buyerMaker(), trade.tradeTime())));
+    }
+
+    /** Live trades of one pair, at least one, earliest first, read as one range. */
+    public static PriceRange ofPrints(MarketType market, UUID pairId, List<Print> prints) {
+        if (prints.isEmpty()) {
+            throw new IllegalArgumentException("a range of trades holds at least one");
+        }
+        Print first = prints.getFirst();
+        Print low = first;
+        Print high = first;
+        NavigableMap<BigDecimal, BigDecimal> sold = new TreeMap<>();
+        NavigableMap<BigDecimal, BigDecimal> bought = new TreeMap<>();
+        for (Print print : prints) {
+            // Strictly lower or higher: the earliest trade at the low or the high keeps its time.
+            if (print.price().compareTo(low.price()) < 0) {
+                low = print;
+            }
+            if (print.price().compareTo(high.price()) > 0) {
+                high = print;
+            }
+            (print.takerSold() ? sold : bought).merge(print.price(), print.quantity(), BigDecimal::add);
+        }
+        return new PriceRange(
+                market,
+                pairId,
+                low.price(),
+                high.price(),
+                first.at(),
                 false,
                 FillSource.LIVE,
-                trade.tradeTime(),
-                trade.tradeTime(),
-                trade.buyerMaker() ? volume : none,
-                trade.buyerMaker() ? none : volume);
+                low.at(),
+                high.at(),
+                sold,
+                bought,
+                null,
+                prints);
     }
 
     /**
@@ -150,7 +201,8 @@ public record PriceRange(
 
     /**
      * These trades followed by later ones of the same pair, read as one range: the lowest low and the highest high,
-     * each with the time of the earliest trade at it, and the volume sold and bought at each price added up.
+     * each with the time of the earliest trade at it, the volume sold and bought at each price added up, and every
+     * trade kept in the order it traded.
      */
     public PriceRange withTrades(PriceRange later) {
         int lower = later.low.compareTo(low);
@@ -168,7 +220,23 @@ public record PriceRange(
                 laterLow ? later.lowAt : lowAt,
                 laterHigh ? later.highAt : highAt,
                 added(soldAt, later.soldAt),
-                added(boughtAt, later.boughtAt));
+                added(boughtAt, later.boughtAt),
+                null,
+                inTradeOrder(prints, later.prints));
+    }
+
+    /** Two runs of trades, each earliest first, as one; at an equal time a trade of the first run comes first. */
+    private static List<Print> inTradeOrder(List<Print> earlier, List<Print> later) {
+        List<Print> merged = new ArrayList<>(earlier.size() + later.size());
+        int i = 0;
+        int j = 0;
+        while (i < earlier.size() || j < later.size()) {
+            boolean takeLater = i == earlier.size()
+                    || (j < later.size()
+                            && later.get(j).at().isBefore(earlier.get(i).at()));
+            merged.add(takeLater ? later.get(j++) : earlier.get(i++));
+        }
+        return merged;
     }
 
     private static NavigableMap<BigDecimal, BigDecimal> added(
@@ -176,5 +244,22 @@ public record PriceRange(
         NavigableMap<BigDecimal, BigDecimal> sum = new TreeMap<>(earlier);
         later.forEach((price, quantity) -> sum.merge(price, quantity, BigDecimal::add));
         return sum;
+    }
+
+    /**
+     * One market trade of a range.
+     *
+     * @param price the price it traded at
+     * @param quantity the base quantity
+     * @param takerSold whether its taker sold, hitting the bids ({@code buyerMaker}); otherwise the taker bought
+     * @param at its trade time
+     */
+    public record Print(BigDecimal price, BigDecimal quantity, boolean takerSold, Instant at) {
+
+        public Print {
+            Objects.requireNonNull(price, "price");
+            Objects.requireNonNull(quantity, "quantity");
+            Objects.requireNonNull(at, "at");
+        }
     }
 }

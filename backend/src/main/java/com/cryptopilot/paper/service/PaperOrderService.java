@@ -8,6 +8,7 @@ import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
+import com.cryptopilot.paper.model.PlacedOrderList;
 import java.util.List;
 import java.util.UUID;
 
@@ -51,7 +52,14 @@ public interface PaperOrderService {
      */
     OrderResponse cancel(UUID userId, UUID orderId);
 
-    OrderListResponse placeList(UUID userId, PlaceOrderListRequest request);
+    /**
+     * Places a group of orders (TR-10), once per {@code listClientOrderId}: a key already used for the same group
+     * returns that group, not created now.
+     *
+     * @throws com.cryptopilot.common.exception.BusinessException {@code DATA_CONFLICT} when the key was used for a
+     *     group of other values
+     */
+    PlacedOrderList placeList(UUID userId, PlaceOrderListRequest request);
 
     OrderListResponse cancelList(UUID userId, UUID listId);
 

@@ -4,6 +4,7 @@ import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.model.enums.OrderType;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -98,6 +99,17 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
 
     /** Reads the orders of these ids. */
     List<PaperOrder> findByIdIn(Collection<UUID> ids);
+
+    /** How many of the account's orders of one pair are in these statuses. */
+    long countByAccountIdAndPairIdAndOrderStatusIn(UUID accountId, UUID pairId, Collection<OrderStatus> statuses);
+
+    /** How many of the account's orders of one pair, of these types, are in these statuses. */
+    long countByAccountIdAndPairIdAndOrderStatusInAndOrderTypeIn(
+            UUID accountId, UUID pairId, Collection<OrderStatus> statuses, Collection<OrderType> types);
+
+    /** The accounts with an order of the pair in these statuses: those a stop of the pair's trading concerns. */
+    @Query("select distinct o.accountId from PaperOrder o where o.pairId = :pairId and o.orderStatus in :statuses")
+    List<UUID> findAccountIdsWithOrders(UUID pairId, Collection<OrderStatus> statuses);
 
     /** Writes an order. Not transactional here; the unit of work is the calling service's. */
     PaperOrder save(PaperOrder order);

@@ -30,6 +30,7 @@ import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
+import com.cryptopilot.paper.model.PlacedOrderList;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
@@ -79,9 +80,10 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <h2>Prices and quantities</h2>
  *
- * <p>The price is rounded to the pair's tick (BR-30) and the quantity floored to its step (BR-23), then to the 8
- * decimals a balance holds; an order worth less than the pair's minimum notional is refused (MSG15), as the exchange
- * refuses it.
+ * <p>A price, stopPrice and quantity are taken as given and checked against the pair's Spot filters, as the exchange
+ * checks them ({@link SpotFilters}): off the tick or the step, out of their bounds, worth too little or too much, or
+ * too far from the last price, the order is refused, never rounded. The open orders and stops of the account on the
+ * pair are limited ({@link SpotOrderLimits}).
  *
  * <h2>Executing on arrival</h2>
  *
@@ -112,6 +114,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     private final SpotArrival arrival;
     private final PaperOrderLists lists;
     private final PaperOrderListRepository groups;
+    private final SpotOrderLimits limits;
     private final UserLock lock;
     private final MarketApi market;
     private final QuoteUsdtRate usdtRates;
@@ -125,7 +128,9 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         PaperAccount account = accountOf(userId);
         requireShape(request);
+        // A pair the exchange stopped trading takes no new order: its open ones are cancelled (NSF-01).
         TradablePair pair = market.tradablePair(request.pairId(), request.market())
+                .filter(TradablePair::exchangeTrading)
                 .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", request.pairId()));
         Terms terms = termsOf(request, pair.filters());
         if (request.clientOrderId() != null) {
@@ -135,6 +140,16 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             if (placed.isPresent()) {
                 return new PlacedOrder(replayOf(placed.get(), terms, request, pair.symbol()), false);
             }
+        }
+        limits.requireRoom(
+                account.getId(), pair.pairId(), pair.filters(), 1, terms.type().isSpotStop() ? 1 : 0);
+        if (terms.price() != null) {
+            SpotFilters.requirePercentPrice(
+                    pair.filters(),
+                    terms.side(),
+                    terms.price(),
+                    market.currentLastPrice(MarketType.SPOT, pair.symbol()).orElse(null),
+                    "price");
         }
         PairCoins coins = market.pairCoins(pair.pairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + pair.pairId() + " is tradable but not stored"));
@@ -209,7 +224,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
 
     @Override
     @Transactional
-    public OrderListResponse placeList(UUID userId, PlaceOrderListRequest request) {
+    public PlacedOrderList placeList(UUID userId, PlaceOrderListRequest request) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         return lists.place(accountOf(userId), request);
     }
@@ -335,11 +350,14 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         PaperOrder order;
         if (terms.quoteAmount() != null) {
             sweep = BookSweep.ofQuote(book.levels(), terms.quoteAmount(), pair.filters());
-            requireTradable(pair.filters(), sweep, "quoteOrderQty");
+            SpotFilters.requirePositive(pair.filters(), sweep.quantity(), "quoteOrderQty");
+            SpotFilters.requireMarketQuantity(pair.filters(), sweep.quantity(), "quoteOrderQty", false);
+            SpotFilters.requireNotional(pair.filters(), sweep.notional(), true, "quoteOrderQty");
             order = PaperOrder.spotMarketFor(account.getId(), pair.pairId(), key, terms.side(), terms.quoteAmount());
         } else {
             sweep = BookSweep.ofQuantity(book.levels(), terms.side(), terms.quantity(), null);
-            requireTradable(pair.filters(), sweep, "quantity");
+            SpotFilters.requirePositive(pair.filters(), sweep.quantity(), "quantity");
+            SpotFilters.requireNotional(pair.filters(), sweep.notional(), true, "quantity");
             order = PaperOrder.spotMarket(account.getId(), pair.pairId(), key, terms.side(), terms.quantity());
         }
         orders.save(order);
@@ -367,7 +385,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             Terms terms,
             String key,
             Optional<SpotArrival.Book> book) {
-        requireTradable(pair.filters(), terms.price().multiply(terms.quantity()), terms.quantity(), "quantity");
+        SpotFilters.requireNotional(pair.filters(), terms.price().multiply(terms.quantity()), false, "quantity");
         TimeInForce timeInForce = terms.timeInForce();
         if (book.isEmpty() && (timeInForce == TimeInForce.IOC || timeInForce == TimeInForce.FOK)) {
             throw priceUnavailable(pair);
@@ -397,7 +415,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 market.currentLastPrice(MarketType.SPOT, pair.symbol()).orElseThrow(() -> priceUnavailable(pair));
         BigDecimal sizing =
                 terms.price() != null ? terms.price() : terms.stopPrice() != null ? terms.stopPrice() : last;
-        requireTradable(pair.filters(), sizing.multiply(terms.quantity()), terms.quantity(), "quantity");
+        SpotFilters.requireNotional(pair.filters(), sizing.multiply(terms.quantity()), false, "quantity");
         TriggerCondition condition = type.triggerConditionFor(terms.side());
         if (terms.stopPrice() != null && terms.trailingPercent() == null) {
             int side = last.compareTo(terms.stopPrice());
@@ -444,7 +462,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             Terms terms,
             String key,
             Optional<SpotArrival.Book> book) {
-        requireTradable(pair.filters(), terms.price().multiply(terms.quantity()), terms.quantity(), "quantity");
+        SpotFilters.requireNotional(pair.filters(), terms.price().multiply(terms.quantity()), false, "quantity");
         boolean wouldTake = book.map(
                         found -> !BookSweep.ofQuantity(found.levels(), terms.side(), terms.quantity(), terms.price())
                                 .isEmpty())
@@ -561,22 +579,40 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         }
     }
 
-    /** The order's figures on the pair's grid: the price to the tick, the quantity to the step and 8 decimals. */
+    /**
+     * The order's figures as the Trader gave them, each checked against the pair's filters ({@link SpotFilters}): a
+     * price or stopPrice off the tick, or a quantity off the step, is refused, never rounded.
+     */
     private static Terms termsOf(PlaceOrderRequest request, PairFilters filters) {
-        BigDecimal price = request.price() == null ? null : filters.roundPrice(request.price());
-        if (price != null && price.signum() == 0) {
-            throw new FieldValidationException("price rounds to zero on the tick", Map.of("price", "MSG15"));
+        BigDecimal price = request.price();
+        if (price != null) {
+            SpotFilters.requirePrice(filters, price, "price");
         }
-        BigDecimal quantity = request.quantity() == null ? null : scaled(filters.floorQuantity(request.quantity()));
-        if (quantity != null && quantity.signum() == 0) {
-            throw new FieldValidationException("quantity is below one step", Map.of("quantity", "MSG15"));
+        BigDecimal quantity = request.quantity();
+        if (quantity != null) {
+            SpotFilters.requireQuantity(filters, quantity, "quantity");
+            if (request.type() == OrderType.MARKET) {
+                SpotFilters.requireMarketQuantity(filters, quantity, "quantity", true);
+            }
+            // On the step and within 8 decimals by now, so this only sets the scale a balance holds.
+            quantity = quantity.setScale(BALANCE_SCALE, RoundingMode.UNNECESSARY);
         }
         boolean hasTimeInForce = request.type() == OrderType.LIMIT
                 || request.type() == OrderType.STOP_LOSS_LIMIT
                 || request.type() == OrderType.TAKE_PROFIT_LIMIT;
         TimeInForce timeInForce =
                 hasTimeInForce && request.timeInForce() == null ? TimeInForce.GTC : request.timeInForce();
-        BigDecimal stopPrice = onTick(filters, request.stopPrice(), "stopPrice");
+        BigDecimal stopPrice = request.stopPrice();
+        if (stopPrice != null) {
+            SpotFilters.requirePrice(filters, stopPrice, "stopPrice");
+        }
+        if (request.trailingDelta() != null) {
+            SpotFilters.requireTrailingDelta(
+                    filters,
+                    request.type().triggerConditionFor(request.side()),
+                    request.trailingDelta(),
+                    "trailingDelta");
+        }
         BigDecimal trailingPercent =
                 request.trailingDelta() == null ? null : BigDecimal.valueOf(request.trailingDelta(), 2);
         return new Terms(
@@ -588,18 +624,6 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 request.quoteOrderQty(),
                 stopPrice,
                 trailingPercent);
-    }
-
-    /** A trigger price on the pair's tick; {@code null} stays {@code null}; one that rounds to zero is MSG15. */
-    private static BigDecimal onTick(PairFilters filters, BigDecimal price, String field) {
-        if (price == null) {
-            return null;
-        }
-        BigDecimal rounded = filters.roundPrice(price);
-        if (rounded.signum() == 0) {
-            throw new FieldValidationException(field + " rounds to zero on the tick", Map.of(field, "MSG15"));
-        }
-        return rounded;
     }
 
     /**
@@ -630,29 +654,9 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         return stored == null ? asked == null : asked != null && stored.compareTo(asked) == 0;
     }
 
-    /** An order that takes the book is refused when what it takes is below the pair's minimum notional (MSG15). */
-    private static void requireTradable(PairFilters filters, BookSweep.Result sweep, String field) {
-        requireTradable(filters, sweep.notional(), sweep.quantity(), field);
-    }
-
-    /** An order below the pair's minimum notional is refused on the field that sized it (MSG15). */
-    private static void requireTradable(PairFilters filters, BigDecimal notional, BigDecimal quantity, String field) {
-        if (quantity.signum() == 0 || filters.isBelowMinNotional(notional)) {
-            throw new FieldValidationException(
-                    "order of " + quantity.toPlainString() + " worth " + notional.toPlainString()
-                            + " is below the minimum notional of "
-                            + filters.minNotional().toPlainString(),
-                    Map.of(field, "MSG15"));
-        }
-    }
-
     private static BusinessException priceUnavailable(TradablePair pair) {
         return new BusinessException(
                 ErrorCode.MARKET_PRICE_UNAVAILABLE, "no current last price for " + pair.symbol() + " on SPOT");
-    }
-
-    private static BigDecimal scaled(BigDecimal quantity) {
-        return quantity.setScale(BALANCE_SCALE, RoundingMode.DOWN);
     }
 
     /** The caller's account; MSG41 when it is not opened yet, so the client knows to open it. */
@@ -698,12 +702,12 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     }
 
     /**
-     * The order's figures after rounding.
+     * The order's figures, checked against the pair's filters.
      *
-     * @param price the LIMIT price on the tick; {@code null} for MARKET
-     * @param quantity the quantity on the step; {@code null} for a MARKET buy by total
+     * @param price the limit price; {@code null} for MARKET
+     * @param quantity the quantity, at the scale of a balance; {@code null} for a MARKET order by total
      * @param quoteAmount what a MARKET order by total spends or brings in; otherwise {@code null}
-     * @param stopPrice a stop's stopPrice on the tick; otherwise {@code null}
+     * @param stopPrice a stop's stopPrice; otherwise {@code null}
      * @param trailingPercent a stop's trailing delta in percent; otherwise {@code null}
      */
     private record Terms(

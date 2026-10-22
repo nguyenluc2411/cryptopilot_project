@@ -12,6 +12,7 @@ import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -75,6 +76,45 @@ class PaperMatchingRecordsTest {
         assertThat(merged.soldAt().get(new BigDecimal("80000"))).isEqualByComparingTo("2");
         assertThat(merged.boughtAt().get(new BigDecimal("80001"))).isEqualByComparingTo("2");
         assertThat(range("1", "2", MINUTE, true).soldAt()).isEmpty();
+    }
+
+    @Test
+    void D77_mergedTrades_keepEachTradeInTheOrderItTraded_evenWhenReadOutOfOrder() {
+        PriceRange early = PriceRange.of(trade("100", MINUTE.plusMillis(10)))
+                .withTrades(PriceRange.of(trade("101", MINUTE.plusMillis(30))));
+        PriceRange late = PriceRange.of(trade("99", MINUTE.plusMillis(20)));
+
+        PriceRange merged = early.withTrades(late);
+
+        assertThat(merged.prints())
+                .extracting(PriceRange.Print::at)
+                .containsExactly(MINUTE.plusMillis(10), MINUTE.plusMillis(20), MINUTE.plusMillis(30));
+        assertThat(merged.lowAt()).isEqualTo(MINUTE.plusMillis(20));
+        assertThat(range("1", "2", MINUTE, true).prints()).isEmpty();
+        assertThat(merged.withTrades(range("1", "200", MINUTE, false)).prints())
+                .as("a range without trades adds none")
+                .hasSize(3);
+    }
+
+    @Test
+    void TR05_aRangeOfPrints_takesItsLowHighAndVolumes_fromThem() {
+        PriceRange range = PriceRange.ofPrints(
+                MarketType.SPOT,
+                PAIR,
+                List.of(
+                        new PriceRange.Print(new BigDecimal("100"), BigDecimal.ONE, true, MINUTE),
+                        new PriceRange.Print(new BigDecimal("98"), BigDecimal.ONE, false, MINUTE.plusMillis(1)),
+                        new PriceRange.Print(new BigDecimal("98"), BigDecimal.TEN, true, MINUTE.plusMillis(2)),
+                        new PriceRange.Print(new BigDecimal("102"), BigDecimal.ONE, false, MINUTE.plusMillis(3))));
+
+        assertThat(range.low()).isEqualByComparingTo("98");
+        assertThat(range.lowAt()).isEqualTo(MINUTE.plusMillis(1));
+        assertThat(range.high()).isEqualByComparingTo("102");
+        assertThat(range.from()).isEqualTo(MINUTE);
+        assertThat(range.soldAt().get(new BigDecimal("98"))).isEqualByComparingTo("10");
+        assertThat(range.boughtAt().get(new BigDecimal("98"))).isEqualByComparingTo("1");
+        assertThatIllegalArgumentException().isThrownBy(() -> PriceRange.ofPrints(MarketType.SPOT, PAIR, List.of()));
+        assertThatNullPointerException().isThrownBy(() -> new PriceRange.Print(null, BigDecimal.ONE, true, MINUTE));
     }
 
     @Test

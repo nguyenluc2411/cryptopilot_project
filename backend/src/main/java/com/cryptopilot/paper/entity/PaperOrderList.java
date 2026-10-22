@@ -44,20 +44,29 @@ public class PaperOrderList extends BaseEntity {
     @Column(name = "list_status", nullable = false, length = 32)
     private OrderListStatus listStatus;
 
+    /** The idempotency key, unique per account: the client's listClientOrderId, or the group's own id. */
+    @Column(name = "list_client_order_id", nullable = false, length = 64, updatable = false)
+    private String listClientOrderId;
+
     /** For JPA only. */
     protected PaperOrderList() {}
 
-    private PaperOrderList(UUID accountId, UUID pairId, OrderListType listType) {
+    private PaperOrderList(UUID accountId, UUID pairId, OrderListType listType, String listClientOrderId) {
         this.accountId = Objects.requireNonNull(accountId, "accountId must not be null");
         this.pairId = Objects.requireNonNull(pairId, "pairId must not be null");
         this.marketType = MarketType.SPOT;
         this.listType = Objects.requireNonNull(listType, "listType must not be null");
         this.listStatus = OrderListStatus.EXECUTING;
+        this.listClientOrderId = listClientOrderId != null ? listClientOrderId : getId().toString();
     }
 
-    /** A Spot group of orders, EXECUTING. */
-    public static PaperOrderList spot(UUID accountId, UUID pairId, OrderListType listType) {
-        return new PaperOrderList(accountId, pairId, listType);
+    /**
+     * A Spot group of orders, EXECUTING.
+     *
+     * @param listClientOrderId the client's idempotency key; {@code null} for the group's own id
+     */
+    public static PaperOrderList spot(UUID accountId, UUID pairId, OrderListType listType, String listClientOrderId) {
+        return new PaperOrderList(accountId, pairId, listType, listClientOrderId);
     }
 
     /** Whether one of its orders still works or waits to be placed. */

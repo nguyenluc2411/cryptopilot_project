@@ -54,7 +54,15 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.PAPER_ORDER_NOT_OPEN, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_ORDER_WOULD_TAKE, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_ORDER_WOULD_TRIGGER, "MSG43 409"),
-            Map.entry(ErrorCode.PAPER_PAIR_NOT_VALUED, "MSG43 409"));
+            Map.entry(ErrorCode.PAPER_PAIR_NOT_VALUED, "MSG43 409"),
+            Map.entry(ErrorCode.PAPER_PRICE_FILTER, "MSG15 400"),
+            Map.entry(ErrorCode.PAPER_LOT_SIZE, "MSG15 400"),
+            Map.entry(ErrorCode.PAPER_MARKET_LOT_SIZE, "MSG15 400"),
+            Map.entry(ErrorCode.PAPER_NOTIONAL, "MSG15 400"),
+            Map.entry(ErrorCode.PAPER_PERCENT_PRICE, "MSG15 400"),
+            Map.entry(ErrorCode.PAPER_TRAILING_DELTA, "MSG15 400"),
+            Map.entry(ErrorCode.PAPER_MAX_NUM_ORDERS, "MSG43 409"),
+            Map.entry(ErrorCode.PAPER_MAX_NUM_ALGO_ORDERS, "MSG43 409"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

@@ -27,7 +27,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -67,9 +70,13 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *       trade's arrival and the storing of its fill, and the orders behind it in the book are reached by the next
  *       trade. The trades of a pair that arrive while the consumer is busy are merged into one waiting range, with the
  *       lowest and highest price and the time each was traded, and queued once: the stream reader never blocks, and
- *       no price is skipped. An order a trade reached fills at that trade's time. With {@code limit-fill-mode}
+ *       no price is skipped. The merged range keeps each trade with its time, and an order is reached only by the
+ *       trades after its placement (D-77). An order a trade reached fills at that trade's time. With {@code limit-fill-mode}
  *       {@code QUEUE} (Binance's price-time priority) an order starts behind the quantity the exchange's depth shows
  *       at its price when it starts waiting, which the trades at that price then consume.
+ *   <li>An order is tracked once its placement commits, which may be after the trades that followed its placement
+ *       were read into a range and ran. Each pair keeps its latest trades ({@code recent-trades}), and an order or a
+ *       stop is matched against those after its placement when it is tracked, so they are not lost.
  *   <li>The forming candles of a pair fill orders only while the pair's trades are silent for {@code trade-silence}:
  *       Futures, a pair streamed without trades, or a lost trade stream. A closed candle always fills what it reached,
  *       so a trade lost on a reconnection is made up for at the candle's open time (D-78), and it moves the watermark.
@@ -145,6 +152,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     /** The stop limits and trailing stops; owned like {@link #book}. */
     private final TriggerBook triggers = new TriggerBook();
+
+    /** The latest live trades of each pair the consumer matched, earliest first; owned like {@link #book}. */
+    private final Map<BookKey, Deque<PriceRange.Print>> recentTrades = new HashMap<>();
 
     /** When the consumer last read a trade of each pair. */
     private final Map<BookKey, Instant> lastTrade = new HashMap<>();
@@ -344,8 +354,14 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     private void handle(Command command) {
         switch (command) {
-            case Command.Track track -> book.track(track.order(), queueAhead(track.order()));
-            case Command.TrackTrigger track -> triggers.track(track.order());
+            case Command.Track track -> {
+                book.track(track.order(), queueAhead(track.order()));
+                catchUp(track.order());
+            }
+            case Command.TrackTrigger track -> {
+                triggers.track(track.order());
+                catchUp(track.order());
+            }
             case Command.Untrack untrack -> {
                 book.untrack(untrack.orderId());
                 triggers.untrack(untrack.orderId());
@@ -406,6 +422,56 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         lastTrade.put(key, clock.instant());
         retryDue(key);
         fillReached(key, range);
+        remember(key, range.prints());
+    }
+
+    /** Keeps a pair's latest trades, within {@code recent-trades.window} of the newest and at most {@code max-trades}. */
+    private void remember(BookKey key, List<PriceRange.Print> prints) {
+        Deque<PriceRange.Print> kept = recentTrades.computeIfAbsent(key, ignored -> new ArrayDeque<>());
+        prints.forEach(kept::addLast);
+        Instant oldest = kept.getLast().at().minus(properties.recentTrades().window());
+        while (kept.size() > properties.recentTrades().maxTrades()
+                || kept.getFirst().at().isBefore(oldest)) {
+            kept.removeFirst();
+        }
+    }
+
+    /**
+     * The pair's recent trades after {@code placedAt}, earliest first. Strictly after: a trade at that instant is the
+     * one a stop triggered on, which its limit already met on arrival.
+     */
+    private List<PriceRange.Print> tradesAfter(BookKey key, Instant placedAt) {
+        Deque<PriceRange.Print> kept = recentTrades.get(key);
+        if (kept == null) {
+            return List.of();
+        }
+        return kept.stream()
+                .filter(print -> print.at().isAfter(placedAt))
+                .sorted(Comparator.comparing(PriceRange.Print::at))
+                .toList();
+    }
+
+    /** Fills a LIMIT order just tracked that trades read before it was tracked reached (D-77). */
+    private void catchUp(RestingOrder order) {
+        BookKey key = keyOf(order);
+        List<PriceRange.Print> after = tradesAfter(key, order.placedAt());
+        if (after.isEmpty()) {
+            return;
+        }
+        book.catchUp(order.orderId(), after)
+                .ifPresent(reached ->
+                        fillAll(key, List.of(new Fill(reached.order(), reached.at(), FillSource.LIVE, null))));
+    }
+
+    /** Triggers a stop just watched that trades read before it was watched reached (D-77). */
+    private void catchUp(TriggerOrder order) {
+        BookKey key = new BookKey(order.market(), order.pairId());
+        List<PriceRange.Print> after = tradesAfter(key, order.placedAt());
+        if (after.isEmpty()) {
+            return;
+        }
+        triggers.catchUp(order.orderId(), PriceRange.ofPrints(key.market(), key.pairId(), after))
+                .ifPresent(fired -> trigger(fired, FillSource.LIVE, null));
     }
 
     /** Whether a trade of the pair was read within {@code trade-silence}, so its forming candles are left to them. */
@@ -425,19 +491,24 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
      */
     private void triggerReached(PriceRange range) {
         for (TriggerBook.Triggered fired : triggers.onRange(range)) {
-            try {
-                if (!matching.trigger(fired.order(), fired.at(), fired.stopPrice(), range.source(), range.open())) {
-                    log.debug(
-                            "TR-09 paper order {} no longer waits for a trigger",
-                            fired.order().orderId());
-                }
-            } catch (RuntimeException failure) {
-                triggers.track(fired.order());
-                log.warn(
-                        "TR-09 paper order {} trigger failed; it waits for the next price: {}",
-                        fired.order().orderId(),
-                        failure.toString());
+            trigger(fired, range.source(), range.open());
+        }
+    }
+
+    /** Triggers one stop under its Trader's lock; on a failure it is watched again for the next price. */
+    private void trigger(TriggerBook.Triggered fired, FillSource source, BigDecimal candleOpen) {
+        try {
+            if (!matching.trigger(fired.order(), fired.at(), fired.stopPrice(), source, candleOpen)) {
+                log.debug(
+                        "TR-09 paper order {} no longer waits for a trigger",
+                        fired.order().orderId());
             }
+        } catch (RuntimeException failure) {
+            triggers.track(fired.order());
+            log.warn(
+                    "TR-09 paper order {} trigger failed; it waits for the next price: {}",
+                    fired.order().orderId(),
+                    failure.toString());
         }
     }
 
@@ -462,12 +533,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         triggerReached(range);
         fillAll(
                 key,
-                book.onRange(range, this::depthAt).stream()
-                        .map(order -> new Fill(
-                                order,
-                                order.side() == OrderSide.BUY ? range.lowAt() : range.highAt(),
-                                range.source(),
-                                null))
+                book.reach(range, this::depthAt).stream()
+                        .map(reached -> new Fill(reached.order(), reached.at(), range.source(), null))
                         .toList());
     }
 

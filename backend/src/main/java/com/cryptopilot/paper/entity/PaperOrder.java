@@ -476,10 +476,20 @@ public class PaperOrder extends BaseEntity {
 
     /** Ends a working order, or a pending order of a group, the Trader cancelled. */
     public void cancel(Instant at) {
+        cancel(null, at);
+    }
+
+    /**
+     * Ends a working order, or a pending order of a group, cancelled for a reason of the system rather than by the
+     * Trader, e.g. its pair stopped trading.
+     *
+     * @param reason a short code the order history shows; {@code null} for a cancel of the Trader
+     */
+    public void cancel(String reason, Instant at) {
         if (!isPending()) {
             requireOpen("cancelled");
         }
-        end(OrderStatus.CANCELED, null, at);
+        end(OrderStatus.CANCELED, reason, at);
     }
 
     /**

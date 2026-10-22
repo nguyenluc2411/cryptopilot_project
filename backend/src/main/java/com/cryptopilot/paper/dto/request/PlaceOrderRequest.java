@@ -6,10 +6,9 @@ import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.model.enums.TimeInForce;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 import java.util.UUID;
 
@@ -36,8 +35,11 @@ import java.util.UUID;
  * trigger immediately (TR-09). With a {@code trailingDelta} the stopPrice is where tracking starts: a SELL follows the
  * highest price and triggers when the price falls back by the delta, a BUY the reverse (TR-11).
  *
- * <p>The price is rounded to the pair's tick size (BR-30) and the quantity floored to its step size (BR-23), as the
- * order form of the exchange does; the order shows what was placed.
+ * <p>The price, stopPrice and quantity are checked against the pair's Spot filters as the exchange checks them, and an
+ * order that breaks one is refused, never rounded: off the tick size (BR-30) or the step size (BR-23), out of the
+ * price or quantity bounds, worth less or more than the notional bounds, or too far from the last price
+ * ({@code PAPER_PRICE_FILTER}, {@code PAPER_LOT_SIZE}, {@code PAPER_MARKET_LOT_SIZE}, {@code PAPER_NOTIONAL},
+ * {@code PAPER_PERCENT_PRICE}, {@code PAPER_TRAILING_DELTA}).
  *
  * @param pairId the pair, enabled on the market
  * @param market {@code SPOT}
@@ -50,7 +52,7 @@ import java.util.UUID;
  *     asset
  * @param stopPrice the stops only: the price that triggers it, or with a trailing delta where tracking starts
  * @param trailingDelta the stops only: how far back from the best price it triggers, in basis points (100 = 1 %),
- *     from 10 to 2000
+ *     within the pair's {@code TRAILING_DELTA} range for the side the stop triggers on
  * @param clientOrderId the idempotency key: a request sent again with the same key, e.g. after a timeout, returns the
  *     order already placed instead of placing a second one; up to 64 letters, digits and {@code . _ : -}. Optional
  */
@@ -84,5 +86,4 @@ public record PlaceOrderRequest(
         @Digits(integer = 16, fraction = 12, message = "MSG15")
         BigDecimal stopPrice,
 
-        @Min(value = 10, message = "MSG15") @Max(value = 2000, message = "MSG15")
-        Long trailingDelta) {}
+        @Positive(message = "MSG15") Long trailingDelta) {}

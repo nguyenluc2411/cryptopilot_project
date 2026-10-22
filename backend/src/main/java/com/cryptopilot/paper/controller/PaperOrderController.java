@@ -9,6 +9,7 @@ import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
+import com.cryptopilot.paper.model.PlacedOrderList;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.service.PaperOrderService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -58,10 +59,16 @@ public class PaperOrderController {
     @ApiResponse(responseCode = "200", description = "The order placed earlier with the same clientOrderId")
     @ApiResponse(
             responseCode = "400",
-            description = "MSG01, MSG15: `errors` names each rejected field; PAPER_INSUFFICIENT_BALANCE (MSG01)")
+            description = "MSG01, MSG15: `errors` names each rejected field; PAPER_INSUFFICIENT_BALANCE (MSG01); a"
+                    + " filter failure (MSG15): PAPER_PRICE_FILTER, PAPER_LOT_SIZE, PAPER_MARKET_LOT_SIZE,"
+                    + " PAPER_NOTIONAL, PAPER_PERCENT_PRICE, PAPER_TRAILING_DELTA, with `messageArgs` field, value,"
+                    + " limit and MIN, MAX or STEP")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened, or the pair is not tradable")
-    @ApiResponse(responseCode = "409", description = "MSG43: the clientOrderId was used for another order")
+    @ApiResponse(
+            responseCode = "409",
+            description = "MSG43: the clientOrderId was used for another order; too many open orders or stops on"
+                    + " the pair (PAPER_MAX_NUM_ORDERS, PAPER_MAX_NUM_ALGO_ORDERS)")
     @ApiResponse(responseCode = "503", description = "MSG43: no current price for an order that executes now")
     @PostMapping("/orders")
     public ResponseEntity<OrderResponse> place(
@@ -71,22 +78,28 @@ public class PaperOrderController {
                 .body(placed.order());
     }
 
-    @Operation(summary = "Place a Spot OCO, OTO or OTOCO group of orders (TR-10)")
+    @Operation(summary = "Place a Spot OCO, OTO or OTOCO group of orders (TR-10); once per listClientOrderId")
     @ApiResponse(responseCode = "201", description = "The group, EXECUTING, with its orders")
+    @ApiResponse(responseCode = "200", description = "The group placed earlier with the same listClientOrderId")
     @ApiResponse(
             responseCode = "400",
-            description =
-                    "MSG01, MSG15: `errors` names each rejected part or field; PAPER_INSUFFICIENT_BALANCE (MSG01)")
+            description = "MSG01, MSG15: `errors` names each rejected part or field; PAPER_INSUFFICIENT_BALANCE"
+                    + " (MSG01); a filter failure (MSG15): PAPER_PRICE_FILTER, PAPER_LOT_SIZE, PAPER_NOTIONAL,"
+                    + " PAPER_PERCENT_PRICE, with `messageArgs` field, value, limit and MIN, MAX or STEP")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened, or the pair is not tradable")
     @ApiResponse(
             responseCode = "409",
-            description = "MSG43: a working LIMIT_MAKER would take the book, or a pending stop is the last price")
+            description = "MSG43: a working LIMIT_MAKER would take the book, a pending stop would trigger at the"
+                    + " working price, too many open orders or stops on the pair (PAPER_MAX_NUM_ORDERS,"
+                    + " PAPER_MAX_NUM_ALGO_ORDERS), or the listClientOrderId was used for another group")
     @ApiResponse(responseCode = "503", description = "MSG43: no current price")
     @PostMapping("/order-lists")
     public ResponseEntity<OrderListResponse> placeList(
             @AuthenticationPrincipal Jwt caller, @Valid @RequestBody PlaceOrderListRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(orders.placeList(callerOf(caller), request));
+        PlacedOrderList placed = orders.placeList(callerOf(caller), request);
+        return ResponseEntity.status(placed.created() ? HttpStatus.CREATED : HttpStatus.OK)
+                .body(placed.list());
     }
 
     @Operation(summary = "Cancel every order of a group that works or waits, releasing what they locked")

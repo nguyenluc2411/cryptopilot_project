@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -29,7 +30,8 @@ import java.util.UUID;
  *       trade is the first best price. It triggers when a price comes back from the best price by the trailing delta:
  *       at or below the best less the delta for a SELL, at or above the best plus the delta for a BUY.
  *   <li>A price traded before the order was placed never starts, moves or triggers it (D-77).
- *   <li>The low and the high of a range are taken in the order they traded. A candle's low and high carry the same
+ *   <li>The trades of a range are taken one by one, in the order they traded.
+ *   <li>The low and the high of a candle are taken in the order they traded. A candle's low and high carry the same
  *       time (D-78), and which came first is not known: they are then taken so that the best price comes last, so a
  *       candle alone never triggers a trailing stop on a pullback that may have come before its peak.
  * </ul>
@@ -111,6 +113,30 @@ public final class TriggerBook {
         return triggered;
     }
 
+    /**
+     * A stop just watched, run over trades read before it was watched and traded after it was placed, as a range of
+     * them would have run it (D-77). A triggered stop leaves the book; a best price it moved is reported as on a range.
+     *
+     * <p>Rule: TR-09, TR-11; D-77.
+     *
+     * @param trades trades after the stop's placement, as one range
+     */
+    public Optional<Triggered> catchUp(UUID orderId, PriceRange trades) {
+        BookKey key = keys.get(orderId);
+        if (key == null) {
+            return Optional.empty();
+        }
+        Watch watch = books.get(key).get(orderId);
+        Triggered fired = watch.onRange(trades);
+        if (fired != null) {
+            untrack(orderId);
+        } else if (watch.extremeMoved) {
+            watch.extremeMoved = false;
+            moved.put(orderId, watch.extreme);
+        }
+        return Optional.ofNullable(fired);
+    }
+
     /** The best prices of the trailing stops that moved since the last call, by order; cleared by the call. */
     public Map<UUID, BigDecimal> movedExtremes() {
         Map<UUID, BigDecimal> drained = Map.copyOf(moved);
@@ -148,11 +174,20 @@ public final class TriggerBook {
 
         Triggered onRange(PriceRange range) {
             boolean sell = order.side() == OrderSide.SELL;
-            List<Point> points = new ArrayList<>(
-                    List.of(new Point(range.low(), range.lowAt()), new Point(range.high(), range.highAt())));
-            // Same time: the best price last, so a pullback is never assumed to have followed it.
-            points.sort(Comparator.comparing(Point::at)
-                    .thenComparing(point -> sell ? point.price() : point.price().negate()));
+            List<Point> points;
+            if (range.prints().isEmpty()) {
+                points = new ArrayList<>(
+                        List.of(new Point(range.low(), range.lowAt()), new Point(range.high(), range.highAt())));
+                // Same time: the best price last, so a pullback is never assumed to have followed it.
+                points.sort(Comparator.comparing(Point::at)
+                        .thenComparing(
+                                point -> sell ? point.price() : point.price().negate()));
+            } else {
+                // Every trade in the order it traded, so one after the placement counts though an earlier set the low.
+                points = range.prints().stream()
+                        .map(print -> new Point(print.price(), print.at()))
+                        .toList();
+            }
             for (Point point : points) {
                 if (point.at().isBefore(order.placedAt())) {
                     continue;
