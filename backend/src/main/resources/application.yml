@@ -103,11 +103,39 @@ cryptopilot:
     stale-after: 5m
     # Anything older is deleted, delivered or not: the longest link an event carries lives 24 hours (BR-01).
     retention: 24h
+  media:
+    cloudinary:
+      # T-061 (D-98): the account post images and videos are stored in. The browser uploads straight to Cloudinary
+      # with a form the backend signs; the secret never leaves the backend. All three empty: posts with media are
+      # refused and text posts work (dev and tests); the prod profile refuses to start.
+      cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+      api-key: ${CLOUDINARY_API_KEY:}
+      api-secret: ${CLOUDINARY_API_SECRET:}
+      api-base-url: https://api.cloudinary.com
+      # Every file of a post is stored under <folder>/<uploader account>/<random key>.
+      folder: cryptopilot/posts
+      connect-timeout: 5s
+      read-timeout: 10s
+    sweep:
+      # Files uploaded with a signed form but never attached to a post, or left by a failed deletion, are deleted
+      # once older than the grace period. Daily; off here, on in the dev and prod profiles.
+      enabled: false
+      cron: "0 45 0 * * *"
+      zone: UTC
+      grace: 24h
+      max-pages: 20
   notification:
     mail:
       # T-057: the sender address, and the web application the mailed links open (/verify-email, /reset-password).
       from: ${SMTP_FROM:no-reply@cryptopilot.local}
       public-base-url: ${PUBLIC_BASE_URL:http://localhost:5173}
+    sweep:
+      # NSF-17, notifications: daily, deletes those older than the retention (90 days, SRS 3.4.5). Off here, on in
+      # the dev and prod profiles, so a test context schedules nothing.
+      enabled: false
+      cron: "0 30 0 * * *"
+      zone: UTC
+      retention: 90d
   web:
     # Reverse proxies whose X-Forwarded-For is believed: addresses or CIDR ranges, comma-separated. Empty trusts none,
     # so the direct peer is the client. Set wherever Nginx sits in front.
@@ -118,12 +146,15 @@ cryptopilot:
       allowed-origins: ${CORS_ALLOWED_ORIGINS:}
     rate-limit:
       # ADR-014: requests per one-minute window and subject (login and the other public auth calls per client address,
-      # authenticated calls per account). Off here so a test context is not limited; on in the dev and prod profiles.
+      # authenticated calls per account, calls without an account per client address). Off here so a test context is
+      # not limited; on in the dev and prod profiles.
       enabled: false
       window: 1m
       login: ${RATE_LIMIT_LOGIN:10}
       auth: ${RATE_LIMIT_AUTH:20}
       api: ${RATE_LIMIT_API:120}
+      # Guests (public market data and forum reads, D-99), per client address: several Guests may share one.
+      guest: ${RATE_LIMIT_GUEST:300}
       # Placing a paper order is counted apart from the calls above, in a window of its own, as Binance does (50 new
       # orders in 10 seconds); cancels and reads are not counted.
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:50}

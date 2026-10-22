@@ -19,20 +19,31 @@ import org.springframework.transaction.annotation.Transactional;
 public class SystemSettingReader implements SystemSettingApi {
 
     private static final String DECIMAL = "DECIMAL";
+    private static final String INT = "INT";
 
     private final JdbcClient jdbc;
 
     @Override
     @Transactional(readOnly = true)
     public BigDecimal decimal(String key) {
+        return new BigDecimal(read(key, DECIMAL));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public int integer(String key) {
+        return Integer.parseInt(read(key, INT));
+    }
+
+    private String read(String key, String type) {
         String[] setting = jdbc.sql("select setting_value, value_type from system_setting where setting_key = ?")
                 .param(key)
                 .query((row, n) -> new String[] {row.getString("setting_value"), row.getString("value_type")})
                 .optional()
                 .orElseThrow(() -> new IllegalStateException("system setting " + key + " is not stored"));
-        if (!DECIMAL.equals(setting[1])) {
-            throw new IllegalStateException("system setting " + key + " is " + setting[1] + ", not " + DECIMAL);
+        if (!type.equals(setting[1])) {
+            throw new IllegalStateException("system setting " + key + " is " + setting[1] + ", not " + type);
         }
-        return new BigDecimal(setting[0]);
+        return setting[0];
     }
 }
