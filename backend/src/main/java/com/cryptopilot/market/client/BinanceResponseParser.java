@@ -1,11 +1,14 @@
 package com.cryptopilot.market.client;
 
+import com.cryptopilot.market.SymbolRules;
 import com.cryptopilot.market.model.enums.BinanceVenue;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -180,8 +183,11 @@ final class BinanceResponseParser {
         BigDecimal stepSize = null;
         BigDecimal minQuantity = null;
         BigDecimal minNotional = null;
+        Map<String, JsonNode> filters = new HashMap<>();
         for (JsonNode filter : array(symbol.path("filters"))) {
-            switch (filter.required("filterType").stringValue()) {
+            String type = filter.required("filterType").stringValue();
+            filters.put(type, filter);
+            switch (type) {
                 case "PRICE_FILTER" -> tickSize = decimal(filter.required("tickSize"));
                 case "LOT_SIZE" -> {
                     stepSize = decimal(filter.required("stepSize"));
@@ -192,7 +198,7 @@ final class BinanceResponseParser {
                             ? decimal(filter.get("minNotional"))
                             : decimal(filter.required("notional"));
                 default -> {
-                    // Filters the system does not use (PERCENT_PRICE, MAX_NUM_ORDERS, ...) are ignored.
+                    // The other filters are read into the rules below; the rest (PERCENT_PRICE, ...) are ignored.
                 }
             }
         }
@@ -205,7 +211,61 @@ final class BinanceResponseParser {
                 tickSize,
                 stepSize,
                 minQuantity,
-                minNotional);
+                minNotional,
+                rulesOf(filters));
+    }
+
+    /**
+     * The filters of a symbol beyond the four above, each {@code null} when not sent. A rule the exchange sent out of
+     * shape (negative, too many decimals) leaves the symbol without rules rather than failing the whole response.
+     */
+    private static SymbolRules rulesOf(Map<String, JsonNode> filters) {
+        JsonNode price = filters.get("PRICE_FILTER");
+        JsonNode lot = filters.get("LOT_SIZE");
+        JsonNode marketLot = filters.get("MARKET_LOT_SIZE");
+        JsonNode notional = filters.get("NOTIONAL");
+        JsonNode legacyNotional = filters.get("MIN_NOTIONAL");
+        JsonNode percent = filters.get("PERCENT_PRICE_BY_SIDE");
+        JsonNode trailing = filters.get("TRAILING_DELTA");
+        try {
+            return new SymbolRules(
+                    field(price, "minPrice"),
+                    field(price, "maxPrice"),
+                    field(lot, "minQty"),
+                    field(lot, "maxQty"),
+                    field(marketLot, "minQty"),
+                    field(marketLot, "maxQty"),
+                    field(marketLot, "stepSize"),
+                    notional != null ? flag(notional, "applyMinToMarket") : flag(legacyNotional, "applyToMarket"),
+                    field(notional, "maxNotional"),
+                    flag(notional, "applyMaxToMarket"),
+                    field(percent, "bidMultiplierUp"),
+                    field(percent, "bidMultiplierDown"),
+                    field(percent, "askMultiplierUp"),
+                    field(percent, "askMultiplierDown"),
+                    whole(trailing, "minTrailingAboveDelta"),
+                    whole(trailing, "maxTrailingAboveDelta"),
+                    whole(trailing, "minTrailingBelowDelta"),
+                    whole(trailing, "maxTrailingBelowDelta"),
+                    whole(filters.get("MAX_NUM_ORDERS"), "maxNumOrders"),
+                    whole(filters.get("MAX_NUM_ALGO_ORDERS"), "maxNumAlgoOrders"));
+        } catch (IllegalArgumentException unusable) {
+            return SymbolRules.NONE;
+        }
+    }
+
+    private static BigDecimal field(JsonNode filter, String name) {
+        return filter == null ? null : optionalDecimal(filter.get(name));
+    }
+
+    private static Boolean flag(JsonNode filter, String name) {
+        JsonNode value = filter == null ? null : filter.get(name);
+        return value == null || !value.isBoolean() ? null : value.booleanValue();
+    }
+
+    private static Integer whole(JsonNode filter, String name) {
+        JsonNode value = filter == null ? null : filter.get(name);
+        return value == null || !value.isIntegralNumber() ? null : value.intValue();
     }
 
     private <T> T parse(BinanceVenue venue, String body, Function<JsonNode, T> reader) {

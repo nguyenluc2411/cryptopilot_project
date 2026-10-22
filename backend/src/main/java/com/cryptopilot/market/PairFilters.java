@@ -26,8 +26,9 @@ import java.util.Objects;
  * @param tickSize the price increment ({@code PRICE_FILTER.tickSize})
  * @param stepSize the quantity increment ({@code LOT_SIZE.stepSize})
  * @param minNotional the smallest order value in the quote asset
+ * @param rules the exchange's other filters of the market, each off when not known
  */
-public record PairFilters(BigDecimal tickSize, BigDecimal stepSize, BigDecimal minNotional) {
+public record PairFilters(BigDecimal tickSize, BigDecimal stepSize, BigDecimal minNotional, SymbolRules rules) {
 
     /** Decimals {@code numeric(28,12)} holds: the tick and step columns. */
     public static final int INCREMENT_SCALE = 12;
@@ -39,6 +40,12 @@ public record PairFilters(BigDecimal tickSize, BigDecimal stepSize, BigDecimal m
         requirePositive(tickSize, "tickSize", INCREMENT_SCALE);
         requirePositive(stepSize, "stepSize", INCREMENT_SCALE);
         requirePositive(minNotional, "minNotional", NOTIONAL_SCALE);
+        Objects.requireNonNull(rules, "rules must not be null");
+    }
+
+    /** The three figures a plan is sized with, and no other rule ({@link SymbolRules#NONE}). */
+    public PairFilters(BigDecimal tickSize, BigDecimal stepSize, BigDecimal minNotional) {
+        this(tickSize, stepSize, minNotional, SymbolRules.NONE);
     }
 
     /**
@@ -52,7 +59,8 @@ public record PairFilters(BigDecimal tickSize, BigDecimal stepSize, BigDecimal m
     }
 
     /**
-     * A price entered by a trader, rounded to the nearest tick, halves up (BR-30; TECHNICAL_DESIGN 5.4).
+     * A price entered by a trader, rounded to the nearest tick, halves up (BR-30; TECHNICAL_DESIGN 5.4). For the
+     * prices of plans and alerts; a paper order's price is refused off the tick, never rounded, as the exchange does.
      *
      * <p>Rule: BR-30.
      */

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.SymbolRules;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.PairStatus;
@@ -30,6 +31,44 @@ class CryptoPairTest {
             new PairFilters(new BigDecimal("0.01000000"), new BigDecimal("0.00001000"), new BigDecimal("5.00000000"));
     private static final PairFilters FUTURES_FILTERS =
             new PairFilters(new BigDecimal("0.10"), new BigDecimal("0.001"), new BigDecimal("50"));
+
+    /** TR-02: the other Spot filters are stored and read back with the three; futures keeps none of them. */
+    @Test
+    void TR02_theOtherSpotFilters_areStoredAndReadBack_onSpotOnly() {
+        SymbolRules rules = new SymbolRules(
+                new BigDecimal("0.01"),
+                new BigDecimal("1000000"),
+                new BigDecimal("0.00001"),
+                new BigDecimal("9000"),
+                null,
+                new BigDecimal("124.19455715"),
+                null,
+                true,
+                new BigDecimal("9000000"),
+                false,
+                new BigDecimal("1.2"),
+                new BigDecimal("0.5"),
+                new BigDecimal("2"),
+                new BigDecimal("0.8"),
+                10,
+                2000,
+                10,
+                2000,
+                200,
+                5);
+        PairFilters spot =
+                new PairFilters(SPOT_FILTERS.tickSize(), SPOT_FILTERS.stepSize(), SPOT_FILTERS.minNotional(), rules);
+        CryptoPair pair = CryptoPair.register(BTC, USDT, "BTCUSDT");
+
+        pair.applyFilters(MarketType.SPOT, spot);
+        pair.applyFilters(
+                MarketType.FUTURES,
+                new PairFilters(
+                        FUTURES_FILTERS.tickSize(), FUTURES_FILTERS.stepSize(), FUTURES_FILTERS.minNotional(), rules));
+
+        assertThat(pair.filters(MarketType.SPOT)).contains(spot);
+        assertThat(pair.filters(MarketType.FUTURES).orElseThrow().rules()).isEqualTo(SymbolRules.NONE);
+    }
 
     /** BR-07: a new pair is known and not available — INACTIVE, both markets off, no filters yet. */
     @Test

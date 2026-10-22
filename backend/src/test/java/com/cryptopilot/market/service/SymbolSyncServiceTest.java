@@ -15,6 +15,7 @@ import com.cryptopilot.market.client.StubExchange;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.SymbolSyncProperties;
 import com.cryptopilot.market.entity.CryptoPair;
+import com.cryptopilot.market.event.SpotPairStoppedTrading;
 import com.cryptopilot.market.model.SyncReport;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -41,6 +42,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -57,6 +60,7 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>Rule: NSF-01; BR-07; Q-14, Q-15; TECHNICAL_DESIGN 5.4 and 7.1.
  */
 @SpringBootTest
+@RecordApplicationEvents
 @Import(TestcontainersConfig.class)
 class SymbolSyncServiceTest {
 
@@ -73,6 +77,9 @@ class SymbolSyncServiceTest {
 
     @Autowired
     private JdbcClient sql;
+
+    @Autowired
+    private ApplicationEvents events;
 
     private final MutableTestClock clock = new MutableTestClock(NOW);
 
@@ -200,6 +207,10 @@ class SymbolSyncServiceTest {
         assertThat(again.flagged()).isEmpty();
         assertThat(pair("ETHUSDT").exchangeStatus(MarketType.SPOT)).isEqualTo(ExchangeStatus.NOT_TRADING);
         assertThat(pair("ETHUSDT").exchangeStatusRaw(MarketType.SPOT)).isEqualTo("BREAK");
+        assertThat(events.stream(SpotPairStoppedTrading.class))
+                .as("TR-02: published once, for the paper orders on it")
+                .containsExactly(
+                        new SpotPairStoppedTrading(pair("ETHUSDT").getId(), "ETHUSDT", ExchangeStatus.NOT_TRADING));
     }
 
     /** A pair that disappears from a market is DELISTED, flagged once, and never deleted. */
@@ -222,6 +233,8 @@ class SymbolSyncServiceTest {
         assertThat(eth.filters(MarketType.SPOT))
                 .as("the last known filters are kept")
                 .isPresent();
+        assertThat(events.stream(SpotPairStoppedTrading.class))
+                .containsExactly(new SpotPairStoppedTrading(eth.getId(), "ETHUSDT", ExchangeStatus.DELISTED));
     }
 
     /** A market switched on for a pair the exchange never listed there is flagged DELISTED too. */
@@ -236,6 +249,9 @@ class SymbolSyncServiceTest {
 
         assertThat(report.flagged()).containsExactly("SHIBUSDT");
         assertThat(pair("SHIBUSDT").exchangeStatus(MarketType.FUTURES)).isEqualTo(ExchangeStatus.DELISTED);
+        assertThat(events.stream(SpotPairStoppedTrading.class))
+                .as("futures has no paper orders to cancel")
+                .isEmpty();
     }
 
     /**
