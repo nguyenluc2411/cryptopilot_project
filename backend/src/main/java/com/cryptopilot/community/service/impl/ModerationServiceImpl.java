@@ -50,12 +50,16 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>A decision resolves every OPEN and REVIEWING report of the post together, with the moderator, the action and the
  * time. HIDE_POST hides the post; REMOVE_POST deletes it for everyone but Admin (D-99, the registered topic's "hide
- * or remove"), keeping its files as the evidence of the decision; BAN_USER hides it and bans its author, which ends every session of the author
- * (BR-06) in the same transaction; WARN_USER and DISMISS leave the post as it is. The decision, the hidden post and the
- * ban are each written to the audit log in that transaction (BR-57), and {@link PostModerated} tells the author and
- * the reporters after it commits. A hidden post can be restored.
+ * or remove"), keeping its files as the evidence of the decision: unlike an author's delete it releases none, and the
+ * sweep of unattached files keeps the files of a post with a REMOVE_POST report; BAN_USER hides it and bans its
+ * author, which ends every session of the author (BR-06) in the same transaction; WARN_USER and DISMISS leave the
+ * post as it is. The decision, the hidden post and the ban are each written to the audit log in that transaction
+ * (BR-57), and {@link PostModerated} tells the author and the reporters after it commits. A hidden post can be
+ * restored.
  *
  * <p>Rule: UC-43; BR-06, BR-47, BR-57, BR-58; SRS 3.11.3; D-98.
+ *
+ * <p>Reference: Evans, E. <i>Domain-Driven Design</i> (Addison-Wesley, 2003), ch. 6 (the life cycle of an aggregate).
  */
 @Service
 @RequiredArgsConstructor

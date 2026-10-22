@@ -31,18 +31,20 @@ import org.springframework.web.util.UriComponentsBuilder;
  * Admin API to read back a stored file and to list a folder, and the signed {@code destroy} call. No SDK: four calls
  * do not justify a new dependency (TECHNICAL_DESIGN 1.3), and the signature is a documented hash.
  *
- * <p>Only the backend holds the secret. A form is signed for one {@code public_id}, the formats it may have and the
- * issue time, and Cloudinary refuses a signed form whose time is more than an hour old, so a leaked form uploads at
- * most one file under a key this module chose. The file is then read back with the Admin API, authenticated with the
- * key and secret, and only what Cloudinary reports is trusted.
+ * <p>Only the backend holds the secret. A form is signed for one {@code public_id}, the formats it may have, the issue
+ * time and {@code overwrite=false}, and Cloudinary refuses a signed form whose time is more than an hour old. A leaked
+ * form can store a file under its key only while the key is free: once a file is there, posting the form again cannot
+ * replace it, so a file already checked and attached stays the one that was checked. The file is then read back with
+ * the Admin API, authenticated with the key and secret, and only what Cloudinary reports is trusted.
  *
  * <p>A key is the folder, the uploader's account and a random part, all of {@code [A-Za-z0-9_-]}, so it is written in
  * an address as it is; any other key is refused before a request is made.
  *
  * <p>Rule: BR-44; D-98.
  *
- * <p>Reference: Cloudinary. <i>Upload API</i> (signed uploads), <i>Admin API</i> ("Get details of a single
- * resource", "Get resources" by prefix), <i>Authentication signatures</i> (Cloudinary documentation, 2025).
+ * <p>Reference: Cloudinary. <i>Upload API reference</i> (signed uploads, the {@code overwrite} parameter), <i>Admin
+ * API</i> ("Get details of a single resource", "Get resources" by prefix), <i>Authentication signatures</i>
+ * (Cloudinary documentation, 2025). OWASP. <i>File Upload Cheat Sheet</i> (OWASP Cheat Sheet Series, 2024).
  */
 public class CloudinaryClient implements MediaStorage {
 
@@ -86,7 +88,15 @@ public class CloudinaryClient implements MediaStorage {
         long timestamp = clock.instant().getEpochSecond();
         String formats = String.join(",", allowedFormats);
         String signature = CloudinarySignature.sign(
-                Map.of("public_id", id, "timestamp", Long.toString(timestamp), "allowed_formats", formats),
+                Map.of(
+                        "public_id",
+                        id,
+                        "timestamp",
+                        Long.toString(timestamp),
+                        "allowed_formats",
+                        formats,
+                        "overwrite",
+                        "false"),
                 properties.apiSecret());
         return new UploadTicket(
                 properties.apiBaseUrl().resolve(path(type, "upload")).toString(),
@@ -94,7 +104,8 @@ public class CloudinaryClient implements MediaStorage {
                 timestamp,
                 signature,
                 id,
-                allowedFormats);
+                allowedFormats,
+                false);
     }
 
     @Override

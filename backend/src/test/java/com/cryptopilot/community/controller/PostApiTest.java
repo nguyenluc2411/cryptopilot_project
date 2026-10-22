@@ -89,6 +89,7 @@ class PostApiTest {
     void removeRows() {
         InAppNotifications.remove(sql, accounts);
         for (UUID account : accounts) {
+            sql.sql("delete from audit_log where user_id = ?").param(account).update();
             sql.sql("delete from engagement where user_id = ?").param(account).update();
             sql.sql("delete from forum_comment where author_id = ?")
                     .param(account)
@@ -264,10 +265,36 @@ class PostApiTest {
         as(author, get(POSTS + "?tab=MINE"), null)
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.items[0].status").value("HIDDEN"));
-        // The author may still edit or delete it.
+        // The author may delete it, not edit it.
         as(author, put(POSTS + "/" + id), body("Still hidden", "text", null))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.messageCode").value("MSG41"));
+    }
+
+    @Test
+    void BR47_aPostModerationHid_cannotBeEditedByItsAuthor_andKeepsItsText() throws Exception {
+        UUID author = trader("Alice");
+        String id = hiddenByModeration(author, "Before review", "Original text");
+
+        as(author, put(POSTS + "/" + id), body("Cleaned up", "Other text", null))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.messageCode").value("MSG41"));
+
+        as(author, get(POSTS + "/" + id), null)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("HIDDEN"));
+                .andExpect(jsonPath("$.status").value("HIDDEN"))
+                .andExpect(jsonPath("$.title").value("Before review"))
+                .andExpect(jsonPath("$.content").value("Original text"));
+    }
+
+    @Test
+    void BR47_aPostModerationHid_canStillBeDeletedByItsAuthor() throws Exception {
+        UUID author = trader("Alice");
+        String id = hiddenByModeration(author, "Before review", "Original text");
+
+        as(author, delete(POSTS + "/" + id), null).andExpect(status().isNoContent());
+
+        assertThat(storedStatus(id)).isEqualTo("DELETED");
     }
 
     // ------------------------------------------------------------------------------------------
@@ -564,6 +591,21 @@ class PostApiTest {
             request.contentType(MediaType.APPLICATION_JSON).content(body);
         }
         return mvc.perform(request);
+    }
+
+    /** A post of {@code author} that another Trader reported and an Admin hid (HIDE_POST). */
+    private String hiddenByModeration(UUID author, String title, String content) throws Exception {
+        String id = id(as(author, post(POSTS), body(title, content, null)));
+        as(trader("Bob"), post(POSTS + "/" + id + "/reports"), "{\"reason\": \"SPAM\"}")
+                .andExpect(status().isCreated());
+        as(
+                        account(UserRole.ADMIN, "Admin"),
+                        UserRole.ADMIN,
+                        post("/api/v1/admin/reports-queue/" + id + "/decision"),
+                        "{\"action\": \"HIDE_POST\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.postStatus").value("HIDDEN"));
+        return id;
     }
 
     private static String id(ResultActions created) throws Exception {

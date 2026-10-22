@@ -38,7 +38,8 @@ public class InMemoryMediaStorage implements MediaStorage {
                 1L,
                 CloudinarySignature.sign(Map.of("public_id", publicId, "timestamp", "1"), "test-secret"),
                 publicId,
-                allowedFormats);
+                allowedFormats,
+                false);
     }
 
     @Override

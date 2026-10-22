@@ -29,14 +29,19 @@ public interface PostMediaRepository extends Repository<PostMedia, UUID> {
     boolean existsByStoragePublicId(String storagePublicId);
 
     /**
-     * Which of these keys a post that is not deleted still carries: the files the sweep of unattached files keeps. A
-     * deleted post's files were released (BR-47), so they are not among them.
+     * Which of these keys a post still carries: the files the sweep of unattached files keeps. A post that is not
+     * deleted carries its files, and so does a post moderation removed (REMOVE_POST), whose files are the evidence of
+     * the decision. A post its author deleted released its files (BR-47), so they are not among them.
      */
     @Transactional(readOnly = true)
     @Query("""
             select m.storagePublicId from PostMedia m, ForumPost p
-             where p.id = m.postId and p.status <> com.cryptopilot.community.model.enums.PostStatus.DELETED
-               and m.storagePublicId in :keys""")
+             where p.id = m.postId and m.storagePublicId in :keys
+               and (p.status <> com.cryptopilot.community.model.enums.PostStatus.DELETED
+                    or exists (select r.id from PostReport r
+                                where r.postId = p.id
+                                  and r.resolutionAction
+                                      = com.cryptopilot.community.model.enums.ResolutionAction.REMOVE_POST))""")
     List<String> keysStillCarried(@Param("keys") Collection<String> keys);
 
     /** Writes a file row. Not transactional here; the unit of work is the calling service's. */

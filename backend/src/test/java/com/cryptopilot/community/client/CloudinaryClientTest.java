@@ -69,7 +69,7 @@ class CloudinaryClientTest {
     }
 
     @Test
-    void D98_aForm_isSignedForItsKeyFormatsAndTime() {
+    void D98_aForm_isSignedForItsKeyFormatsTimeAndNoOverwrite() {
         UploadTicket ticket = client.sign(PostMediaType.IMAGE, PUBLIC_ID, List.of("jpg", "png", "webp"));
 
         assertThat(ticket.uploadUrl()).endsWith("/v1_1/" + CLOUD + "/image/upload");
@@ -84,8 +84,11 @@ class CloudinaryClientTest {
                                 "timestamp",
                                 Long.toString(NOW.getEpochSecond()),
                                 "allowed_formats",
-                                "jpg,png,webp"),
+                                "jpg,png,webp",
+                                "overwrite",
+                                "false"),
                         SECRET));
+        assertThat(ticket.overwrite()).isFalse();
         assertThat(client.sign(PostMediaType.VIDEO, PUBLIC_ID, List.of("mp4")).uploadUrl())
                 .endsWith("/v1_1/" + CLOUD + "/video/upload");
     }

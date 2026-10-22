@@ -14,7 +14,9 @@ import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.community.InMemoryMediaStorage;
 import com.cryptopilot.community.client.MediaStorage;
 import com.cryptopilot.community.client.MediaStorageException;
+import com.cryptopilot.community.model.enums.PostMediaType;
 import com.cryptopilot.community.service.MediaSweepService;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -100,6 +102,13 @@ class PostMediaApiTest {
 
     @AfterEach
     void removeRows() {
+        InAppNotifications.remove(sql, accounts);
+        for (UUID account : accounts) {
+            sql.sql("delete from audit_log where user_id = ?").param(account).update();
+            sql.sql("delete from post_report where reporter_id = ? or resolved_by = ?")
+                    .params(account, account)
+                    .update();
+        }
         for (UUID account : accounts) {
             sql.sql("delete from forum_post where author_id = ?").param(account).update();
             sql.sql("""
@@ -128,6 +137,7 @@ class PostMediaApiTest {
                 .andExpect(jsonPath("$.signature").isNotEmpty())
                 .andExpect(jsonPath("$.allowedFormats[0]").value("jpg"))
                 .andExpect(jsonPath("$.allowedFormats.length()").value(3))
+                .andExpect(jsonPath("$.overwrite").value(false))
                 .andExpect(jsonPath("$.maxBytes").value(5 * MB))
                 .andExpect(jsonPath("$.maxDurationSeconds").doesNotExist())
                 .andExpect(jsonPath("$.apiSecret").doesNotExist());
@@ -459,6 +469,45 @@ class PostMediaApiTest {
         storage().failing(false);
         assertThat(sweep.removeUnattached()).isEqualTo(1);
         assertThat(storage().destroyed()).containsExactly(file);
+    }
+
+    @Test
+    void D99_removePost_keepsTheFilesThroughTheSweep() throws Exception {
+        UUID author = trader();
+        UUID reporter = trader();
+        UUID admin = account(UserRole.ADMIN);
+        String file = signed(author, "IMAGE");
+        storage().uploadImage(file, "jpg", 1_000);
+        String id =
+                id(as(author, post(POSTS), postBody("Evidence", image(file))).andExpect(status().isCreated()));
+        as(reporter, post(POSTS + "/" + id + "/reports"), "{\"reason\": \"SCAM\"}")
+                .andExpect(status().isCreated());
+        as(
+                        admin,
+                        UserRole.ADMIN,
+                        post("/api/v1/admin/reports-queue/" + id + "/decision"),
+                        "{\"action\": \"REMOVE_POST\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.postStatus").value("DELETED"));
+        storage().uploadedAt(file, Instant.now().minus(Duration.ofDays(2)));
+
+        assertThat(sweep.removeUnattached()).isZero();
+
+        assertThat(storage().destroyed()).isEmpty();
+        assertThat(storage().describe(PostMediaType.IMAGE, file)).isPresent();
+    }
+
+    @Test
+    void D98_withoutModeration_anOldUnattachedUpload_isSwept() throws Exception {
+        UUID trader = trader();
+        String file = signed(trader, "IMAGE");
+        storage().uploadImage(file, "jpg", 1_000);
+        storage().uploadedAt(file, Instant.now().minus(Duration.ofDays(2)));
+
+        assertThat(sweep.removeUnattached()).isEqualTo(1);
+
+        assertThat(storage().destroyed()).containsExactly(file);
+        assertThat(storage().describe(PostMediaType.IMAGE, file)).isEmpty();
     }
 
     // ------------------------------------------------------------------------------------------

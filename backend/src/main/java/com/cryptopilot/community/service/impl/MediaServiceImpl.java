@@ -50,6 +50,7 @@ public class MediaServiceImpl implements MediaService {
                 ticket.signature(),
                 ticket.publicId(),
                 ticket.allowedFormats(),
+                ticket.overwrite(),
                 type,
                 rules.maxBytes(type),
                 rules.maxDurationSeconds(type));

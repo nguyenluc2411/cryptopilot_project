@@ -10,6 +10,7 @@ import com.cryptopilot.community.event.PostMediaReleased;
 import com.cryptopilot.community.model.CheckedMedia;
 import com.cryptopilot.community.model.enums.OfficialCategory;
 import com.cryptopilot.community.model.enums.PostMediaType;
+import com.cryptopilot.community.model.enums.PostStatus;
 import com.cryptopilot.community.model.enums.PostType;
 import com.cryptopilot.community.repository.ForumPostRepository;
 import com.cryptopilot.community.repository.PostMediaRepository;
@@ -80,19 +81,20 @@ public class PostWriter {
     }
 
     /**
-     * Replaces the content and files of the post {@code lookup} finds and that is not deleted; MSG41 otherwise.
+     * Replaces the content and files of the post {@code lookup} finds and that is neither deleted nor hidden; MSG41
+     * otherwise. A hidden post is kept as moderation saw it, and the answer does not tell that it is hidden.
      *
      * @param caller who edits it, in whose folder new files must be
      * @param trader whether the caller is a Trader, whose new videos need video posting
      */
     PostDetailResponse update(
             UUID caller, UUID postId, PostRequest request, Function<UUID, Optional<ForumPost>> lookup, boolean trader) {
-        ForumPost found = editable(postId, lookup);
+        ForumPost found = revisable(postId, lookup);
         requireCategoryOnlyWhenOfficial(request, found.isOfficial());
         Set<UUID> coins = assembler.coinTags(request.coins());
         List<CheckedMedia> files = rules.check(caller, request.media(), byKey(found.getId()), trader);
         return transactions.execute(status -> {
-            ForumPost post = editable(postId, lookup);
+            ForumPost post = revisable(postId, lookup);
             post.revise(request.title(), request.content(), request.marketType(), coins);
             if (post.isOfficial()) {
                 post.categorize(categoryOf(request));
@@ -179,6 +181,12 @@ public class PostWriter {
     private static ForumPost editable(UUID postId, Function<UUID, Optional<ForumPost>> lookup) {
         return lookup.apply(postId)
                 .filter(post -> !post.isDeleted())
+                .orElseThrow(() -> new ResourceNotFoundException("Post", postId));
+    }
+
+    private static ForumPost revisable(UUID postId, Function<UUID, Optional<ForumPost>> lookup) {
+        return lookup.apply(postId)
+                .filter(post -> !post.isDeleted() && post.getStatus() != PostStatus.HIDDEN)
                 .orElseThrow(() -> new ResourceNotFoundException("Post", postId));
     }
 
