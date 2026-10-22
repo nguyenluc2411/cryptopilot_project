@@ -25,8 +25,10 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.dto.request.UpdateTradingPlanRequest;
@@ -43,6 +45,7 @@ import com.cryptopilot.trading.exception.PlanActivationBlockedException;
 import com.cryptopilot.trading.model.PlanListQuery;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.model.enums.PlanTab;
 import com.cryptopilot.trading.model.enums.WarningSeverity;
@@ -70,6 +73,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.mockito.Mockito;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -97,6 +102,10 @@ class TradingPlanServiceImplTest {
     private final RiskProfileApi riskProfiles = mock(RiskProfileApi.class);
     private final EntitlementApi entitlements = mock(EntitlementApi.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    private final SetupStyleSource styles = mock(SetupStyleSource.class);
+
+    @SuppressWarnings("unchecked") // TP-A: a mock of a generic interface
+    private final ObjectProvider<SetupStyleSource> styleProvider = mock(ObjectProvider.class);
 
     private TradingPlanServiceImpl service;
 
@@ -113,7 +122,11 @@ class TradingPlanServiceImplTest {
                 riskProfiles,
                 entitlements,
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                events);
+                events,
+                settings,
+                styleProvider);
+        when(styleProvider.getIfAvailable()).thenReturn(styles);
+        when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_BLOCK_R)).thenReturn(new BigDecimal("0.75"));
         when(market.tradablePair(eq(PAIR), any()))
                 .thenAnswer(call -> Optional.of(new TradablePair(PAIR, "BTCUSDT", call.getArgument(1), FILTERS)));
         when(market.leverageBrackets(PAIR))
@@ -382,6 +395,9 @@ class TradingPlanServiceImplTest {
                 null,
                 expiry,
                 "note",
+                null,
+                null,
+                null,
                 false);
 
         TradingPlanResponse plan = service.create(USER, request);
@@ -696,7 +712,7 @@ class TradingPlanServiceImplTest {
         verify(plans)
                 .search(
                         USER,
-                        EnumSet.of(PlanStatus.CANCELLED, PlanStatus.EXPIRED),
+                        EnumSet.of(PlanStatus.CANCELLED, PlanStatus.EXPIRED, PlanStatus.INVALIDATED),
                         EnumSet.of(MarketType.SPOT),
                         false,
                         PAIR,
@@ -734,6 +750,354 @@ class TradingPlanServiceImplTest {
     }
 
     /** A Spot LIMIT draft (E 100, S 95, T 110) created through the service. */
+    // ------------------------------------------------------------------------------------------
+    // Plan validity (TP-A): STOP entry, invalidation price, entry deviation limit, analysis timeframe
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void MSG01_aStopPlan_needsItsStopPrice() {
+        assertThatThrownBy(() -> service.create(USER, spotStop(null, "95", "110")))
+                .satisfies(e -> assertFields(e, Map.of("entryPrice", "MSG01")));
+    }
+
+    @Test
+    void D71_aStopPlanWithoutAnExpiry_expiresInSevenDaysLikeALimit() {
+        TradingPlanResponse plan = service.create(USER, spotStop("100", "95", "110"));
+
+        assertThat(plan.entryType()).isEqualTo(EntryType.STOP);
+        assertThat(plan.entryPrice()).isEqualByComparingTo("100");
+        assertThat(plan.expiresAt()).isEqualTo(NOW.plus(Duration.ofDays(7)));
+    }
+
+    @Test
+    void D71_aStopPlanWithAnExpiry_keepsIt() {
+        Instant expiry = NOW.plus(Duration.ofDays(2));
+
+        TradingPlanResponse plan = service.create(USER, withExpiry(spotStop("100", "95", "110"), expiry));
+
+        assertThat(plan.expiresAt()).isEqualTo(expiry);
+    }
+
+    /** The trigger of a STOP is the matching engine's (TP-B): activation never fills it, wherever the price is. */
+    @ParameterizedTest(name = "last price {0}")
+    @ValueSource(strings = {"99", "100", "101"})
+    void BR33_aStopPlanActivated_waitsAndIsNeverFilledAtActivation(String last) {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal(last)));
+
+        TradingPlanResponse plan = service.create(USER, activating(spotStop("100", "95", "110")));
+
+        assertThat(plan.status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(saved.getFillPrice()).isNull();
+        verify(events)
+                .publishEvent(new TradingPlanActivated(
+                        saved.getId(),
+                        MarketType.SPOT,
+                        PAIR,
+                        Direction.LONG,
+                        EntryType.STOP,
+                        saved.getEntryPrice(),
+                        NOW));
+    }
+
+    /** LIMIT LONG and STOP SHORT: above the current price; LIMIT SHORT and STOP LONG: below it. */
+    @ParameterizedTest(name = "{1} {2} at {6}: invalidation {7} -> {8}")
+    @CsvSource({
+        "SPOT,    LONG,  LIMIT, 100, 95,  110, 101, 101.01, true",
+        "SPOT,    LONG,  LIMIT, 100, 95,  110, 101, 101,    false",
+        "SPOT,    LONG,  LIMIT, 100, 95,  110, 101, 100.99, false",
+        "FUTURES, SHORT, LIMIT, 100, 105, 90,  99,  98.99,  true",
+        "FUTURES, SHORT, LIMIT, 100, 105, 90,  99,  99,     false",
+        "FUTURES, SHORT, LIMIT, 100, 105, 90,  99,  99.01,  false",
+        "SPOT,    LONG,  STOP,  100, 95,  110, 99,  98.99,  true",
+        "SPOT,    LONG,  STOP,  100, 95,  110, 99,  99,     false",
+        "SPOT,    LONG,  STOP,  100, 95,  110, 99,  99.01,  false",
+        "FUTURES, SHORT, STOP,  100, 105, 90,  101, 101.01, true",
+        "FUTURES, SHORT, STOP,  100, 105, 90,  101, 101,    false",
+        "FUTURES, SHORT, STOP,  100, 105, 90,  101, 100.99, false"
+    })
+    void BR68_theInvalidationPrice_mustLieOnTheFarSideOfTheCurrentPrice_elseMsg16OnItsField(
+            MarketType marketType,
+            Direction direction,
+            EntryType entryType,
+            String entry,
+            String stop,
+            String takeProfit,
+            String current,
+            String invalidation,
+            boolean accepted) {
+        currentPrice(marketType, current);
+        CreateTradingPlanRequest request = withValidity(
+                create(PAIR, marketType, direction, entryType, entry, stop, takeProfit, null, null, null),
+                invalidation,
+                null,
+                null);
+
+        if (accepted) {
+            assertThat(service.create(USER, request).invalidationPrice()).isEqualByComparingTo(invalidation);
+        } else {
+            assertThatThrownBy(() -> service.create(USER, request))
+                    .satisfies(e -> assertFields(e, Map.of("invalidationPrice", "MSG16")));
+            verify(plans, never()).save(any());
+        }
+    }
+
+    @Test
+    void MSG01_aMarketPlan_takesNoInvalidationPrice() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
+
+        assertThatThrownBy(() -> service.create(USER, withValidity(spotMarket("95", "110"), "120", null, null)))
+                .satisfies(e -> assertFields(e, Map.of("invalidationPrice", "MSG01")));
+        verify(plans, never()).save(any());
+    }
+
+    @Test
+    void BR68_anInvalidationPrice_isNotCheckedWithoutACurrentPrice_soTheSaveIsRefused() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.create(USER, withValidity(spotLimit("100", "95", "110"), "102", null, null)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e ->
+                        assertThat(((BusinessException) e).errorCode()).isEqualTo(ErrorCode.MARKET_PRICE_UNAVAILABLE));
+    }
+
+    /** D-112: the last price decides, never the mark price, even when the mark price would accept it. */
+    @Test
+    void D112_theInvalidationPrice_isCheckedAgainstTheLastPrice_neverTheMarkPrice() {
+        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("101")));
+        when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.empty());
+        CreateTradingPlanRequest request = withValidity(
+                create(PAIR, MarketType.FUTURES, Direction.LONG, EntryType.LIMIT, "100", "95", "110", null, null, 2),
+                "102",
+                null,
+                null);
+
+        assertThatThrownBy(() -> service.create(USER, request))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e ->
+                        assertThat(((BusinessException) e).errorCode()).isEqualTo(ErrorCode.MARKET_PRICE_UNAVAILABLE));
+
+        when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("102.5")));
+        assertThatThrownBy(() -> service.create(USER, request))
+                .as("past the invalidation price by the last price, while the mark price is not")
+                .satisfies(e -> assertFields(e, Map.of("invalidationPrice", "MSG16")));
+    }
+
+    @Test
+    void BR68_aPlanWithoutAnInvalidationPrice_needsNoCurrentPriceToBeSaved() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.empty());
+
+        assertThat(service.create(USER, spotLimit("100", "95", "110")).status()).isEqualTo(PlanStatus.DRAFT);
+    }
+
+    @Test
+    void BR68_atActivation_anInvalidationPriceThePriceHasReached_isMsg16AndThePlanStaysADraft() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("101")));
+        service.create(USER, withValidity(spotLimit("100", "95", "110"), "102", null, null));
+        TradingPlan plan = saved;
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("102")));
+
+        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+                .satisfies(e -> assertFields(e, Map.of("invalidationPrice", "MSG16")));
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        verify(plans, Mockito.times(1)).save(any());
+    }
+
+    @Test
+    void BR68_atActivation_anInvalidationPriceStillOnTheFarSide_isActivated() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("101")));
+        service.create(USER, withValidity(spotLimit("100", "95", "110"), "102", null, null));
+        TradingPlan plan = saved;
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+
+        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.ACTIVE);
+    }
+
+    @ParameterizedTest(name = "block {0}, plan {1} -> {2}")
+    @CsvSource({"0.75, 0.75, true", "0.75, 0.1,  true", "0.75, 0.76, false", "0.5,  0.5,  true", "0.5,  0.6,  false"})
+    void BR69_thePlansOwnDeviationLimit_isAtMostTheSystemBlockValue_elseMsg15(
+            String block, String maxDeviation, boolean accepted) {
+        when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_BLOCK_R)).thenReturn(new BigDecimal(block));
+        CreateTradingPlanRequest request = withValidity(spotLimit("100", "95", "110"), null, maxDeviation, null);
+
+        if (accepted) {
+            assertThat(service.create(USER, request).maxEntryDeviationR()).isEqualByComparingTo(maxDeviation);
+        } else {
+            assertThatThrownBy(() -> service.create(USER, request))
+                    .satisfies(e -> assertFields(e, Map.of("maxEntryDeviationR", "MSG15")));
+        }
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource({"SCALPING, 15m", "DAY_TRADING, 1h", "SWING, 4h"})
+    void D112_withoutATimeframe_thePlanTakesTheOneOfTheTradersPreset(SetupStyle style, String expected) {
+        when(styles.styleOf(USER)).thenReturn(Optional.of(style));
+
+        assertThat(service.create(USER, spotLimit("100", "95", "110")).analysisTimeframe())
+                .isEqualTo(expected);
+    }
+
+    @Test
+    void D112_withoutATimeframeOrAPreset_thePlanTakesOneHour() {
+        when(styles.styleOf(USER)).thenReturn(Optional.empty());
+
+        assertThat(service.create(USER, spotLimit("100", "95", "110")).analysisTimeframe())
+                .isEqualTo("1h");
+    }
+
+    @Test
+    void D112_withoutAProfileModule_thePlanTakesOneHour() {
+        when(styleProvider.getIfAvailable()).thenReturn(null);
+
+        assertThat(service.create(USER, spotLimit("100", "95", "110")).analysisTimeframe())
+                .isEqualTo("1h");
+    }
+
+    @Test
+    void D112_aTimeframeTheTraderChose_isKept() {
+        when(styles.styleOf(USER)).thenReturn(Optional.of(SetupStyle.SCALPING));
+
+        assertThat(service.create(USER, withValidity(spotLimit("100", "95", "110"), null, null, "1d"))
+                        .analysisTimeframe())
+                .isEqualTo("1d");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"5m", "1m", "1w", "1H", ""})
+    void BR08_aTimeframeOutsideTheAnalysisTimeframes_isMsg15(String timeframe) {
+        assertThatThrownBy(
+                        () -> service.create(USER, withValidity(spotLimit("100", "95", "110"), null, null, timeframe)))
+                .satisfies(e -> assertFields(e, Map.of("analysisTimeframe", "MSG15")));
+    }
+
+    @Test
+    void BR69_thePlannedEntry_ofALimitOrStopPlan_isThePriceEntered() {
+        assertThat(service.create(USER, spotLimit("100.004", "95", "110")).plannedEntryPrice())
+                .as("rounded to the tick like the entry")
+                .isEqualByComparingTo("100");
+        assertThat(service.create(USER, spotStop("101", "95", "110")).plannedEntryPrice())
+                .isEqualByComparingTo("101");
+    }
+
+    @Test
+    void BR69_thePlannedEntry_ofAMarketPlan_isTheLastPriceOfTheSave_andFollowsEachSave() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
+        service.create(USER, spotMarket("95", "110"));
+        TradingPlan plan = saved;
+        assertThat(plan.getPlannedEntryPrice()).isEqualByComparingTo("100");
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("101")));
+
+        service.update(USER, plan.getId(), updateMarket("95", "110"));
+
+        assertThat(plan.getPlannedEntryPrice()).isEqualByComparingTo("101");
+    }
+
+    @Test
+    void BR69_activatingAMarketPlan_keepsThePlannedEntryOfTheLastSave() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
+        service.create(USER, spotMarket("95", "110"));
+        TradingPlan plan = saved;
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.5")));
+
+        service.activate(USER, plan.getId());
+
+        assertThat(plan.getFillPrice()).isEqualByComparingTo("100.5");
+        assertThat(plan.getPlannedEntryPrice()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void BR36_aFillAtActivation_tookLiquidity_soItIsTaker() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
+
+        service.create(USER, activating(spotMarket("95", "110")));
+        assertThat(saved.getFillLiquidity()).as("MARKET").isEqualTo(LiquidityRole.TAKER);
+
+        service.create(USER, activating(spotLimit("100", "95", "110")));
+        assertThat(saved.getFillLiquidity())
+                .as("LIMIT marketable at activation")
+                .isEqualTo(LiquidityRole.TAKER);
+    }
+
+    /** No public API of {@code market} gives the setup score of a (pair, market, timeframe, preset) yet (Q-74). */
+    @Test
+    void BR70_activation_recordsNoSetupScoreUntilMarketOffersOne_andIsNotBlocked() {
+        TradingPlanResponse plan = service.create(USER, activating(spotLimit("100", "95", "110")));
+
+        assertThat(plan.status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(plan.setupScoreAtPlan()).isNull();
+        assertThat(plan.setupScorePreset()).isNull();
+    }
+
+    private void currentPrice(MarketType marketType, String price) {
+        when(market.currentLastPrice(marketType, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal(price)));
+    }
+
+    private static CreateTradingPlanRequest spotStop(String entry, String stop, String takeProfit) {
+        return create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.STOP, entry, stop, takeProfit, null, null, null);
+    }
+
+    private static CreateTradingPlanRequest withExpiry(CreateTradingPlanRequest r, Instant expiresAt) {
+        return new CreateTradingPlanRequest(
+                r.pairId(),
+                r.market(),
+                r.direction(),
+                r.entryType(),
+                r.entryPrice(),
+                r.stopLoss(),
+                r.takeProfit(),
+                r.capital(),
+                r.riskPercent(),
+                r.leverage(),
+                expiresAt,
+                r.note(),
+                r.invalidationPrice(),
+                r.maxEntryDeviationR(),
+                r.analysisTimeframe(),
+                r.activate());
+    }
+
+    private static CreateTradingPlanRequest withValidity(
+            CreateTradingPlanRequest r, String invalidation, String maxDeviation, String timeframe) {
+        return new CreateTradingPlanRequest(
+                r.pairId(),
+                r.market(),
+                r.direction(),
+                r.entryType(),
+                r.entryPrice(),
+                r.stopLoss(),
+                r.takeProfit(),
+                r.capital(),
+                r.riskPercent(),
+                r.leverage(),
+                r.expiresAt(),
+                r.note(),
+                decimal(invalidation),
+                decimal(maxDeviation),
+                timeframe,
+                r.activate());
+    }
+
+    private static UpdateTradingPlanRequest updateMarket(String stop, String takeProfit) {
+        return new UpdateTradingPlanRequest(
+                MarketType.SPOT,
+                Direction.LONG,
+                EntryType.MARKET,
+                null,
+                decimal(stop),
+                decimal(takeProfit),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false);
+    }
+
     private TradingPlan draft() {
         service.create(USER, spotLimit("100", "95", "110"));
         return saved;
@@ -787,6 +1151,9 @@ class TradingPlanServiceImplTest {
                 leverage,
                 null,
                 null,
+                null,
+                null,
+                null,
                 false);
     }
 
@@ -804,6 +1171,9 @@ class TradingPlanServiceImplTest {
                 r.leverage(),
                 r.expiresAt(),
                 r.note(),
+                r.invalidationPrice(),
+                r.maxEntryDeviationR(),
+                r.analysisTimeframe(),
                 true);
     }
 
@@ -815,6 +1185,9 @@ class TradingPlanServiceImplTest {
                 decimal(entry),
                 decimal(stop),
                 decimal(takeProfit),
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,

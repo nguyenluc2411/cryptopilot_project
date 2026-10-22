@@ -14,8 +14,8 @@ import java.math.BigDecimal;
  *
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT
- * @param entryType LIMIT or MARKET
- * @param entryPrice the LIMIT entry price; not read for MARKET
+ * @param entryType LIMIT, MARKET or STOP
+ * @param entryPrice the LIMIT entry price or the STOP price; not read for MARKET
  * @param stopLoss the stop loss
  * @param takeProfit the take profit
  * @param capital the capital, or {@code null}

@@ -3,6 +3,7 @@ package com.cryptopilot.trading.dto.response;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.InvalidationReason;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -11,13 +12,13 @@ import java.util.UUID;
 /**
  * A row of the plan list (SCR-16): the key figures, without the warnings.
  *
- * <p>Rule: SRS 3.5.2; CR-04.
+ * <p>Rule: SRS 3.5.2; CR-04; BR-68 (the reason shown in the Cancelled/Expired tab).
  *
  * @param id the plan
  * @param pairId the pair
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT
- * @param entryType LIMIT or MARKET
+ * @param entryType LIMIT, MARKET or STOP
  * @param entryPrice the entry price
  * @param stopLoss the stop loss
  * @param takeProfit the take profit
@@ -28,6 +29,8 @@ import java.util.UUID;
  * @param createdAt when the plan was created
  * @param activatedAt when it was activated, or {@code null}
  * @param expiresAt when an unfilled ACTIVE plan expires, or {@code null}
+ * @param invalidatedAt when it became INVALIDATED, or {@code null}
+ * @param invalidationReason why it became INVALIDATED, or {@code null}
  */
 public record TradingPlanSummaryResponse(
         UUID id,
@@ -44,4 +47,6 @@ public record TradingPlanSummaryResponse(
         PlanStatus status,
         Instant createdAt,
         Instant activatedAt,
-        Instant expiresAt) {}
+        Instant expiresAt,
+        Instant invalidatedAt,
+        InvalidationReason invalidationReason) {}

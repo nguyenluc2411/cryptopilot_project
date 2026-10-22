@@ -9,9 +9,9 @@ import java.time.Instant;
 /**
  * The values of SCR-17 shared by creating and editing a plan. Optional values ({@code null}) take their default: the
  * entry price of a MARKET plan is the current last price, capital and risk % come from the profile, leverage is 1,
- * a LIMIT plan expires after 7 days.
+ * a LIMIT or STOP plan expires after 7 days, the analysis timeframe follows the Trader's style preset.
  *
- * <p>Rule: SRS 3.5.1; BR-21, BR-30.
+ * <p>Rule: SRS 3.5.1; BR-21, BR-30, BR-68, BR-69, BR-70; D-111, D-112.
  */
 public interface PlanInputs {
 
@@ -36,6 +36,15 @@ public interface PlanInputs {
     Instant expiresAt();
 
     String note();
+
+    /** The invalidation price of a LIMIT or STOP plan, or {@code null} (BR-68). */
+    BigDecimal invalidationPrice();
+
+    /** The plan's own entry deviation limit in R, or {@code null} for the system's (BR-69). */
+    BigDecimal maxEntryDeviationR();
+
+    /** The analysis timeframe code, or {@code null} for the style preset's (BR-70, D-112). */
+    String analysisTimeframe();
 
     /** "Save and Activate" rather than "Save as Draft"; {@code null} is a draft. */
     Boolean activate();

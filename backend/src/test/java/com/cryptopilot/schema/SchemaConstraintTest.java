@@ -10,6 +10,8 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -232,16 +234,19 @@ class SchemaConstraintTest {
         assertThat(insertPlan("FUTURES", "SHORT", 10)).isNotNull();
     }
 
-    @Test
-    void limitPlan_needsTheEntryPriceItWaitsAt() {
-        assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> jdbc.sql("""
-                        insert into trading_plan (plan_id, user_id, pair_id, market_type, direction,
-                                                  entry_type, stop_loss_price, take_profit_price,
-                                                  capital_amount, risk_percent, plan_status,
-                                                  created_at, updated_at)
-                        values (?, ?, ?, 'SPOT', 'LONG', 'LIMIT', 26500, 28000, 1000, 1.5, 'DRAFT', ?, ?)""")
-                .params(UUID.randomUUID(), userId, pairId, NOW, NOW)
-                .update());
+    @ParameterizedTest
+    @ValueSource(strings = {"LIMIT", "STOP"})
+    void waitingPlan_needsTheEntryPriceItWaitsAt(String entryType) {
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> jdbc.sql("""
+                                insert into trading_plan (plan_id, user_id, pair_id, market_type, direction,
+                                                          entry_type, stop_loss_price, take_profit_price,
+                                                          capital_amount, risk_percent, plan_status,
+                                                          analysis_timeframe, created_at, updated_at)
+                                values (?, ?, ?, 'SPOT', 'LONG', ?, 26500, 28000, 1000, 1.5, 'DRAFT', '1h', ?, ?)""")
+                        .params(UUID.randomUUID(), userId, pairId, entryType, NOW, NOW)
+                        .update())
+                .withMessageContaining("ck_trading_plan_limit_has_entry_price");
     }
 
     // ---------------------------------------------------------------- journal
@@ -494,9 +499,9 @@ class SchemaConstraintTest {
                         insert into trading_plan (plan_id, user_id, pair_id, market_type, direction,
                                                   entry_type, entry_price, stop_loss_price, take_profit_price,
                                                   capital_amount, risk_percent, leverage, margin_mode,
-                                                  plan_status, created_at, updated_at)
+                                                  plan_status, analysis_timeframe, created_at, updated_at)
                         values (?, ?, ?, ?, ?, 'LIMIT', 27123.45, 26500, 28000, 1000, 1.5,
-                                cast(? as integer), cast(? as varchar), 'DRAFT', ?, ?)""")
+                                cast(? as integer), cast(? as varchar), 'DRAFT', '1h', ?, ?)""")
                 .params(
                         id,
                         userId,

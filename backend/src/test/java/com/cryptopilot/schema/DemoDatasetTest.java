@@ -113,8 +113,8 @@ class DemoDatasetTest {
         assertThat(count("system_setting"))
                 .as("the demo set adds no setting: the reference values are the same in every environment"
                         + " (V3's sixteen, less the two plan limits V10 and the two thresholds V13 removes,"
-                        + " plus the clearance fee V26 adds)")
-                .isEqualTo(13);
+                        + " plus the clearance fee V26 adds and the four plan validity settings V32 adds)")
+                .isEqualTo(17);
         assertThat(count("trading_strategy")).isEqualTo(3);
         assertThat(count("crypto_pair"))
                 .as("the pair list is an open decision, and a development-only file is not a way around it")

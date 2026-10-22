@@ -40,6 +40,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -413,6 +415,72 @@ class TradingPlanApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Plan validity (TP-A; BR-68, BR-69, BR-70; D-111, D-112)
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void D112_aStopPlan_isCreatedWithTheTimeframeOfTheTradersStyleAndItsPlannedEntry() throws Exception {
+        UUID trader = trader();
+        sql.sql("update user_profile set trading_style = 'SCALPING' where user_id = ?")
+                .param(trader)
+                .update();
+
+        as(trader, post(PLANS), spotStop("{}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.entryType").value("STOP"))
+                .andExpect(jsonPath("$.entryPrice").value("100.00"))
+                .andExpect(jsonPath("$.plannedEntryPrice").value("100.00"))
+                .andExpect(jsonPath("$.analysisTimeframe").value("15m"))
+                .andExpect(jsonPath("$.expiresAt").isNotEmpty())
+                .andExpect(jsonPath("$.invalidationPrice").doesNotExist())
+                .andExpect(jsonPath("$.setupScoreAtPlan").doesNotExist());
+    }
+
+    @Test
+    void BR69_aDeviationLimitAtTheSeededBlockValue_isSaved() throws Exception {
+        as(trader(), post(PLANS), spotStop("{\"maxEntryDeviationR\": 0.75, \"analysisTimeframe\": \"1d\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.maxEntryDeviationR").value("0.75"))
+                .andExpect(jsonPath("$.analysisTimeframe").value("1d"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(
+            delimiter = '|',
+            value = {
+                "\"maxEntryDeviationR\": 0       | maxEntryDeviationR",
+                "\"maxEntryDeviationR\": -0.1    | maxEntryDeviationR",
+                "\"maxEntryDeviationR\": 0.76    | maxEntryDeviationR",
+                "\"analysisTimeframe\": \"5m\" | analysisTimeframe",
+                "\"invalidationPrice\": 0        | invalidationPrice"
+            })
+    void MSG15_aValidityValueOutOfRange_isNamedUnderErrors(String value, String field) throws Exception {
+        as(trader(), post(PLANS), spotStop("{" + value + "}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors." + field).value("MSG15"));
+    }
+
+    @Test
+    void BR68_anInvalidatedPlan_isListedInTheCancelledExpiredTabWithItsReason() throws Exception {
+        UUID trader = trader();
+        String id = id(as(trader, post(PLANS), spotLimit("100", "95", "110", true))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("ACTIVE")));
+        sql.sql("""
+                        update trading_plan set plan_status = 'INVALIDATED', invalidated_at = now(),
+                               invalidation_reason = 'TAKE_PROFIT_REACHED'
+                         where plan_id = ?""").param(UUID.fromString(id)).update();
+
+        as(trader, get(PLANS).param("tab", "CANCELLED_EXPIRED"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(id))
+                .andExpect(jsonPath("$.items[0].status").value("INVALIDATED"))
+                .andExpect(jsonPath("$.items[0].invalidationReason").value("TAKE_PROFIT_REACHED"));
+        as(trader, get(PLANS + "/" + id), null)
+                .andExpect(jsonPath("$.statusHistory[2].status").value("INVALIDATED"));
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
 
@@ -438,6 +506,14 @@ class TradingPlanApiTest {
                 + ", \"activate\": " + activate + "}";
     }
 
+    /** A Spot LONG STOP draft at 100 (SL 95, TP 110) with the extra fields of {@code extra}, a JSON object. */
+    private String spotStop(String extra) {
+        String fields = extra.substring(1, extra.length() - 1).trim();
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\", \"entryType\": \"STOP\","
+                + " \"entryPrice\": 100, \"stopLoss\": 95, \"takeProfit\": 110"
+                + (fields.isEmpty() ? "" : ", " + fields) + "}";
+    }
+
     private String futuresLimit(boolean activate) {
         return "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
                 + " \"entryType\": \"LIMIT\", \"entryPrice\": 100, \"stopLoss\": 95, \"takeProfit\": 110,"
@@ -458,6 +534,9 @@ class TradingPlanApiTest {
                 new BigDecimal("100"),
                 new BigDecimal("95"),
                 new BigDecimal("110"),
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,

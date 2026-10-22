@@ -15,8 +15,11 @@ import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskInputRejected;
+import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.InvalidationReason;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.MarginMode;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import jakarta.persistence.AttributeOverride;
@@ -35,6 +38,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -50,13 +54,15 @@ import lombok.Getter;
  *       refused while a BLOCKING warning exists, as {@link WarningEvaluator#blocksActivation} decides (MSG18).
  *   <li>After activation the snapshot is fixed.
  *   <li>Every status change goes through the transition table of {@link PlanStatus} and records its instant.
+ *   <li>Each save records the planned entry price, from which the entry deviation is measured (BR-69).
  * </ul>
  *
  * <p>The plan's inputs are checked by the calculation that sized them (BR-21, BR-22, BR-30): the plan asks
  * {@link PositionSizeCalculator} again rather than repeating the comparisons, so the rules live in one place, and a
  * rejection is reported per field ({@link FieldValidationException}).
  *
- * <p>Rule: BR-21, BR-22, BR-31, BR-32; MSG18; TECHNICAL_DESIGN 3.2 and 4.3; D-66, D-67, D-68, D-69.
+ * <p>Rule: BR-21, BR-22, BR-31, BR-32, BR-68, BR-69, BR-70; MSG18; TECHNICAL_DESIGN 3.2 and 4.3; D-66, D-67, D-68,
+ * D-69, D-111, D-112.
  *
  * <p>Reference: Evans, E. (2003). <i>Domain-Driven Design</i>. Addison-Wesley, ch. 6 "Aggregates".
  * <p>Reference: Vernon, V. (2013). <i>Implementing Domain-Driven Design</i>. Addison-Wesley, ch. 10 "Aggregates".
@@ -164,11 +170,51 @@ public class TradingPlan extends BaseEntity {
     @Column(name = "fill_price", precision = 28, scale = 12)
     private BigDecimal fillPrice;
 
+    /** Whether the fill rested (maker) or took liquidity (taker); set with EXECUTED (BR-36). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "fill_liquidity", length = 32)
+    private LiquidityRole fillLiquidity;
+
+    /**
+     * The entry the Trader planned: the entered price for LIMIT and STOP, the reference price of the last save for
+     * MARKET (BR-69). {@code null} only for MARKET plans filled before it was recorded.
+     */
+    @Column(name = "planned_entry_price", precision = 28, scale = 12)
+    private BigDecimal plannedEntryPrice;
+
+    /** The price that invalidates a waiting LIMIT or STOP plan, or {@code null} (BR-68). */
+    @Column(name = "invalidation_price", precision = 28, scale = 12)
+    private BigDecimal invalidationPrice;
+
+    /** The plan's own limit on the entry deviation in R, or {@code null} for the system's (BR-69). */
+    @Column(name = "max_entry_deviation_r", precision = 12, scale = 8)
+    private BigDecimal maxEntryDeviationR;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "analysis_timeframe", nullable = false, length = 32)
+    private String analysisTimeframe;
+
+    /** The setup score taken at activation, or {@code null} when none could be read (BR-70, D-112). */
+    @Column(name = "setup_score_at_plan", precision = 5, scale = 2)
+    private BigDecimal setupScoreAtPlan;
+
+    /** The preset name and version the score at activation used, e.g. {@code DAY_TRADING v1} (D-112). */
+    @Column(name = "setup_score_preset", length = 32)
+    private String setupScorePreset;
+
     @Column(name = "cancelled_at")
     private Instant cancelledAt;
 
     @Column(name = "expired_at")
     private Instant expiredAt;
+
+    @Column(name = "invalidated_at")
+    private Instant invalidatedAt;
+
+    /** Why the plan became INVALIDATED; set with that status (BR-68). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "invalidation_reason", length = 32)
+    private InvalidationReason invalidationReason;
 
     /**
      * Inside the aggregate: created, replaced and deleted with the plan (D-68). Lazy, so a list of plans costs one
@@ -193,7 +239,7 @@ public class TradingPlan extends BaseEntity {
      * A new DRAFT plan (UC-16), saved with its warnings whatever their severity.
      *
      * @param calculation the plan's inputs with their sizing and, on Futures, liquidation estimate
-     * @param details entry type, expiry and note
+     * @param details entry type, expiry, note, invalidation price, maximum deviation and analysis timeframe
      * @param warnings the warnings the calculation raises, most severe first
      */
     public static TradingPlan draft(
@@ -248,16 +294,46 @@ public class TradingPlan extends BaseEntity {
     /**
      * The entry was filled (NSF-07, BR-33); the position is the journal's from here.
      *
+     * <p>Rule: BR-33, BR-36; D-111 (E1).
+     *
      * @param now when the fill counts, kept to the microsecond like the column
      * @param price the fill price
+     * @param liquidity MAKER when the entry rested and was then reached, TAKER when it executed against the market
      */
-    public void markExecuted(Instant now, BigDecimal price) {
+    public void markExecuted(Instant now, BigDecimal price, LiquidityRole liquidity) {
         Objects.requireNonNull(now, "now");
         Objects.requireNonNull(price, "price");
+        Objects.requireNonNull(liquidity, "liquidity");
         requireTransition(PlanStatus.EXECUTED);
         status = PlanStatus.EXECUTED;
         executedAt = now.truncatedTo(ChronoUnit.MICROS);
         fillPrice = price;
+        fillLiquidity = liquidity;
+    }
+
+    /**
+     * An ACTIVE plan whose setup no longer holds: an invalidation level was reached before the entry. Compare-and-set:
+     * a plan that is no longer ACTIVE (filled, cancelled, expired or already invalidated) is left unchanged.
+     *
+     * <p>Rule: BR-32, BR-68; D-111 (M3).
+     *
+     * <p>Reference: Binance Futures documentation, order types (a stop order that would trigger at once is rejected,
+     * so a level already passed ends the order instead of acting on it).
+     *
+     * @param reason which level was reached
+     * @param at when it was reached, kept to the microsecond like the column
+     * @return whether the plan moved to INVALIDATED
+     */
+    public boolean invalidate(InvalidationReason reason, Instant at) {
+        Objects.requireNonNull(reason, "reason");
+        Objects.requireNonNull(at, "at");
+        if (status != PlanStatus.ACTIVE) {
+            return false;
+        }
+        status = PlanStatus.INVALIDATED;
+        invalidatedAt = at.truncatedTo(ChronoUnit.MICROS);
+        invalidationReason = reason;
+        return true;
     }
 
     /** Cancelled by the Trader (UC-19), from DRAFT or ACTIVE. */
@@ -277,6 +353,13 @@ public class TradingPlan extends BaseEntity {
         }
         status = PlanStatus.EXPIRED;
         expiredAt = now;
+    }
+
+    /** The timeframe the plan was analysed on (BR-70, D-112). */
+    public AnalysisTimeframe getAnalysisTimeframe() {
+        return AnalysisTimeframe.fromCode(analysisTimeframe)
+                .orElseThrow(() -> new IllegalStateException(
+                        "plan " + getId() + " has the unknown analysis timeframe " + analysisTimeframe));
     }
 
     /** Whether the plan's values may still be changed (BR-32). */
@@ -310,12 +393,14 @@ public class TradingPlan extends BaseEntity {
     private void save(PlanCalculation calculation, PlanDetails details, List<PlanWarning> newWarnings) {
         Objects.requireNonNull(details, "details");
         requireAccepted(calculation);
+        requireValidDetails(details);
         RiskInput in = calculation.plan();
         boolean futures = calculation.isFutures();
         market = in.market();
         direction = in.direction();
         entryType = details.entryType();
         entryPrice = in.entryPrice();
+        plannedEntryPrice = in.entryPrice();
         stopLoss = in.stopLoss();
         takeProfit = in.takeProfit();
         capital = in.capital();
@@ -324,6 +409,9 @@ public class TradingPlan extends BaseEntity {
         marginMode = futures ? MarginMode.ISOLATED : null;
         expiresAt = details.expiresAt();
         note = details.note();
+        invalidationPrice = details.invalidationPrice();
+        maxEntryDeviationR = details.maxEntryDeviationR();
+        analysisTimeframe = details.analysisTimeframe().code();
         replaceSnapshot(PlanSnapshot.of(calculation));
         replaceWarnings(newWarnings);
     }
@@ -337,6 +425,23 @@ public class TradingPlan extends BaseEntity {
         if (PositionSizeCalculator.calculate(calculation.plan()) instanceof RiskInputRejected rejected) {
             throw new FieldValidationException(
                     "the calculation rejects the plan's inputs: " + rejected.violations(), rejected.fieldErrors());
+        }
+    }
+
+    /**
+     * The values a plan of this entry type must or must not carry: an analysis timeframe always (MSG01), no invalidation
+     * price on a MARKET plan, which never waits (MSG01, as for a value a plan type fixes).
+     *
+     * <p>Rule: BR-68, BR-70; D-111, D-112.
+     */
+    private static void requireValidDetails(PlanDetails details) {
+        if (details.analysisTimeframe() == null) {
+            throw new FieldValidationException(
+                    "a plan needs an analysis timeframe", Map.of("analysisTimeframe", "MSG01"));
+        }
+        if (details.entryType() == EntryType.MARKET && details.invalidationPrice() != null) {
+            throw new FieldValidationException(
+                    "a MARKET plan has no invalidation price", Map.of("invalidationPrice", "MSG01"));
         }
     }
 

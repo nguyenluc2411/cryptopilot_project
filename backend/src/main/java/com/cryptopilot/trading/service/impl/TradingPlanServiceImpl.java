@@ -1,5 +1,6 @@
 package com.cryptopilot.trading.service.impl;
 
+import com.cryptopilot.admin.SystemSettingApi;
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
@@ -11,8 +12,10 @@ import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.calculator.PlanValidityRule;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.dto.request.PlanInputs;
 import com.cryptopilot.trading.dto.request.UpdateTradingPlanRequest;
@@ -25,12 +28,16 @@ import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.matching.EntryFillRule;
 import com.cryptopilot.trading.model.CalculatedPlan;
+import com.cryptopilot.trading.model.InputViolation;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanListQuery;
 import com.cryptopilot.trading.model.PlanTerms;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskProfileLimits;
+import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
+import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import com.cryptopilot.trading.service.TradingPlanService;
@@ -41,7 +48,10 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -50,6 +60,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -62,7 +73,8 @@ import org.springframework.transaction.annotation.Transactional;
  * D-63 lock on the Trader before it counts the ACTIVE plans, so the count and the activation it allows cannot
  * interleave with another one.
  *
- * <p>Rule: UC-16 to UC-20; BR-21 to BR-33, BR-62, BR-66; CR-04; D-63, D-70, D-71, D-72.
+ * <p>Rule: UC-16 to UC-20; BR-21 to BR-33, BR-62, BR-66, BR-68, BR-69, BR-70; CR-04; D-63, D-70, D-71, D-72, D-111,
+ * D-112.
  *
  * <p>Reference: Fowler, M. (2002). <i>Patterns of Enterprise Application Architecture</i>. Addison-Wesley, "Service
  * Layer".
@@ -75,8 +87,11 @@ public class TradingPlanServiceImpl implements TradingPlanService {
 
     private static final Logger log = LoggerFactory.getLogger(TradingPlanServiceImpl.class);
 
-    /** How long an unfilled LIMIT plan stays ACTIVE when the Trader sets no expiry (SRS 3.5.1). */
+    /** How long an unfilled LIMIT or STOP plan stays ACTIVE when the Trader sets no expiry (SRS 3.5.1, D-71). */
     static final Duration LIMIT_EXPIRY = Duration.ofDays(7);
+
+    /** The setting a plan's own entry deviation limit may not exceed (BR-69). */
+    static final String ENTRY_DEVIATION_BLOCK_R = "ENTRY_DEVIATION_BLOCK_R";
 
     /** Excludes no plan from the other open risk, and stands for "any pair" in the list: no row has this key. */
     private static final UUID NO_PLAN = new UUID(0L, 0L);
@@ -89,6 +104,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     private final EntitlementApi entitlements;
     private final Clock clock;
     private final ApplicationEventPublisher events;
+    private final SystemSettingApi settings;
+    /** The Trader's style preset, implemented by the profile's owner; absent means no preset (D-53). */
+    private final ObjectProvider<SetupStyleSource> styles;
 
     @Override
     @Transactional(readOnly = true)
@@ -105,8 +123,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             activePlanLock.lock(userId);
         }
         CalculatedPlan calculated = calculate(userId, request.pairId(), terms(request), NO_PLAN);
-        TradingPlan plan = TradingPlan.draft(
-                userId, request.pairId(), calculated.calculation(), details(request, now), calculated.warnings());
+        PlanDetails details = details(userId, request, now);
+        requireValidAtSave(request.pairId(), calculated, details);
+        TradingPlan plan =
+                TradingPlan.draft(userId, request.pairId(), calculated.calculation(), details, calculated.warnings());
         if (activate) {
             requireRoomForAnActivePlan(userId);
             activate(plan, calculated, now);
@@ -124,7 +144,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         }
         TradingPlan plan = owned(userId, planId);
         CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(request), plan.getId());
-        plan.updateDraft(calculated.calculation(), details(request, now), calculated.warnings());
+        PlanDetails details = details(userId, request, now);
+        requireValidAtSave(plan.getPairId(), calculated, details);
+        plan.updateDraft(calculated.calculation(), details, calculated.warnings());
         if (activate) {
             requireRoomForAnActivePlan(userId);
             activate(plan, calculated, now);
@@ -143,6 +165,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             throw new IllegalPlanStateException(plan.getId(), plan.getStatus(), "move to " + PlanStatus.ACTIVE);
         }
         requireRoomForAnActivePlan(userId);
+        requireValidAtActivation(plan);
         // Stored prices are checked against the current tick, not rounded to it (BR-30, BR-31).
         CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(plan), plan.getId(), false);
         activate(plan, calculated, now);
@@ -230,19 +253,16 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * MARKET: the current reference price (BR-33), see {@link #currentReferencePrice}; LIMIT: the price entered, rounded
-     * to the tick when {@code roundPrice} (BR-30).
+     * MARKET: the current reference price (BR-33), see {@link #currentReferencePrice}; LIMIT and STOP: the price
+     * entered (for STOP the stop price), rounded to the tick when {@code roundPrice} (BR-30).
      */
     private BigDecimal entryPrice(TradablePair pair, PlanTerms terms, boolean roundPrice) {
         if (terms.entryType() == EntryType.MARKET) {
-            return currentReferencePrice(pair)
-                    .orElseThrow(() -> new BusinessException(
-                            ErrorCode.MARKET_PRICE_UNAVAILABLE,
-                            "no current " + (pair.market() == MarketType.FUTURES ? "mark" : "last") + " price for "
-                                    + pair.symbol() + " on " + pair.market()));
+            return currentReferencePrice(pair).orElseThrow(() -> priceUnavailable(pair));
         }
         if (terms.entryPrice() == null) {
-            throw new FieldValidationException("a LIMIT plan needs an entry price", Map.of("entryPrice", "MSG01"));
+            throw new FieldValidationException(
+                    "a " + terms.entryType() + " plan needs an entry price", Map.of("entryPrice", "MSG01"));
         }
         return roundPrice ? tick(pair, terms.entryPrice()) : terms.entryPrice();
     }
@@ -314,27 +334,115 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 plan.getLeverage());
     }
 
-    /** A LIMIT plan without an expiry expires after {@link #LIMIT_EXPIRY}; a MARKET plan has none by default. */
-    private static PlanDetails details(PlanInputs request, Instant now) {
+    /**
+     * The request's details with their defaults: a LIMIT or STOP plan without an expiry expires after
+     * {@link #LIMIT_EXPIRY} (a MARKET plan has none by default), and without an analysis timeframe the plan takes the
+     * one of the Trader's style preset. A timeframe outside BR-08 is MSG15.
+     *
+     * <p>Rule: BR-08, BR-70; SRS 3.5.1; D-71, D-111 (M1), D-112.
+     */
+    private PlanDetails details(UUID userId, PlanInputs request, Instant now) {
         Instant expiresAt = request.expiresAt();
-        if (expiresAt == null && request.entryType() == EntryType.LIMIT) {
+        if (expiresAt == null && request.entryType() != EntryType.MARKET) {
             expiresAt = now.plus(LIMIT_EXPIRY);
         }
-        return new PlanDetails(request.entryType(), expiresAt, request.note());
+        return new PlanDetails(
+                request.entryType(),
+                expiresAt,
+                request.note(),
+                request.invalidationPrice(),
+                request.maxEntryDeviationR(),
+                analysisTimeframe(userId, request.analysisTimeframe()));
+    }
+
+    private AnalysisTimeframe analysisTimeframe(UUID userId, String requested) {
+        if (requested == null) {
+            SetupStyleSource source = styles.getIfAvailable();
+            return AnalysisTimeframe.defaultFor(source == null ? Optional.empty() : source.styleOf(userId));
+        }
+        return AnalysisTimeframe.fromCode(requested)
+                .orElseThrow(() -> new FieldValidationException(
+                        "the analysis timeframe " + requested + " is not one of BR-08",
+                        Map.of("analysisTimeframe", "MSG15")));
+    }
+
+    /**
+     * BR-69: a plan's own deviation limit within the system's block value; BR-68: the invalidation price on the far
+     * side of the current price (a MARKET plan carrying one is the aggregate's error).
+     */
+    private void requireValidAtSave(UUID pairId, CalculatedPlan calculated, PlanDetails details) {
+        List<InputViolation> violations = new ArrayList<>();
+        PlanValidityRule.maxEntryDeviation(details.maxEntryDeviationR(), settings.decimal(ENTRY_DEVIATION_BLOCK_R))
+                .ifPresent(violations::add);
+        if (details.entryType() != EntryType.MARKET) {
+            invalidationViolation(
+                            pairId,
+                            calculated.calculation().plan().market(),
+                            details.entryType(),
+                            calculated.calculation().plan().direction(),
+                            details.invalidationPrice())
+                    .ifPresent(violations::add);
+        }
+        requireNone(violations);
+    }
+
+    /** BR-68 again at activation (BR-31): the price may have moved to the plan's invalidation price since the save. */
+    private void requireValidAtActivation(TradingPlan plan) {
+        if (plan.getEntryType() != EntryType.MARKET) {
+            requireNone(invalidationViolation(
+                            plan.getPairId(),
+                            plan.getMarket(),
+                            plan.getEntryType(),
+                            plan.getDirection(),
+                            plan.getInvalidationPrice())
+                    .stream()
+                    .toList());
+        }
+    }
+
+    /**
+     * The invalidation price against the pair's current last price, never the mark price (D-112). Without a current
+     * last price the rule cannot be checked, so the save or activation is refused (MSG43); on Futures the cache holds
+     * a last price from TP-0 on.
+     */
+    private Optional<InputViolation> invalidationViolation(
+            UUID pairId, MarketType marketType, EntryType entryType, Direction direction, BigDecimal invalidation) {
+        if (invalidation == null) {
+            return Optional.empty();
+        }
+        TradablePair pair = market.tradablePair(pairId, marketType)
+                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", pairId));
+        BigDecimal last = market.currentLastPrice(pair.market(), pair.symbol())
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.MARKET_PRICE_UNAVAILABLE,
+                        "no current last price for " + pair.symbol() + " on " + pair.market()
+                                + " to check the invalidation price"));
+        return PlanValidityRule.invalidationPrice(entryType, direction, invalidation, last);
+    }
+
+    private static void requireNone(List<InputViolation> violations) {
+        if (violations.isEmpty()) {
+            return;
+        }
+        Map<String, String> errors = new LinkedHashMap<>();
+        violations.forEach(violation -> errors.putIfAbsent(violation.field(), violation.messageCode()));
+        throw new FieldValidationException("the plan's validity values are rejected: " + violations, errors);
     }
 
     /**
      * Activates the plan and fills its entry at once when it is MARKET, or when it is LIMIT and the current last price
      * already reaches it (BR-33); otherwise it waits for the matching engine. A MARKET entry fills at the price the
-     * activation was calculated with: the last price on Spot, the mark price on Futures (D-84). The journal record of
-     * the fill is T-048.
+     * activation was calculated with: the last price on Spot, the mark price on Futures (D-84). A fill at activation took liquidity, so it is TAKER (D-111 E1).
+     * A STOP waits: its trigger is the matching engine's (TP-B). The journal record of the fill is T-048.
      */
     private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now) {
         plan.activate(calculated.calculation(), calculated.warnings(), now);
-        Optional<BigDecimal> fillPrice = EntryFillRule.atActivation(
-                plan.getEntryType(), plan.getDirection(), plan.getEntryPrice(), lastPrice(plan));
+        Optional<BigDecimal> fillPrice = plan.getEntryType() == EntryType.STOP
+                ? Optional.empty()
+                : EntryFillRule.atActivation(
+                        plan.getEntryType(), plan.getDirection(), plan.getEntryPrice(), lastPrice(plan));
         if (fillPrice.isPresent()) {
-            plan.markExecuted(now, fillPrice.get());
+            plan.markExecuted(now, fillPrice.get(), LiquidityRole.TAKER);
             log.info("NSF-07 plan {} filled at activation at {}", plan.getId(), fillPrice.get());
         } else {
             publishActivated(plan);
@@ -362,6 +470,13 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return pair.market() == MarketType.FUTURES
                 ? market.currentMarkPrice(pair.symbol())
                 : market.currentLastPrice(pair.market(), pair.symbol());
+    }
+
+    private static BusinessException priceUnavailable(TradablePair pair) {
+        return new BusinessException(
+                ErrorCode.MARKET_PRICE_UNAVAILABLE,
+                "no current " + (pair.market() == MarketType.FUTURES ? "mark" : "last") + " price for " + pair.symbol()
+                        + " on " + pair.market());
     }
 
     private void publishActivated(TradingPlan plan) {

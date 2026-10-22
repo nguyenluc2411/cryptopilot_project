@@ -73,10 +73,11 @@ class SeedDataTest {
      * The tables the seed writes, with the number of rows each one holds after every migration: V3 seeds sixteen
      * settings, V10 removes the watchlist and active alert limits, which are the plan's (BR-62), and V13 the
      * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V26 adds the
-     * liquidation clearance fee (BR-36); V11 seeds the five packages.
+     * liquidation clearance fee (BR-36); V32 the entry deviation, setup score drop and slippage settings (BR-36, BR-69,
+     * BR-70); V11 seeds the five packages.
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
-            "system_setting", 13,
+            "system_setting", 17,
             "trading_strategy", 3,
             "user_account", 1,
             "user_profile", 1,
@@ -114,7 +115,7 @@ class SeedDataTest {
 
     @ParameterizedTest(name = "{0} holds {1} seeded rows")
     @CsvSource({
-        "system_setting, 13",
+        "system_setting, 17",
         "trading_strategy, 3",
         "user_account, 1",
         "user_profile, 1",
@@ -304,6 +305,39 @@ class SeedDataTest {
         assertThat(settingValue(key)).isEqualTo(expected);
     }
 
+    /** BR-36, BR-69, BR-70: the thresholds V32 seeds, with the defaults D-111 states. */
+    @ParameterizedTest(name = "{0} = {1}")
+    @CsvSource({
+        "ENTRY_DEVIATION_CONFIRM_R, 0.25000000, DECIMAL",
+        "ENTRY_DEVIATION_BLOCK_R, 0.75000000, DECIMAL",
+        "SETUP_SCORE_DROP_WARN, 15, INT",
+        "SLIPPAGE_BPS, 0, INT"
+    })
+    void BR69_BR70_planValidityThreshold_isSeededWithItsDefault(String key, String expected, String type) {
+        assertThat(settingValue(key)).isEqualTo(expected);
+        assertThat(jdbc.sql("select value_type from system_setting where setting_key = ?")
+                        .param(key)
+                        .query(String.class)
+                        .single())
+                .isEqualTo(type);
+    }
+
+    /** BR-36, D-111 E1: the fee descriptions name the liquidity role, maker resting and taker taking liquidity. */
+    @ParameterizedTest
+    @CsvSource({
+        "SPOT_MAKER_FEE, rested",
+        "FUTURES_MAKER_FEE, rested",
+        "SPOT_TAKER_FEE, take liquidity",
+        "FUTURES_TAKER_FEE, take liquidity"
+    })
+    void BR36_theFeeDescriptions_nameTheLiquidityRole(String key, String role) {
+        assertThat(jdbc.sql("select description from system_setting where setting_key = ?")
+                        .param(key)
+                        .query(String.class)
+                        .single())
+                .contains(role);
+    }
+
     /** BR-36: Spot has no liquidation, so V26 drops it from the Spot taker fee description (D-97, Q-54). */
     @Test
     void BR36_theSpotTakerFeeDescription_namesNoLiquidation() {
@@ -339,7 +373,7 @@ class SeedDataTest {
                 .query()
                 .listOfRows();
 
-        assertThat(settings).hasSize(13).allSatisfy(setting -> {
+        assertThat(settings).hasSize(17).allSatisfy(setting -> {
             String key = (String) setting.get("setting_key");
             String value = (String) setting.get("setting_value");
             switch ((String) setting.get("value_type")) {

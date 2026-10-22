@@ -17,8 +17,11 @@ import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.RiskInput;
+import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.InvalidationReason;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.MarginMode;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.model.enums.WarningType;
@@ -47,8 +50,10 @@ class TradingPlanTest {
     private static final Instant NOW = Instant.parse("2026-10-01T08:00:00Z");
     private static final Instant LATER = NOW.plus(Duration.ofHours(2));
     private static final Instant EXPIRY = NOW.plus(Duration.ofDays(7));
-    private static final PlanDetails LIMIT = new PlanDetails(EntryType.LIMIT, EXPIRY, "breakout retest");
-    private static final PlanDetails MARKET = new PlanDetails(EntryType.MARKET, null, null);
+    private static final PlanDetails LIMIT =
+            new PlanDetails(EntryType.LIMIT, EXPIRY, "breakout retest", null, null, AnalysisTimeframe.ONE_HOUR);
+    private static final PlanDetails MARKET =
+            new PlanDetails(EntryType.MARKET, null, null, null, null, AnalysisTimeframe.ONE_HOUR);
 
     private static final PlanWarning BLOCKING =
             new PlanWarning(WarningType.INSUFFICIENT_CAPITAL, "margin above capital");
@@ -104,7 +109,7 @@ class TradingPlanTest {
                 TradingPlan.draft(USER, PAIR, PlanFixture.futuresLong().build(), LIMIT, List.of(WARNING));
         PlanCalculation edited =
                 PlanFixture.futuresLong().stop("96").takeProfit("120").build();
-        PlanDetails details = new PlanDetails(EntryType.MARKET, null, null);
+        PlanDetails details = new PlanDetails(EntryType.MARKET, null, null, null, null, AnalysisTimeframe.ONE_HOUR);
 
         plan.updateDraft(edited, details, List.of(BLOCKING, INFO));
 
@@ -124,7 +129,7 @@ class TradingPlanTest {
     @ParameterizedTest
     @EnumSource(
             value = PlanStatus.class,
-            names = {"ACTIVE", "EXECUTED", "CANCELLED", "EXPIRED"})
+            names = {"ACTIVE", "EXECUTED", "CANCELLED", "EXPIRED", "INVALIDATED"})
     void BR32_aPlanOutsideDraft_cannotBeEdited(PlanStatus status) {
         TradingPlan plan = planIn(status);
         PlanSnapshot before = plan.getSnapshot();
@@ -360,7 +365,8 @@ class TradingPlanTest {
     @ParameterizedTest
     @CsvSource({"-1", "0"})
     void BR32_anExpiryNotAfterTheActivation_isRefused(long secondsAfterNow) {
-        PlanDetails details = new PlanDetails(EntryType.LIMIT, NOW.plusSeconds(secondsAfterNow), null);
+        PlanDetails details = new PlanDetails(
+                EntryType.LIMIT, NOW.plusSeconds(secondsAfterNow), null, null, null, AnalysisTimeframe.ONE_HOUR);
         TradingPlan plan =
                 TradingPlan.draft(USER, PAIR, PlanFixture.futuresLong().build(), details, List.of());
 
@@ -373,12 +379,16 @@ class TradingPlanTest {
     @Test
     void BR32_aPlanWithoutExpiry_orWithALaterOne_isActivated() {
         TradingPlan none = TradingPlan.draft(
-                USER, PAIR, PlanFixture.futuresLong().build(), new PlanDetails(EntryType.LIMIT, null, null), List.of());
+                USER,
+                PAIR,
+                PlanFixture.futuresLong().build(),
+                new PlanDetails(EntryType.LIMIT, null, null, null, null, AnalysisTimeframe.ONE_HOUR),
+                List.of());
         TradingPlan inASecond = TradingPlan.draft(
                 USER,
                 PAIR,
                 PlanFixture.futuresLong().build(),
-                new PlanDetails(EntryType.LIMIT, NOW.plusSeconds(1), null),
+                new PlanDetails(EntryType.LIMIT, NOW.plusSeconds(1), null, null, null, AnalysisTimeframe.ONE_HOUR),
                 List.of());
 
         none.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
@@ -465,7 +475,7 @@ class TradingPlanTest {
     @Test
     void BR32_eachTransition_recordsTheInstantItWasGiven() {
         TradingPlan executed = planIn(PlanStatus.ACTIVE);
-        executed.markExecuted(LATER, new BigDecimal("99.5"));
+        executed.markExecuted(LATER, new BigDecimal("99.5"), LiquidityRole.MAKER);
         TradingPlan cancelledDraft = planIn(PlanStatus.DRAFT);
         cancelledDraft.cancel(LATER);
         TradingPlan cancelledActive = planIn(PlanStatus.ACTIVE);
@@ -495,7 +505,7 @@ class TradingPlanTest {
         Instant minute = Instant.parse("2026-10-01T08:01:00Z");
 
         plan.activate(PlanFixture.futuresLong().build(), List.of(), minute.plusNanos(500));
-        plan.markExecuted(minute.plusSeconds(1).plusNanos(1_999), BigDecimal.ONE);
+        plan.markExecuted(minute.plusSeconds(1).plusNanos(1_999), BigDecimal.ONE, LiquidityRole.MAKER);
 
         assertThat(plan.getActivatedAt()).isEqualTo(minute);
         assertThat(plan.getExecutedAt()).isEqualTo(minute.plusSeconds(1).plusNanos(1_000));
@@ -505,7 +515,8 @@ class TradingPlanTest {
     void BR33_aPlanIsExecuted_onlyWithItsFillPrice() {
         TradingPlan plan = planIn(PlanStatus.ACTIVE);
 
-        assertThatThrownBy(() -> plan.markExecuted(LATER, null)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> plan.markExecuted(LATER, null, LiquidityRole.MAKER))
+                .isInstanceOf(NullPointerException.class);
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.ACTIVE);
         assertThat(plan.getFillPrice()).isNull();
     }
@@ -531,7 +542,11 @@ class TradingPlanTest {
     @Test
     void BR32_aPlanWithoutExpiry_neverExpires() {
         TradingPlan plan = TradingPlan.draft(
-                USER, PAIR, PlanFixture.futuresLong().build(), new PlanDetails(EntryType.LIMIT, null, null), List.of());
+                USER,
+                PAIR,
+                PlanFixture.futuresLong().build(),
+                new PlanDetails(EntryType.LIMIT, null, null, null, null, AnalysisTimeframe.ONE_HOUR),
+                List.of());
         plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
 
         assertThatThrownBy(() -> plan.expire(EXPIRY.plus(Duration.ofDays(365))))
@@ -541,7 +556,7 @@ class TradingPlanTest {
     @ParameterizedTest
     @EnumSource(
             value = PlanStatus.class,
-            names = {"EXECUTED", "CANCELLED", "EXPIRED"})
+            names = {"EXECUTED", "CANCELLED", "EXPIRED", "INVALIDATED"})
     void BR31_theSnapshot_isFixedOnceThePlanIsActivated(PlanStatus end) {
         TradingPlan plan = planIn(PlanStatus.ACTIVE);
         PlanSnapshot activated = plan.getSnapshot();
@@ -556,6 +571,111 @@ class TradingPlanTest {
 
         assertThat(plan.getSnapshot()).isEqualTo(activated);
         assertThat(plan.getWarnings()).isEqualTo(warnings);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Plan validity (TP-A)
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void BR68_invalidate_movesAnActivePlanToInvalidated_withItsInstantAndReason() {
+        TradingPlan plan = planIn(PlanStatus.ACTIVE);
+
+        boolean moved = plan.invalidate(InvalidationReason.TAKE_PROFIT_REACHED, LATER.plusNanos(1_999));
+
+        assertThat(moved).isTrue();
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.INVALIDATED);
+        assertThat(plan.getInvalidatedAt()).as("kept to the microsecond").isEqualTo(LATER.plusNanos(1_000));
+        assertThat(plan.getInvalidationReason()).isEqualTo(InvalidationReason.TAKE_PROFIT_REACHED);
+        assertThat(plan.getStatus().isTerminal()).isTrue();
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = PlanStatus.class,
+            names = {"DRAFT", "EXECUTED", "CANCELLED", "EXPIRED", "INVALIDATED"})
+    void BR68_invalidate_leavesAPlanThatIsNotActiveUnchanged(PlanStatus status) {
+        TradingPlan plan = planIn(status);
+        Instant invalidatedBefore = plan.getInvalidatedAt();
+        InvalidationReason reasonBefore = plan.getInvalidationReason();
+
+        boolean moved = plan.invalidate(InvalidationReason.STOP_LOSS_REACHED, LATER.plusSeconds(60));
+
+        assertThat(moved).isFalse();
+        assertThat(plan.getStatus()).isEqualTo(status);
+        assertThat(plan.getInvalidatedAt()).isEqualTo(invalidatedBefore);
+        assertThat(plan.getInvalidationReason()).isEqualTo(reasonBefore);
+    }
+
+    @Test
+    void BR36_anExecutedPlan_recordsTheLiquidityRoleOfItsFill() {
+        TradingPlan plan = planIn(PlanStatus.ACTIVE);
+
+        plan.markExecuted(LATER, new BigDecimal("99.5"), LiquidityRole.TAKER);
+
+        assertThat(plan.getFillLiquidity()).isEqualTo(LiquidityRole.TAKER);
+        assertThatThrownBy(() -> planIn(PlanStatus.ACTIVE).markExecuted(LATER, BigDecimal.ONE, null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void BR33_aStopPlan_keepsItsStopPriceAsEntryAndAsPlannedEntry() {
+        PlanDetails stop =
+                new PlanDetails(EntryType.STOP, EXPIRY, null, new BigDecimal("90"), null, AnalysisTimeframe.FOUR_HOURS);
+
+        TradingPlan plan =
+                TradingPlan.draft(USER, PAIR, PlanFixture.futuresLong().build(), stop, List.of());
+
+        assertThat(plan.getEntryType()).isEqualTo(EntryType.STOP);
+        assertThat(plan.getEntryPrice()).isEqualByComparingTo(plan.getPlannedEntryPrice());
+        assertThat(plan.getInvalidationPrice()).isEqualByComparingTo("90");
+        assertThat(plan.getAnalysisTimeframe()).isEqualTo(AnalysisTimeframe.FOUR_HOURS);
+    }
+
+    @Test
+    void BR69_eachSave_recordsThePlannedEntryAndTheDeviationLimit() {
+        PlanDetails details =
+                new PlanDetails(EntryType.LIMIT, EXPIRY, null, null, new BigDecimal("0.5"), AnalysisTimeframe.ONE_HOUR);
+        TradingPlan plan =
+                TradingPlan.draft(USER, PAIR, PlanFixture.futuresLong().build(), details, List.of());
+        BigDecimal first = plan.getPlannedEntryPrice();
+
+        PlanCalculation moved = PlanFixture.futuresLong().entry("101").build();
+        plan.updateDraft(moved, LIMIT, List.of());
+
+        assertThat(first)
+                .isEqualByComparingTo(PlanFixture.futuresLong().build().plan().entryPrice());
+        assertThat(plan.getPlannedEntryPrice()).isEqualByComparingTo("101");
+        assertThat(plan.getMaxEntryDeviationR())
+                .as("the second save carries none")
+                .isNull();
+    }
+
+    @Test
+    void MSG01_aMarketPlan_cannotCarryAnInvalidationPrice() {
+        PlanDetails details =
+                new PlanDetails(EntryType.MARKET, null, null, new BigDecimal("120"), null, AnalysisTimeframe.ONE_HOUR);
+
+        assertThatThrownBy(() ->
+                        TradingPlan.draft(USER, PAIR, PlanFixture.futuresLong().build(), details, List.of()))
+                .satisfies(e -> assertValidationFailed(e, Map.of("invalidationPrice", "MSG01")));
+    }
+
+    @Test
+    void MSG01_aPlanWithoutAnAnalysisTimeframe_isRefused() {
+        PlanDetails details = new PlanDetails(EntryType.LIMIT, EXPIRY, null, null, null, null);
+
+        assertThatThrownBy(() ->
+                        TradingPlan.draft(USER, PAIR, PlanFixture.futuresLong().build(), details, List.of()))
+                .satisfies(e -> assertValidationFailed(e, Map.of("analysisTimeframe", "MSG01")));
+    }
+
+    @Test
+    void BR70_anActivatedPlan_holdsNoSetupScoreUntilOneIsRecorded() {
+        TradingPlan plan = planIn(PlanStatus.ACTIVE);
+
+        assertThat(plan.getSetupScoreAtPlan()).isNull();
+        assertThat(plan.getSetupScorePreset()).isNull();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -585,9 +705,18 @@ class TradingPlanTest {
         return switch (status) {
             case DRAFT -> throw new IllegalArgumentException("no method leads to DRAFT");
             case ACTIVE -> plan -> plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
-            case EXECUTED -> plan -> plan.markExecuted(LATER, BigDecimal.TEN);
+            case EXECUTED -> plan -> plan.markExecuted(LATER, BigDecimal.TEN, LiquidityRole.MAKER);
             case CANCELLED -> plan -> plan.cancel(LATER);
             case EXPIRED -> plan -> plan.expire(EXPIRY);
+            // invalidate() is a compare-and-set that leaves a non-ACTIVE plan unchanged; the table reads that as
+            // refused.
+            case INVALIDATED ->
+                plan -> {
+                    PlanStatus before = plan.getStatus();
+                    if (!plan.invalidate(InvalidationReason.INVALIDATION_PRICE, LATER)) {
+                        throw new IllegalPlanStateException(plan.getId(), before, "move to " + PlanStatus.INVALIDATED);
+                    }
+                };
         };
     }
 

@@ -22,6 +22,7 @@ import com.cryptopilot.trading.job.MatchingWorker;
 import com.cryptopilot.trading.job.MinuteKlineFeed;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.PlanDetails;
+import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PlanStatus;
@@ -496,7 +497,13 @@ class MatchingReplayTest {
                 SEEDED_ACCOUNT,
                 pair,
                 fixture.build(),
-                new PlanDetails(EntryType.LIMIT, activatedAt.plus(Duration.ofDays(7)), null),
+                new PlanDetails(
+                        EntryType.LIMIT,
+                        activatedAt.plus(Duration.ofDays(7)),
+                        null,
+                        null,
+                        null,
+                        AnalysisTimeframe.ONE_HOUR),
                 List.of());
         plan.activate(fixture.build(), List.of(), activatedAt);
         return plan;

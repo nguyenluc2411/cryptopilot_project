@@ -10,7 +10,10 @@ import com.cryptopilot.trading.model.PlanCalculation;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
+import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.InvalidationReason;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.MarginMode;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.model.enums.WarningType;
@@ -57,7 +60,8 @@ class TradingPlanRepositoryTest {
 
     private static final Instant NOW = Instant.parse("2026-10-01T08:00:00Z");
     private static final Instant EXPIRY = Instant.parse("2026-10-08T08:00:00Z");
-    private static final PlanDetails LIMIT = new PlanDetails(EntryType.LIMIT, EXPIRY, "retest of 100");
+    private static final PlanDetails LIMIT =
+            new PlanDetails(EntryType.LIMIT, EXPIRY, "retest of 100", null, null, AnalysisTimeframe.ONE_HOUR);
 
     private static final PlanWarning BLOCKING =
             new PlanWarning(WarningType.INSUFFICIENT_CAPITAL, "margin above capital");
@@ -204,7 +208,7 @@ class TradingPlanRepositoryTest {
         inTransaction(() -> {
             TradingPlan plan = plans.findById(id).orElseThrow();
             plan.activate(PlanFixture.futuresLong().build(), List.of(WARNING), NOW);
-            plan.markExecuted(NOW.plusSeconds(60), new BigDecimal("101.25"));
+            plan.markExecuted(NOW.plusSeconds(60), new BigDecimal("101.25"), LiquidityRole.MAKER);
             return null;
         });
 
@@ -259,8 +263,8 @@ class TradingPlanRepositoryTest {
                 .getId();
         OffsetDateTime at = NOW.plusSeconds(60).atOffset(ZoneOffset.UTC);
 
-        assertThatThrownBy(() -> jdbc.sql(
-                                "update trading_plan set plan_status = 'EXECUTED', executed_at = ? where plan_id = ?")
+        assertThatThrownBy(() -> jdbc.sql("update trading_plan set plan_status = 'EXECUTED', executed_at = ?,"
+                                + " fill_liquidity = 'MAKER' where plan_id = ?")
                         .params(at, id)
                         .update())
                 .isInstanceOf(DataIntegrityViolationException.class)
@@ -270,6 +274,177 @@ class TradingPlanRepositoryTest {
                         .update())
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .hasMessageContaining("ck_trading_plan_fill_price");
+    }
+
+    /** TP-A: the validity values of a STOP plan, written and read back. */
+    @Test
+    void BR68_BR69_BR70_aStopPlan_survivesAWriteAndAReadWithItsValidityValues() {
+        PlanDetails stop = new PlanDetails(
+                EntryType.STOP,
+                EXPIRY,
+                null,
+                new BigDecimal("90.5"),
+                new BigDecimal("0.5"),
+                AnalysisTimeframe.FOUR_HOURS);
+        UUID id = inTransaction(() -> plans.save(TradingPlan.draft(
+                        SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), stop, List.of())))
+                .getId();
+
+        inTransaction(() -> {
+            TradingPlan reread = plans.findById(id).orElseThrow();
+            assertThat(reread.getEntryType()).isEqualTo(EntryType.STOP);
+            assertThat(reread.getPlannedEntryPrice()).isEqualByComparingTo("100");
+            assertThat(reread.getInvalidationPrice()).isEqualByComparingTo("90.5");
+            assertThat(reread.getMaxEntryDeviationR()).isEqualByComparingTo("0.5");
+            assertThat(reread.getAnalysisTimeframe()).isEqualTo(AnalysisTimeframe.FOUR_HOURS);
+            assertThat(reread.getSetupScoreAtPlan()).isNull();
+            assertThat(reread.getSetupScorePreset()).isNull();
+            return null;
+        });
+    }
+
+    @Test
+    void BR68_anInvalidatedPlan_isStoredWithItsInstantAndReason() {
+        UUID id = inTransaction(() -> {
+                    TradingPlan plan = TradingPlan.draft(
+                            SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of());
+                    plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
+                    plan.invalidate(InvalidationReason.INVALIDATION_PRICE, NOW.plusSeconds(60));
+                    return plans.save(plan);
+                })
+                .getId();
+
+        inTransaction(() -> {
+            TradingPlan reread = plans.findById(id).orElseThrow();
+            assertThat(reread.getStatus()).isEqualTo(PlanStatus.INVALIDATED);
+            assertThat(reread.getInvalidatedAt()).isEqualTo(NOW.plusSeconds(60));
+            assertThat(reread.getInvalidationReason()).isEqualTo(InvalidationReason.INVALIDATION_PRICE);
+            return null;
+        });
+    }
+
+    /** The compare-and-set the engine will call (TP-B): only an ACTIVE plan moves, once. */
+    @Test
+    void BR68_invalidateIfActive_movesAnActivePlanOnce_andNothingElse() {
+        UUID active = inTransaction(() -> {
+                    TradingPlan plan = TradingPlan.draft(
+                            SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of());
+                    plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
+                    return plans.save(plan);
+                })
+                .getId();
+        UUID draft = inTransaction(() -> plans.save(TradingPlan.draft(
+                        SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of())))
+                .getId();
+        Instant at = NOW.plusSeconds(120);
+
+        int first =
+                inTransaction(() -> plans.invalidateIfActive(active, at, InvalidationReason.TAKE_PROFIT_REACHED, NOW));
+        int second =
+                inTransaction(() -> plans.invalidateIfActive(active, at, InvalidationReason.STOP_LOSS_REACHED, NOW));
+        int ofDraft =
+                inTransaction(() -> plans.invalidateIfActive(draft, at, InvalidationReason.TAKE_PROFIT_REACHED, NOW));
+
+        assertThat(first).isEqualTo(1);
+        assertThat(second).isZero();
+        assertThat(ofDraft).isZero();
+        inTransaction(() -> {
+            TradingPlan reread = plans.findById(active).orElseThrow();
+            assertThat(reread.getStatus()).isEqualTo(PlanStatus.INVALIDATED);
+            assertThat(reread.getInvalidationReason()).isEqualTo(InvalidationReason.TAKE_PROFIT_REACHED);
+            assertThat(reread.getInvalidatedAt()).isEqualTo(at);
+            assertThat(plans.findById(draft).orElseThrow().getStatus()).isEqualTo(PlanStatus.DRAFT);
+            return null;
+        });
+    }
+
+    @Test
+    void BR36_executeIfActive_recordsTheLiquidityRole() {
+        UUID id = inTransaction(() -> {
+                    TradingPlan plan = TradingPlan.draft(
+                            SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of());
+                    plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
+                    return plans.save(plan);
+                })
+                .getId();
+
+        int filled = inTransaction(() -> plans.executeIfActive(
+                id, NOW.plusSeconds(60), new BigDecimal("100"), LiquidityRole.MAKER, NOW.plusSeconds(61)));
+
+        assertThat(filled).isEqualTo(1);
+        assertThat(inTransaction(() -> plans.findById(id).orElseThrow().getFillLiquidity()))
+                .isEqualTo(LiquidityRole.MAKER);
+    }
+
+    /** The books hold LIMIT entries only until the STOP book exists (TP-B), so an ACTIVE STOP is never filled as one. */
+    @Test
+    void BR33_theActiveLimitEntries_leaveOutStopPlans() {
+        PlanDetails stop = new PlanDetails(EntryType.STOP, EXPIRY, null, null, null, AnalysisTimeframe.ONE_HOUR);
+        UUID id = inTransaction(() -> {
+                    TradingPlan plan = TradingPlan.draft(
+                            SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), stop, List.of());
+                    plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
+                    return plans.save(plan);
+                })
+                .getId();
+
+        assertThat(plans.findActiveLimitEntries())
+                .noneMatch(entry -> entry.planId().equals(id));
+    }
+
+    /** V32: the validity columns hold their rules in the database itself. */
+    @Test
+    void BR68_BR69_theSchema_refusesValidityValuesThatBreakTheRules() {
+        UUID id = inTransaction(() -> {
+                    TradingPlan plan = TradingPlan.draft(
+                            SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of());
+                    plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
+                    return plans.save(plan);
+                })
+                .getId();
+        OffsetDateTime at = NOW.plusSeconds(60).atOffset(ZoneOffset.UTC);
+
+        assertRefused(
+                "update trading_plan set plan_status = 'INVALIDATED', invalidation_reason = 'INVALIDATION_PRICE'"
+                        + " where plan_id = ?",
+                "ck_trading_plan_invalidated_at",
+                id);
+        assertRefused(
+                "update trading_plan set plan_status = 'INVALIDATED', invalidated_at = '" + at + "' where plan_id = ?",
+                "ck_trading_plan_invalidation_reason",
+                id);
+        assertRefused(
+                "update trading_plan set invalidation_reason = 'STOP_LOSS_REACHED' where plan_id = ?",
+                "ck_trading_plan_invalidation_reason",
+                id);
+        assertRefused(
+                "update trading_plan set entry_type = 'MARKET', invalidation_price = 90 where plan_id = ?",
+                "ck_trading_plan_invalidation_price",
+                id);
+        assertRefused(
+                "update trading_plan set max_entry_deviation_r = 0 where plan_id = ?",
+                "ck_trading_plan_max_entry_deviation_r",
+                id);
+        assertRefused(
+                "update trading_plan set plan_status = 'EXECUTED', executed_at = '" + at + "', fill_price = 100"
+                        + " where plan_id = ?",
+                "ck_trading_plan_fill_liquidity",
+                id);
+        assertRefused(
+                "update trading_plan set entry_type = 'STOP', entry_price = null where plan_id = ?",
+                "ck_trading_plan_limit_has_entry_price",
+                id);
+        assertRefused(
+                "update trading_plan set analysis_timeframe = '5m' where plan_id = ?",
+                "ck_trading_plan_analysis_timeframe",
+                id);
+    }
+
+    private void assertRefused(String update, String constraint, UUID id) {
+        assertThatThrownBy(() -> jdbc.sql(update).param(id).update())
+                .as(update)
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining(constraint);
     }
 
     @Test
