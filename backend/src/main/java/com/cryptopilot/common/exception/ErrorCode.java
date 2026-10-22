@@ -317,6 +317,13 @@ public enum ErrorCode {
     MEDIA_INVALID(HttpStatus.BAD_REQUEST, "MSG32"),
 
     /**
+     * An edit drops a file of a post whose files are kept as the evidence of the moderation: the post is reported, or
+     * a report on it was decided against it (BR-47, D-99). MSG56 under {@code media}; the files themselves are valid,
+     * so not MSG32. 400: the request names them.
+     */
+    MEDIA_KEPT_AS_EVIDENCE(HttpStatus.BAD_REQUEST, "MSG56"),
+
+    /**
      * The media storage could not be reached or is not configured, so a file could be neither signed for nor checked.
      * Borrows MSG43 (A-38). 503: the request may succeed later.
      */

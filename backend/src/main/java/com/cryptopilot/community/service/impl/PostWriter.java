@@ -1,5 +1,6 @@
 package com.cryptopilot.community.service.impl;
 
+import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.community.dto.request.PostRequest;
@@ -87,7 +88,7 @@ public class PostWriter {
      * Replaces the content and files of the post {@code lookup} finds and that is neither deleted nor hidden; MSG41
      * otherwise. A hidden post is kept as moderation saw it. A post whose files are the evidence of the moderation
      * keeps every file it carries: its text, coins and market may change and files may be added, but an edit that
-     * drops one is refused with MSG32.
+     * drops one is refused with MSG56.
      *
      * <p>Rule: BR-47; D-99.
      *
@@ -194,12 +195,20 @@ public class PostWriter {
         events.publishEvent(new PostMediaReleased(postId, files));
     }
 
-    /** Refuses with MSG32 an edit that drops a file of a post whose files are the evidence of the moderation. */
+    /**
+     * Refuses an edit that drops a file of a post whose files are the evidence of the moderation: 400
+     * {@code MEDIA_KEPT_AS_EVIDENCE}, MSG56 under {@code media}.
+     *
+     * <p>Rule: BR-47; D-99.
+     */
     private void requireEvidenceKept(UUID postId, List<CheckedMedia> files, Map<String, PostMedia> current) {
         Set<String> named = files.stream().map(CheckedMedia::publicId).collect(Collectors.toSet());
         if (!named.containsAll(current.keySet()) && reports.holdsEvidence(postId)) {
+            ErrorCode kept = ErrorCode.MEDIA_KEPT_AS_EVIDENCE;
             throw new FieldValidationException(
-                    "post " + postId + " keeps its files as the evidence of the moderation", Map.of("media", "MSG32"));
+                    kept,
+                    "post " + postId + " keeps its files as the evidence of the moderation",
+                    Map.of("media", kept.messageCode()));
         }
     }
 

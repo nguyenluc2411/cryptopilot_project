@@ -115,7 +115,10 @@ public class PostController {
 
     @Operation(summary = "Edit one of the caller's posts (UC-29)")
     @ApiResponse(responseCode = "200", description = "The post")
-    @ApiResponse(responseCode = "400", description = "MSG01: `errors` names each rejected field")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01: `errors` names each rejected field; MSG32: a file the post may not carry; MSG56"
+                    + " (`MEDIA_KEPT_AS_EVIDENCE`): the edit drops a file kept as the evidence of the moderation")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such post of the caller, or it is deleted")
     @PutMapping("/{id}")

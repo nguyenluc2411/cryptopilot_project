@@ -34,6 +34,22 @@ class FieldValidationExceptionTest {
     }
 
     @Test
+    void aFieldRule_mayCarryA400CodeOfItsOwn() {
+        FieldValidationException exception =
+                new FieldValidationException(ErrorCode.MEDIA_KEPT_AS_EVIDENCE, "rejected", Map.of("media", "MSG56"));
+
+        assertThat(exception.errorCode()).isEqualTo(ErrorCode.MEDIA_KEPT_AS_EVIDENCE);
+        assertThat(exception.errors()).containsExactly(Map.entry("media", "MSG56"));
+    }
+
+    @Test
+    void aFieldRule_withACodeThatIsNot400_isRefused() {
+        assertThatThrownBy(() ->
+                        new FieldValidationException(ErrorCode.POST_NOT_HIDDEN, "rejected", Map.of("media", "MSG43")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void aValidationWithoutAField_isRefused() {
         assertThatThrownBy(() -> new FieldValidationException("rejected", Map.of()))
                 .isInstanceOf(IllegalArgumentException.class);

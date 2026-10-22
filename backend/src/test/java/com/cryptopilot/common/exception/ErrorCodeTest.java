@@ -56,6 +56,7 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.PAPER_ORDER_WOULD_TRIGGER, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_PAIR_NOT_VALUED, "MSG43 409"),
             Map.entry(ErrorCode.MEDIA_INVALID, "MSG32 400"),
+            Map.entry(ErrorCode.MEDIA_KEPT_AS_EVIDENCE, "MSG56 400"),
             Map.entry(ErrorCode.MEDIA_STORAGE_UNAVAILABLE, "MSG43 503"),
             Map.entry(ErrorCode.POST_ALREADY_REPORTED, "MSG34 409"),
             Map.entry(ErrorCode.POST_REPORT_OWN_POST, "MSG43 409"),

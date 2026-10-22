@@ -568,13 +568,54 @@ class PostMediaApiTest {
 
         as(author, put(POSTS + "/" + id), postBody("Nothing to see"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.errors.media").value("MSG32"));
+                .andExpect(jsonPath("$.code").value("MEDIA_KEPT_AS_EVIDENCE"))
+                .andExpect(jsonPath("$.errors.media").value("MSG56"));
 
         assertThat(releases(id)).isZero();
         assertThat(mediaRowsOf(id)).isEqualTo(1);
         storage().uploadedAt(file, Instant.now().minus(Duration.ofDays(2)));
         assertThat(sweep.removeUnattached()).isZero();
         assertThat(storage().destroyed()).isEmpty();
+    }
+
+    @Test
+    void D99_aReportedPost_keepingAllItsFiles_mayChangeItsText() throws Exception {
+        UUID author = trader();
+        String file = signed(author, "IMAGE");
+        storage().uploadImage(file, "jpg", 1_000);
+        String id =
+                id(as(author, post(POSTS), postBody("Reported", image(file))).andExpect(status().isCreated()));
+        report(trader(), id);
+
+        as(author, put(POSTS + "/" + id), postBody("Reported, reworded", image(file)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("Reported, reworded"))
+                .andExpect(jsonPath("$.media.length()").value(1))
+                .andExpect(jsonPath("$.media[0].publicId").value(file));
+
+        assertThat(releases(id)).isZero();
+        assertThat(mediaRowsOf(id)).isEqualTo(1);
+    }
+
+    @Test
+    void D99_aReportedPost_keepingAllItsFiles_mayAddOne() throws Exception {
+        UUID author = trader();
+        String kept = signed(author, "IMAGE");
+        storage().uploadImage(kept, "jpg", 1_000);
+        String id =
+                id(as(author, post(POSTS), postBody("Reported", image(kept))).andExpect(status().isCreated()));
+        report(trader(), id);
+        String added = signed(author, "IMAGE");
+        storage().uploadImage(added, "png", 1_000);
+
+        as(author, put(POSTS + "/" + id), postBody("Reported", image(kept), image(added)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.media.length()").value(2))
+                .andExpect(jsonPath("$.media[0].publicId").value(kept))
+                .andExpect(jsonPath("$.media[1].publicId").value(added));
+
+        assertThat(releases(id)).isZero();
+        assertThat(mediaRowsOf(id)).isEqualTo(2);
     }
 
     @Test
