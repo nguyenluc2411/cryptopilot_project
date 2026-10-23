@@ -144,13 +144,13 @@ class TradingPlanServiceImplTest {
                         .toList());
         when(market.currentFundingRate("BTCUSDT")).thenReturn(Optional.empty());
         // No stored analysis unless a test stores one: the score is null and the preset is the one asked for.
-        when(market.closedCandleSetupScore(any(), any(), anyString(), any(), any()))
+        when(market.closedCandleSetupScore(any(), any(), anyString(), any(), any(), any()))
                 .thenAnswer(call -> new SetupScoreReading(
                         null,
                         call.getArgument(3) == null ? SetupStyle.DAY_TRADING : call.getArgument(3),
                         "v1",
                         call.getArgument(2),
-                        null));
+                        NOW.minusSeconds(3600)));
         when(settings.decimal(PlanCalculationAssembler.LOW_RR)).thenReturn(new BigDecimal("1.5"));
         when(settings.decimal(PlanCalculationAssembler.WIDE_STOP_LOSS)).thenReturn(BigDecimal.TEN);
         when(settings.decimal(PlanCalculationAssembler.HIGH_FUNDING_RATE)).thenReturn(new BigDecimal("0.001"));
@@ -1213,7 +1213,7 @@ class TradingPlanServiceImplTest {
     @Test
     void BR70_saveAndActivate_recordsTheSetupScoreAndItsPreset() {
         when(styles.styleOf(USER)).thenReturn(Optional.of(SetupStyle.DAY_TRADING));
-        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null))
+        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null, NOW))
                 .thenReturn(new SetupScoreReading(62, SetupStyle.DAY_TRADING, "v1", "1h", NOW.minusSeconds(3600)));
 
         TradingPlanResponse plan = service.create(USER, activating(spotLimit("100", "95", "110")));
@@ -1228,7 +1228,7 @@ class TradingPlanServiceImplTest {
         TradingPlan plan = draft();
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
         assertThat(plan.getSetupScorePreset()).as("a draft has none").isNull();
-        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", null, null))
+        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", null, null, NOW))
                 .thenReturn(new SetupScoreReading(48, SetupStyle.DAY_TRADING, "v1", "1h", NOW.minusSeconds(3600)));
         when(styles.styleOf(USER)).thenReturn(Optional.empty());
 
@@ -1251,7 +1251,7 @@ class TradingPlanServiceImplTest {
     @Test
     void BR70_aMarketPlanFilledAtActivation_keepsTheSetupScoreOfItsActivation() {
         currentPrice(MarketType.SPOT, "100");
-        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", null, null))
+        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", null, null, NOW))
                 .thenReturn(new SetupScoreReading(70, SetupStyle.DAY_TRADING, "v1", "1h", NOW.minusSeconds(3600)));
         when(styles.styleOf(USER)).thenReturn(Optional.empty());
 
@@ -1275,7 +1275,7 @@ class TradingPlanServiceImplTest {
 
         TradingPlanResponse active = service.activate(USER, plan.getId());
 
-        verify(market).closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.SWING, null);
+        verify(market).closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.SWING, null, NOW);
         assertThat(active.setupScorePreset()).isEqualTo("SWING v1");
         assertThat(active.analysisTimeframe()).isEqualTo("1h");
     }

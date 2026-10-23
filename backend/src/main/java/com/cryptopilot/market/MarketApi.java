@@ -100,16 +100,18 @@ public interface MarketApi {
     Optional<BigDecimal> currentFundingRate(String symbol);
 
     /**
-     * The setup score of the pair's latest closed candle of {@code timeframe}, weighted under a style preset the same
-     * way as the analysis screen (BR-13). A candle still forming is never read. The score is {@code null} when it
-     * cannot be read (see {@link SetupScoreReading#score()}); this never throws for missing data.
+     * The setup score of the pair's latest candle of {@code timeframe} closed at {@code at}, weighted under a style
+     * preset the same way as the analysis screen (BR-13). Neither a candle still forming nor an older one is read: when
+     * that candle's indicators are not stored, the score is {@code null} (see {@link SetupScoreReading#score()}); this
+     * never throws for missing data.
      *
      * @param timeframe one of the BR-08 timeframes, e.g. {@code 1h}
      * @param style the preset, or {@code null} for the default preset of a Trader who selects none (D-53)
      * @param presetVersion the preset version, or {@code null} for the one configured now
+     * @param at the instant the score is read for, e.g. a plan's activation; not after now
      */
     SetupScoreReading closedCandleSetupScore(
-            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion);
+            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at);
 
     /** The pair's Futures leverage brackets, smallest notional first; empty when none are stored. */
     List<LeverageTier> leverageBrackets(UUID pairId);

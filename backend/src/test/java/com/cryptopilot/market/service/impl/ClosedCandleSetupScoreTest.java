@@ -43,7 +43,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The setup score {@link MarketApi} gives other modules, against the migrated schema and the configured presets: for
  * one stored candle it equals the score the analysis API answers a Trader of the same preset, on Spot and on Futures;
- * a missing component gives a {@code null} score; a row of the candle still forming is never read.
+ * a missing component gives a {@code null} score; neither a row of the candle still forming nor one of an older candle is read.
  *
  * <p>The application's clock is fixed ({@link FixedClockConfig}). Every test rolls back.
  *
@@ -103,7 +103,8 @@ class ClosedCandleSetupScoreTest {
                 .getContentAsString();
         Integer analysed = JsonPath.read(body, "$.setupScore.score");
 
-        SetupScoreReading reading = market.closedCandleSetupScore(pair, type, timeframe, preset, null);
+        SetupScoreReading reading =
+                market.closedCandleSetupScore(pair, type, timeframe, preset, null, FixedClockConfig.NOW);
 
         assertThat(analysed).isNotNull();
         assertThat(reading.score()).isEqualTo(analysed);
@@ -117,7 +118,8 @@ class ClosedCandleSetupScoreTest {
     void BR13_withoutAPreset_readsDayTradingAtItsCurrentVersion() {
         store(MarketType.SPOT, "1h", latestClosedOpen("1h"), "75", "50", "40", "60", null);
 
-        SetupScoreReading reading = market.closedCandleSetupScore(pair, MarketType.SPOT, "1h", null, null);
+        SetupScoreReading reading =
+                market.closedCandleSetupScore(pair, MarketType.SPOT, "1h", null, null, FixedClockConfig.NOW);
 
         assertThat(reading.score()).isEqualTo(59);
         assertThat(reading.preset()).isEqualTo("DAY_TRADING v1");
@@ -128,8 +130,8 @@ class ClosedCandleSetupScoreTest {
         Instant closed = latestClosedOpen("1h");
         store(MarketType.SPOT, "1h", closed, null, "50", "40", "60", null);
 
-        SetupScoreReading reading =
-                market.closedCandleSetupScore(pair, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null);
+        SetupScoreReading reading = market.closedCandleSetupScore(
+                pair, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null, FixedClockConfig.NOW);
 
         assertThat(reading.score()).isNull();
         assertThat(reading.openTime()).isEqualTo(closed);
@@ -139,18 +141,62 @@ class ClosedCandleSetupScoreTest {
     void BR70_aFuturesRowWithoutDerivatives_givesANullScore() {
         store(MarketType.FUTURES, "1h", latestClosedOpen("1h"), "75", "50", "40", "60", null);
 
-        assertThat(market.closedCandleSetupScore(pair, MarketType.FUTURES, "1h", SetupStyle.DAY_TRADING, null)
+        assertThat(market.closedCandleSetupScore(
+                                pair, MarketType.FUTURES, "1h", SetupStyle.DAY_TRADING, null, FixedClockConfig.NOW)
                         .score())
                 .isNull();
     }
 
     @Test
-    void BR70_nothingStored_givesANullScoreAndNoCandle() {
-        SetupScoreReading reading = market.closedCandleSetupScore(pair, MarketType.SPOT, "4h", SetupStyle.SWING, null);
+    void BR70_nothingStored_givesANullScore_forTheLatestClosedCandle() {
+        SetupScoreReading reading = market.closedCandleSetupScore(
+                pair, MarketType.SPOT, "4h", SetupStyle.SWING, null, FixedClockConfig.NOW);
 
         assertThat(reading.score()).isNull();
-        assertThat(reading.openTime()).isNull();
+        assertThat(reading.openTime()).isEqualTo(latestClosedOpen("4h"));
         assertThat(reading.preset()).isEqualTo("SWING v1");
+    }
+
+    /** D-112: the latest closed candle's own row gives the score. */
+    @ParameterizedTest
+    @CsvSource({"SCALPING, 15m", "DAY_TRADING, 1h", "SWING, 4h"})
+    void BR70_theLatestClosedCandle_givesAScore(SetupStyle preset, String timeframe) {
+        store(MarketType.SPOT, timeframe, latestClosedOpen(timeframe), "60", "60", "60", "60", null);
+
+        SetupScoreReading reading =
+                market.closedCandleSetupScore(pair, MarketType.SPOT, timeframe, preset, null, FixedClockConfig.NOW);
+
+        assertThat(reading.score()).isEqualTo(60);
+        assertThat(reading.openTime()).isEqualTo(latestClosedOpen(timeframe));
+    }
+
+    /** D-112: when the newest row is one interval older than the latest closed candle, its score is stale. */
+    @ParameterizedTest
+    @CsvSource({"SCALPING, 15m", "DAY_TRADING, 1h", "SWING, 4h"})
+    void BR70_aRowOneIntervalOlder_givesANullScore(SetupStyle preset, String timeframe) {
+        Instant older = latestClosedOpen(timeframe).minus(duration(timeframe));
+        store(MarketType.SPOT, timeframe, older, "60", "60", "60", "60", null);
+
+        SetupScoreReading reading =
+                market.closedCandleSetupScore(pair, MarketType.SPOT, timeframe, preset, null, FixedClockConfig.NOW);
+
+        assertThat(reading.score()).isNull();
+        assertThat(reading.openTime()).isEqualTo(latestClosedOpen(timeframe));
+    }
+
+    /** After an outage of the indicator job only rows of a day ago are stored: none of them is read. */
+    @Test
+    void BR70_afterAnOutage_withOnlyOldRows_givesANullScore() {
+        Instant closed = latestClosedOpen("1h");
+        for (int hoursBefore = 24; hoursBefore <= 30; hoursBefore++) {
+            store(MarketType.SPOT, "1h", closed.minus(Duration.ofHours(hoursBefore)), "60", "60", "60", "60", null);
+        }
+
+        SetupScoreReading reading = market.closedCandleSetupScore(
+                pair, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null, FixedClockConfig.NOW);
+
+        assertThat(reading.score()).isNull();
+        assertThat(reading.openTime()).isEqualTo(closed);
     }
 
     /** D-112: the candle still forming is never read, even when a row for it exists. */
@@ -162,7 +208,8 @@ class ClosedCandleSetupScoreTest {
         store(MarketType.SPOT, timeframe, closed, "0", "0", "0", "0", null);
         store(MarketType.SPOT, timeframe, forming, "100", "100", "100", "100", null);
 
-        SetupScoreReading reading = market.closedCandleSetupScore(pair, MarketType.SPOT, timeframe, preset, null);
+        SetupScoreReading reading =
+                market.closedCandleSetupScore(pair, MarketType.SPOT, timeframe, preset, null, FixedClockConfig.NOW);
 
         assertThat(reading.openTime()).isEqualTo(closed);
         assertThat(reading.score()).isZero();

@@ -463,7 +463,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      */
     private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now) {
         plan.activate(calculated.calculation(), calculated.warnings(), now);
-        recordSetupScore(plan);
+        recordSetupScore(plan, now);
         Optional<BigDecimal> fillPrice = plan.getEntryType() == EntryType.STOP
                 ? Optional.empty()
                 : EntryFillRule.atActivation(
@@ -477,18 +477,20 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * The setup score of the latest closed candle of the plan's analysis timeframe, under the preset the Trader's
-     * profile selects now (not at the draft save), with the preset's current version. A score that cannot be read is
-     * stored as {@code null} beside the preset and never refuses the activation.
+     * The setup score of the latest candle of the plan's analysis timeframe closed at the activation, under the preset
+     * the Trader's profile selects now (not at the draft save), with the preset's current version. The score is read
+     * at {@code now}, the plan's {@code activated_at}, so the candle it came from is not stored: it is the one before
+     * the candle holding {@code activated_at}. A score that cannot be read is stored as {@code null} beside the preset
+     * and never refuses the activation.
      *
      * <p>Rule: BR-13, BR-70; D-111 (M4), D-112; Q-74.
      */
-    private void recordSetupScore(TradingPlan plan) {
+    private void recordSetupScore(TradingPlan plan, Instant now) {
         SetupStyleSource source = styles.getIfAvailable();
         SetupStyle style =
                 source == null ? null : source.styleOf(plan.getUserId()).orElse(null);
         SetupScoreReading reading = market.closedCandleSetupScore(
-                plan.getPairId(), plan.getMarket(), plan.getAnalysisTimeframe().code(), style, null);
+                plan.getPairId(), plan.getMarket(), plan.getAnalysisTimeframe().code(), style, null, now);
         // At the column's scale, so the response of this request reads as the stored value does later.
         plan.recordSetupScoreAtPlan(
                 reading.score() == null

@@ -108,39 +108,45 @@ public class AnalysisServiceImpl implements AnalysisService {
     }
 
     /**
-     * Weights the components of the latest closed candle with {@link SetupScoreCalculator}, as {@link #analysis} does.
-     * The score is {@code null} when no closed candle is stored, a component is missing, the version asked for is not
-     * the configured one (its weights are not held), or {@code timeframe} is not the preset's own: the weights of a
-     * preset are defined for its timeframe only (TECHNICAL_DESIGN 7.4; Q-77). Futures needs no dominant side here; it
-     * is never part of the score.
+     * Weights the components of the latest candle closed at {@code at} with {@link SetupScoreCalculator}, as
+     * {@link #analysis} does. That candle opened one interval before the last interval boundary at or before
+     * {@code at} (intervals are aligned to the epoch in UTC, BR-08), and only its own row counts: when the newest
+     * stored row is older, e.g. after an outage of the indicator job, the score is {@code null}, never a stale one. The
+     * score is also {@code null} when a component is missing, the version asked for is not the configured one (its
+     * weights are not held), or {@code timeframe} is not the preset's own: the weights of a preset are defined for its
+     * timeframe only (TECHNICAL_DESIGN 7.4; Q-77). Futures needs no dominant side here; it is never part of the score.
      *
-     * <p>Rule: BR-13, BR-70; TECHNICAL_DESIGN 7.4; D-53, D-112.
+     * <p>Rule: BR-08, BR-13, BR-70; TECHNICAL_DESIGN 7.4; D-53, D-112.
      *
-     * @throws IllegalArgumentException for a timeframe outside BR-08
+     * @throws IllegalArgumentException for a timeframe outside BR-08, or an instant after now, at which a candle still
+     *     forming would be read
      */
     @Override
     @Transactional(readOnly = true)
     public SetupScoreReading closedCandleSetupScore(
-            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion) {
+            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at) {
+        if (at.isAfter(clock.instant())) {
+            throw new IllegalArgumentException("a setup score is read at or before now, not at " + at);
+        }
         MarketInterval interval = MarketInterval.fromCode(timeframe)
                 .filter(CandleBackfillServiceImpl.TIMEFRAMES::contains)
                 .orElseThrow(() -> new IllegalArgumentException(timeframe + " is not a BR-08 timeframe"));
         StylePreset preset = presets.preset(style == null ? DEFAULT_STYLE : style);
         String version = presetVersion == null ? preset.version() : presetVersion;
-        // The latest candle whose close is not after now; the one still forming opened later.
-        Instant latestClosedOpen = clock.instant().minus(interval.duration());
-        Optional<StoredIndicators> row = indicators.latestOpenedBy(pairId, market, timeframe, latestClosedOpen);
+        Instant latestClosedOpen = latestClosedOpen(interval, at);
+        Optional<StoredIndicators> row = indicators.at(pairId, market, timeframe, latestClosedOpen);
         boolean weighable = version.equals(preset.version()) && timeframe.equals(preset.timeframe());
         Integer score = row.filter(r -> weighable)
                 .map(r ->
                         SetupScoreCalculator.score(preset, r.components(), null).score())
                 .orElse(null);
-        return new SetupScoreReading(
-                score,
-                preset.style(),
-                version,
-                timeframe,
-                row.map(StoredIndicators::openTime).orElse(null));
+        return new SetupScoreReading(score, preset.style(), version, timeframe, latestClosedOpen);
+    }
+
+    /** The open time of the latest candle of {@code interval} whose close is at or before {@code at}. */
+    static Instant latestClosedOpen(MarketInterval interval, Instant at) {
+        long seconds = interval.duration().toSeconds();
+        return Instant.ofEpochSecond(Math.floorDiv(at.getEpochSecond(), seconds) * seconds - seconds);
     }
 
     private SetupStyle styleOf(UUID userId) {

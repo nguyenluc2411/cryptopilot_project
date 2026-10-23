@@ -270,12 +270,13 @@ class MarketApiImplTest {
     @Test
     void BR70_theSetupScoreRead_isTheAnalysisServicesOwn() {
         UUID pairId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-10-01T08:00:00Z");
         SetupScoreReading reading =
                 new SetupScoreReading(59, SetupStyle.DAY_TRADING, "v1", "1h", Instant.parse("2026-10-01T07:00:00Z"));
-        when(analysis.closedCandleSetupScore(pairId, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null))
+        when(analysis.closedCandleSetupScore(pairId, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null, now))
                 .thenReturn(reading);
 
-        assertThat(api.closedCandleSetupScore(pairId, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null))
+        assertThat(api.closedCandleSetupScore(pairId, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null, now))
                 .isSameAs(reading);
     }
 

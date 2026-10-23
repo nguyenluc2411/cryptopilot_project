@@ -231,8 +231,8 @@ public class MarketApiImpl implements MarketApi {
 
     @Override
     public SetupScoreReading closedCandleSetupScore(
-            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion) {
-        return analysis.closedCandleSetupScore(pairId, market, timeframe, style, presetVersion);
+            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at) {
+        return analysis.closedCandleSetupScore(pairId, market, timeframe, style, presetVersion, at);
     }
 
     @Override
