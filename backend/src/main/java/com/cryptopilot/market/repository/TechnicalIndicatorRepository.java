@@ -92,6 +92,23 @@ public class TechnicalIndicatorRepository {
                 .optional();
     }
 
+    /**
+     * The row of the latest candle of a series that opened at or before {@code openedBy}, or empty when none is stored.
+     * A caller passes the open time of the latest closed candle, so a row of a candle still forming is never read.
+     */
+    public Optional<StoredIndicators> latestOpenedBy(
+            UUID pairId, MarketType market, String timeframe, Instant openedBy) {
+        return sql.sql("select " + COLUMNS + """
+
+                          from technical_indicator
+                         where pair_id = ? and market_type = ? and timeframe = ? and open_time <= ?
+                         order by open_time desc
+                         limit 1""")
+                .params(pairId, market.name(), timeframe, Timestamp.from(openedBy))
+                .query((row, index) -> read(row))
+                .optional();
+    }
+
     /** The stored MACD histogram of one candle, or empty when the row is missing or had none. */
     public Optional<BigDecimal> macdHistogram(UUID pairId, MarketType market, String timeframe, Instant openTime) {
         return sql.sql("""

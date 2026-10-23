@@ -1,5 +1,6 @@
 package com.cryptopilot.market.service.impl;
 
+import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.calculator.SetupComponents;
 import com.cryptopilot.market.calculator.SetupScoreCalculator;
@@ -20,12 +21,15 @@ import com.cryptopilot.market.model.StoredCandle;
 import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.StylePreset;
 import com.cryptopilot.market.model.enums.DominantSide;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.market.service.AnalysisService;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -43,7 +47,10 @@ import org.springframework.transaction.annotation.Transactional;
  * while no module provides that source, it is {@link #DEFAULT_STYLE}. On Futures the dominant side of the trend is
  * read beside the score from the stored EMAs and the close of the same candle in {@code ohlcv}, and never stored.
  *
- * <p>Rule: UC-10, UC-11, BR-07, BR-08, BR-12, BR-13, BR-14; SRS 3.3.2; TECHNICAL_DESIGN 7.4; D-53.
+ * <p>The same weighting serves other modules through {@link #closedCandleSetupScore}: the score of the latest closed
+ * candle of one timeframe under a preset they name, which a plan stores at activation (D-112).
+ *
+ * <p>Rule: UC-10, UC-11, BR-07, BR-08, BR-12, BR-13, BR-14, BR-70; SRS 3.3.2; TECHNICAL_DESIGN 7.4; D-53, D-112.
  */
 @Service
 public class AnalysisServiceImpl implements AnalysisService {
@@ -59,18 +66,21 @@ public class AnalysisServiceImpl implements AnalysisService {
     private final OhlcvRepository candles;
     private final SetupScoreProperties presets;
     private final ObjectProvider<SetupStyleSource> styles;
+    private final Clock clock;
 
     public AnalysisServiceImpl(
             MarketRequests requests,
             TechnicalIndicatorRepository indicators,
             OhlcvRepository candles,
             SetupScoreProperties presets,
-            ObjectProvider<SetupStyleSource> styles) {
+            ObjectProvider<SetupStyleSource> styles,
+            Clock clock) {
         this.requests = requests;
         this.indicators = indicators;
         this.candles = candles;
         this.presets = presets;
         this.styles = styles;
+        this.clock = clock;
     }
 
     @Override
@@ -95,6 +105,42 @@ public class AnalysisServiceImpl implements AnalysisService {
                 row.map(StoredIndicators::nearestResistance).orElse(null),
                 components(type, row.map(StoredIndicators::components).orElse(null)),
                 setupScore(type, preset, pair.getId(), scored.orElse(null)));
+    }
+
+    /**
+     * Weights the components of the latest closed candle with {@link SetupScoreCalculator}, as {@link #analysis} does.
+     * The score is {@code null} when no closed candle is stored, a component is missing, the version asked for is not
+     * the configured one (its weights are not held), or {@code timeframe} is not the preset's own: the weights of a
+     * preset are defined for its timeframe only (TECHNICAL_DESIGN 7.4; Q-77). Futures needs no dominant side here; it
+     * is never part of the score.
+     *
+     * <p>Rule: BR-13, BR-70; TECHNICAL_DESIGN 7.4; D-53, D-112.
+     *
+     * @throws IllegalArgumentException for a timeframe outside BR-08
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public SetupScoreReading closedCandleSetupScore(
+            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion) {
+        MarketInterval interval = MarketInterval.fromCode(timeframe)
+                .filter(CandleBackfillServiceImpl.TIMEFRAMES::contains)
+                .orElseThrow(() -> new IllegalArgumentException(timeframe + " is not a BR-08 timeframe"));
+        StylePreset preset = presets.preset(style == null ? DEFAULT_STYLE : style);
+        String version = presetVersion == null ? preset.version() : presetVersion;
+        // The latest candle whose close is not after now; the one still forming opened later.
+        Instant latestClosedOpen = clock.instant().minus(interval.duration());
+        Optional<StoredIndicators> row = indicators.latestOpenedBy(pairId, market, timeframe, latestClosedOpen);
+        boolean weighable = version.equals(preset.version()) && timeframe.equals(preset.timeframe());
+        Integer score = row.filter(r -> weighable)
+                .map(r ->
+                        SetupScoreCalculator.score(preset, r.components(), null).score())
+                .orElse(null);
+        return new SetupScoreReading(
+                score,
+                preset.style(),
+                version,
+                timeframe,
+                row.map(StoredIndicators::openTime).orElse(null));
     }
 
     private SetupStyle styleOf(UUID userId) {

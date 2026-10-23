@@ -1,6 +1,7 @@
 package com.cryptopilot.market.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -8,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.config.SetupScoreProperties;
 import com.cryptopilot.market.dto.response.AnalysisResponse;
@@ -21,7 +23,10 @@ import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -40,6 +45,8 @@ class AnalysisServiceImplTest {
     private static final UUID PAIR = UUID.randomUUID();
     private static final UUID USER = UUID.randomUUID();
     private static final Instant OPEN = Instant.parse("2026-09-27T00:00:00Z");
+    private static final Instant NOW = Instant.parse("2026-09-27T10:30:15Z");
+    private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
 
     private final MarketRequests requests = mock(MarketRequests.class);
     private final TechnicalIndicatorRepository indicators = mock(TechnicalIndicatorRepository.class);
@@ -93,6 +100,78 @@ class AnalysisServiceImplTest {
         assertThat(score.score()).isEqualTo(40);
     }
 
+    // ------------------------------------------------------------------ closed candle setup score (D-112, Q-74)
+
+    /** The latest candle whose close is not after now: an hourly read asks for rows opened by 09:30:15. */
+    @Test
+    void BR70_theRead_asksForACandleClosedByNow() {
+        Instant closedBy = NOW.minus(Duration.ofHours(1));
+        when(indicators.latestOpenedBy(PAIR, MarketType.SPOT, "1h", closedBy)).thenReturn(Optional.of(row("1h")));
+
+        SetupScoreReading reading =
+                service(null).closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null);
+
+        assertThat(reading.score()).isEqualTo(10);
+        assertThat(reading.preset()).isEqualTo("DAY_TRADING v1");
+        assertThat(reading.timeframe()).isEqualTo("1h");
+        assertThat(reading.openTime()).isEqualTo(OPEN);
+        verify(indicators, never()).latest(any(), any(), anyString());
+    }
+
+    @Test
+    void BR13_withoutAStyle_readsTheDefaultPreset_notTheSource() {
+        when(indicators.latestOpenedBy(any(), any(), anyString(), any())).thenReturn(Optional.of(row("1h")));
+
+        SetupScoreReading reading = service(source).closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", null, null);
+
+        assertThat(reading.style()).isEqualTo(SetupStyle.DAY_TRADING);
+        verify(source, never()).styleOf(any());
+    }
+
+    /** Only the configured version's weights are held; another version cannot be weighted again. */
+    @Test
+    void BR70_aPresetVersionNoLongerConfigured_givesANullScore() {
+        when(indicators.latestOpenedBy(any(), any(), anyString(), any())).thenReturn(Optional.of(row("1h")));
+
+        SetupScoreReading reading =
+                service(null).closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, "v0");
+
+        assertThat(reading.score()).isNull();
+        assertThat(reading.preset()).isEqualTo("DAY_TRADING v0");
+        assertThat(reading.openTime()).isEqualTo(OPEN);
+    }
+
+    /** A preset's weights are defined for its own timeframe only (TECHNICAL_DESIGN 7.4); Q-77 asks what else to do. */
+    @Test
+    void BR70_aTimeframeOtherThanThePresets_givesANullScore() {
+        when(indicators.latestOpenedBy(any(), any(), anyString(), any())).thenReturn(Optional.of(row("4h")));
+
+        SetupScoreReading reading =
+                service(null).closedCandleSetupScore(PAIR, MarketType.SPOT, "4h", SetupStyle.DAY_TRADING, null);
+
+        assertThat(reading.score()).isNull();
+        assertThat(reading.timeframe()).isEqualTo("4h");
+    }
+
+    @Test
+    void BR70_noClosedCandle_givesANullScoreAndNoOpenTime() {
+        when(indicators.latestOpenedBy(any(), any(), anyString(), any())).thenReturn(Optional.empty());
+
+        SetupScoreReading reading =
+                service(null).closedCandleSetupScore(PAIR, MarketType.SPOT, "15m", SetupStyle.SCALPING, null);
+
+        assertThat(reading.score()).isNull();
+        assertThat(reading.openTime()).isNull();
+    }
+
+    @Test
+    void BR08_aTimeframeOutsideBr08_isAProgrammingError() {
+        AnalysisServiceImpl service = service(null);
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> service.closedCandleSetupScore(PAIR, MarketType.SPOT, "5m", null, null));
+    }
+
     private static SpotSetupScoreResponse score(AnalysisServiceImpl service, UUID caller) {
         AnalysisResponse response = service.analysis("spot", "BTCUSDT", "1h", caller);
         return (SpotSetupScoreResponse) response.setupScore();
@@ -102,7 +181,7 @@ class AnalysisServiceImplTest {
     private AnalysisServiceImpl service(SetupStyleSource styles) {
         ObjectProvider<SetupStyleSource> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(styles);
-        return new AnalysisServiceImpl(requests, indicators, candles, presets(), provider);
+        return new AnalysisServiceImpl(requests, indicators, candles, presets(), provider, CLOCK);
     }
 
     /** The v1 presets; only the timeframes and versions matter here. */

@@ -1,6 +1,7 @@
 package com.cryptopilot.market;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
@@ -11,10 +12,11 @@ import java.util.UUID;
 
 /**
  * What the {@code market} module tells other modules about a pair: whether it may be traded on a market and with which
- * filters, which markets it is listed on, its current last price and funding rate, its leverage brackets, and its closed 1-minute candles after downtime. Read
- * only; a price that is not current is never returned as one.
+ * filters, which markets it is listed on, its current last price and funding rate, its leverage brackets, the setup
+ * score of its latest closed candle, and its closed 1-minute candles after downtime. Read only; a price that is not
+ * current is never returned as one.
  *
- * <p>Rule: BR-07, BR-26, BR-27, BR-29, BR-33; NSF-03, NSF-07; TECHNICAL_DESIGN section 2; A-04.
+ * <p>Rule: BR-07, BR-13, BR-26, BR-27, BR-29, BR-33, BR-70; NSF-03, NSF-07; TECHNICAL_DESIGN section 2; A-04; D-112.
  */
 public interface MarketApi {
 
@@ -96,6 +98,18 @@ public interface MarketApi {
 
     /** The predicted funding rate of the coming Futures settlement, when the cache holds a current one. */
     Optional<BigDecimal> currentFundingRate(String symbol);
+
+    /**
+     * The setup score of the pair's latest closed candle of {@code timeframe}, weighted under a style preset the same
+     * way as the analysis screen (BR-13). A candle still forming is never read. The score is {@code null} when it
+     * cannot be read (see {@link SetupScoreReading#score()}); this never throws for missing data.
+     *
+     * @param timeframe one of the BR-08 timeframes, e.g. {@code 1h}
+     * @param style the preset, or {@code null} for the default preset of a Trader who selects none (D-53)
+     * @param presetVersion the preset version, or {@code null} for the one configured now
+     */
+    SetupScoreReading closedCandleSetupScore(
+            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion);
 
     /** The pair's Futures leverage brackets, smallest notional first; empty when none are stored. */
     List<LeverageTier> leverageBrackets(UUID pairId);
