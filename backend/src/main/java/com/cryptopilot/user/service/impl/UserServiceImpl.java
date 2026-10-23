@@ -3,25 +3,33 @@ package com.cryptopilot.user.service.impl;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.user.AuthorCard;
 import com.cryptopilot.user.LoginCredentials;
+import com.cryptopilot.user.PublicProfile;
 import com.cryptopilot.user.UserApi;
 import com.cryptopilot.user.UserSummary;
 import com.cryptopilot.user.entity.UserAccount;
 import com.cryptopilot.user.entity.UserProfile;
+import com.cryptopilot.user.event.AccountSuspended;
 import com.cryptopilot.user.model.enums.AccountStatus;
+import com.cryptopilot.user.model.enums.Role;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.cryptopilot.user.repository.UserAccountRepository;
 import com.cryptopilot.user.repository.UserProfileRepository;
 import com.cryptopilot.user.service.DeviceService;
 import com.cryptopilot.user.service.UserService;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionOperations;
 
@@ -89,6 +97,7 @@ public class UserServiceImpl implements UserService {
     private final FailedLoginRecorder failedLogins;
     private final DeviceService devices;
     private final TransactionOperations transactions;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional
@@ -222,6 +231,45 @@ public class UserServiceImpl implements UserService {
     @Transactional
     public void deactivateDevice(UUID userId, String fcmToken) {
         devices.deactivateByToken(userId, fcmToken);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean banForModeration(UUID userId, Instant at) {
+        UserAccount account = accounts.findByIdForUpdate(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
+        if (account.getRole() == Role.ADMIN) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_STATUS_TRANSITION_INVALID, "moderation does not ban administrator " + userId);
+        }
+        if (account.getAccountStatus() == AccountStatus.BANNED) {
+            return false;
+        }
+        account.ban();
+        accounts.save(account);
+        events.publishEvent(new AccountSuspended(userId, at));
+        return true;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<PublicProfile> publicProfile(UUID userId) {
+        return accounts.findById(userId)
+                .filter(account -> account.getAccountStatus() != AccountStatus.BANNED)
+                .flatMap(account -> profiles.findById(userId)
+                        .map(profile -> new PublicProfile(
+                                userId, profile.getDisplayName(), profile.getAvatarUrl(), account.getCreatedAt())));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<AuthorCard> authors(Collection<UUID> userIds) {
+        if (userIds.isEmpty()) {
+            return List.of();
+        }
+        return profiles.findAllByIdIn(userIds).stream()
+                .map(profile -> new AuthorCard(profile.getId(), profile.getDisplayName(), profile.getAvatarUrl()))
+                .toList();
     }
 
     /**

@@ -342,7 +342,45 @@ public enum ErrorCode {
     PAPER_MAX_NUM_ORDERS(HttpStatus.CONFLICT, "MSG43"),
 
     /** {@code MAX_NUM_ALGO_ORDERS}: as {@link #PAPER_MAX_NUM_ORDERS}, for the open stops of the pair. */
-    PAPER_MAX_NUM_ALGO_ORDERS(HttpStatus.CONFLICT, "MSG43");
+    PAPER_MAX_NUM_ALGO_ORDERS(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A file named for a post is not one the post may carry (BR-44): not uploaded, not the caller's, already attached
+     * to another post, of a type or size outside the limits, a video too long, or a combination of files a post may
+     * not hold. MSG32; the message argument is the limit that applies, e.g. {@code 5 MB}. 400: the request names it.
+     */
+    MEDIA_INVALID(HttpStatus.BAD_REQUEST, "MSG32"),
+
+    /**
+     * An edit drops a file of a post whose files are kept as the evidence of the moderation: the post is reported, or
+     * a report on it was decided against it (BR-47, D-99). MSG56 under {@code media}; the files themselves are valid,
+     * so not MSG32. 400: the request names them.
+     */
+    MEDIA_KEPT_AS_EVIDENCE(HttpStatus.BAD_REQUEST, "MSG56"),
+
+    /**
+     * The media storage could not be reached or is not configured, so a file could be neither signed for nor checked.
+     * Borrows MSG43 (A-38). 503: the request may succeed later.
+     */
+    MEDIA_STORAGE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43"),
+
+    /**
+     * The Trader already reported this post (BR-46); nothing is stored. MSG34 in its "already reported" form. 409: the
+     * request is valid and an earlier report conflicts with it.
+     */
+    POST_ALREADY_REPORTED(HttpStatus.CONFLICT, "MSG34"),
+
+    /**
+     * A Trader cannot report their own post (BR-46); the client offers no Report on it. Borrows MSG43 (A-38): SRS 5.3
+     * has no message for it. 409: the request is valid and the post's author refuses it.
+     */
+    POST_REPORT_OWN_POST(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * Only a hidden post can be restored (UC-43); this one is published or deleted. Borrows MSG43 (A-38). 409: the
+     * request is valid and the post's status refuses it.
+     */
+    POST_NOT_HIDDEN(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

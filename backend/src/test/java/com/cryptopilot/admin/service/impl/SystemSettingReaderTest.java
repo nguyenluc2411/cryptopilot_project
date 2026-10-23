@@ -49,4 +49,20 @@ class SystemSettingReaderTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("INT");
     }
+
+    @Test
+    void BR44_theSeededUploadLimits_areReadAsWholeNumbers() {
+        assertThat(settings.integer("MAX_IMAGES_PER_POST")).isEqualTo(4);
+        assertThat(settings.integer("MAX_IMAGE_SIZE_MB")).isEqualTo(5);
+        assertThat(settings.integer("MAX_VIDEO_SIZE_MB")).isEqualTo(100);
+        assertThat(settings.integer("MAX_VIDEO_DURATION_SECONDS")).isEqualTo(300);
+    }
+
+    @Test
+    void aDecimalSetting_isNotReadAsAWholeNumber() {
+        assertThatThrownBy(() -> settings.integer("WARN_LOW_RR_RATIO"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("DECIMAL");
+        assertThatThrownBy(() -> settings.integer("NOT_A_SETTING")).isInstanceOf(IllegalStateException.class);
+    }
 }

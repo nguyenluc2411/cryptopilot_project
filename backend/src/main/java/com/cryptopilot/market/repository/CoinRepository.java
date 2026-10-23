@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -33,6 +34,17 @@ public interface CoinRepository extends Repository<Coin, UUID> {
     /** The coins with these keys; an unknown key is left out. */
     @Transactional(readOnly = true)
     List<Coin> findAllByIdIn(Collection<UUID> coinIds);
+
+    /**
+     * The coins with these symbols that are the base or the quote of an ACTIVE pair enabled on Spot or Futures
+     * (BR-07); an unknown or unlisted symbol is left out.
+     */
+    @Transactional(readOnly = true)
+    @Query("select c from Coin c where c.symbol in :symbols and exists (select 1 from CryptoPair p"
+            + " where (p.baseCoinId = c.id or p.quoteCoinId = c.id)"
+            + " and p.pairStatus = com.cryptopilot.market.model.enums.PairStatus.ACTIVE"
+            + " and (p.spotEnabled = true or p.futuresEnabled = true))")
+    List<Coin> findListedBySymbolIn(@Param("symbols") Collection<String> symbols);
 
     /**
      * Stores a coin by its symbol unless one is stored already, named after the symbol as {@code Coin.fromExchange}

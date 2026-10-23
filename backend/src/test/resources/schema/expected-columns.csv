@@ -155,6 +155,7 @@ forum_post,content,text,,,NO
 forum_post,created_at,timestamp with time zone,,,NO
 forum_post,is_official,boolean,,,NO
 forum_post,market_type,character varying,,,YES
+forum_post,official_category,character varying,,,YES
 forum_post,post_id,uuid,,,NO
 forum_post,post_status,character varying,,,NO
 forum_post,post_type,character varying,,,NO
@@ -246,6 +247,7 @@ notification,reference_id,uuid,,,YES
 notification,reference_type,character varying,,,YES
 notification,sent_via_email,boolean,,,NO
 notification,sent_via_push,boolean,,,NO
+notification,source_key,character varying,,,YES
 notification,title,character varying,,,NO
 notification,updated_at,timestamp with time zone,,,NO
 notification,user_id,uuid,,,NO

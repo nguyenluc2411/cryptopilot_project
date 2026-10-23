@@ -28,6 +28,8 @@ import tools.jackson.databind.ObjectMapper;
  *   <li>{@code POST /api/v1/paper/orders} by an authenticated account: rule {@code paper-order}, per account, in its
  *       own window and instead of {@code api}, as Binance counts new orders apart from its request weight.
  *   <li>Any other request under {@code /api/v1/} by an authenticated account: rule {@code api}, per account.
+ *   <li>Any other request under {@code /api/v1/} without an account — a Guest reading the public market data or the
+ *       forum (D-99): rule {@code guest}, per client address. Guests behind one address share its count.
  * </ul>
  *
  * <p>Registered by {@code common.config.WebEdgeConfig} at {@link #ORDER}, just after Spring Security's chain and so
@@ -56,7 +58,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
      *
      * @param enabled false lets every request through (test contexts)
      */
-    public record Limits(boolean enabled, int login, int auth, int api, int paperOrders) {}
+    public record Limits(boolean enabled, int login, int auth, int api, int paperOrders, int guest) {}
 
     private final Limits limits;
     private final FixedWindowRateLimiter limiter;
@@ -116,6 +118,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
                         new Limit("paper-order", "user:" + caller.getName(), limits.paperOrders(), paperOrderLimiter));
             }
             return Optional.of(new Limit("api", "user:" + caller.getName(), limits.api(), limiter));
+        }
+        if (path.startsWith(API)) {
+            return Optional.of(new Limit("guest", "ip:" + request.getRemoteAddr(), limits.guest(), limiter));
         }
         return Optional.empty();
     }

@@ -43,6 +43,12 @@ public interface MarketApi {
     List<CoinListing> coins(Collection<UUID> coinIds);
 
     /**
+     * The coins with these symbols that a listed pair trades: the base or quote of an ACTIVE pair enabled on at least
+     * one market (BR-07). An unknown or unlisted symbol is left out. A post is tagged only with these (UC-27).
+     */
+    List<CoinListing> listedCoinsBySymbol(Collection<String> symbols);
+
+    /**
      * The coins with these symbols, storing any not stored yet, so a caller that must hold a balance in a coin (the
      * virtual funds of a paper account, TR-04) never depends on the symbol synchronisation having run. Every symbol
      * asked for is in the result. Joins the caller's transaction, or runs in its own.

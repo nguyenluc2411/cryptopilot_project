@@ -47,6 +47,7 @@ class ProfileEdgeDefaultsTest {
         assertThat(limits.api()).isEqualTo(120);
         assertThat(limits.paperOrders()).isEqualTo(50);
         assertThat(limits.paperOrdersWindow()).hasSeconds(10);
+        assertThat(limits.guest()).isEqualTo(300);
     }
 
     @Test
@@ -54,6 +55,7 @@ class ProfileEdgeDefaultsTest {
         assertThat(rateLimits(binder("dev")).enabled()).isTrue();
         assertThat(rateLimits(binder("dev")).login()).isEqualTo(100);
         assertThat(rateLimits(binder("dev")).paperOrders()).isEqualTo(500);
+        assertThat(rateLimits(binder("dev")).guest()).isEqualTo(3000);
         assertThat(rateLimits(binder()).enabled()).isFalse();
     }
 

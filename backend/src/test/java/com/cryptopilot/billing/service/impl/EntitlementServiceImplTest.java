@@ -180,7 +180,7 @@ class EntitlementServiceImplTest {
         "NEWS_AI_INSIGHT, 0, 1, 1",
         "AI_CHAT_DAILY, 0, 30, 100",
         "AI_PERFORMANCE_CONTEXT, 0, 0, 1",
-        "VIDEO_POST, 0, 0, 1",
+        "VIDEO_POST, 0, 1, 1",
     })
     void BR62_eachCode_answersTheValueOfTable3_1_onEachTier(String code, String free, String pro, String premium) {
         Feature feature = Feature.valueOf(code);
@@ -218,9 +218,15 @@ class EntitlementServiceImplTest {
                     assertThat(e.messageArgs()).containsExactly("PRO");
                 });
         assertThatExceptionOfType(BusinessException.class)
-                .isThrownBy(() -> service.requireFeature(traders.get(PlanTier.PRO), Feature.VIDEO_POST))
+                .isThrownBy(() -> service.requireFeature(traders.get(PlanTier.PRO), Feature.AI_PERFORMANCE_CONTEXT))
                 .satisfies(e -> assertThat(e.messageArgs()).containsExactly("PREMIUM"));
-        assertThatCode(() -> service.requireFeature(traders.get(PlanTier.PREMIUM), Feature.VIDEO_POST))
+        assertThatCode(() -> service.requireFeature(traders.get(PlanTier.PREMIUM), Feature.AI_PERFORMANCE_CONTEXT))
+                .doesNotThrowAnyException();
+        // D-99: video posting is for every paid tier, so FREE is told the lowest one, PRO.
+        assertThatExceptionOfType(BusinessException.class)
+                .isThrownBy(() -> service.requireFeature(traders.get(PlanTier.FREE), Feature.VIDEO_POST))
+                .satisfies(e -> assertThat(e.messageArgs()).containsExactly("PRO"));
+        assertThatCode(() -> service.requireFeature(traders.get(PlanTier.PRO), Feature.VIDEO_POST))
                 .doesNotThrowAnyException();
         assertThatCode(() -> service.requireFeature(traders.get(PlanTier.PRO), Feature.ACTIVE_PLAN_MAX))
                 .as("an unlimited maximum is included")
@@ -240,7 +246,7 @@ class EntitlementServiceImplTest {
                 .satisfies(e -> assertThat(e.messageArgs()).containsExactly("PREMIUM"));
     }
 
-    /** Only PREMIUM includes the video post; with its packages withdrawn no package on offer does. */
+    /** Only PREMIUM includes the own performance context; with its packages withdrawn no package on offer does. */
     @Test
     void CR08_aFeatureNoActivePackageIncludes_isAConfigurationError() {
         jdbc.sql("update subscription_package set is_active = false where tier = 'PREMIUM'")
@@ -248,8 +254,8 @@ class EntitlementServiceImplTest {
         entityManager.clear();
 
         assertThatIllegalStateException()
-                .isThrownBy(() -> service.requireFeature(trader(), Feature.VIDEO_POST))
-                .withMessageContaining("VIDEO_POST");
+                .isThrownBy(() -> service.requireFeature(trader(), Feature.AI_PERFORMANCE_CONTEXT))
+                .withMessageContaining("AI_PERFORMANCE_CONTEXT");
     }
 
     // ------------------------------------------------------------------ requireWithinLimit (MSG27)

@@ -2,6 +2,7 @@ package com.cryptopilot.auth.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 import com.cryptopilot.common.exception.ErrorCode;
@@ -184,7 +185,7 @@ class AuthorizationMatrixTest {
                     "/api/v1/paper/account",
                     "/api/v1/journal",
                     "/api/v1/performance",
-                    "/api/v1/posts",
+                    "/api/v1/comments/1",
                     "/api/v1/news",
                     "/api/v1/ai/conversations",
                     "/api/v1/billing/packages"
@@ -204,13 +205,43 @@ class AuthorizationMatrixTest {
                     "/api/v1/paper/account",
                     "/api/v1/journal",
                     "/api/v1/performance",
-                    "/api/v1/posts",
+                    "/api/v1/comments/1",
                     "/api/v1/news",
                     "/api/v1/ai/conversations",
                     "/api/v1/billing/packages"
                 })
         void SRS313_theTraderArea_refusesAnAdmin(String path) throws Exception {
             assertForbidden(mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, bearer(UserRole.ADMIN))));
+        }
+    }
+
+    /**
+     * The community a Guest reads (D-99, the registered topic): the feed, the pinned posts, a post, its comments and a
+     * coin's discussion are open to anyone for GET; writing stays a Trader's.
+     */
+    @Nested
+    class PublicCommunity {
+
+        @ParameterizedTest(name = "GET {0} admits a Guest")
+        @ValueSource(
+                strings = {
+                    "/api/v1/posts",
+                    "/api/v1/posts/pinned",
+                    "/api/v1/posts/00000000-0000-0000-0000-000000000001",
+                    "/api/v1/posts/00000000-0000-0000-0000-000000000001/comments",
+                    "/api/v1/posts/coins/BTC/discussion",
+                    "/api/v1/community/members/00000000-0000-0000-0000-000000000001"
+                })
+        void D99_theCommunityReads_admitAGuest(String path) throws Exception {
+            assertAdmitted(mvc.perform(get(path)));
+        }
+
+        @Test
+        void D99_writingToTheCommunity_staysATradersOnly() throws Exception {
+            assertUnauthenticated(mvc.perform(post("/api/v1/posts")));
+            assertUnauthenticated(mvc.perform(post("/api/v1/posts/00000000-0000-0000-0000-000000000001/like")));
+            assertForbidden(
+                    mvc.perform(post("/api/v1/posts").header(HttpHeaders.AUTHORIZATION, bearer(UserRole.ADMIN))));
         }
     }
 
@@ -408,6 +439,7 @@ class AuthorizationMatrixTest {
                             "/api/v1/performance",
                             "/api/v1/posts/**",
                             "/api/v1/comments/**",
+                            "/api/v1/community/**",
                             "/api/v1/media/**",
                             "/api/v1/news/**",
                             "/api/v1/ai/**",

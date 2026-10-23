@@ -84,9 +84,33 @@ class OpenApiDocsTest {
             "/api/v1/alerts",
             "/api/v1/alerts/{id}",
             "/api/v1/alerts/{id}/pause",
-            "/api/v1/alerts/{id}/resume");
+            "/api/v1/alerts/{id}/resume",
+            "/api/v1/posts",
+            "/api/v1/posts/pinned",
+            "/api/v1/posts/{id}",
+            "/api/v1/admin/announcements",
+            "/api/v1/admin/announcements/{id}",
+            "/api/v1/media/upload-signature",
+            "/api/v1/admin/media/upload-signature",
+            "/api/v1/posts/{postId}/comments",
+            "/api/v1/comments/{id}",
+            "/api/v1/posts/{id}/like",
+            "/api/v1/posts/{id}/save",
+            "/api/v1/comments/{id}/like",
+            "/api/v1/posts/{id}/reports",
+            "/api/v1/admin/reports-queue",
+            "/api/v1/admin/reports-queue/{postId}",
+            "/api/v1/admin/reports-queue/{postId}/decision",
+            "/api/v1/admin/posts/{id}",
+            "/api/v1/admin/posts/{id}/restore",
+            "/api/v1/posts/coins/{symbol}/discussion",
+            "/api/v1/community/members/{memberId}",
+            "/api/v1/notifications",
+            "/api/v1/notifications/unread-count",
+            "/api/v1/notifications/{id}/read",
+            "/api/v1/notifications/read-all");
 
-    private static final int OPERATIONS = 61;
+    private static final int OPERATIONS = 95;
 
     @Autowired
     private MockMvc mvc;

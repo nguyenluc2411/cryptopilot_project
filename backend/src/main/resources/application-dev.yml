@@ -32,6 +32,15 @@ cryptopilot:
       auth: ${RATE_LIMIT_AUTH:200}
       api: ${RATE_LIMIT_API:1200}
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:500}
+      guest: ${RATE_LIMIT_GUEST:3000}
+  media:
+    sweep:
+      # Runs in this profile: files no post carries are deleted from Cloudinary daily.
+      enabled: true
+  notification:
+    sweep:
+      # NSF-17 runs in this profile: notifications older than 90 days are deleted daily.
+      enabled: true
   auth:
     token-sweep:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
