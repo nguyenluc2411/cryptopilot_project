@@ -35,6 +35,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -119,11 +120,15 @@ public class AnalysisServiceImpl implements AnalysisService {
      *
      * <p>Rule: BR-08, BR-13, BR-70; TECHNICAL_DESIGN 7.4; D-53, D-112.
      *
+     * <p>The read runs outside a caller's transaction and sees committed rows only: one query needs none, and a failed
+     * read can then neither mark the caller's transaction for rollback nor abort it in the database, so the caller may
+     * go on without the score (a plan's activation does).
+     *
      * @throws IllegalArgumentException for a timeframe outside BR-08, or an instant after now, at which a candle still
      *     forming would be read
      */
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public SetupScoreReading closedCandleSetupScore(
             UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at) {
         if (at.isAfter(clock.instant())) {

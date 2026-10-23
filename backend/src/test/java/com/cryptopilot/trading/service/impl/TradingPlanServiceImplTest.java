@@ -14,6 +14,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.cryptopilot.admin.SystemSettingApi;
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
@@ -77,6 +81,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mockito;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
@@ -1246,6 +1251,35 @@ class TradingPlanServiceImplTest {
         assertThat(plan.status()).isEqualTo(PlanStatus.ACTIVE);
         assertThat(plan.setupScoreAtPlan()).isNull();
         assertThat(plan.setupScorePreset()).isEqualTo("DAY_TRADING v1");
+    }
+
+    /** A failed read stores neither score nor preset, logs a warning naming the plan, and the plan still activates. */
+    @Test
+    void BR70_aFailedSetupScoreRead_storesNullsWarnsAndActivates() {
+        TradingPlan plan = draft();
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        when(market.closedCandleSetupScore(any(), any(), anyString(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("indicator store unavailable"));
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        Logger logger = (Logger) LoggerFactory.getLogger(TradingPlanServiceImpl.class);
+        logger.addAppender(logs);
+
+        TradingPlanResponse active;
+        try {
+            active = service.activate(USER, plan.getId());
+        } finally {
+            logger.detachAppender(logs);
+        }
+
+        assertThat(active.status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(active.setupScoreAtPlan()).isNull();
+        assertThat(active.setupScorePreset()).isNull();
+        verify(events).publishEvent(any(TradingPlanActivated.class));
+        assertThat(logs.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains(plan.getId().toString());
+        });
     }
 
     @Test

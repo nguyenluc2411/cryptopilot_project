@@ -1,6 +1,10 @@
 package com.cryptopilot.trading.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -60,6 +64,7 @@ import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
@@ -101,7 +106,8 @@ class TradingPlanApiTest {
     @Autowired
     private PriceCacheService prices;
 
-    @Autowired
+    /** A spy, so one test can make the setup score read fail inside the activation's transaction. */
+    @MockitoSpyBean
     private TechnicalIndicatorRepository indicators;
 
     private static final AtomicLong TICKS = new AtomicLong();
@@ -589,6 +595,30 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.analysisTimeframe").value("4h"))
                 .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
                 .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1"));
+    }
+
+    /**
+     * A setup score read that fails with an SQL error inside the activation's transaction is rolled back alone: the
+     * plan is activated and committed with neither score nor preset.
+     */
+    @Test
+    void BR70_aSetupScoreReadFailingInTheDatabase_doesNotUndoTheActivation() throws Exception {
+        UUID trader = trader();
+        String id = id(as(trader, post(PLANS), spotLimit("100", "95", "110", false)));
+        doAnswer(call -> sql.sql("select 1 / 0").query(Integer.class).single())
+                .when(indicators)
+                .at(eq(pair), any(), anyString(), any());
+
+        as(trader, post(PLANS + "/" + id + "/activate"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.setupScoreAtPlan").doesNotExist())
+                .andExpect(jsonPath("$.setupScorePreset").doesNotExist());
+        assertThat(sql.sql("select plan_status from trading_plan where plan_id = ?")
+                        .param(UUID.fromString(id))
+                        .query(String.class)
+                        .single())
+                .isEqualTo("ACTIVE");
     }
 
     /** Nothing analysed on the plan's timeframe: the activation goes on, with a null score beside the preset. */

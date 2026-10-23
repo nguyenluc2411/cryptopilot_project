@@ -22,7 +22,10 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -38,21 +41,20 @@ import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * The setup score {@link MarketApi} gives other modules, against the migrated schema and the configured presets: for
  * one stored candle it equals the score the analysis API answers a Trader of the same preset, on Spot and on Futures;
  * a missing component gives a {@code null} score; neither a row of the candle still forming nor one of an older candle is read.
  *
- * <p>The application's clock is fixed ({@link FixedClockConfig}). Every test rolls back.
+ * <p>The application's clock is fixed ({@link FixedClockConfig}). The read runs outside a caller's transaction, so the
+ * rows are committed and removed after each test.
  *
  * <p>Rule: BR-13, BR-70; TECHNICAL_DESIGN 7.4; D-53, D-112; Q-74.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import({TestcontainersConfig.class, FixedClockConfig.class})
-@Transactional
 class ClosedCandleSetupScoreTest {
 
     @Autowired
@@ -70,11 +72,23 @@ class ClosedCandleSetupScoreTest {
     @Autowired
     private MarketApi market;
 
+    private final List<UUID> traders = new ArrayList<>();
     private UUID pair;
+    private String symbol;
 
     @BeforeEach
     void enablePair() {
-        pair = new MarketTestData(sql, FixedClockConfig.NOW).pair("BTCUSDT", true, true, "TRADING", "TRADING", 0);
+        symbol = "SS" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
+        pair = new MarketTestData(sql, FixedClockConfig.NOW).pair(symbol, true, true, "TRADING", "TRADING", 0);
+    }
+
+    @AfterEach
+    void removeRows() {
+        for (UUID trader : traders) {
+            sql.sql("delete from user_profile where user_id = ?").param(trader).update();
+            sql.sql("delete from user_account where user_id = ?").param(trader).update();
+        }
+        new MarketTestData(sql, FixedClockConfig.NOW).remove(pair);
     }
 
     /** The trading style of the profile, the preset it selects (BR-13), and that preset's timeframe. */
@@ -93,7 +107,7 @@ class ClosedCandleSetupScoreTest {
         store(type, timeframe, closed, "75", "50", "40", "60", "30");
         UUID trader = trader(tradingStyle);
 
-        String body = mvc.perform(get("/api/v1/analysis/" + type.name().toLowerCase() + "/BTCUSDT")
+        String body = mvc.perform(get("/api/v1/analysis/" + type.name().toLowerCase() + "/" + symbol)
                         .param("tf", timeframe)
                         .header(HttpHeaders.AUTHORIZATION, bearer(trader)))
                 .andExpect(status().isOk())
@@ -300,6 +314,7 @@ class ClosedCandleSetupScoreTest {
 
     private UUID trader(String tradingStyle) {
         UUID id = UUID.randomUUID();
+        traders.add(id);
         Timestamp now = Timestamp.from(FixedClockConfig.NOW);
         sql.sql("""
                         insert into user_account (user_id, email, password_hash, role, account_status, created_at,

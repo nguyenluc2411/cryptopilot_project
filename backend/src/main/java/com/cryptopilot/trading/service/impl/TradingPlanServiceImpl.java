@@ -481,7 +481,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * the Trader's profile selects now (not at the draft save), with the preset's current version. The score is read
      * at {@code now}, the plan's {@code activated_at}, so the candle it came from is not stored: it is the one before
      * the candle holding {@code activated_at}. A score that cannot be read is stored as {@code null} beside the preset
-     * and never refuses the activation.
+     * and never refuses the activation. When the read itself fails, the score and the preset both stay {@code null},
+     * a warning names the plan, and the activation goes on.
      *
      * <p>Rule: BR-13, BR-70; D-111 (M4), D-112; Q-74.
      */
@@ -489,8 +490,19 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         SetupStyleSource source = styles.getIfAvailable();
         SetupStyle style =
                 source == null ? null : source.styleOf(plan.getUserId()).orElse(null);
-        SetupScoreReading reading = market.closedCandleSetupScore(
-                plan.getPairId(), plan.getMarket(), plan.getAnalysisTimeframe().code(), style, null, now);
+        SetupScoreReading reading;
+        try {
+            reading = market.closedCandleSetupScore(
+                    plan.getPairId(),
+                    plan.getMarket(),
+                    plan.getAnalysisTimeframe().code(),
+                    style,
+                    null,
+                    now);
+        } catch (RuntimeException e) {
+            log.warn("BR-70 plan {} activated without a setup score: the read failed", plan.getId(), e);
+            return;
+        }
         // At the column's scale, so the response of this request reads as the stored value does later.
         plan.recordSetupScoreAtPlan(
                 reading.score() == null
