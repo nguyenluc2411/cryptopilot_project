@@ -114,6 +114,103 @@ class TradeResultCalculatorTest {
         assertAmounts(r, "1000", "61", "939");
     }
 
+    // ------------------------------------------------------------------ T-045: the same cases with funding
+
+    /**
+     * TECHNICAL_DESIGN 7.8 test vector, case (a) with one settlement at mark 101, rate 0.0001: the LONG pays
+     * 2 × 101 × 0.0001 = 0.0202; net 30 − 0.086 − 0.0202 = 29.8938.
+     */
+    @Test
+    void BR38_longTakeProfitWithOneFunding_isTheDesignVector() {
+        TradeResult r =
+                withFunding(Direction.LONG, EntryType.LIMIT, CloseReason.TAKE_PROFIT, "115", List.of(), Direction.LONG);
+
+        assertThat(r.fundingFeeAmount()).isEqualByComparingTo("-0.0202");
+        assertAmounts(r, "30", "0.086", "29.8938");
+    }
+
+    /** Case (b) with the same settlement: the SHORT receives 0.0202; net −10.205 + 0.0202 = −10.1848. */
+    @Test
+    void BR38_shortStopLossWithOneFunding_receivesIt() {
+        TradeResult r = withFunding(
+                Direction.SHORT, EntryType.MARKET, CloseReason.STOP_LOSS, "105", List.of(), Direction.SHORT);
+
+        assertThat(r.fundingFeeAmount()).isEqualByComparingTo("0.0202");
+        assertAmounts(r, "-10", "0.205", "-10.1848");
+    }
+
+    /** Case (c), the liquidation vector, with the same settlement: net −20.02296 − 0.0202 = −20.04316. */
+    @Test
+    void BR38_longLiquidationWithOneFunding_paysItOnTopOfTheClearanceFee() {
+        TradeResult r = withFunding(
+                Direction.LONG, EntryType.LIMIT, CloseReason.LIQUIDATION, "90.37", BRACKETS, Direction.LONG);
+
+        assertThat(r.fundingFeeAmount()).isEqualByComparingTo("-0.0202");
+        assertAmounts(r, "-19.26", "0.76296", "-20.04316");
+    }
+
+    /** Case (d): Spot has no funding, null and not 0, so net = realized − fees = 939. */
+    @Test
+    void BR37_spotTrade_hasNullFunding_andNetIsRealizedMinusFees() {
+        TradeResult r = calculate(
+                MarketType.SPOT,
+                Direction.LONG,
+                EntryType.MARKET,
+                "60000",
+                "0.5",
+                CloseReason.MANUAL,
+                "62000",
+                SPOT,
+                List.of(),
+                null);
+
+        assertThat(r.fundingFeeAmount()).isNull();
+        assertThat(r.amounts().fundingFeeAmount()).isNull();
+        assertAmounts(r, "1000", "61", "939");
+    }
+
+    @Test
+    void BR37_aSpotTradeWithFunding_orAFuturesTradeWithout_isRefused() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> calculate(
+                        MarketType.SPOT,
+                        Direction.LONG,
+                        EntryType.MARKET,
+                        "60000",
+                        "0.5",
+                        CloseReason.MANUAL,
+                        "62000",
+                        SPOT,
+                        List.of(),
+                        BigDecimal.ZERO));
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> calculate(
+                        MarketType.FUTURES,
+                        Direction.LONG,
+                        EntryType.LIMIT,
+                        "100",
+                        "2",
+                        CloseReason.TAKE_PROFIT,
+                        "115",
+                        FUTURES,
+                        List.of(),
+                        null));
+    }
+
+    /** Qty 2, entry 100, one settlement at mark 101 and rate 0.0001, signed for the position by the calculator. */
+    private static TradeResult withFunding(
+            Direction direction,
+            EntryType entryType,
+            CloseReason reason,
+            String exit,
+            List<LeverageBracket> brackets,
+            Direction fundingSide) {
+        BigDecimal funding = Rounding.toAmount(FundingCalculator.settlementAmount(
+                fundingSide, new BigDecimal("2"), new BigDecimal("101"), new BigDecimal("0.0001")));
+        return calculate(
+                MarketType.FUTURES, direction, entryType, "100", "2", reason, exit, FUTURES, brackets, funding);
+    }
+
     // ------------------------------------------------------------------ further cases
 
     /** A manual Futures close after a LIMIT entry: maker in, taker out; net = realized − fees. */
@@ -438,16 +535,34 @@ class TradeResultCalculatorTest {
             String exit,
             FeeSchedule fees,
             List<LeverageBracket> brackets) {
-        return TradeResultCalculator.calculate(new TradeClose(
-                market,
-                direction,
-                entryType,
-                new BigDecimal(entry),
-                new BigDecimal(qty),
-                reason,
-                new BigDecimal(exit),
-                fees,
-                brackets));
+        // A Futures trade with no settlement while it was open: its funding is a complete 0.
+        BigDecimal funding = market == MarketType.SPOT ? null : Rounding.toAmount(BigDecimal.ZERO);
+        return calculate(market, direction, entryType, entry, qty, reason, exit, fees, brackets, funding);
+    }
+
+    private static TradeResult calculate(
+            MarketType market,
+            Direction direction,
+            EntryType entryType,
+            String entry,
+            String qty,
+            CloseReason reason,
+            String exit,
+            FeeSchedule fees,
+            List<LeverageBracket> brackets,
+            BigDecimal funding) {
+        return TradeResultCalculator.calculate(
+                new TradeClose(
+                        market,
+                        direction,
+                        entryType,
+                        new BigDecimal(entry),
+                        new BigDecimal(qty),
+                        reason,
+                        new BigDecimal(exit),
+                        fees,
+                        brackets),
+                funding);
     }
 
     /** The liquidation price of qty 1 at this entry, from the same calculation a plan uses (tick 0.01). */
