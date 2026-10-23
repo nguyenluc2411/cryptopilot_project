@@ -2,19 +2,16 @@ package com.cryptopilot.paper.service.impl;
 
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
-import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.PairCoins;
-import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderStatus;
-import com.cryptopilot.paper.model.enums.OrderType;
-import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperMatchingWatermarkRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -41,7 +38,10 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * A stop limit or a trailing stop the price triggered is triggered the same way, under the lock, and only once.
  *
- * <p>Rule: TR-02, TR-09, TR-11; NSF-07; Q-T6.
+ * <p>An order of a Spot pair the exchange stopped trading is cancelled instead ({@code PAIR_NOT_TRADING}), by the
+ * cancellation the pair's stop runs.
+ *
+ * <p>Rule: TR-02, TR-09, TR-11; NSF-01, NSF-07; Q-T6.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -52,9 +52,9 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final PaperAccountRepository accounts;
     private final PaperOrderRepository orders;
     private final SpotSettlement settlement;
-    private final SpotArrival arrival;
-    private final PaperUserFeed feed;
+    private final SpotStopTrigger stopTrigger;
     private final PaperOrderLists lists;
+    private final PairStopCancellation pairStops;
     private final PaperMatchingWatermarkRepository watermarks;
     private final UserLock lock;
     private final MarketApi market;
@@ -70,6 +70,12 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     @Override
     @Transactional
     public boolean fill(RestingOrder resting, Instant tradedAt, FillSource source) {
+        return fill(resting, tradedAt, source, null);
+    }
+
+    @Override
+    @Transactional
+    public boolean fill(RestingOrder resting, Instant tradedAt, FillSource source, ReplayedCandle candle) {
         // fk_paper_order_account keeps the account of an order stored.
         PaperAccount account = accounts.findById(resting.accountId())
                 .orElseThrow(() -> new IllegalStateException("account " + resting.accountId() + " is not stored"));
@@ -80,6 +86,9 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             return false;
         }
         PaperOrder order = found.get();
+        if (cancelledAsNotTrading(account, order)) {
+            return false;
+        }
         PairCoins coins = market.pairCoins(order.getPairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
         lists.beforeExecution(account, order, tradedAt);
@@ -93,7 +102,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 source,
                 tradedAt,
                 true);
-        lists.afterExecution(account, order, tradedAt);
+        lists.afterExecution(account, order, tradedAt, source, candle);
         log.info("TR-02 paper order {} filled at {} ({}, {})", order.getId(), order.getLimitPrice(), tradedAt, source);
         return true;
     }
@@ -117,61 +126,39 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             return false;
         }
         PaperOrder order = found.get();
-        lists.beforeExecution(account, order, at);
-        order.trigger(at);
-        feed.order(account, order);
-        log.info(
-                "TR-09 paper order {} {} triggered at {} ({}, {})",
-                order.getId(),
-                order.getOrderType(),
-                stopPrice,
-                at,
-                source);
+        if (cancelledAsNotTrading(account, order)) {
+            return false;
+        }
         PairCoins coins = market.pairCoins(order.getPairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
-        boolean replayed = source == FillSource.REPLAY;
-        if (order.getOrderType().isSpotMarketStop()) {
-            // Replayed, the book of then is not known: the stop, or the open of a candle that gapped past it.
-            Optional<SpotArrival.Book> book = replayed
-                    ? Optional.of(new SpotArrival.Book(
-                            List.of(new PriceLevel(replayedStopPrice(order, stopPrice, candleOpen), BigDecimal.ZERO)),
-                            false))
-                    : arrival.bookFor(pairOf(order), order.getSide());
-            arrival.marketOnTrigger(account, order, coins, book, replayed ? at : clock.instant(), source);
-        } else if (replayed) {
-            // The candles replayed after this one fill it at its price; the book of now is not the book of then.
-            arrival.rest(account, order);
-        } else {
-            arrival.limitOnArrival(
-                    account, order, coins, arrival.bookFor(pairOf(order), order.getSide()), clock.instant());
-        }
-        lists.afterExecution(account, order, at);
+        lists.beforeExecution(account, order, at);
+        stopTrigger.execute(account, order, coins, at, stopPrice, source, candleOpen);
+        // A stop is never the working order of a group, so no candle is needed to place anything after it.
+        lists.afterExecution(account, order, at, source, null);
         return true;
     }
 
     /**
-     * The price a replayed STOP_LOSS or TAKE_PROFIT executes at: the open of the candle that triggered it when its
-     * trigger condition already held at that open, as the market had gapped through the stop; otherwise the stop
-     * (Q-51). A trailing stop triggers on the pullback, the way of a STOP_LOSS of its side.
+     * An order of a Spot pair the exchange stopped trading is cancelled instead of executed, as the pair's stop does
+     * (NSF-01): a fill or trigger decided while the stop was being committed would otherwise execute it.
      *
-     * <p>Rule: TR-09; PT-R14.
-     *
-     * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges: Market Microstructure for Practitioners</i>. Oxford
-     * University Press, ch. 4 (a triggered stop becomes a market order and executes at the next available price).
+     * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly, ch. 7 (write skew:
+     * the status is checked again under the lock the cancellation takes).
      */
-    static BigDecimal replayedStopPrice(PaperOrder order, BigDecimal stopPrice, BigDecimal candleOpen) {
-        if (candleOpen == null) {
-            return stopPrice;
+    private boolean cancelledAsNotTrading(PaperAccount account, PaperOrder order) {
+        if (order.getMarketType() != MarketType.SPOT) {
+            return false;
         }
-        TriggerCondition condition = order.getCallbackRate() != null
-                ? OrderType.STOP_LOSS.triggerConditionFor(order.getSide())
-                : order.getTriggerCondition();
-        return condition.isMet(candleOpen, stopPrice) ? candleOpen : stopPrice;
-    }
-
-    private TradablePair pairOf(PaperOrder order) {
-        return market.tradablePair(order.getPairId(), order.getMarketType())
-                .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not tradable"));
+        // A pair an administrator disabled is not one the exchange stopped; it keeps executing as before.
+        boolean stopped = market.tradablePair(order.getPairId(), MarketType.SPOT)
+                .map(pair -> !pair.exchangeTrading())
+                .orElse(false);
+        if (!stopped) {
+            return false;
+        }
+        pairStops.cancel(account, order);
+        log.info("NSF-01 paper order {} cancelled instead of executed: its pair stopped trading", order.getId());
+        return true;
     }
 
     @Override

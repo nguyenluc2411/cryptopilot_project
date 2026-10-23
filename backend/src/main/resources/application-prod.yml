@@ -85,6 +85,9 @@ cryptopilot:
     grant-cost:
       # PT-R13 runs in this profile: the granted coins without a cost get one once they have a price.
       enabled: true
+    pair-stop-sweep:
+      # NSF-01 runs in this profile: Spot paper orders left open on a pair that stopped trading are cancelled.
+      enabled: true
     matching:
       replay:
         # TR-02, Q-T6 run in this profile: after a restart or a lost stream, the closed 1-minute candles the

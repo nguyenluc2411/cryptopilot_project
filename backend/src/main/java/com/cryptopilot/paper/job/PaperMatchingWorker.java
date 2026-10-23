@@ -16,6 +16,7 @@ import com.cryptopilot.paper.matching.PaperOrderBook;
 import com.cryptopilot.paper.matching.PaperOrderBook.BookKey;
 import com.cryptopilot.paper.matching.TriggerBook;
 import com.cryptopilot.paper.model.PriceRange;
+import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
@@ -55,7 +56,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Runs the paper matching engine: one consumer thread owns a {@link PaperOrderBook} and applies to it, in arrival
@@ -68,15 +71,17 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <ul>
  *   <li>Market trades are the live path (Q-T6, TR-05): each one is matched as it comes, so an order fills within the
  *       trade's arrival and the storing of its fill, and the orders behind it in the book are reached by the next
- *       trade. The trades of a pair that arrive while the consumer is busy are merged into one waiting range, with the
- *       lowest and highest price and the time each was traded, and queued once: the stream reader never blocks, and
- *       no price is skipped. The merged range keeps each trade with its time, and an order is reached only by the
+ *       trade. The trades of a pair that arrive while the consumer is busy are gathered one by one ({@link
+ *       PendingTrades}), each append costing the same however many wait, and queued once: the stream reader never
+ *       blocks, does no work that grows with the backlog, and no price is skipped. Past {@code pending-trades-max}
+ *       the oldest are folded into the low, the high and the volumes. The merged range keeps each trade with its time, and an order is reached only by the
  *       trades after its placement (D-77). An order a trade reached fills at that trade's time. With {@code limit-fill-mode}
  *       {@code QUEUE} (Binance's price-time priority) an order starts behind the quantity the exchange's depth shows
  *       at its price when it starts waiting, which the trades at that price then consume.
  *   <li>An order is tracked once its placement commits, which may be after the trades that followed its placement
- *       were read into a range and ran. Each pair keeps its latest trades ({@code recent-trades}), and an order or a
- *       stop is matched against those after its placement when it is tracked, so they are not lost.
+ *       were read into a range and ran. A pair with an order tracked, or published and not tracked yet, keeps its
+ *       latest trades ({@code recent-trades}), and an order or a stop is matched against those after its placement
+ *       when it is tracked, so they are not lost. A pair without either keeps none.
  *   <li>The forming candles of a pair fill orders only while the pair's trades are silent for {@code trade-silence}:
  *       Futures, a pair streamed without trades, or a lost trade stream. A closed candle always fills what it reached,
  *       so a trade lost on a reconnection is made up for at the candle's open time (D-78), and it moves the watermark.
@@ -120,7 +125,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <p>Rule: TR-02, TR-05, TR-09, TR-11; NSF-07; Q-T1, Q-T6, Q-T8; A-04; D-77, D-78; ADR-011.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
- * (producer-consumer) and ch. 7 (cancellation and shutdown).
+ * (producer-consumer), ch. 7 (cancellation and shutdown) and ch. 11 (lock scope and contention).
  * <p>Reference: Akidau, T. et al. (2015). The Dataflow Model. <i>PVLDB</i>, 8(12), 1792-1803 (a watermark never passes
  * event time whose input is not complete).
  * <p>Reference: Hohpe, G. &amp; Woolf, B. (2003). <i>Enterprise Integration Patterns</i>. Addison-Wesley,
@@ -144,8 +149,18 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     /** The merged forming range of each pair, waiting for the consumer; its key is queued once while present. */
     private final Map<BookKey, PriceRange> forming = new ConcurrentHashMap<>();
 
-    /** The merged market trades of each pair, waiting for the consumer; its key is queued once while present. */
-    private final Map<BookKey, PriceRange> trades = new ConcurrentHashMap<>();
+    /** The market trades of each pair, waiting for the consumer; its key is queued once while present. */
+    private final Map<BookKey, PendingTrades> trades = new ConcurrentHashMap<>();
+
+    /** When a pair's waiting trades were last logged as folded; written by the stream thread. */
+    private final Map<BookKey, Instant> foldWarnedAt = new ConcurrentHashMap<>();
+
+    /**
+     * How many orders of each pair were published to wait, at their price or for a trigger, and not tracked yet: their
+     * pair keeps its recent trades meanwhile. Counted from inside the placing transaction, as the trades the
+     * catch-up needs may be read before it commits.
+     */
+    private final Map<BookKey, Integer> untracked = new ConcurrentHashMap<>();
 
     /** Owned by the consumer thread once it starts; written by {@link #start()} before that. */
     private final PaperOrderBook book;
@@ -155,6 +170,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     /** The latest live trades of each pair the consumer matched, earliest first; owned like {@link #book}. */
     private final Map<BookKey, Deque<PriceRange.Print>> recentTrades = new HashMap<>();
+
+    /** When a pair last lost a recent trade still within the window; owned like {@link #book}. */
+    private final Map<BookKey, Instant> evictionWarnedAt = new HashMap<>();
 
     /** When the consumer last read a trade of each pair. */
     private final Map<BookKey, Instant> lastTrade = new HashMap<>();
@@ -277,16 +295,43 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         if (!running) {
             return;
         }
-        PriceRange range = PriceRange.of(trade);
-        BookKey key = new BookKey(range.market(), range.pairId());
+        BookKey key = new BookKey(trade.market(), trade.pairId());
+        PriceRange.Print print =
+                new PriceRange.Print(trade.price(), trade.quantity(), trade.buyerMaker(), trade.tradeTime());
         AtomicBoolean fresh = new AtomicBoolean();
+        AtomicBoolean folded = new AtomicBoolean();
+        // Constant work inside the bin: one append, no copy of what already waits.
         trades.compute(key, (ignored, waiting) -> {
-            fresh.set(waiting == null);
-            return waiting == null ? range : waiting.withTrades(range);
+            PendingTrades gathered = waiting;
+            if (gathered == null) {
+                fresh.set(true);
+                gathered = new PendingTrades(key.market(), key.pairId(), properties.pendingTradesMax());
+            }
+            folded.set(gathered.add(print));
+            return gathered;
         });
         if (fresh.get()) {
             queue.offer(new Command.Trades(key));
         }
+        if (folded.get()) {
+            warnFolded(key);
+        }
+    }
+
+    /** Logs, at most once a minute per pair, that its waiting trades outgrew {@code pending-trades-max}. */
+    private void warnFolded(BookKey key) {
+        Instant now = clock.instant();
+        Instant last = foldWarnedAt.get(key);
+        if (last != null && now.isBefore(last.plus(MINUTE))) {
+            return;
+        }
+        foldWarnedAt.put(key, now);
+        log.warn(
+                "TR-05 {} {}: more than {} trades wait for the paper matching consumer; the oldest are folded into"
+                        + " the low, the high and the volumes",
+                key.market(),
+                key.pairId(),
+                properties.pendingTradesMax());
     }
 
     /** Hands a live range to the consumer without waiting; see the class comment. */
@@ -306,11 +351,40 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
     }
 
+    /**
+     * An order is published to wait at its price, inside the transaction that places it: its pair keeps its recent
+     * trades from now until the order is tracked, so the catch-up finds the trades read before the commit.
+     */
+    @EventListener
+    public void onRestedPublished(PaperOrderRested event) {
+        expect(keyOf(event.order()));
+    }
+
+    /** As {@link #onRestedPublished}, for a stop published to wait for its trigger. */
+    @EventListener
+    public void onAwaitingTriggerPublished(PaperOrderAwaitingTrigger event) {
+        expect(new BookKey(event.order().market(), event.order().pairId()));
+    }
+
+    /** A placement that rolled back tracks nothing. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
+    public void onRestedRolledBack(PaperOrderRested event) {
+        tracked(keyOf(event.order()));
+    }
+
+    /** As {@link #onRestedRolledBack}, for a stop. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
+    public void onAwaitingTriggerRolledBack(PaperOrderAwaitingTrigger event) {
+        tracked(new BookKey(event.order().market(), event.order().pairId()));
+    }
+
     /** A LIMIT order that did not execute on arrival waits in the book. */
     @TransactionalEventListener
     public void onRested(PaperOrderRested event) {
         if (running) {
             queue.offer(new Command.Track(event.order()));
+        } else {
+            tracked(keyOf(event.order()));
         }
     }
 
@@ -319,7 +393,21 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     public void onAwaitingTrigger(PaperOrderAwaitingTrigger event) {
         if (running) {
             queue.offer(new Command.TrackTrigger(event.order()));
+        } else {
+            tracked(new BookKey(event.order().market(), event.order().pairId()));
         }
+    }
+
+    /** Counts an order of the pair published to wait; only inside a transaction, whose commit or rollback follows. */
+    private void expect(BookKey key) {
+        if (running && TransactionSynchronizationManager.isSynchronizationActive()) {
+            untracked.merge(key, 1, Integer::sum);
+        }
+    }
+
+    /** One order of the pair counted by {@link #expect} is tracked, or will never be. */
+    private void tracked(BookKey key) {
+        untracked.computeIfPresent(key, (ignored, count) -> count > 1 ? count - 1 : null);
     }
 
     /** A cancelled order leaves the book. */
@@ -355,12 +443,18 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     private void handle(Command command) {
         switch (command) {
             case Command.Track track -> {
+                BookKey key = keyOf(track.order());
                 book.track(track.order(), queueAhead(track.order()));
                 catchUp(track.order());
+                tracked(key);
+                forgetIfIdle(key);
             }
             case Command.TrackTrigger track -> {
+                BookKey key = new BookKey(track.order().market(), track.order().pairId());
                 triggers.track(track.order());
                 catchUp(track.order());
+                tracked(key);
+                forgetIfIdle(key);
             }
             case Command.Untrack untrack -> {
                 book.untrack(untrack.orderId());
@@ -379,9 +473,10 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                 }
             }
             case Command.Trades tradesKey -> {
-                PriceRange range = trades.remove(tradesKey.key());
-                if (range != null) {
-                    onTrades(tradesKey.key(), range);
+                PendingTrades waiting = trades.remove(tradesKey.key());
+                if (waiting != null) {
+                    // Built here, once, on the consumer thread: never under the map bin the stream appends in.
+                    onTrades(tradesKey.key(), waiting.drain());
                 }
             }
             case Command.ReplayDone done -> {
@@ -425,15 +520,56 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         remember(key, range.prints());
     }
 
-    /** Keeps a pair's latest trades, within {@code recent-trades.window} of the newest and at most {@code max-trades}. */
+    /**
+     * Keeps the latest trades of a pair with an order tracked or about to be: within {@code recent-trades.window} of
+     * the newest first, then at most {@code max-trades}. A trade still within the window that the count drops is
+     * logged, as an order tracked late could have needed it.
+     */
     private void remember(BookKey key, List<PriceRange.Print> prints) {
+        if (forgetIfIdle(key)) {
+            return;
+        }
         Deque<PriceRange.Print> kept = recentTrades.computeIfAbsent(key, ignored -> new ArrayDeque<>());
         prints.forEach(kept::addLast);
         Instant oldest = kept.getLast().at().minus(properties.recentTrades().window());
-        while (kept.size() > properties.recentTrades().maxTrades()
-                || kept.getFirst().at().isBefore(oldest)) {
+        while (kept.getFirst().at().isBefore(oldest)) {
             kept.removeFirst();
         }
+        int evicted = 0;
+        while (kept.size() > properties.recentTrades().maxTrades()) {
+            kept.removeFirst();
+            evicted++;
+        }
+        if (evicted > 0) {
+            warnEvicted(key, evicted);
+        }
+    }
+
+    /** Drops the recent trades of a pair with no order tracked and none about to be; returns whether it is idle. */
+    private boolean forgetIfIdle(BookKey key) {
+        if (hasOrders(key) || untracked.containsKey(key)) {
+            return false;
+        }
+        recentTrades.remove(key);
+        evictionWarnedAt.remove(key);
+        return true;
+    }
+
+    /** Logs, at most once a minute per pair, recent trades dropped while still within the window. */
+    private void warnEvicted(BookKey key, int evicted) {
+        Instant now = clock.instant();
+        Instant last = evictionWarnedAt.get(key);
+        if (last != null && now.isBefore(last.plus(MINUTE))) {
+            return;
+        }
+        evictionWarnedAt.put(key, now);
+        log.warn(
+                "TR-05 {} {}: {} recent trades within {} dropped to keep {}; an order tracked late may miss them",
+                key.market(),
+                key.pairId(),
+                evicted,
+                properties.recentTrades().window(),
+                properties.recentTrades().maxTrades());
     }
 
     /**
@@ -460,7 +596,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
         book.catchUp(order.orderId(), after)
                 .ifPresent(reached ->
-                        fillAll(key, List.of(new Fill(reached.order(), reached.at(), FillSource.LIVE, null))));
+                        fillAll(key, List.of(new Fill(reached.order(), reached.at(), FillSource.LIVE, null, null))));
     }
 
     /** Triggers a stop just watched that trades read before it was watched reached (D-77). */
@@ -534,7 +670,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         fillAll(
                 key,
                 book.reach(range, this::depthAt).stream()
-                        .map(reached -> new Fill(reached.order(), reached.at(), range.source(), null))
+                        .map(reached ->
+                                new Fill(reached.order(), reached.at(), range.source(), ReplayedCandle.of(range), null))
                         .toList());
     }
 
@@ -615,7 +752,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         fillAll(
                 key,
                 due.stream()
-                        .map(pending -> new Fill(pending.order(), pending.tradedAt(), pending.source(), pending))
+                        .map(pending -> new Fill(
+                                pending.order(), pending.tradedAt(), pending.source(), pending.candle(), pending))
                         .toList());
     }
 
@@ -671,7 +809,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         List<Failure> failures = new ArrayList<>();
         for (Fill fill : fills) {
             try {
-                if (!matching.fill(fill.order(), fill.tradedAt(), fill.source())) {
+                if (!matching.fill(fill.order(), fill.tradedAt(), fill.source(), fill.candle())) {
                     log.debug(
                             "TR-02 paper order {} no longer works", fill.order().orderId());
                 }
@@ -712,6 +850,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                         order,
                         failure.fill().tradedAt(),
                         failure.fill().source(),
+                        failure.fill().candle(),
                         firstFailedAt,
                         now.plus(properties.retryDelay())));
     }
@@ -853,8 +992,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         return instant.truncatedTo(ChronoUnit.MINUTES);
     }
 
-    /** A fill to store; {@code previous} is the retry it comes from, or {@code null} for a first try. */
-    private record Fill(RestingOrder order, Instant tradedAt, FillSource source, PendingFill previous) {}
+    /**
+     * A fill to store; {@code candle} is the replayed candle that decided it, or {@code null} when live, and
+     * {@code previous} the retry it comes from, or {@code null} for a first try.
+     */
+    private record Fill(
+            RestingOrder order, Instant tradedAt, FillSource source, ReplayedCandle candle, PendingFill previous) {}
 
     private record Failure(Fill fill, RuntimeException cause) {}
 
@@ -863,7 +1006,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     /** A fill to try again, with when it first failed and when to try next. */
     private record PendingFill(
-            RestingOrder order, Instant tradedAt, FillSource source, Instant firstFailedAt, Instant nextTryAt) {}
+            RestingOrder order,
+            Instant tradedAt,
+            FillSource source,
+            ReplayedCandle candle,
+            Instant firstFailedAt,
+            Instant nextTryAt) {}
 
     /** What the consumer is asked to do. */
     private sealed interface Command {

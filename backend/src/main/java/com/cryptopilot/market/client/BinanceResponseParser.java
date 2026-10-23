@@ -10,6 +10,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -45,6 +47,8 @@ import tools.jackson.databind.json.JsonMapper;
  * Layer": translate another system's model at the boundary so that it never leaks into your own).
  */
 final class BinanceResponseParser {
+
+    private static final Logger log = LoggerFactory.getLogger(BinanceResponseParser.class);
 
     private final JsonMapper json;
 
@@ -212,14 +216,15 @@ final class BinanceResponseParser {
                 stepSize,
                 minQuantity,
                 minNotional,
-                rulesOf(filters));
+                rulesOf(symbol.required("symbol").stringValue(), filters));
     }
 
     /**
      * The filters of a symbol beyond the four above, each {@code null} when not sent. A rule the exchange sent out of
-     * shape (negative, too many decimals) leaves the symbol without rules rather than failing the whole response.
+     * shape (negative, too many decimals) leaves the symbol without rules rather than failing the whole response, and
+     * is logged so the missing checks are visible.
      */
-    private static SymbolRules rulesOf(Map<String, JsonNode> filters) {
+    private static SymbolRules rulesOf(String symbol, Map<String, JsonNode> filters) {
         JsonNode price = filters.get("PRICE_FILTER");
         JsonNode lot = filters.get("LOT_SIZE");
         JsonNode marketLot = filters.get("MARKET_LOT_SIZE");
@@ -250,6 +255,7 @@ final class BinanceResponseParser {
                     whole(filters.get("MAX_NUM_ORDERS"), "maxNumOrders"),
                     whole(filters.get("MAX_NUM_ALGO_ORDERS"), "maxNumAlgoOrders"));
         } catch (IllegalArgumentException unusable) {
+            log.warn("NSF-01 {} filters out of shape, its Spot rules are left off: {}", symbol, unusable.getMessage());
             return SymbolRules.NONE;
         }
     }

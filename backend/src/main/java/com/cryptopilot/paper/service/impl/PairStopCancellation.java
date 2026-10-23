@@ -3,6 +3,7 @@ package com.cryptopilot.paper.service.impl;
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairCoins;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.entity.PaperOrderList;
@@ -35,7 +36,8 @@ import org.springframework.transaction.annotation.Transactional;
  * Trader's order queue hears of it and the matching engine drops it.
  *
  * <p>Each account in its own transaction, under its paper lock, so a fill or a cancel of the Trader never interleaves
- * with it and a failure stays with its account. Run again, it finds nothing open and changes nothing.
+ * with it and a failure stays with its account. Run again, it finds nothing open and changes nothing. Only Spot orders
+ * are touched. A fill or a trigger that reaches an order of such a pair cancels it the same way.
  *
  * <p>Rule: TR-02, TR-10; NSF-01.
  */
@@ -63,10 +65,10 @@ public class PairStopCancellation {
     private final ApplicationEventPublisher events;
     private final Clock clock;
 
-    /** The accounts with an order of the pair that works or waits in a group. */
+    /** The accounts with a Spot order of the pair that works or waits in a group. */
     @Transactional(readOnly = true)
     public List<UUID> accountsWithOrders(UUID pairId) {
-        return orders.findAccountIdsWithOrders(pairId, CANCELLED);
+        return orders.findAccountIdsWithOrders(pairId, MarketType.SPOT, CANCELLED);
     }
 
     /**
@@ -81,23 +83,17 @@ public class PairStopCancellation {
                 .orElseThrow(() -> new IllegalStateException("account " + accountId + " is not stored"));
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.getUserId());
         // Read only now, under the lock, so a fill or a cancel committed meanwhile is seen.
-        List<PaperOrder> open =
-                orders.findByAccountIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(accountId, pairId, CANCELLED);
+        List<PaperOrder> open = orders.findByAccountIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
+                accountId, pairId, MarketType.SPOT, CANCELLED);
         if (open.isEmpty()) {
             return 0;
         }
-        PairCoins coins = market.pairCoins(pairId)
-                .orElseThrow(() -> new IllegalStateException("pair " + pairId + " of a paper order is not stored"));
+        PairCoins coins = coinsOf(pairId);
         Instant now = clock.instant();
         Set<UUID> cancelledGroups = new HashSet<>();
         for (PaperOrder order : open) {
-            if (order.getListId() == null) {
-                wallets.unlock(account, WalletType.SPOT, SpotArrival.lockedCoin(order, coins), order.lockedAmount());
-                order.cancel(PAIR_NOT_TRADING, now);
-                feed.order(account, order);
-                events.publishEvent(new PaperOrderCanceled(order.getId()));
-            } else if (cancelledGroups.add(order.getListId())) {
-                lists.cancel(account, groupOf(order.getListId()), PAIR_NOT_TRADING, now);
+            if (order.getListId() == null || cancelledGroups.add(order.getListId())) {
+                cancel(account, order, coins, now);
             }
         }
         log.info(
@@ -106,6 +102,31 @@ public class PairStopCancellation {
                 accountId,
                 pairId);
         return open.size();
+    }
+
+    /**
+     * Cancels one order of a pair that stopped trading, or the whole group it belongs to, inside the caller's
+     * transaction, which holds the Trader's paper lock: for a fill or a trigger that reached it first (NSF-01).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void cancel(PaperAccount account, PaperOrder order) {
+        cancel(account, order, coinsOf(order.getPairId()), clock.instant());
+    }
+
+    private void cancel(PaperAccount account, PaperOrder order, PairCoins coins, Instant now) {
+        if (order.getListId() != null) {
+            lists.cancel(account, groupOf(order.getListId()), PAIR_NOT_TRADING, now);
+            return;
+        }
+        wallets.unlock(account, WalletType.SPOT, SpotArrival.lockedCoin(order, coins), order.lockedAmount());
+        order.cancel(PAIR_NOT_TRADING, now);
+        feed.order(account, order);
+        events.publishEvent(new PaperOrderCanceled(order.getId()));
+    }
+
+    private PairCoins coinsOf(UUID pairId) {
+        return market.pairCoins(pairId)
+                .orElseThrow(() -> new IllegalStateException("pair " + pairId + " of a paper order is not stored"));
     }
 
     // fk_paper_order_list keeps the group of an order stored.

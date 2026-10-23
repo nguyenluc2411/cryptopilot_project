@@ -13,6 +13,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKline;
@@ -23,6 +26,7 @@ import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
+import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
@@ -45,6 +49,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
+import org.slf4j.LoggerFactory;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * The paper matching engine around its book, with the storage side and the exchange mocked: what fills, on which
@@ -77,7 +83,7 @@ class PaperMatchingWorkerTest {
     void noCandlesToReplayByDefault() {
         when(market.closedMinuteKlines(any(), any(), any())).thenReturn(MinuteKlineBatch.of(List.of()));
         when(matching.watermark(any(), any())).thenReturn(Optional.empty());
-        when(matching.fill(any(), any(), any())).thenReturn(true);
+        when(matching.fill(any(), any(), any(), any())).thenReturn(true);
     }
 
     @AfterEach
@@ -113,7 +119,7 @@ class PaperMatchingWorkerTest {
 
         worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
 
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE, null);
         verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
     }
 
@@ -126,7 +132,7 @@ class PaperMatchingWorkerTest {
         worker.onMinuteKline(kline(MINUTE_1, "101", "102", false));
         worker.onMinuteKline(kline(MINUTE_1, "99.5", "102", false));
 
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE, null);
         verify(matching, after(200).never()).advanceWatermark(any(), any(), any());
     }
 
@@ -139,7 +145,7 @@ class PaperMatchingWorkerTest {
         worker.onMinuteKline(kline(MINUTE_0, "90", "110", true));
 
         verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_0);
-        verify(matching, never()).fill(any(), any(), any());
+        verify(matching, never()).fill(any(), any(), any(), any());
     }
 
     @Test
@@ -153,24 +159,24 @@ class PaperMatchingWorkerTest {
         worker.onRested(new PaperOrderRested(kept));
         worker.onMinuteKline(kline(MINUTE_1, "90", "110", true));
 
-        verify(matching, timeout(WAIT)).fill(kept, MINUTE_1, FillSource.LIVE);
-        verify(matching, never()).fill(eq(cancelled), any(), any());
+        verify(matching, timeout(WAIT)).fill(kept, MINUTE_1, FillSource.LIVE, null);
+        verify(matching, never()).fill(eq(cancelled), any(), any(), any());
     }
 
     @Test
     void TR02_aFillThatFails_isTriedAgainOnThePairsNextRange_andHoldsTheWatermarkMeanwhile() {
         RestingOrder order = buy("100");
         when(matching.restingOrders()).thenReturn(List.of(order));
-        when(matching.fill(order, MINUTE_1, FillSource.LIVE))
+        when(matching.fill(order, MINUTE_1, FillSource.LIVE, null))
                 .thenThrow(new IllegalStateException("database down"))
                 .thenReturn(true);
         worker = started(properties(true, false, Duration.ofMinutes(10)));
 
         worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE, null);
         worker.onMinuteKline(kline(MINUTE_2, "120", "130", false));
 
-        verify(matching, timeout(WAIT).times(2)).fill(order, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT).times(2)).fill(order, MINUTE_1, FillSource.LIVE, null);
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
     }
 
@@ -179,31 +185,32 @@ class PaperMatchingWorkerTest {
         RestingOrder order = buy("100");
         RestingOrder keeper = buy("10");
         when(matching.restingOrders()).thenReturn(List.of(order, keeper));
-        when(matching.fill(order, MINUTE_1, FillSource.LIVE)).thenThrow(new IllegalStateException("database down"));
+        when(matching.fill(order, MINUTE_1, FillSource.LIVE, null))
+                .thenThrow(new IllegalStateException("database down"));
         worker = started(properties(true, false, Duration.ofMinutes(10)));
 
         worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE, null);
         worker.onCanceled(new PaperOrderCanceled(order.orderId()));
         worker.onMinuteKline(kline(MINUTE_2, "90", "130", true));
 
         verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_2);
-        verify(matching, never()).fill(order, MINUTE_2, FillSource.LIVE);
-        verify(matching).fill(order, MINUTE_1, FillSource.LIVE);
+        verify(matching, never()).fill(order, MINUTE_2, FillSource.LIVE, null);
+        verify(matching).fill(order, MINUTE_1, FillSource.LIVE, null);
     }
 
     @Test
     void TR02_aFillFailingPastItsDeadline_isGivenUp_theOrderWaitsAgain_andTheWatermarkStaysHeld() {
         RestingOrder order = buy("100");
         when(matching.restingOrders()).thenReturn(List.of(order));
-        when(matching.fill(order, MINUTE_1, FillSource.LIVE)).thenThrow(new IllegalStateException("bug"));
+        when(matching.fill(order, MINUTE_1, FillSource.LIVE, null)).thenThrow(new IllegalStateException("bug"));
         worker = started(properties(true, false, Duration.ZERO));
 
         worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE, null);
         worker.onMinuteKline(kline(MINUTE_2, "99", "110", true));
 
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_2, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(order, MINUTE_2, FillSource.LIVE, null);
         verify(matching, after(200).never()).advanceWatermark(any(), any(), any());
     }
 
@@ -216,10 +223,10 @@ class PaperMatchingWorkerTest {
                         List.of(kline(MINUTE_0, "90", "110", true), kline(MINUTE_1, "99", "110", true))));
         worker = started(properties(true, true, Duration.ofMinutes(10)));
 
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.REPLAY);
+        verify(matching, timeout(WAIT)).fill(eq(order), eq(MINUTE_1), eq(FillSource.REPLAY), any());
         verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
         verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2);
-        verify(matching, never()).fill(order, MINUTE_0, FillSource.REPLAY);
+        verify(matching, never()).fill(eq(order), eq(MINUTE_0), eq(FillSource.REPLAY), any());
     }
 
     @Test
@@ -231,10 +238,10 @@ class PaperMatchingWorkerTest {
                         List.of(kline(MINUTE_0, "101", "110", true), kline(MINUTE_1, "99", "110", true))));
         worker = started(properties(true, true, Duration.ofMinutes(10)));
 
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.REPLAY);
+        verify(matching, timeout(WAIT)).fill(eq(order), eq(MINUTE_1), eq(FillSource.REPLAY), any());
         InOrder sequence = inOrder(matching);
         sequence.verify(matching).prefetchQuoteRates(MarketType.SPOT, PAIR, MINUTE_0, MINUTE_1);
-        sequence.verify(matching).fill(order, MINUTE_1, FillSource.REPLAY);
+        sequence.verify(matching).fill(eq(order), eq(MINUTE_1), eq(FillSource.REPLAY), any());
     }
 
     @Test
@@ -248,7 +255,7 @@ class PaperMatchingWorkerTest {
                 .prefetchQuoteRates(any(), any(), any(), any());
         worker = started(properties(true, true, Duration.ofMinutes(10)));
 
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.REPLAY);
+        verify(matching, timeout(WAIT)).fill(eq(order), eq(MINUTE_1), eq(FillSource.REPLAY), any());
         verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
     }
 
@@ -313,7 +320,7 @@ class PaperMatchingWorkerTest {
                 .thenReturn(MinuteKlineBatch.of(List.of(kline(MINUTE_1, "99", "110", true))));
         worker = started(properties(true, true, Duration.ofMinutes(10)));
 
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.REPLAY);
+        verify(matching, timeout(WAIT)).fill(eq(order), eq(MINUTE_1), eq(FillSource.REPLAY), any());
     }
 
     @Test
@@ -346,7 +353,7 @@ class PaperMatchingWorkerTest {
         RestingOrder first = buy("100");
         RestingOrder second = buy("90");
         when(matching.restingOrders()).thenReturn(List.of(first, second));
-        when(matching.fill(first, MINUTE_1, FillSource.LIVE)).thenReturn(false);
+        when(matching.fill(first, MINUTE_1, FillSource.LIVE, null)).thenReturn(false);
         org.mockito.Mockito.doThrow(new IllegalStateException("database down"))
                 .when(matching)
                 .advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
@@ -355,7 +362,7 @@ class PaperMatchingWorkerTest {
         worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
         worker.onMinuteKline(kline(MINUTE_2, "89", "110", true));
 
-        verify(matching, timeout(WAIT)).fill(second, MINUTE_2, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(second, MINUTE_2, FillSource.LIVE, null);
     }
 
     @Test
@@ -371,9 +378,9 @@ class PaperMatchingWorkerTest {
         worker.onTrade(trade("99.99", low));
         worker.onTrade(trade("110.01", high));
 
-        verify(matching, timeout(WAIT)).fill(buy, low, FillSource.LIVE);
-        verify(matching, timeout(WAIT)).fill(sell, high, FillSource.LIVE);
-        verify(matching, after(200).never()).fill(eq(away), any(), any());
+        verify(matching, timeout(WAIT)).fill(buy, low, FillSource.LIVE, null);
+        verify(matching, timeout(WAIT)).fill(sell, high, FillSource.LIVE, null);
+        verify(matching, after(200).never()).fill(eq(away), any(), any(), any());
         verify(matching, never()).advanceWatermark(any(), any(), any());
     }
 
@@ -383,8 +390,6 @@ class PaperMatchingWorkerTest {
         when(matching.restingOrders()).thenReturn(List.of(marker));
         worker = started(properties(true, false, Duration.ofMinutes(10)));
         Instant traded = PLACED.plusSeconds(2);
-        worker.onTrade(trade("98.5", traded));
-        verify(matching, timeout(WAIT)).fill(marker, traded, FillSource.LIVE);
         RestingOrder placedBefore = buy("99");
         RestingOrder placedAfter = new RestingOrder(
                 UUID.randomUUID(),
@@ -394,12 +399,16 @@ class PaperMatchingWorkerTest {
                 OrderSide.BUY,
                 new BigDecimal("99"),
                 traded.plusMillis(1));
+        published(placedBefore);
+        published(placedAfter);
+        worker.onTrade(trade("98.5", traded));
+        verify(matching, timeout(WAIT)).fill(marker, traded, FillSource.LIVE, null);
 
         worker.onRested(new PaperOrderRested(placedAfter));
         worker.onRested(new PaperOrderRested(placedBefore));
 
-        verify(matching, timeout(WAIT)).fill(placedBefore, traded, FillSource.LIVE);
-        verify(matching, after(200).never()).fill(eq(placedAfter), any(), any());
+        verify(matching, timeout(WAIT)).fill(placedBefore, traded, FillSource.LIVE, null);
+        verify(matching, after(200).never()).fill(eq(placedAfter), any(), any(), any());
     }
 
     @Test
@@ -408,8 +417,6 @@ class PaperMatchingWorkerTest {
         when(matching.restingOrders()).thenReturn(List.of(marker));
         worker = started(properties(true, false, Duration.ofMinutes(10)));
         Instant traded = PLACED.plusSeconds(2);
-        worker.onTrade(trade("98.5", traded));
-        verify(matching, timeout(WAIT)).fill(marker, traded, FillSource.LIVE);
         TriggerOrder stop = new TriggerOrder(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
@@ -432,6 +439,10 @@ class PaperMatchingWorkerTest {
                 null,
                 null,
                 traded);
+        published(stop);
+        published(later);
+        worker.onTrade(trade("98.5", traded));
+        verify(matching, timeout(WAIT)).fill(marker, traded, FillSource.LIVE, null);
 
         worker.onAwaitingTrigger(new PaperOrderAwaitingTrigger(later));
         worker.onAwaitingTrigger(new PaperOrderAwaitingTrigger(stop));
@@ -450,27 +461,136 @@ class PaperMatchingWorkerTest {
                 Duration.ofMinutes(10),
                 LimitFillMode.CROSS,
                 new PaperMatchingProperties.RecentTrades(Duration.ofSeconds(10), 2)));
+        RestingOrder firstMarker = sell("119");
+        RestingOrder buy = buy("99");
+        RestingOrder lateBuy = buy("98");
+        RestingOrder lateSell = sell("130.5");
+        List.of(firstMarker, buy, lateBuy, lateSell).forEach(this::published);
         worker.onTrade(trade("98", PLACED.plusSeconds(1)));
-        verify(matching, timeout(WAIT)).fill(marker, PLACED.plusSeconds(1), FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(marker, PLACED.plusSeconds(1), FillSource.LIVE, null);
         // Past the window of the first trade, which is dropped.
         worker.onTrade(trade("120", PLACED.plusSeconds(20)));
-        RestingOrder firstMarker = sell("119");
         worker.onRested(new PaperOrderRested(firstMarker));
-        verify(matching, timeout(WAIT)).fill(firstMarker, PLACED.plusSeconds(20), FillSource.LIVE);
-        RestingOrder buy = buy("99");
+        verify(matching, timeout(WAIT)).fill(firstMarker, PLACED.plusSeconds(20), FillSource.LIVE, null);
         worker.onRested(new PaperOrderRested(buy));
         // Three more trades: only the last two are kept.
         worker.onTrade(trade("97", PLACED.plusSeconds(21)));
         worker.onTrade(trade("130", PLACED.plusSeconds(22)));
         worker.onTrade(trade("131", PLACED.plusSeconds(23)));
-        verify(matching, timeout(WAIT)).fill(buy, PLACED.plusSeconds(21), FillSource.LIVE);
-        RestingOrder lateBuy = buy("98");
-        RestingOrder lateSell = sell("130.5");
+        verify(matching, timeout(WAIT)).fill(buy, PLACED.plusSeconds(21), FillSource.LIVE, null);
         worker.onRested(new PaperOrderRested(lateBuy));
         worker.onRested(new PaperOrderRested(lateSell));
 
-        verify(matching, timeout(WAIT)).fill(lateSell, PLACED.plusSeconds(23), FillSource.LIVE);
-        verify(matching, after(200).never()).fill(eq(lateBuy), any(), any());
+        verify(matching, timeout(WAIT)).fill(lateSell, PLACED.plusSeconds(23), FillSource.LIVE, null);
+        verify(matching, after(200).never()).fill(eq(lateBuy), any(), any(), any());
+    }
+
+    /** TR-05: a pair with no order tracked and none about to be keeps no trade, so a late order catches up nothing. */
+    @Test
+    void TR05_aPairWithoutOrders_keepsNoRecentTrades() {
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+        Instant traded = PLACED.plusSeconds(2);
+        RestingOrder late = buy("99");
+
+        worker.onTrade(trade("98.5", traded));
+        worker.onRested(new PaperOrderRested(late));
+
+        verify(matching, after(300).never()).fill(eq(late), any(), any(), any());
+    }
+
+    /**
+     * D-77: a pair with an order published but not tracked yet keeps its trades meanwhile, even without any other
+     * order, and the order catches up with them once tracked.
+     */
+    @Test
+    void D77_aPairWithAnOrderInFlight_keepsItsTradesUntilItIsTracked() {
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+        Instant traded = PLACED.plusSeconds(2);
+        RestingOrder inFlight = buy("99");
+        published(inFlight);
+
+        worker.onTrade(trade("98.5", traded));
+        worker.onRested(new PaperOrderRested(inFlight));
+
+        verify(matching, timeout(WAIT)).fill(inFlight, traded, FillSource.LIVE, null);
+    }
+
+    /**
+     * TR-05: the count bound drops the oldest recent trades after the window, the newest stay, and a trade dropped while
+     * still within the window is logged.
+     */
+    @Test
+    void TR05_aRecentTradeDroppedWithinTheWindow_isLogged_andTheNewestAreKept() {
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        Logger logger = (Logger) LoggerFactory.getLogger(PaperMatchingWorker.class);
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            worker = started(properties(
+                    true,
+                    false,
+                    Duration.ofMinutes(10),
+                    LimitFillMode.CROSS,
+                    new PaperMatchingProperties.RecentTrades(Duration.ofSeconds(10), 2)));
+            RestingOrder lateBuy = buy("98");
+            RestingOrder lateSell = sell("130.5");
+            published(lateBuy);
+            published(lateSell);
+
+            worker.onTrade(trade("97", PLACED.plusSeconds(1)));
+            worker.onTrade(trade("130", PLACED.plusSeconds(2)));
+            worker.onTrade(trade("131", PLACED.plusSeconds(3)));
+            worker.onRested(new PaperOrderRested(lateBuy));
+            worker.onRested(new PaperOrderRested(lateSell));
+
+            verify(matching, timeout(WAIT)).fill(lateSell, PLACED.plusSeconds(3), FillSource.LIVE, null);
+            verify(matching, after(200).never()).fill(eq(lateBuy), any(), any(), any());
+            assertThat(logs.list)
+                    .anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("recent trades within"));
+        } finally {
+            logger.detachAppender(logs);
+        }
+    }
+
+    /** D-77: a placement that rolls back leaves its pair keeping no trade for it. */
+    @Test
+    void D77_aPlacementThatRollsBack_stopsKeepingTheTradesOfItsPair() {
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+        RestingOrder rolledBack = buy("99");
+        published(rolledBack);
+        worker.onRestedRolledBack(new PaperOrderRested(rolledBack));
+        RestingOrder late = buy("99");
+
+        worker.onTrade(trade("98.5", PLACED.plusSeconds(2)));
+        worker.onRested(new PaperOrderRested(late));
+
+        verify(matching, after(300).never()).fill(eq(late), any(), any(), any());
+    }
+
+    /** TR-05, Q-T6: a fill decided by a replayed candle carries that candle to the storage side. */
+    @Test
+    void QT6_aReplayedFill_carriesItsCandle() {
+        RestingOrder order = buy("100");
+        when(matching.restingOrders()).thenReturn(List.of(order));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_0))
+                .thenReturn(MinuteKlineBatch.of(List.of(new MinuteKline(
+                        MarketType.SPOT,
+                        PAIR,
+                        MINUTE_1,
+                        new BigDecimal("99"),
+                        new BigDecimal("103"),
+                        new BigDecimal("100"),
+                        true,
+                        MINUTE_1.plusSeconds(59),
+                        new BigDecimal("101")))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+
+        verify(matching, timeout(WAIT))
+                .fill(
+                        order,
+                        MINUTE_1,
+                        FillSource.REPLAY,
+                        new ReplayedCandle(new BigDecimal("101"), new BigDecimal("99"), new BigDecimal("103")));
     }
 
     @Test
@@ -481,7 +601,7 @@ class PaperMatchingWorkerTest {
 
         worker.onTrade(trade("100", MINUTE_1));
 
-        verify(matching, after(200).never()).fill(any(), any(), any());
+        verify(matching, after(200).never()).fill(any(), any(), any(), any());
         worker.stop();
 
         RestingOrder touchOrder = buy("100");
@@ -490,7 +610,7 @@ class PaperMatchingWorkerTest {
 
         worker.onTrade(trade("100", MINUTE_1));
 
-        verify(matching, timeout(WAIT)).fill(touchOrder, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(touchOrder, MINUTE_1, FillSource.LIVE, null);
     }
 
     @Test
@@ -500,10 +620,10 @@ class PaperMatchingWorkerTest {
         worker = started(properties(true, false, Duration.ofMinutes(10)));
 
         worker.onTrade(trade("99", PLACED.minusMillis(1)));
-        verify(matching, after(200).never()).fill(any(), any(), any());
+        verify(matching, after(200).never()).fill(any(), any(), any(), any());
         worker.onTrade(trade("99", PLACED.plusMillis(1)));
 
-        verify(matching, timeout(WAIT)).fill(order, PLACED.plusMillis(1), FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(order, PLACED.plusMillis(1), FillSource.LIVE, null);
     }
 
     @Test
@@ -515,31 +635,31 @@ class PaperMatchingWorkerTest {
 
         worker.onTrade(trade("120", MINUTE_1));
         worker.onMinuteKline(kline(MINUTE_1, "99", "120", false));
-        verify(matching, after(200).never()).fill(any(), any(), any());
+        verify(matching, after(200).never()).fill(any(), any(), any(), any());
 
         worker.onMinuteKline(kline(MINUTE_1, "99", "120", true));
-        verify(matching, timeout(WAIT)).fill(byClosed, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(byClosed, MINUTE_1, FillSource.LIVE, null);
         verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
 
         clock.advance(Duration.ofSeconds(5));
         worker.onMinuteKline(kline(MINUTE_2, "94", "120", false));
-        verify(matching, timeout(WAIT)).fill(bySilence, MINUTE_2, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(bySilence, MINUTE_2, FillSource.LIVE, null);
     }
 
     @Test
     void TR05_aFillATradeDecidedThatFails_isTriedAgainOnThePairsNextTrade() {
         RestingOrder order = buy("100");
         when(matching.restingOrders()).thenReturn(List.of(order));
-        when(matching.fill(order, MINUTE_1, FillSource.LIVE))
+        when(matching.fill(order, MINUTE_1, FillSource.LIVE, null))
                 .thenThrow(new IllegalStateException("database down"))
                 .thenReturn(true);
         worker = started(properties(true, false, Duration.ofMinutes(10)));
 
         worker.onTrade(trade("99", MINUTE_1));
-        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(order, MINUTE_1, FillSource.LIVE, null);
         worker.onTrade(trade("120", MINUTE_1.plusSeconds(1)));
 
-        verify(matching, timeout(WAIT).times(2)).fill(order, MINUTE_1, FillSource.LIVE);
+        verify(matching, timeout(WAIT).times(2)).fill(order, MINUTE_1, FillSource.LIVE, null);
     }
 
     @Test
@@ -562,12 +682,12 @@ class PaperMatchingWorkerTest {
         worker.onRested(new PaperOrderRested(between));
 
         worker.onTrade(trade("80000", "1.5", true, MINUTE_1));
-        verify(matching, after(200).never()).fill(any(), any(), any());
+        verify(matching, after(200).never()).fill(any(), any(), any(), any());
         worker.onTrade(trade("80000", "1", true, MINUTE_1.plusSeconds(1)));
-        verify(matching, timeout(WAIT)).fill(atLevel, MINUTE_1.plusSeconds(1), FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(atLevel, MINUTE_1.plusSeconds(1), FillSource.LIVE, null);
 
         worker.onTrade(trade("79995", "0.001", true, MINUTE_1.plusSeconds(2)));
-        verify(matching, timeout(WAIT)).fill(between, MINUTE_1.plusSeconds(2), FillSource.LIVE);
+        verify(matching, timeout(WAIT)).fill(between, MINUTE_1.plusSeconds(2), FillSource.LIVE, null);
     }
 
     @Test
@@ -629,7 +749,8 @@ class PaperMatchingWorkerTest {
                 4,
                 Duration.ofSeconds(5),
                 new PaperMatchingProperties.Replay(replay, Duration.ofHours(24), Duration.ZERO),
-                recentTrades);
+                recentTrades,
+                50_000);
     }
 
     @Test
@@ -645,7 +766,7 @@ class PaperMatchingWorkerTest {
         }
         when(matching.restingOrders()).thenReturn(orders);
         List<RestingOrder> stored = Collections.synchronizedList(new ArrayList<>());
-        when(matching.fill(any(), any(), any())).thenAnswer(call -> {
+        when(matching.fill(any(), any(), any(), any())).thenAnswer(call -> {
             stored.add(call.getArgument(0));
             return true;
         });
@@ -659,6 +780,24 @@ class PaperMatchingWorkerTest {
             RestingOrder worse = orders.get(trader);
             RestingOrder better = orders.get(trader + 1);
             assertThat(stored.indexOf(better)).isLessThan(stored.indexOf(worse));
+        }
+    }
+
+    /** The order published to wait inside its placing transaction, as the placement does before it commits. */
+    private void published(RestingOrder order) {
+        inTransaction(() -> worker.onRestedPublished(new PaperOrderRested(order)));
+    }
+
+    private void published(TriggerOrder order) {
+        inTransaction(() -> worker.onAwaitingTriggerPublished(new PaperOrderAwaitingTrigger(order)));
+    }
+
+    private static void inTransaction(Runnable task) {
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            task.run();
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
         }
     }
 

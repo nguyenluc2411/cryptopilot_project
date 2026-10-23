@@ -128,19 +128,20 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         PaperAccount account = accountOf(userId);
         requireShape(request);
+        if (request.clientOrderId() != null) {
+            // Under the lock, so a retry that raced the original waited for it and finds it here. Before the pair and
+            // filter checks: a retry is answered with what was placed though the pair stopped or its filters changed.
+            Optional<PaperOrder> placed =
+                    orders.findByAccountIdAndClientOrderId(account.getId(), request.clientOrderId());
+            if (placed.isPresent()) {
+                return new PlacedOrder(replayOf(placed.get(), request), false);
+            }
+        }
         // A pair the exchange stopped trading takes no new order: its open ones are cancelled (NSF-01).
         TradablePair pair = market.tradablePair(request.pairId(), request.market())
                 .filter(TradablePair::exchangeTrading)
                 .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", request.pairId()));
         Terms terms = termsOf(request, pair.filters());
-        if (request.clientOrderId() != null) {
-            // Under the lock, so a retry that raced the original waited for it and finds it here.
-            Optional<PaperOrder> placed =
-                    orders.findByAccountIdAndClientOrderId(account.getId(), request.clientOrderId());
-            if (placed.isPresent()) {
-                return new PlacedOrder(replayOf(placed.get(), terms, request, pair.symbol()), false);
-            }
-        }
         limits.requireRoom(
                 account.getId(), pair.pairId(), pair.filters(), 1, terms.type().isSpotStop() ? 1 : 0);
         if (terms.price() != null) {
@@ -597,11 +598,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             // On the step and within 8 decimals by now, so this only sets the scale a balance holds.
             quantity = quantity.setScale(BALANCE_SCALE, RoundingMode.UNNECESSARY);
         }
-        boolean hasTimeInForce = request.type() == OrderType.LIMIT
-                || request.type() == OrderType.STOP_LOSS_LIMIT
-                || request.type() == OrderType.TAKE_PROFIT_LIMIT;
-        TimeInForce timeInForce =
-                hasTimeInForce && request.timeInForce() == null ? TimeInForce.GTC : request.timeInForce();
+        TimeInForce timeInForce = timeInForceOf(request);
         BigDecimal stopPrice = request.stopPrice();
         if (stopPrice != null) {
             SpotFilters.requirePrice(filters, stopPrice, "stopPrice");
@@ -613,8 +610,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                     request.trailingDelta(),
                     "trailingDelta");
         }
-        BigDecimal trailingPercent =
-                request.trailingDelta() == null ? null : BigDecimal.valueOf(request.trailingDelta(), 2);
+        BigDecimal trailingPercent = trailingPercentOf(request);
         return new Terms(
                 request.side(),
                 request.type(),
@@ -626,28 +622,45 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 trailingPercent);
     }
 
+    /** The time in force an order works with: GTC for a limit kind that names none. */
+    private static TimeInForce timeInForceOf(PlaceOrderRequest request) {
+        boolean hasTimeInForce = request.type() == OrderType.LIMIT
+                || request.type() == OrderType.STOP_LOSS_LIMIT
+                || request.type() == OrderType.TAKE_PROFIT_LIMIT;
+        return hasTimeInForce && request.timeInForce() == null ? TimeInForce.GTC : request.timeInForce();
+    }
+
+    /** The trailing delta in percent (the exchange's trailingDelta / 100), or {@code null}. */
+    private static BigDecimal trailingPercentOf(PlaceOrderRequest request) {
+        return request.trailingDelta() == null ? null : BigDecimal.valueOf(request.trailingDelta(), 2);
+    }
+
     /**
-     * The order a retry asks for again. A key reused for a different order is a client error, refused rather than
-     * answered with an order the client did not ask for.
+     * The order a retry asks for again, compared with the values the request sent, so a pair that stopped trading or
+     * filters changed since do not turn a retry into a refusal. A key reused for a different order is a client error,
+     * refused rather than answered with an order the client did not ask for.
+     *
+     * <p>Reference: Richardson, C. (2018). <i>Microservices Patterns</i>. Manning, ch. 3 (idempotent consumers: a
+     * duplicate is answered with the first outcome).
      */
-    private static OrderResponse replayOf(PaperOrder placed, Terms terms, PlaceOrderRequest request, String symbol) {
+    private OrderResponse replayOf(PaperOrder placed, PlaceOrderRequest request) {
         boolean same = placed.getPairId().equals(request.pairId())
                 && placed.getMarketType() == request.market()
-                && placed.getSide() == terms.side()
-                && placed.getOrderType() == terms.type()
-                && placed.getTimeInForce() == terms.timeInForce()
-                && sameValue(placed.getLimitPrice(), terms.price())
-                && sameValue(placed.getOrigQuantity(), terms.quantity())
-                && sameValue(placed.getQuoteOrderAmount(), terms.quoteAmount())
-                && sameValue(placed.getStopPrice(), terms.stopPrice())
-                && sameValue(placed.getCallbackRate(), terms.trailingPercent());
+                && placed.getSide() == request.side()
+                && placed.getOrderType() == request.type()
+                && placed.getTimeInForce() == timeInForceOf(request)
+                && sameValue(placed.getLimitPrice(), request.price())
+                && sameValue(placed.getOrigQuantity(), request.quantity())
+                && sameValue(placed.getQuoteOrderAmount(), request.quoteOrderQty())
+                && sameValue(placed.getStopPrice(), request.stopPrice())
+                && sameValue(placed.getCallbackRate(), trailingPercentOf(request));
         if (!same) {
             throw new BusinessException(
                     ErrorCode.DATA_CONFLICT,
                     "clientOrderId " + request.clientOrderId() + " was used for order " + placed.getId()
                             + " of other values");
         }
-        return toResponse(placed, symbol);
+        return toResponse(placed, symbolOf(symbolsOf(List.of(placed.getPairId())), placed.getPairId()));
     }
 
     private static boolean sameValue(BigDecimal stored, BigDecimal asked) {

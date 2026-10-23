@@ -93,21 +93,6 @@ public class SpotArrival {
     @Transactional(propagation = Propagation.MANDATORY)
     public void limitOnArrival(
             PaperAccount account, PaperOrder order, PairCoins coins, Optional<Book> book, Instant now) {
-        limitOnArrival(account, order, coins, book, now, null);
-    }
-
-    /**
-     * As {@link #limitOnArrival(PaperAccount, PaperOrder, PairCoins, Optional, Instant)}, for the pending order of a
-     * group: what is left waits from {@code activatedAt}, when its working order filled, not from its placement.
-     */
-    @Transactional(propagation = Propagation.MANDATORY)
-    public void limitOnArrival(
-            PaperAccount account,
-            PaperOrder order,
-            PairCoins coins,
-            Optional<Book> book,
-            Instant now,
-            Instant activatedAt) {
         TimeInForce timeInForce = order.getTimeInForce();
         boolean decidedNow = timeInForce == TimeInForce.IOC || timeInForce == TimeInForce.FOK;
         CoinListing locked = lockedCoin(order, coins);
@@ -133,7 +118,7 @@ public class SpotArrival {
             order.expire(NOT_FILLABLE, now);
             return;
         }
-        rest(account, order, activatedAt);
+        rest(account, order);
     }
 
     /** Settles each slice of a sweep as one live fill, as a taker. */
@@ -162,16 +147,11 @@ public class SpotArrival {
         }
     }
 
-    /** Hands a working limit order to the matching engine, which tracks it once the transaction commits. */
-    public void rest(PaperAccount account, PaperOrder order) {
-        rest(account, order, null);
-    }
-
     /**
-     * As {@link #rest(PaperAccount, PaperOrder)}, waiting from {@code activatedAt} when not {@code null}: a pending
-     * order of a group activated by its working order's fill, which no trade before that fill may reach (D-77).
+     * Hands a working limit order to the matching engine, which tracks it once the transaction commits, waiting since
+     * {@link PaperOrder#restingSince()}: the same instant a restart rebuilds it from (D-77).
      */
-    public void rest(PaperAccount account, PaperOrder order, Instant activatedAt) {
+    public void rest(PaperAccount account, PaperOrder order) {
         events.publishEvent(new PaperOrderRested(new RestingOrder(
                 order.getId(),
                 account.getId(),
@@ -179,19 +159,14 @@ public class SpotArrival {
                 order.getPairId(),
                 order.getSide(),
                 order.getLimitPrice(),
-                activatedAt != null ? activatedAt : order.restingSince())));
-    }
-
-    /** Hands a Spot stop to the matching engine, which watches it once the placement commits. */
-    public void awaitTrigger(PaperAccount account, PaperOrder order) {
-        awaitTrigger(account, order, null);
+                order.restingSince())));
     }
 
     /**
-     * As {@link #awaitTrigger(PaperAccount, PaperOrder)}, watched from {@code activatedAt} when not {@code null}: a
-     * pending stop of a group activated by its working order's fill, which no trade before that fill may trigger (D-77).
+     * Hands a Spot stop to the matching engine, which watches it once the transaction commits, since
+     * {@link PaperOrder#watchedSince()}: the same instant a restart rebuilds it from (D-77).
      */
-    public void awaitTrigger(PaperAccount account, PaperOrder order, Instant activatedAt) {
+    public void awaitTrigger(PaperAccount account, PaperOrder order) {
         events.publishEvent(new PaperOrderAwaitingTrigger(new TriggerOrder(
                 order.getId(),
                 account.getId(),
@@ -202,7 +177,7 @@ public class SpotArrival {
                 order.getStopPrice(),
                 order.getCallbackRate(),
                 order.getTrailingExtremePrice(),
-                activatedAt != null ? activatedAt : order.getCreatedAt())));
+                order.watchedSince())));
     }
 
     /**

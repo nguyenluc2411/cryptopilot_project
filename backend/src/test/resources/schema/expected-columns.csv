@@ -345,6 +345,7 @@ paper_matching_watermark,market_type,character varying,,,NO
 paper_matching_watermark,pair_id,uuid,,,NO
 paper_matching_watermark,updated_at,timestamp with time zone,,,NO
 paper_order,account_id,uuid,,,NO
+paper_order,activated_at,timestamp with time zone,,,YES
 paper_order,activation_price,numeric,28,12,YES
 paper_order,avg_price,numeric,28,12,YES
 paper_order,callback_rate,numeric,12,8,YES

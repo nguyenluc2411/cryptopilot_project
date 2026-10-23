@@ -22,11 +22,14 @@ import com.cryptopilot.paper.entity.PaperOrderList;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.model.PlacedOrderList;
+import com.cryptopilot.paper.model.ReplayedCandle;
+import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderListType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.model.enums.TimeInForce;
+import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.PaperOrderListRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -73,11 +76,13 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>The pending order of an OTO, or the pending OCO of an OTOCO, locks nothing while it waits. Its stop is checked
  * against the working order's price, where it starts: one already met there is refused, and the OCO's take profit and
  * stop lie on either side of it. Once the working order has filled in full, it is placed: it locks what it needs and
- * meets the market as an order placed then does. When too little is free by then — the fee of a buy is taken in the
- * coin bought — it is REJECTED ({@code INSUFFICIENT_BALANCE}) and the working order's fill stands. A stop the last
- * price already meets by then ends EXPIRED ({@code WOULD_TRIGGER_ON_ACTIVATION}), locking nothing, and the fill stands
- * too. An OTOCO that gives no OCO quantity gets the one its working order leaves, net of the fee, so its OCO can be
- * placed.
+ * meets the market as an order placed then does, waiting from that fill (D-77). When too little is free by then — the
+ * fee of a buy is taken in the coin bought — it is REJECTED ({@code INSUFFICIENT_BALANCE}) and the working order's fill
+ * stands. A stop the market already meets by then triggers at once, as a stop the market reached at that instant: an
+ * OTOCO's stop loss is never dropped while the price falls through it, and its take profit expires as the other order
+ * of an OCO. Whether it is met is judged by what decided the fill: the last price for a live fill, the candle for a
+ * replayed one. An OTOCO that gives no OCO quantity gets the one its working order leaves, net of the fee, so its OCO
+ * can be placed.
  *
  * <p>A group placed with a {@code listClientOrderId} is placed once: the key is looked up under the Trader's lock
  * before anything is stored. Every order of a group is checked against the pair's Spot filters
@@ -91,7 +96,11 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Rule: TR-10; BR-23, BR-30.
  *
  * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges: Market Microstructure for Practitioners</i>. Oxford
- * University Press, ch. 4 (contingent orders: one-cancels-other and one-triggers-other).
+ * University Press, ch. 4 (contingent orders: one-cancels-other and one-triggers-other; a triggered stop becomes a
+ * market order).
+ * <p>Reference: Binance Spot API documentation, "Order lists (OTO/OTOCO)".
+ * <p>Reference: Akidau, T. et al. (2015). The Dataflow Model. <i>PVLDB</i>, 8(12), 1792-1803 (a replayed fill is
+ * judged by the event time of its candle, not the processing time of now).
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -108,13 +117,11 @@ public class PaperOrderLists {
     /** Why a pending order could not be placed when its working order filled. */
     static final String INSUFFICIENT = "INSUFFICIENT_BALANCE";
 
-    /** Why a pending stop ended when its working order filled: the last price already met it. */
-    static final String WOULD_TRIGGER_ON_ACTIVATION = "WOULD_TRIGGER_ON_ACTIVATION";
-
     private final PaperOrderRepository orders;
     private final PaperOrderListRepository lists;
     private final PaperWallets wallets;
     private final SpotArrival arrival;
+    private final SpotStopTrigger stopTrigger;
     private final PaperUserFeed feed;
     private final ApplicationEventPublisher events;
     private final MarketApi market;
@@ -131,18 +138,19 @@ public class PaperOrderLists {
     @Transactional(propagation = Propagation.MANDATORY)
     public PlacedOrderList place(PaperAccount account, PlaceOrderListRequest request) {
         requireShape(request);
-        // A pair the exchange stopped trading takes no new order: its open ones are cancelled (NSF-01).
-        TradablePair pair = market.tradablePair(request.pairId(), request.market())
-                .filter(TradablePair::exchangeTrading)
-                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", request.pairId()));
         if (request.listClientOrderId() != null) {
-            // Under the lock, so a retry that raced the original waited for it and finds it here.
+            // Under the lock, so a retry that raced the original waited for it and finds it here. Before the pair and
+            // filter checks: a retry is answered with what was placed though the pair stopped or its filters changed.
             Optional<PaperOrderList> placed =
                     lists.findByAccountIdAndListClientOrderId(account.getId(), request.listClientOrderId());
             if (placed.isPresent()) {
                 return new PlacedOrderList(replayOf(placed.get(), request), false);
             }
         }
+        // A pair the exchange stopped trading takes no new order: its open ones are cancelled (NSF-01).
+        TradablePair pair = market.tradablePair(request.pairId(), request.market())
+                .filter(TradablePair::exchangeTrading)
+                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", request.pairId()));
         PairCoins coins = market.pairCoins(pair.pairId())
                 .orElseThrow(() -> new IllegalStateException("pair " + pair.pairId() + " is tradable but not stored"));
         usdtRates.requireValued(coins);
@@ -270,9 +278,14 @@ public class PaperOrderLists {
     /**
      * After an order of a group executed: once the working order of an OTO or OTOCO has filled, its pending order or
      * OCO is placed. The group is ALL_DONE once none of its orders works or waits.
+     *
+     * @param at when the order executed: the trade's time, or a candle's open time (D-78)
+     * @param source what decided the execution, so a pending stop is judged against the live price or the candle
+     * @param candle the replayed candle that decided it; {@code null} for a live execution or when not known
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public void afterExecution(PaperAccount account, PaperOrder order, Instant at) {
+    public void afterExecution(
+            PaperAccount account, PaperOrder order, Instant at, FillSource source, ReplayedCandle candle) {
         if (order.getListId() == null) {
             return;
         }
@@ -285,9 +298,9 @@ public class PaperOrderLists {
             PairCoins coins = market.pairCoins(list.getPairId())
                     .orElseThrow(() -> new IllegalStateException("pair " + list.getPairId() + " is not stored"));
             if (list.getListType() == OrderListType.OTO) {
-                activate(account, pair, coins, byRole.get(PENDING), at);
+                activate(account, pair, coins, byRole.get(PENDING), at, source, candle);
             } else {
-                activateOco(account, pair, coins, byRole.get(TAKE_PROFIT), byRole.get(STOP), at);
+                activateOco(account, pair, coins, byRole.get(TAKE_PROFIT), byRole.get(STOP), at, source, candle);
             }
         }
         refresh(list);
@@ -370,16 +383,14 @@ public class PaperOrderLists {
         CoinListing coin = lockedCoin(takeProfit);
         wallets.preload(account, WalletType.SPOT, coin);
         wallets.lock(account, WalletType.SPOT, coin, takeProfit.lockedAmount().max(stop.lockedAmount()));
-        meet(account, pair, coins, takeProfit, stop, at, null);
+        meet(account, pair, coins, takeProfit, stop, at);
     }
 
     /**
      * The two orders of an OCO meet the market: the take profit, a LIMIT_MAKER, waits in the book and the stop waits for
      * its trigger. A take profit the book already reaches when a pending OCO is placed cannot wait as a maker: it
-     * expires, giving back what it held beyond the stop, and the stop goes on alone.
-     *
-     * @param activatedAt when the working order of an OTOCO filled, from which its OCO waits; {@code null} for an OCO
-     *     placed now
+     * expires, giving back what it held beyond the stop, and the stop goes on alone. Both wait from their placement,
+     * or for the OCO of an OTOCO from its activation (D-77).
      */
     private void meet(
             PaperAccount account,
@@ -387,8 +398,7 @@ public class PaperOrderLists {
             PairCoins coins,
             PaperOrder takeProfit,
             PaperOrder stop,
-            Instant at,
-            Instant activatedAt) {
+            Instant at) {
         if (wouldTake(arrival.bookFor(pair, takeProfit.getSide()), takeProfit)) {
             BigDecimal extra = takeProfit.lockedAmount().subtract(stop.lockedAmount());
             if (extra.signum() > 0) {
@@ -396,11 +406,11 @@ public class PaperOrderLists {
             }
             takeProfit.expire(SpotArrival.WOULD_TAKE, at);
             feed.order(account, takeProfit);
-            arrival.awaitTrigger(account, stop, activatedAt);
+            arrival.awaitTrigger(account, stop);
             return;
         }
-        arrival.rest(account, takeProfit, activatedAt);
-        arrival.awaitTrigger(account, stop, activatedAt);
+        arrival.rest(account, takeProfit);
+        arrival.awaitTrigger(account, stop);
     }
 
     /** The working order locks what it needs and meets the market; filled at once, its pending part is placed. */
@@ -420,22 +430,22 @@ public class PaperOrderLists {
             return;
         }
         arrival.limitOnArrival(account, working, coins, book, at);
-        afterExecution(account, working, at);
+        afterExecution(account, working, at, FillSource.LIVE, null);
     }
 
     /**
-     * A pending order of an OTO is placed: it locks what it needs and meets the market, or is REJECTED. A stop whose
-     * condition the last price already meets would trigger at once: it ends EXPIRED, locking nothing, and the working
-     * order's fill stands.
+     * A pending order of an OTO is placed at {@code at}: it locks what it needs and meets the market, or is REJECTED.
+     * A stop the market already meets then triggers at once.
      */
-    private void activate(PaperAccount account, TradablePair pair, PairCoins coins, PaperOrder order, Instant at) {
+    private void activate(
+            PaperAccount account,
+            TradablePair pair,
+            PairCoins coins,
+            PaperOrder order,
+            Instant at,
+            FillSource source,
+            ReplayedCandle candle) {
         if (order == null || !order.isPending()) {
-            return;
-        }
-        if (order.isTriggered() && wouldTriggerNow(pair, order)) {
-            order.activate();
-            order.expire(WOULD_TRIGGER_ON_ACTIVATION, at);
-            feed.order(account, order);
             return;
         }
         CoinListing coin = lockedCoin(order);
@@ -444,28 +454,34 @@ public class PaperOrderLists {
             feed.order(account, order);
             return;
         }
-        order.activate();
+        order.activate(at);
         wallets.lock(account, WalletType.SPOT, coin, order.lockedAmount());
         feed.order(account, order);
-        // From the working order's fill, not the group's placement: no trade before the fill may reach it (D-77).
         switch (order.getOrderType()) {
-            case STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT -> arrival.awaitTrigger(account, order, at);
+            case STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT -> {
+                if (metOnActivation(pair, order, source, candle)) {
+                    triggerOnActivation(account, order, coins, at, source, candle);
+                } else {
+                    arrival.awaitTrigger(account, order);
+                }
+            }
             case LIMIT_MAKER -> {
                 Optional<SpotArrival.Book> book = arrival.bookFor(pair, order.getSide());
                 if (wouldTake(book, order)) {
                     wallets.unlock(account, WalletType.SPOT, coin, order.lockedAmount());
                     order.expire(SpotArrival.WOULD_TAKE, at);
                 } else {
-                    arrival.rest(account, order, at);
+                    arrival.rest(account, order);
                 }
             }
-            default -> arrival.limitOnArrival(account, order, coins, arrival.bookFor(pair, order.getSide()), at, at);
+            default -> arrival.limitOnArrival(account, order, coins, arrival.bookFor(pair, order.getSide()), at);
         }
     }
 
     /**
-     * The pending OCO of an OTOCO is placed: both lock once and meet the market, or both are REJECTED. A stop the last
-     * price already meets ends EXPIRED, locking nothing, and the take profit goes on alone, locking only what it needs.
+     * The pending OCO of an OTOCO is placed at {@code at}: both lock once and meet the market, or both are REJECTED. A
+     * stop the market already meets then triggers at once, and the take profit expires as the other order of the OCO,
+     * giving back what it needed beyond the stop.
      */
     private void activateOco(
             PaperAccount account,
@@ -473,15 +489,10 @@ public class PaperOrderLists {
             PairCoins coins,
             PaperOrder takeProfit,
             PaperOrder stop,
-            Instant at) {
+            Instant at,
+            FillSource source,
+            ReplayedCandle candle) {
         if (takeProfit == null || stop == null || !takeProfit.isPending() || !stop.isPending()) {
-            return;
-        }
-        if (wouldTriggerNow(pair, stop)) {
-            stop.activate();
-            stop.expire(WOULD_TRIGGER_ON_ACTIVATION, at);
-            feed.order(account, stop);
-            activate(account, pair, coins, takeProfit, at);
             return;
         }
         CoinListing coin = lockedCoin(takeProfit);
@@ -493,19 +504,49 @@ public class PaperOrderLists {
             }
             return;
         }
-        takeProfit.activate();
-        stop.activate();
+        takeProfit.activate(at);
+        stop.activate(at);
         wallets.lock(account, WalletType.SPOT, coin, needed);
         feed.order(account, takeProfit);
         feed.order(account, stop);
-        meet(account, pair, coins, takeProfit, stop, at, at);
+        if (metOnActivation(pair, stop, source, candle)) {
+            beforeExecution(account, stop, at);
+            triggerOnActivation(account, stop, coins, at, source, candle);
+            return;
+        }
+        meet(account, pair, coins, takeProfit, stop, at);
     }
 
-    /** Whether a stop's condition holds at the pair's last price now; without one it waits for the next price. */
-    private boolean wouldTriggerNow(TradablePair pair, PaperOrder stop) {
+    /**
+     * Whether a pending stop's condition already holds when its working order filled. Live, at the pair's last price
+     * now; without one it waits for the next price. Replayed, within the candle that filled the working order: its low
+     * for a stop met at or below, its high for one met at or above. A replayed fill without its candle is judged at the
+     * working order's price, where the placement checked the stop is not met.
+     */
+    private boolean metOnActivation(TradablePair pair, PaperOrder stop, FillSource source, ReplayedCandle candle) {
+        TriggerCondition condition = stop.getTriggerCondition();
+        if (source == FillSource.REPLAY) {
+            if (candle == null) {
+                return false;
+            }
+            BigDecimal reached = condition == TriggerCondition.AT_OR_BELOW ? candle.low() : candle.high();
+            return condition.isMet(reached, stop.getStopPrice());
+        }
         return market.currentLastPrice(MarketType.SPOT, pair.symbol())
-                .map(last -> stop.getTriggerCondition().isMet(last, stop.getStopPrice()))
+                .map(last -> condition.isMet(last, stop.getStopPrice()))
                 .orElse(false);
+    }
+
+    /** A pending stop met on activation, triggered as the matching engine triggers one the market reached then. */
+    private void triggerOnActivation(
+            PaperAccount account,
+            PaperOrder stop,
+            PairCoins coins,
+            Instant at,
+            FillSource source,
+            ReplayedCandle candle) {
+        stopTrigger.execute(
+                account, stop, coins, at, stop.getStopPrice(), source, candle == null ? null : candle.open());
     }
 
     private PaperOrder working(PaperAccount account, Quote quote, String key, Leg leg) {

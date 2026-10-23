@@ -3,6 +3,7 @@ package com.cryptopilot.paper.service.impl;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperOrderProperties;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
@@ -18,7 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * How many orders an account may have open on one Spot pair ({@code MAX_NUM_ORDERS}) and how many of them may be stops
- * ({@code MAX_NUM_ALGO_ORDERS}). The orders of groups count, the pending ones too, as they are placed in full once
+ * ({@code MAX_NUM_ALGO_ORDERS}). Only Spot orders count. The orders of groups count, the pending ones too, as they are placed in full once
  * their working order fills. A pair the exchange sent no limit for takes the configured defaults, so no book of the
  * matching engine grows without bound.
  *
@@ -55,7 +56,8 @@ public class SpotOrderLimits {
     public void requireRoom(UUID accountId, UUID pairId, PairFilters filters, int adding, int addingStops) {
         Integer maxOrders = filters.rules().maxNumOrders();
         int ordersLimit = maxOrders != null ? maxOrders : properties.spotMaxNumOrders();
-        long open = orders.countByAccountIdAndPairIdAndOrderStatusIn(accountId, pairId, COUNTED);
+        long open = orders.countByAccountIdAndPairIdAndMarketTypeAndOrderStatusIn(
+                accountId, pairId, MarketType.SPOT, COUNTED);
         if (open + adding > ordersLimit) {
             throw refused(ErrorCode.PAPER_MAX_NUM_ORDERS, "orders", open + adding, ordersLimit);
         }
@@ -64,7 +66,8 @@ public class SpotOrderLimits {
         }
         Integer maxStops = filters.rules().maxNumAlgoOrders();
         int stopsLimit = maxStops != null ? maxStops : properties.spotMaxNumAlgoOrders();
-        long stops = orders.countByAccountIdAndPairIdAndOrderStatusInAndOrderTypeIn(accountId, pairId, COUNTED, STOPS);
+        long stops = orders.countByAccountIdAndPairIdAndMarketTypeAndOrderStatusInAndOrderTypeIn(
+                accountId, pairId, MarketType.SPOT, COUNTED, STOPS);
         if (stops + addingStops > stopsLimit) {
             throw refused(ErrorCode.PAPER_MAX_NUM_ALGO_ORDERS, "stopOrders", stops + addingStops, stopsLimit);
         }

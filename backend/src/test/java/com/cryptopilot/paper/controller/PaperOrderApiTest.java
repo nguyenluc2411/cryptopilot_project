@@ -28,9 +28,15 @@ import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.PaperLedgerInvariant;
 import com.cryptopilot.paper.job.PairStopListener;
 import com.cryptopilot.paper.job.PaperMatchingWorker;
+import com.cryptopilot.paper.job.PaperPairStopSweep;
+import com.cryptopilot.paper.matching.PaperOrderBook;
+import com.cryptopilot.paper.matching.TriggerBook;
+import com.cryptopilot.paper.model.PriceRange;
+import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
+import com.cryptopilot.paper.model.enums.LimitFillMode;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
@@ -134,6 +140,9 @@ class PaperOrderApiTest {
 
     @Autowired
     private PairStopListener pairStops;
+
+    @Autowired
+    private PaperPairStopSweep sweep;
 
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
@@ -2171,11 +2180,12 @@ class PaperOrderApiTest {
     }
 
     /**
-     * TR-10: a pending stop the last price already meets when the working order fills ends EXPIRED, locking nothing,
-     * and the fill stands; in an OTOCO the take profit then goes on alone, locking what it needs.
+     * TR-10, TR-09: a pending stop the last price already meets when the working order fills triggers at once, as a
+     * stop the market reached then. The OTO's STOP_LOSS sells at the market; the OTOCO's STOP_LOSS_LIMIT works as a
+     * LIMIT order, resting at 84 above the last price, and its take profit expires as the other order of the OCO.
      */
     @Test
-    void TR10_aPendingStopMetWhenTheWorkingOrderFills_expires_andTheFillStands() throws Exception {
+    void TR10_aPendingStopMetWhenTheWorkingOrderFills_triggersAtOnce_andTheTakeProfitExpires() throws Exception {
         UUID trader = trader();
         price("100");
         String oto = placeList(trader, oto("90", "STOP_LOSS", "85", "0.99"))
@@ -2194,17 +2204,326 @@ class PaperOrderApiTest {
 
         awaitStatus(trader, JsonPath.read(oto, "$.orders[0].orderId"), "FILLED");
         awaitStatus(trader, JsonPath.read(otoco, "$.orders[0].orderId"), "FILLED");
-        as(trader, get(PAPER + "/orders/" + JsonPath.read(oto, "$.orders[1].orderId")), null)
-                .andExpect(jsonPath("$.status").value("EXPIRED"))
-                .andExpect(jsonPath("$.statusReason").value("WOULD_TRIGGER_ON_ACTIVATION"));
+        String otoStop = JsonPath.read(oto, "$.orders[1].orderId");
+        awaitStatus(trader, otoStop, "FILLED");
+        as(trader, get(PAPER + "/orders/" + otoStop), null)
+                .andExpect(jsonPath("$.triggeredAt").exists())
+                .andExpect(jsonPath("$.avgPrice").value(80.0));
         as(trader, get(PAPER + "/order-lists/" + JsonPath.read(otoco, "$.listId")), null)
                 .andExpect(jsonPath("$.status").value("EXECUTING"))
-                .andExpect(jsonPath("$.orders[1].status").value("NEW"))
-                .andExpect(jsonPath("$.orders[2].status").value("EXPIRED"))
-                .andExpect(jsonPath("$.orders[2].statusReason").value("WOULD_TRIGGER_ON_ACTIVATION"));
+                .andExpect(jsonPath("$.orders[1].status").value("EXPIRED"))
+                .andExpect(jsonPath("$.orders[1].statusReason").value("OCO_OTHER_EXECUTED"))
+                .andExpect(jsonPath("$.orders[2].status").value("NEW"))
+                .andExpect(jsonPath("$.orders[2].triggeredAt").exists());
+        // Only the OTOCO's stop limit holds the coin, once: 0.999 after the buy's fee.
         assertThat(locked(trader, base())).isEqualByComparingTo("0.999");
         assertThat(matching.triggerOrders()).noneMatch(order -> order.pairId().equals(pair));
+        assertThat(matching.restingOrders())
+                .anyMatch(order -> order.orderId().toString().equals(JsonPath.read(otoco, "$.orders[2].orderId")));
         assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /**
+     * TR-10: an OTOCO whose STOP_LOSS is already met when its buy fills sells at the market at once: the coin is never
+     * left with only a take profit while the price falls. The take profit expires and nothing stays locked.
+     */
+    @Test
+    void TR10_anOtocosStopLoss_metWhenTheBuyFills_sellsAtTheMarket_andTheTakeProfitExpires() throws Exception {
+        UUID trader = trader();
+        price("100");
+        BigDecimal usdt = spot(trader, "USDT");
+        String group = placeList(trader, otoco("90", "1", null, "95", "85", "null"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String stop = JsonPath.read(group, "$.orders[2].orderId");
+
+        price("80");
+        trade("80", 1);
+
+        awaitStatus(trader, stop, "FILLED");
+        as(trader, get(PAPER + "/order-lists/" + JsonPath.read(group, "$.listId")), null)
+                .andExpect(jsonPath("$.status").value("ALL_DONE"))
+                .andExpect(jsonPath("$.orders[0].status").value("FILLED"))
+                .andExpect(jsonPath("$.orders[1].status").value("EXPIRED"))
+                .andExpect(jsonPath("$.orders[1].statusReason").value("OCO_OTHER_EXECUTED"))
+                .andExpect(jsonPath("$.orders[2].type").value("STOP_LOSS"))
+                .andExpect(jsonPath("$.orders[2].avgPrice").value(80.0));
+        assertThat(locked(trader, base())).isZero();
+        assertThat(locked(trader, "USDT")).isZero();
+        assertThat(spot(trader, base())).isZero();
+        // Bought 1 at 90, sold 0.999 at 80 less the taker fee.
+        assertThat(spot(trader, "USDT")).isLessThan(usdt.subtract(new BigDecimal("10")));
+        assertThat(matching.triggerOrders()).noneMatch(order -> order.pairId().equals(pair));
+        assertThat(matching.restingOrders()).noneMatch(order -> order.pairId().equals(pair));
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /**
+     * TR-10, Q-T6: a pending stop activated by a replayed fill is judged within the candle that filled the working
+     * order, not at the live price of now: the live price far above the stop does not keep it from triggering, and
+     * far below does not trigger one the candle never met. A replayed market stop executes at its stop.
+     */
+    @Test
+    void QT6_aReplayedFill_judgesThePendingStopByItsCandle_notTheLivePrice() throws Exception {
+        UUID trader = trader();
+        price("200");
+        String met = placeList(trader, otoco("90", "1", null, "95", "85", "null"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String notMet = placeList(trader, otoco("90", "1", null, "95", "85", "null"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        Instant candle = Instant.now().plus(3, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.MINUTES);
+
+        assertThat(matching.fill(
+                        resting(JsonPath.read(met, "$.orders[0].orderId")),
+                        candle,
+                        FillSource.REPLAY,
+                        new ReplayedCandle(new BigDecimal("92"), new BigDecimal("84"), new BigDecimal("93"))))
+                .isTrue();
+        price("50");
+        assertThat(matching.fill(
+                        resting(JsonPath.read(notMet, "$.orders[0].orderId")),
+                        candle,
+                        FillSource.REPLAY,
+                        new ReplayedCandle(new BigDecimal("92"), new BigDecimal("86"), new BigDecimal("93"))))
+                .isTrue();
+
+        String stop = JsonPath.read(met, "$.orders[2].orderId");
+        as(trader, get(PAPER + "/orders/" + stop), null)
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.avgPrice").value(85.0));
+        assertThat(sql.sql("select triggered_at from paper_order where order_id = ?")
+                        .param(UUID.fromString(stop))
+                        .query(Timestamp.class)
+                        .single()
+                        .toInstant())
+                .isEqualTo(candle);
+        assertThat(sql.sql("select fill_source from paper_fill where order_id = ?")
+                        .param(UUID.fromString(stop))
+                        .query(String.class)
+                        .single())
+                .isEqualTo("REPLAY");
+        as(trader, get(PAPER + "/orders/" + JsonPath.read(met, "$.orders[1].orderId")), null)
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        as(trader, get(PAPER + "/orders/" + JsonPath.read(notMet, "$.orders[2].orderId")), null)
+                .andExpect(jsonPath("$.status").value("NEW"))
+                .andExpect(jsonPath("$.triggeredAt").doesNotExist());
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Pending orders after a restart (D-77, TR-10)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * D-77, TR-10: the OCO of an OTOCO waits from its buy's fill, after a restart too. With a BUY at 90 and a take
+     * profit at 100, a candle that traded 101 before the price fell to 90 fills the buy only; rebuilt from the
+     * database, the take profit and the stop wait from the fill, so replaying that candle again reaches neither.
+     */
+    @Test
+    void D77_anOtocosLegsRebuiltAfterARestart_waitFromTheBuysFill_notTheGroupsPlacement() throws Exception {
+        UUID trader = trader();
+        price("92");
+        String group = placeList(trader, otoco("90", "1", null, "100", "85", "84"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String takeProfit = JsonPath.read(group, "$.orders[1].orderId");
+        String stop = JsonPath.read(group, "$.orders[2].orderId");
+        Instant placed = createdAt(takeProfit);
+        Instant rose = placed.truncatedTo(ChronoUnit.MINUTES).plus(1, ChronoUnit.MINUTES);
+        Instant fell = rose.plus(1, ChronoUnit.MINUTES);
+        assertThat(matching.fill(
+                        resting(JsonPath.read(group, "$.orders[0].orderId")),
+                        fell,
+                        FillSource.REPLAY,
+                        new ReplayedCandle(new BigDecimal("95"), new BigDecimal("89"), new BigDecimal("96"))))
+                .isTrue();
+
+        RestingOrder rebuiltTakeProfit = matching.restingOrders().stream()
+                .filter(order -> order.orderId().toString().equals(takeProfit))
+                .findFirst()
+                .orElseThrow();
+        TriggerOrder rebuiltStop = watched(stop);
+        assertThat(rebuiltTakeProfit.placedAt()).isEqualTo(fell);
+        assertThat(rebuiltStop.placedAt()).isEqualTo(fell);
+        assertThat(sql.sql("select activated_at from paper_order where order_id = ?")
+                        .param(UUID.fromString(takeProfit))
+                        .query(Timestamp.class)
+                        .single()
+                        .toInstant())
+                .isEqualTo(fell);
+        PaperOrderBook book = new PaperOrderBook(LimitFillMode.QUEUE);
+        book.track(rebuiltTakeProfit);
+        TriggerBook triggers = new TriggerBook();
+        triggers.track(rebuiltStop);
+
+        // The candle before the fill: 101 above the take profit, 80 below the stop. It reaches neither.
+        PriceRange before = new PriceRange(
+                MarketType.SPOT, pair, new BigDecimal("80"), new BigDecimal("101"), rose, true, FillSource.REPLAY);
+        assertThat(book.onRange(before)).isEmpty();
+        assertThat(triggers.onRange(before)).isEmpty();
+        PriceRange after = new PriceRange(
+                MarketType.SPOT,
+                pair,
+                new BigDecimal("95"),
+                new BigDecimal("101"),
+                fell.plus(1, ChronoUnit.MINUTES),
+                true,
+                FillSource.REPLAY);
+        assertThat(book.onRange(after)).containsExactly(rebuiltTakeProfit);
+    }
+
+    /** D-77: a pending OTO stop rebuilt after a restart is not triggered by a candle before its activation. */
+    @Test
+    void D77_aPendingOtoStopRebuiltAfterARestart_isNotTriggeredByACandleBeforeItsActivation() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String group = placeList(trader, oto("90", "TAKE_PROFIT", "95", "0.99"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String pending = JsonPath.read(group, "$.orders[1].orderId");
+        Instant activated = createdAt(pending).truncatedTo(ChronoUnit.MINUTES).plus(2, ChronoUnit.MINUTES);
+        assertThat(matching.fill(
+                        resting(JsonPath.read(group, "$.orders[0].orderId")),
+                        activated,
+                        FillSource.REPLAY,
+                        new ReplayedCandle(new BigDecimal("92"), new BigDecimal("89"), new BigDecimal("93"))))
+                .isTrue();
+
+        TriggerOrder rebuilt = watched(pending);
+        assertThat(rebuilt.placedAt()).isEqualTo(activated);
+        TriggerBook triggers = new TriggerBook();
+        triggers.track(rebuilt);
+        assertThat(triggers.onRange(candle("96", activated.minus(1, ChronoUnit.MINUTES))))
+                .isEmpty();
+        assertThat(triggers.onRange(candle("96", activated.plus(1, ChronoUnit.MINUTES))))
+                .singleElement()
+                .satisfies(
+                        fired -> assertThat(fired.order().orderId().toString()).isEqualTo(pending));
+    }
+
+    /** D-77: an order placed alone, outside a group, is rebuilt waiting from its placement. */
+    @Test
+    void D77_anOrderWithoutAGroup_isRebuiltFromItsPlacement() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String limit = id(place(trader, limit("BUY", "90", "1", null)).andExpect(status().isCreated()));
+        String stop = id(place(trader, stop("TAKE_PROFIT", "BUY", "90", null, null, "0.5"))
+                .andExpect(status().isCreated()));
+
+        assertThat(resting(limit).placedAt()).isEqualTo(createdAt(limit));
+        assertThat(watched(stop).placedAt()).isEqualTo(createdAt(stop));
+        assertThat(sql.sql("select count(*) from paper_order where order_id in (?, ?) and activated_at is not null")
+                        .params(UUID.fromString(limit), UUID.fromString(stop))
+                        .query(Long.class)
+                        .single())
+                .isZero();
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Orders left open on a pair that stopped trading (NSF-01)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * NSF-01: an order committed after the pair-stop listener read the accounts, so missed by it, is cancelled by the
+     * sweep with its funds given back; a second run cancels nothing.
+     */
+    @Test
+    void NSF01_anOrderTheListenerMissed_isCancelledByTheSweep_once() throws Exception {
+        UUID trader = trader();
+        price("100");
+        SpotPairStoppedTrading stopped = new SpotPairStoppedTrading(pair, symbol, ExchangeStatus.NOT_TRADING);
+        pairStops.on(stopped);
+        String limit = id(place(trader, limit("BUY", "90", "1", null)).andExpect(status().isCreated()));
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("90");
+        rule("spot_exchange_status", "'NOT_TRADING'");
+
+        assertThat(sweep.run()).isEqualTo(1);
+
+        as(trader, get(PAPER + "/orders/" + limit), null)
+                .andExpect(jsonPath("$.status").value("CANCELED"))
+                .andExpect(jsonPath("$.statusReason").value("PAIR_NOT_TRADING"));
+        assertThat(locked(trader, "USDT")).isZero();
+        long rows = ledgerRows(trader);
+        assertThat(sweep.run()).isZero();
+        assertThat(ledgerRows(trader)).isEqualTo(rows);
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /** NSF-01: a fill or a trigger that reaches an order of a pair that stopped trading cancels it instead. */
+    @Test
+    void NSF01_aFillOrATriggerReachingAnOrderOfAStoppedPair_cancelsItInstead() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 1")).andExpect(status().isCreated());
+        String limit = id(place(trader, limit("BUY", "90", "1", null)).andExpect(status().isCreated()));
+        String stop = id(place(trader, stop("STOP_LOSS", "SELL", "95", null, null, "0.5"))
+                .andExpect(status().isCreated()));
+        RestingOrder resting = resting(limit);
+        TriggerOrder watched = watched(stop);
+        rule("spot_exchange_status", "'NOT_TRADING'");
+
+        assertThat(matching.fill(resting, Instant.now(), FillSource.LIVE)).isFalse();
+        assertThat(matching.trigger(watched, Instant.now(), watched.stopPrice(), FillSource.LIVE, null))
+                .isFalse();
+
+        for (String id : List.of(limit, stop)) {
+            as(trader, get(PAPER + "/orders/" + id), null)
+                    .andExpect(jsonPath("$.status").value("CANCELED"))
+                    .andExpect(jsonPath("$.statusReason").value("PAIR_NOT_TRADING"));
+        }
+        as(trader, get(PAPER + "/fills"), null)
+                .andExpect(jsonPath("$.items.length()").value(1));
+        assertThat(locked(trader, "USDT")).isZero();
+        assertThat(locked(trader, base())).isZero();
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /**
+     * Idempotency: a retry with the same clientOrderId or listClientOrderId is answered with what was placed, though
+     * the pair stopped trading or its filters changed since; another order under the key is still a conflict.
+     */
+    @Test
+    void TR02_aRetryAfterThePairStoppedOrItsFiltersChanged_returnsTheStoredOrder() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String order = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\", \"type\": \"LIMIT\","
+                + " \"price\": 90.01, \"quantity\": 1, \"clientOrderId\": \"retry-1\"}";
+        String group = keyed(oco("BUY", "1", "90", "105", "106"), "retry-grp");
+        String id = id(place(trader, order).andExpect(status().isCreated()));
+        String listId = JsonPath.read(
+                placeList(trader, group)
+                        .andExpect(status().isCreated())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString(),
+                "$.listId");
+
+        rule("spot_tick_size", "0.1");
+        place(trader, order)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderId").value(id));
+        rule("spot_exchange_status", "'NOT_TRADING'");
+        place(trader, order)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.orderId").value(id));
+        placeList(trader, group)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.listId").value(listId));
+        place(trader, order.replace("90.01", "90.02")).andExpect(status().isConflict());
+
+        assertThat(orderCount(trader)).isEqualTo(3);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -2243,6 +2562,28 @@ class PaperOrderApiTest {
                 .param(trader)
                 .query(Long.class)
                 .single();
+    }
+
+    /** The order as the engine's book rebuilds it from the database. */
+    private RestingOrder resting(String id) {
+        return matching.restingOrders().stream()
+                .filter(order -> order.orderId().toString().equals(id))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private Instant createdAt(String id) {
+        return sql.sql("select created_at from paper_order where order_id = ?")
+                .param(UUID.fromString(id))
+                .query(Timestamp.class)
+                .single()
+                .toInstant();
+    }
+
+    /** A closed replayed candle of the test's pair, from 90 up to {@code high}. */
+    private PriceRange candle(String high, Instant openTime) {
+        return new PriceRange(
+                MarketType.SPOT, pair, new BigDecimal("90"), new BigDecimal(high), openTime, true, FillSource.REPLAY);
     }
 
     /** The stop as the engine watches it. */

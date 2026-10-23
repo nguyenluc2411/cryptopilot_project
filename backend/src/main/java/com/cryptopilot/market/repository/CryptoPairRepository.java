@@ -64,6 +64,12 @@ public interface CryptoPairRepository extends Repository<CryptoPair, UUID> {
     @Query("select p from CryptoPair p order by p.symbol")
     List<CryptoPair> findAllForSync();
 
+    /** The pairs whose Spot exchange status was read and is not TRADING (NSF-01). */
+    @Transactional(readOnly = true)
+    @Query("select p.id from CryptoPair p where p.spotExchangeStatus is not null"
+            + " and p.spotExchangeStatus <> com.cryptopilot.market.model.enums.ExchangeStatus.TRADING")
+    List<UUID> findIdsNotTradingOnSpot();
+
     /** Writes a pair. Not transactional here; the unit of work is the calling service's. */
     CryptoPair save(CryptoPair pair);
 

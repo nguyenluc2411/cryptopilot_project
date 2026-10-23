@@ -71,6 +71,12 @@ public class MarketApiImpl implements MarketApi {
 
     @Override
     @Transactional(readOnly = true)
+    public List<UUID> spotPairsNotTrading() {
+        return pairs.findIdsNotTradingOnSpot();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<PairListing> pairListings(Collection<UUID> pairIds) {
         if (pairIds.isEmpty()) {
             return List.of();

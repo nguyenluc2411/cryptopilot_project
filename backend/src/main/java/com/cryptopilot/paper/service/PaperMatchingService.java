@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.service;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
@@ -33,7 +34,8 @@ public interface PaperMatchingService {
      * @param at when the price that triggered it traded
      * @param stopPrice the stop it triggered at
      * @param candleOpen the first price of the replayed candle that triggered it; {@code null} when not known or live
-     * @return whether this call triggered it; {@code false} when it was cancelled or triggered first
+     * @return whether this call triggered it; {@code false} when it was cancelled or triggered first, or is cancelled
+     *     now as its Spot pair stopped trading (NSF-01)
      */
     boolean trigger(TriggerOrder order, Instant at, BigDecimal stopPrice, FillSource source, BigDecimal candleOpen);
 
@@ -42,11 +44,16 @@ public interface PaperMatchingService {
 
     /**
      * Fills a working order the price reached, at its own price, as a maker: under its Trader's lock, and only if it
-     * still works.
+     * still works. An order of a Spot pair the exchange stopped trading is cancelled instead (NSF-01).
      *
      * @param tradedAt when the price reached it: the market trade's time, or the open time of the candle (D-78)
-     * @return whether this call filled it; {@code false} when it was cancelled or filled first
+     * @param candle the replayed candle that reached it, which a pending stop its fill activates is judged against;
+     *     {@code null} for a live fill
+     * @return whether this call filled it; {@code false} when it was cancelled or filled first, or is cancelled now
      */
+    boolean fill(RestingOrder order, Instant tradedAt, FillSource source, ReplayedCandle candle);
+
+    /** As {@link #fill(RestingOrder, Instant, FillSource, ReplayedCandle)}, without the candle that decided it. */
     boolean fill(RestingOrder order, Instant tradedAt, FillSource source);
 
     /**
