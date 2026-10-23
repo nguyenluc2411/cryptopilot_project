@@ -29,8 +29,11 @@ public record SetupScoreReading(
         Objects.requireNonNull(openTime, "openTime");
     }
 
-    /** The preset name and version as a plan stores them, e.g. {@code DAY_TRADING v1}. */
+    /**
+     * The preset name and version as a plan stores them, e.g. {@code DAY_TRADING v1}; {@link SetupScorePreset#parse}
+     * reads it back.
+     */
     public String preset() {
-        return style.name() + " " + presetVersion;
+        return new SetupScorePreset(style, presetVersion).format();
     }
 }
