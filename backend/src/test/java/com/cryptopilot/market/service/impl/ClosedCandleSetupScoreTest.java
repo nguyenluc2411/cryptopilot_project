@@ -184,6 +184,30 @@ class ClosedCandleSetupScoreTest {
         assertThat(reading.openTime()).isEqualTo(latestClosedOpen(timeframe));
     }
 
+    /**
+     * Q-77: the preset's v1 weights apply to the components of a timeframe it does not read on the analysis screen.
+     * DAY_TRADING Spot: 35·75 + 30·50 + 15·40 + 20·60 = 5925 → 59; SWING Spot: 40·75 + 20·50 + 10·40 + 30·60 = 6200 →
+     * 62; SCALPING Spot: 20·75 + 40·50 + 25·40 + 15·60 = 5400 → 54.
+     */
+    @ParameterizedTest(name = "{0} on {1}")
+    @CsvSource({
+        "DAY_TRADING, 4h,  59",
+        "DAY_TRADING, 1d,  59",
+        "SWING,       1h,  62",
+        "SWING,       1d,  62",
+        "SCALPING,    4h,  54"
+    })
+    void BR70_aTimeframeOtherThanThePresets_isWeightedWithThePreset(SetupStyle preset, String timeframe, int score) {
+        store(MarketType.SPOT, timeframe, latestClosedOpen(timeframe), "75", "50", "40", "60", null);
+
+        SetupScoreReading reading =
+                market.closedCandleSetupScore(pair, MarketType.SPOT, timeframe, preset, null, FixedClockConfig.NOW);
+
+        assertThat(reading.score()).isEqualTo(score);
+        assertThat(reading.preset()).isEqualTo(preset.name() + " v1");
+        assertThat(reading.timeframe()).isEqualTo(timeframe);
+    }
+
     /** After an outage of the indicator job only rows of a day ago are stored: none of them is read. */
     @Test
     void BR70_afterAnOutage_withOnlyOldRows_givesANullScore() {

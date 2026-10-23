@@ -129,6 +129,38 @@ class SetupScoreCalculatorTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /** Q-77: a plan's score weights the components of its own timeframe with the preset's weights. */
+    @Test
+    void BR70_weighOnAnyTimeframe_appliesThePresetsWeights_toComponentsOfAnotherTimeframe() {
+        // DAY_TRADING Spot: 35·100 + 30·50 + 15·0 + 20·50 = 6000 → 60, as on its own 1h
+        assertThat(SetupScoreCalculator.weighOnAnyTimeframe(DAY_TRADING, spot("4h", "100", "50", "0", "50")))
+                .isEqualTo(60);
+        // SWING Spot on 1d: 40·100 + 20·50 + 10·0 + 30·50 = 6500 → 65
+        assertThat(SetupScoreCalculator.weighOnAnyTimeframe(SWING, spot("1d", "100", "50", "0", "50")))
+                .isEqualTo(65);
+        // DAY_TRADING Futures on 15m: 30·100 + 25·100 + 15·100 + 15·100 + 15·0 = 8500 → 85
+        assertThat(SetupScoreCalculator.weighOnAnyTimeframe(
+                        DAY_TRADING, futures("15m", "100", "100", "100", "100", "0")))
+                .isEqualTo(85);
+    }
+
+    @Test
+    void BR70_weighOnAnyTimeframe_givesTheSameScoreAsScore_onThePresetsOwnTimeframe() {
+        ComponentScores components = spot("1h", "75", "50", "40", "60");
+
+        assertThat(SetupScoreCalculator.weighOnAnyTimeframe(DAY_TRADING, components))
+                .isEqualTo(SetupScoreCalculator.score(DAY_TRADING, components, null)
+                        .score());
+    }
+
+    @Test
+    void BR70_weighOnAnyTimeframe_aMissingComponent_leavesTheScoreNull() {
+        assertThat(SetupScoreCalculator.weighOnAnyTimeframe(SWING, spot("1d", "50", null, "50", "50")))
+                .isNull();
+        assertThat(SetupScoreCalculator.weighOnAnyTimeframe(SWING, futures("1d", "50", "50", "50", "50", null)))
+                .isNull();
+    }
+
     @Test
     void BR13_spotWithADominantSide_isRefused() {
         assertThatThrownBy(() ->

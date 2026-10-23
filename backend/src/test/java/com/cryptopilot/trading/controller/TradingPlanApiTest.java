@@ -31,7 +31,6 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -558,34 +557,7 @@ class TradingPlanApiTest {
     @Test
     void BR70_saveAndActivate_storesTheSetupScoreOfTheLatestClosedCandle() throws Exception {
         UUID trader = trader();
-        Instant closed = Instant.now().truncatedTo(ChronoUnit.HOURS).minus(Duration.ofHours(1));
-        indicators.upsert(new StoredIndicators(
-                pair,
-                closed,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                new ComponentScores(
-                        MarketType.SPOT,
-                        "1h",
-                        "v1",
-                        new BigDecimal("75.00"),
-                        new BigDecimal("50.00"),
-                        new BigDecimal("40.00"),
-                        new BigDecimal("60.00"),
-                        null),
-                closed.plus(Duration.ofHours(1))));
+        storeLatestClosedSpotComponents(Duration.ofHours(1), "1h");
 
         String id = id(as(trader, post(PLANS), spotLimit("100", "95", "110", true))
                 .andExpect(status().isCreated())
@@ -593,6 +565,28 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
                 .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1")));
         as(trader, get(PLANS + "/" + id), null)
+                .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
+                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1"));
+    }
+
+    /**
+     * Q-77: a plan analysed on another timeframe than its preset's stores the preset's weights applied to that
+     * timeframe's latest closed candle: a DAY Trader (DAY_TRADING, which reads 1h) on 4h, 35·75 + 30·50 + 15·40 + 20·60
+     * → 59.
+     */
+    @Test
+    void BR70_aPlanOnAnotherTimeframeThanItsPresets_storesThePresetsScoreOnThatTimeframe() throws Exception {
+        UUID trader = trader();
+        sql.sql("update user_profile set trading_style = 'DAY' where user_id = ?")
+                .param(trader)
+                .update();
+        storeLatestClosedSpotComponents(Duration.ofHours(4), "4h");
+        String body = spotLimit("100", "95", "110", true);
+
+        as(trader, post(PLANS), body.substring(0, body.length() - 1) + ", \"analysisTimeframe\": \"4h\"}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.analysisTimeframe").value("4h"))
                 .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
                 .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1"));
     }
@@ -662,6 +656,40 @@ class TradingPlanApiTest {
 
     private static String id(ResultActions created) throws Exception {
         return JsonPath.read(created.andReturn().getResponse().getContentAsString(), "$.id");
+    }
+
+    /** Spot components 75, 50, 40, 60 for the latest closed candle of {@code timeframe} by the system clock. */
+    private void storeLatestClosedSpotComponents(Duration interval, String timeframe) {
+        long seconds = interval.toSeconds();
+        long now = Instant.now().getEpochSecond();
+        Instant closed = Instant.ofEpochSecond(now - now % seconds - seconds);
+        indicators.upsert(new StoredIndicators(
+                pair,
+                closed,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new ComponentScores(
+                        MarketType.SPOT,
+                        timeframe,
+                        "v1",
+                        new BigDecimal("75.00"),
+                        new BigDecimal("50.00"),
+                        new BigDecimal("40.00"),
+                        new BigDecimal("60.00"),
+                        null),
+                closed.plus(interval)));
     }
 
     private String spotLimit(String entry, String stop, String takeProfit, boolean activate) {
