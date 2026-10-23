@@ -3,15 +3,21 @@ package com.cryptopilot.schema;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.support.TestcontainersConfig;
+import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.repository.TradingPlanRepository;
+import jakarta.persistence.EntityManagerFactory;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
+import org.hibernate.Session;
+import org.hibernate.SessionFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +26,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.jpa.repository.support.JpaRepositoryFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -48,6 +55,9 @@ class PlanValidityMigrationTest {
 
     @Autowired
     private Flyway configuredFlyway;
+
+    @Autowired
+    private EntityManagerFactory entityManagerFactory;
 
     private String url;
     private SingleConnectionDataSource dataSource;
@@ -148,10 +158,7 @@ class PlanValidityMigrationTest {
         }) {
             assertThat(after.get(column)).as(column).isEqualTo(before.get(column));
         }
-        assertThat(jdbc.sql("select plan_id from trading_plan where plan_status = 'ACTIVE' and entry_type = 'LIMIT'")
-                        .query(UUID.class)
-                        .list())
-                .containsExactly(plan);
+        assertThat(activeLimitEntries()).extracting(TrackedEntry::planId).containsExactly(plan);
     }
 
     @Test
@@ -178,6 +185,22 @@ class PlanValidityMigrationTest {
                         select setting_key from system_setting
                          where setting_key in ('ENTRY_DEVIATION_CONFIRM_R', 'ENTRY_DEVIATION_BLOCK_R',
                                                'SETUP_SCORE_DROP_WARN', 'SLIPPAGE_BPS')""").query(String.class).list()).hasSize(4);
+    }
+
+    /**
+     * What the matching books load, read by {@link TradingPlanRepository#findActiveLimitEntries()} itself: the
+     * repository is built over a session on this test's database instead of the application's.
+     */
+    private List<TrackedEntry> activeLimitEntries() {
+        SessionFactory sessions = entityManagerFactory.unwrap(SessionFactory.class);
+        try (Session session =
+                sessions.withOptions().connection(dataSource.getConnection()).openSession()) {
+            return new JpaRepositoryFactory(session)
+                    .getRepository(TradingPlanRepository.class)
+                    .findActiveLimitEntries();
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private Flyway flyway(String target) {
