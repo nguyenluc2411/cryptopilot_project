@@ -520,6 +520,41 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.statusHistory[2].status").value("INVALIDATED"));
     }
 
+    /**
+     * D-112: an invalidation price on the wrong side of the current last price answers MSG16 on its field. A LONG
+     * LIMIT is invalidated by a rise, so its level lies above the last price; a SHORT LIMIT by a fall, below it. Equal
+     * to the last price is wrong too. A Spot plan is LONG (BR-21), so SHORT is a Futures plan, here with a Futures last
+     * price in the cache as TP-0 will stream it.
+     */
+    @ParameterizedTest(name = "{0} {1} LIMIT at last {4}, invalidation {5}")
+    @CsvSource({
+        "SPOT,    LONG,  95,  110, 102, 101",
+        "SPOT,    LONG,  95,  110, 102, 102",
+        "FUTURES, SHORT, 105, 90,  98,  99",
+        "FUTURES, SHORT, 105, 90,  98,  98"
+    })
+    void MSG16_aWrongSideInvalidationPrice_isNamedUnderErrors(
+            MarketType market, String direction, String stop, String takeProfit, String last, String invalidation)
+            throws Exception {
+        UUID trader = trader();
+        if (market == MarketType.FUTURES) {
+            subscribeToPro(trader);
+        }
+        lastPrice(market, last);
+
+        as(
+                        trader,
+                        post(PLANS),
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"" + market + "\", \"direction\": \""
+                                + direction + "\", \"entryType\": \"LIMIT\", \"entryPrice\": 100, \"stopLoss\": "
+                                + stop + ", \"takeProfit\": " + takeProfit + ", \"invalidationPrice\": " + invalidation
+                                + (market == MarketType.FUTURES ? ", \"leverage\": 5" : "") + "}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.errors.invalidationPrice").value("MSG16"));
+        assertThat(plansOf(trader)).isZero();
+    }
+
     @ParameterizedTest(name = "last price {0}")
     @CsvSource({"100", "101"})
     void MSG16_saveAndActivateAStopTheLastPriceAlreadyTriggered_isRefusedOnTheEntryPrice(String last) throws Exception {
@@ -673,9 +708,14 @@ class TradingPlanApiTest {
 
     /** Streams a Spot ticker of the test pair into the price cache, newer than every earlier one. */
     private void lastPrice(String last) {
+        lastPrice(MarketType.SPOT, last);
+    }
+
+    /** Streams a ticker of the test pair on {@code market} into the price cache, newer than every earlier one. */
+    private void lastPrice(MarketType market, String last) {
         BigDecimal value = new BigDecimal(last);
         prices.record(
-                MarketType.SPOT,
+                market,
                 new TickerMessage(
                         symbol,
                         value,
