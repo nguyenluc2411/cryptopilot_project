@@ -880,6 +880,39 @@ class TradingPlanServiceImplTest {
         verify(market, Mockito.times(1)).currentLastPrice(MarketType.SPOT, "BTCUSDT");
     }
 
+    /** The invalidation check and the immediate-fill decision of a LIMIT see the same read of the last price. */
+    @ParameterizedTest(name = "last price {0} -> {1}")
+    @CsvSource({"101, ACTIVE", "100, EXECUTED"})
+    void BR33_BR68_activatingALimitWithAnInvalidationPrice_readsTheLastPriceOnce(String last, PlanStatus expected) {
+        TradingPlan plan = savedDraft(withValidity(spotLimit("100", "95", "110"), "102", null, null), "101");
+        currentPrice(MarketType.SPOT, last);
+        Mockito.clearInvocations(market);
+
+        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(expected);
+        verify(market, Mockito.times(1)).currentLastPrice(MarketType.SPOT, "BTCUSDT");
+    }
+
+    @Test
+    void BR33_BR68_savingALimitWithAnInvalidationPriceAndActivating_readsTheLastPriceOnce() {
+        currentPrice(MarketType.SPOT, "100");
+
+        TradingPlanResponse plan =
+                service.create(USER, activating(withValidity(spotLimit("100", "95", "110"), "102", null, null)));
+
+        assertThat(plan.status()).isEqualTo(PlanStatus.EXECUTED);
+        verify(market, Mockito.times(1)).currentLastPrice(MarketType.SPOT, "BTCUSDT");
+    }
+
+    /** A MARKET entry fills at the price it was calculated with; the activation reads no second price. */
+    @Test
+    void BR33_activatingASpotMarketPlan_readsTheLastPriceOnce() {
+        TradingPlan plan = savedDraft(spotMarket("95", "110"), "100");
+        Mockito.clearInvocations(market);
+
+        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.EXECUTED);
+        verify(market, Mockito.times(1)).currentLastPrice(MarketType.SPOT, "BTCUSDT");
+    }
+
     // ------------------------------------------------------------------------------------------
     // Check order (TP-A review F-04, F-05)
     // ------------------------------------------------------------------------------------------

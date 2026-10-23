@@ -131,12 +131,12 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         }
         CalculatedPlan calculated = calculate(userId, request.pairId(), terms(request), NO_PLAN);
         PlanDetails details = details(userId, request, calculated, now);
-        requireValidAtSave(request.pairId(), calculated, details, activate);
+        Optional<BigDecimal> last = requireValidAtSave(request.pairId(), calculated, details, activate);
         TradingPlan plan =
                 TradingPlan.draft(userId, request.pairId(), calculated.calculation(), details, calculated.warnings());
         if (activate) {
             requireRoomForAnActivePlan(userId);
-            activate(plan, calculated, now);
+            activate(plan, calculated, now, last);
         }
         return PlanResponses.detail(plans.save(plan));
     }
@@ -156,11 +156,11 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         }
         CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(request), plan.getId());
         PlanDetails details = details(userId, request, calculated, now);
-        requireValidAtSave(plan.getPairId(), calculated, details, activate);
+        Optional<BigDecimal> last = requireValidAtSave(plan.getPairId(), calculated, details, activate);
         plan.updateDraft(calculated.calculation(), details, calculated.warnings());
         if (activate) {
             requireRoomForAnActivePlan(userId);
-            activate(plan, calculated, now);
+            activate(plan, calculated, now, last);
         }
         return PlanResponses.detail(plans.save(plan));
     }
@@ -179,8 +179,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         // Stored prices are checked against the current tick, not rounded to it (BR-30, BR-31).
         CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(plan), plan.getId(), false);
         // After the calculation, whose entitlement check answers MSG29 before a missing Futures price answers 503.
-        requireValidAtActivation(plan);
-        activate(plan, calculated, now);
+        Optional<BigDecimal> last = requireValidAtActivation(plan);
+        activate(plan, calculated, now, last);
         return PlanResponses.detail(plans.save(plan));
     }
 
@@ -384,13 +384,16 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     /**
      * BR-69: a plan's own deviation limit within the system's block value; BR-68: the invalidation price on the far
      * side of the current price (a MARKET plan carrying one is the aggregate's error); when the save also activates,
-     * BR-33: a STOP not already triggered.
+     * BR-33: a STOP not already triggered. Returns the last price it read, which the activation reuses.
      */
-    private void requireValidAtSave(UUID pairId, CalculatedPlan calculated, PlanDetails details, boolean activating) {
+    private Optional<BigDecimal> requireValidAtSave(
+            UUID pairId, CalculatedPlan calculated, PlanDetails details, boolean activating) {
         List<InputViolation> violations = new ArrayList<>();
         PlanValidityRule.maxEntryDeviation(details.maxEntryDeviationR(), settings.decimal(ENTRY_DEVIATION_BLOCK_R))
                 .ifPresent(violations::add);
         RiskInput plan = calculated.calculation().plan();
+        Optional<BigDecimal> last =
+                lastPriceRead(pairId, plan.market(), details.entryType(), details.invalidationPrice(), activating);
         violations.addAll(priceViolations(
                 pairId,
                 plan.market(),
@@ -398,12 +401,19 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 plan.direction(),
                 plan.entryPrice(),
                 details.invalidationPrice(),
-                activating));
+                activating,
+                last));
         requireNone(violations);
+        return last;
     }
 
-    /** BR-68 and BR-33 again at activation (BR-31): the price may have moved since the save. */
-    private void requireValidAtActivation(TradingPlan plan) {
+    /**
+     * BR-68 and BR-33 again at activation (BR-31): the price may have moved since the save. Returns the last price it
+     * read, which the activation reuses.
+     */
+    private Optional<BigDecimal> requireValidAtActivation(TradingPlan plan) {
+        Optional<BigDecimal> last = lastPriceRead(
+                plan.getPairId(), plan.getMarket(), plan.getEntryType(), plan.getInvalidationPrice(), true);
         requireNone(priceViolations(
                 plan.getPairId(),
                 plan.getMarket(),
@@ -411,33 +421,49 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 plan.getDirection(),
                 plan.getEntryPrice(),
                 plan.getInvalidationPrice(),
-                true));
+                true,
+                last));
+        return last;
     }
 
     /**
-     * The invalidation price and, at activation, the stop price of a STOP against one read of the pair's current last
-     * price, never the mark price (D-112). Without a current last price these cannot be checked, so the save or
+     * The one read of the pair's current last price, never the mark price (D-112), that a save or an activation checks
+     * against and that an activation decides an immediate LIMIT fill with, so both steps see the same price. MARKET
+     * reads none: it fills at the price it was calculated with. A save that does not activate reads it only to check an
+     * invalidation price. Empty when not read, or when the cache holds no current one.
+     */
+    private Optional<BigDecimal> lastPriceRead(
+            UUID pairId, MarketType marketType, EntryType entryType, BigDecimal invalidation, boolean activating) {
+        if (entryType == EntryType.MARKET || (invalidation == null && !activating)) {
+            return Optional.empty();
+        }
+        TradablePair pair = market.tradablePair(pairId, marketType)
+                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", pairId));
+        return market.currentLastPrice(pair.market(), pair.symbol());
+    }
+
+    /**
+     * The invalidation price and, at activation, the stop price of a STOP against the request's one read of the last
+     * price, see {@link #lastPriceRead}. Without a current last price these cannot be checked, so the save or
      * activation is refused (MSG43); on Futures the cache holds a last price from TP-0 on.
      */
-    private List<InputViolation> priceViolations(
+    private static List<InputViolation> priceViolations(
             UUID pairId,
             MarketType marketType,
             EntryType entryType,
             Direction direction,
             BigDecimal entryPrice,
             BigDecimal invalidation,
-            boolean activating) {
+            boolean activating,
+            Optional<BigDecimal> lastRead) {
         boolean stopAtActivation = activating && entryType == EntryType.STOP;
         if (entryType == EntryType.MARKET || (invalidation == null && !stopAtActivation)) {
             return List.of();
         }
-        TradablePair pair = market.tradablePair(pairId, marketType)
-                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", pairId));
-        BigDecimal last = market.currentLastPrice(pair.market(), pair.symbol())
-                .orElseThrow(() -> new BusinessException(
-                        ErrorCode.MARKET_PRICE_UNAVAILABLE,
-                        "no current last price for " + pair.symbol() + " on " + pair.market()
-                                + " to check the invalidation or stop price"));
+        BigDecimal last = lastRead.orElseThrow(() -> new BusinessException(
+                ErrorCode.MARKET_PRICE_UNAVAILABLE,
+                "no current last price for pair " + pairId + " on " + marketType
+                        + " to check the invalidation or stop price"));
         List<InputViolation> violations = new ArrayList<>();
         if (stopAtActivation) {
             PlanValidityRule.stopAlreadyTriggered(direction, entryPrice, last).ifPresent(violations::add);
@@ -461,15 +487,16 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * already reaches it (BR-33); otherwise it waits for the matching engine. A MARKET entry fills at the price the
      * activation was calculated with: the last price on Spot, the mark price on Futures (D-84). A fill at activation took liquidity, so it is TAKER (D-111 E1).
      * A STOP waits: its trigger is the matching engine's (TP-B). The journal record of the fill is T-048. The setup
-     * score of the moment is kept beside the plan, see {@link #recordSetupScore}.
+     * score of the moment is kept beside the plan, see {@link #recordSetupScore}. {@code last} is the request's one read
+     * of the last price, see {@link #lastPriceRead}.
      */
-    private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now) {
+    private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now, Optional<BigDecimal> last) {
         plan.activate(calculated.calculation(), calculated.warnings(), now);
         recordSetupScore(plan, now);
         Optional<BigDecimal> fillPrice = plan.getEntryType() == EntryType.STOP
                 ? Optional.empty()
                 : EntryFillRule.atActivation(
-                        plan.getEntryType(), plan.getDirection(), plan.getEntryPrice(), lastPrice(plan));
+                        plan.getEntryType(), plan.getDirection(), plan.getEntryPrice(), fillDecisionPrice(plan, last));
         if (fillPrice.isPresent()) {
             plan.markExecuted(now, fillPrice.get(), LiquidityRole.TAKER);
             log.info("NSF-07 plan {} filled at activation at {}", plan.getId(), fillPrice.get());
@@ -510,15 +537,11 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * MARKET: the last price the activation was just calculated with. LIMIT: the current last price, or empty when the
-     * cache holds no current one; the entry then waits for the matching engine.
+     * MARKET: the price the activation was just calculated with. LIMIT: the last price the validity checks read, or
+     * empty when the cache held no current one; the entry then waits for the matching engine.
      */
-    private Optional<BigDecimal> lastPrice(TradingPlan plan) {
-        if (plan.getEntryType() == EntryType.MARKET) {
-            return Optional.of(plan.getEntryPrice());
-        }
-        return market.tradablePair(plan.getPairId(), plan.getMarket())
-                .flatMap(pair -> market.currentLastPrice(pair.market(), pair.symbol()));
+    private static Optional<BigDecimal> fillDecisionPrice(TradingPlan plan, Optional<BigDecimal> last) {
+        return plan.getEntryType() == EntryType.MARKET ? Optional.of(plan.getEntryPrice()) : last;
     }
 
     /**
