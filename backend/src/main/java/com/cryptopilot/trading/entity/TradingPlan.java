@@ -312,8 +312,9 @@ public class TradingPlan extends BaseEntity {
     }
 
     /**
-     * An ACTIVE plan whose setup no longer holds: an invalidation level was reached before the entry. Compare-and-set:
-     * a plan that is no longer ACTIVE (filled, cancelled, expired or already invalidated) is left unchanged.
+     * An ACTIVE plan whose setup no longer holds: an invalidation level was reached before the entry. Compare-and-set
+     * through the transition table: a plan whose status may not move to INVALIDATED (a draft, or one filled, cancelled,
+     * expired or already invalidated) is left unchanged.
      *
      * <p>Rule: BR-32, BR-68; D-111 (M3).
      *
@@ -327,7 +328,7 @@ public class TradingPlan extends BaseEntity {
     public boolean invalidate(InvalidationReason reason, Instant at) {
         Objects.requireNonNull(reason, "reason");
         Objects.requireNonNull(at, "at");
-        if (status != PlanStatus.ACTIVE) {
+        if (!status.canTransitionTo(PlanStatus.INVALIDATED)) {
             return false;
         }
         status = PlanStatus.INVALIDATED;

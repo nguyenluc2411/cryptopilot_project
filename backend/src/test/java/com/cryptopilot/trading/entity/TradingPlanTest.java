@@ -607,6 +607,18 @@ class TradingPlanTest {
         assertThat(plan.getInvalidationReason()).isEqualTo(reasonBefore);
     }
 
+    /** invalidate() moves a plan exactly when the transition table lets its status move to INVALIDATED. */
+    @ParameterizedTest
+    @EnumSource(PlanStatus.class)
+    void BR32_invalidate_followsTheTransitionTable(PlanStatus status) {
+        TradingPlan plan = planIn(status);
+
+        boolean moved = plan.invalidate(InvalidationReason.INVALIDATION_PRICE, LATER);
+
+        assertThat(moved).isEqualTo(status.canTransitionTo(PlanStatus.INVALIDATED));
+        assertThat(plan.getStatus()).isEqualTo(moved ? PlanStatus.INVALIDATED : status);
+    }
+
     @Test
     void BR36_anExecutedPlan_recordsTheLiquidityRoleOfItsFill() {
         TradingPlan plan = planIn(PlanStatus.ACTIVE);
