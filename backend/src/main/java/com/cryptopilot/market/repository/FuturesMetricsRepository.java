@@ -1,11 +1,13 @@
 package com.cryptopilot.market.repository;
 
 import com.cryptopilot.market.OpenInterestSample;
+import com.cryptopilot.market.SettledFunding;
 import com.cryptopilot.market.calculator.FundingTimes;
 import com.cryptopilot.market.client.FundingRate;
 import com.cryptopilot.market.client.LongShortRatio;
 import com.cryptopilot.market.client.OpenInterestStatistic;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -44,6 +46,12 @@ import org.springframework.stereotype.Repository;
 @Repository
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class FuturesMetricsRepository {
+
+    /**
+     * How far before an interval the snapshots announcing its first settlement are read: well above the longest
+     * gap NSF-03 is expected to leave, and no assumption about the funding interval.
+     */
+    static final Duration ANNOUNCEMENT_LOOKBACK = Duration.ofDays(1);
 
     private final JdbcClient sql;
 
@@ -141,6 +149,50 @@ public class FuturesMetricsRepository {
                     .update();
         }
         return inserted;
+    }
+
+    /** The pair's stored funding settlements with an instant in {@code (after, upTo]}, oldest first (BR-37). */
+    public List<SettledFunding> settledFunding(UUID pairId, Instant after, Instant upTo) {
+        return sql.sql("""
+                        select funding_time, funding_rate, mark_price from funding_rate_history
+                         where pair_id = ? and funding_time > ? and funding_time <= ?
+                         order by funding_time""")
+                .params(pairId, Timestamp.from(after), Timestamp.from(upTo))
+                .query((row, index) -> new SettledFunding(
+                        row.getTimestamp("funding_time").toInstant(),
+                        row.getBigDecimal("funding_rate"),
+                        row.getBigDecimal("mark_price")))
+                .list();
+    }
+
+    /**
+     * The settlement instants in {@code (after, upTo]} that the pair's mark price snapshots announced as the next
+     * funding time, normalized by {@link FundingTimes#normalize} like a stored settlement, oldest first and each once
+     * (A-05). This is how the funding times of a pair are known without assuming an interval (BR-11): every minute
+     * NSF-03 stores the next settlement the exchange states. The snapshots read start {@link #ANNOUNCEMENT_LOOKBACK}
+     * before {@code after}, so the one taken just before the interval, which announces its first settlement, is
+     * included even after a gap in the stream. Snapshots older than their retention (NSF-17) announce nothing, so an
+     * interval that old is checked against the stored settlements only.
+     */
+    public List<Instant> scheduledFundingTimes(UUID pairId, Instant after, Instant upTo) {
+        return sql
+                .sql("""
+                        select distinct next_funding_time from futures_market_data
+                         where pair_id = ? and snapshot_time >= ? and snapshot_time <= ?
+                           and next_funding_time > ? and next_funding_time <= ?""")
+                .params(
+                        pairId,
+                        Timestamp.from(after.minus(ANNOUNCEMENT_LOOKBACK)),
+                        Timestamp.from(upTo),
+                        Timestamp.from(after),
+                        Timestamp.from(upTo))
+                .query((row, index) -> FundingTimes.normalize(
+                        row.getTimestamp("next_funding_time").toInstant()))
+                .list()
+                .stream()
+                .distinct()
+                .sorted()
+                .toList();
     }
 
     private Optional<Instant> latest(UUID pairId, Instant notBefore, String column) {

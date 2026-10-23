@@ -106,4 +106,11 @@ public interface MarketApi {
      * market. A refusal of the exchange is returned with the instant to ask again, never thrown.
      */
     MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from);
+
+    /**
+     * The pair's funding settlements with an instant in {@code (after, upTo]}, read from {@code funding_rate_history},
+     * and the settlement instants the exchange announced in that interval, read from the mark price snapshots, so the
+     * caller can tell a settlement that is not stored yet (A-05). Empty lists for a pair without Futures data.
+     */
+    FundingHistory fundingHistory(UUID pairId, Instant after, Instant upTo);
 }
