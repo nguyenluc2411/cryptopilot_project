@@ -88,7 +88,7 @@ public class CryptoPair extends BaseEntity {
     @Column(name = "spot_min_notional", precision = 28, scale = 8)
     private BigDecimal spotMinNotional;
 
-    // The Spot symbol filters beyond the three above (V27); null when the exchange turned the rule off.
+    // The Spot symbol filters beyond the three above (V30); null when the exchange turned the rule off.
 
     @Column(name = "spot_min_price", precision = 28, scale = 12)
     private BigDecimal spotMinPrice;
