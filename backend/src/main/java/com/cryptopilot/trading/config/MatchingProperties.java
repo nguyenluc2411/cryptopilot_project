@@ -56,7 +56,8 @@ public record MatchingProperties(
      *
      * @param enabled whether missed candles are fetched and replayed at start
      * @param maxWindow how far back a replay may start; candles older than now minus this window are not replayed and
-     *     the skipped interval is logged (Q-34)
+     *     the skipped interval is logged. Seven days by default, the default expiry of a plan, so a plan that can
+     *     still be ACTIVE is replayed over its whole life (Q-34)
      * @param catchUpWait how long to wait before asking again for a candle that closed while the replay ran but is not
      *     served yet
      * @param catchUpAttempts how many times to ask again before the replay counts as failed and is retried with the
@@ -66,7 +67,7 @@ public record MatchingProperties(
      */
     public record Replay(
             @DefaultValue("false") boolean enabled,
-            @NotNull @DefaultValue("24h") Duration maxWindow,
+            @NotNull @DefaultValue("7d") Duration maxWindow,
             @NotNull @DefaultValue("2s") Duration catchUpWait,
             @Min(0) @DefaultValue("3") int catchUpAttempts,
             @Min(2) @DefaultValue("1440") int maxBufferedMinutes) {}
