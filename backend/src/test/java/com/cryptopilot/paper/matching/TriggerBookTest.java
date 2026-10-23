@@ -61,6 +61,41 @@ class TriggerBookTest {
     }
 
     @Test
+    void D77_mergedTrades_aTradeAfterThePlacement_triggers_thoughAnEarlierOneSetTheLow() {
+        TriggerOrder stop = stop(OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "95");
+        book.track(stop);
+        PriceRange merged = print("90", -2).withTrades(print("94", 3));
+
+        assertThat(book.onRange(merged)).singleElement().satisfies(triggered -> assertThat(triggered.at())
+                .isEqualTo(PLACED.plusSeconds(3)));
+    }
+
+    @Test
+    void TR11_catchUp_runsAStopJustWatched_overTradesReadBeforeIt() {
+        TriggerOrder plain = stop(OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "95");
+        TriggerOrder trailing = trailing(OrderSide.SELL, TriggerCondition.AT_OR_BELOW, null, "1", null);
+        book.track(plain);
+        book.track(trailing);
+        PriceRange later = print("94", 1).withTrades(print("96", 2));
+
+        assertThat(book.catchUp(plain.orderId(), later))
+                .hasValueSatisfying(triggered -> assertThat(triggered.at()).isEqualTo(PLACED.plusSeconds(1)));
+        assertThat(book.catchUp(trailing.orderId(), later)).isEmpty();
+        assertThat(book.movedExtremes()).containsOnlyKeys(trailing.orderId());
+        assertThat(book.catchUp(trailing.orderId(), print("96", 3))).isEmpty();
+        assertThat(book.movedExtremes()).isEmpty();
+        assertThat(book.catchUp(UUID.randomUUID(), later)).isEmpty();
+        assertThat(book.size()).isEqualTo(1);
+    }
+
+    private static PriceRange print(String price, int second) {
+        return PriceRange.ofPrints(
+                MarketType.SPOT,
+                PAIR,
+                List.of(new PriceRange.Print(new BigDecimal(price), BigDecimal.ONE, true, PLACED.plusSeconds(second))));
+    }
+
+    @Test
     void TR09_aStopAbove_triggersAtOrAboveIt_andNotBelow() {
         book.track(stop(OrderSide.BUY, TriggerCondition.AT_OR_ABOVE, "105"));
 

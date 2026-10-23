@@ -134,19 +134,121 @@ public final class PaperOrderBook {
         return onRange(range, NO_DEPTH);
     }
 
+    /** The orders {@link #reach(PriceRange, QueueLookup)} returns, without the time each was reached. */
+    public List<RestingOrder> onRange(PriceRange range, QueueLookup depth) {
+        return reach(range, depth).stream().map(Reached::order).toList();
+    }
+
     /**
-     * The orders the range reached, which leave the book: BUY orders above its low and SELL orders below its high, and
-     * those at it as the {@link LimitFillMode} says. A BUY placed after the range's low was traded stays, as does a
-     * SELL placed after its high (D-77).
+     * The orders the range reached, which leave the book, each with the time it was reached, in price-time priority.
+     *
+     * <ul>
+     *   <li>A range of trades reaches each order by its own trades: the first one at or after its placement at a
+     *       price the {@link LimitFillMode} says reaches it, and only those trades move its queue (D-77).
+     *   <li>A candle reaches BUY orders above its low and SELL orders below its high, and those at it as the mode
+     *       says, at its open time; one that opened before an order was placed never reaches it (D-77, D-78).
+     * </ul>
      *
      * @param depth the exchange's book now, read for the queue of an order whose queue is not known yet
      */
-    public List<RestingOrder> onRange(PriceRange range, QueueLookup depth) {
+    public List<Reached> reach(PriceRange range, QueueLookup depth) {
         BookKey key = new BookKey(range.market(), range.pairId());
         Sides pair = books.get(key);
         if (pair == null) {
             return List.of();
         }
+        List<Reached> reached = range.prints().isEmpty()
+                ? reachedByBounds(key, pair, range, depth)
+                : reachedByTrades(key, pair, range, depth);
+        if (pair.isEmpty()) {
+            books.remove(key);
+        }
+        reached.sort(Comparator.comparing(Reached::order, PRIORITY));
+        return reached;
+    }
+
+    /**
+     * An order just tracked, matched against trades read before it was tracked: those traded after it was placed, as
+     * a range of them would have reached it. Their volume at its price does not move its queue, which was read from
+     * the exchange's book after they traded. A reached order leaves the book.
+     *
+     * <p>Rule: TR-05; Q-T8; D-77.
+     *
+     * @param prints trades after the order's placement, earliest first
+     */
+    public Optional<Reached> catchUp(UUID orderId, List<PriceRange.Print> prints) {
+        RestingOrder order = tracked.get(orderId);
+        if (order == null) {
+            return Optional.empty();
+        }
+        BookKey key = new BookKey(order.market(), order.pairId());
+        Instant at = reachedAt(key, order, prints, NO_DEPTH, false);
+        if (at == null) {
+            return Optional.empty();
+        }
+        untrack(orderId);
+        return Optional.of(new Reached(order, at));
+    }
+
+    /** Each order a range of trades may reach, judged by the trades at or after its placement. */
+    private List<Reached> reachedByTrades(BookKey key, Sides pair, PriceRange range, QueueLookup depth) {
+        List<Reached> reached = new ArrayList<>();
+        List<UUID> candidates = new ArrayList<>(pair.buys.idsFrom(range.low()));
+        candidates.addAll(pair.sells.idsUpTo(range.high()));
+        for (UUID id : candidates) {
+            RestingOrder order = tracked.get(id);
+            Instant at = reachedAt(key, order, range.prints(), depth, true);
+            if (at != null) {
+                pair.of(order.side()).remove(order.limitPrice(), id);
+                tracked.remove(id);
+                ahead.remove(id);
+                reached.add(new Reached(order, at));
+            }
+        }
+        return reached;
+    }
+
+    /**
+     * When the first of {@code prints} at or after the order's placement reached it: a price through its own, or at
+     * it as the {@link LimitFillMode} says; {@code null} when none did. With {@code QUEUE}, the takers of its own side
+     * at its price consume what is ahead of it, in the order they traded, when {@code consumeQueue}.
+     */
+    private Instant reachedAt(
+            BookKey key, RestingOrder order, List<PriceRange.Print> prints, QueueLookup depth, boolean consumeQueue) {
+        boolean buy = order.side() == OrderSide.BUY;
+        BigDecimal price = order.limitPrice();
+        for (PriceRange.Print print : prints) {
+            if (print.at().isBefore(order.placedAt())) {
+                continue;
+            }
+            int compared = print.price().compareTo(price);
+            int through = buy ? -compared : compared;
+            if (through > 0 || (through == 0 && mode == LimitFillMode.TOUCH)) {
+                return print.at();
+            }
+            if (through < 0 || mode != LimitFillMode.QUEUE) {
+                continue;
+            }
+            if (print.takerSold() != buy) {
+                // A taker of the other side traded at this price: no exchange order of this side was left at it.
+                return print.at();
+            }
+            if (!consumeQueue) {
+                continue;
+            }
+            BigDecimal before = ahead.computeIfAbsent(
+                    order.orderId(), ignored -> depth.quantityAt(key.market(), key.pairId(), order.side(), price)
+                            .orElse(BigDecimal.ZERO));
+            if (print.quantity().compareTo(before) > 0) {
+                return print.at();
+            }
+            ahead.put(order.orderId(), before.subtract(print.quantity()));
+        }
+        return null;
+    }
+
+    /** The orders a candle reached, at its open time: see {@link #reach}. */
+    private List<Reached> reachedByBounds(BookKey key, Sides pair, PriceRange range, QueueLookup depth) {
         boolean touch = mode == LimitFillMode.TOUCH;
         List<UUID> ids = new ArrayList<>(pair.buys.fireAbove(range.low(), touch));
         ids.addAll(pair.sells.fireBelow(range.high(), touch));
@@ -154,7 +256,7 @@ public final class PaperOrderBook {
             ids.addAll(atQueue(key, pair.buys, OrderSide.BUY, range.low(), range.lowAt(), range, depth));
             ids.addAll(atQueue(key, pair.sells, OrderSide.SELL, range.high(), range.highAt(), range, depth));
         }
-        List<RestingOrder> reached = new ArrayList<>();
+        List<Reached> reached = new ArrayList<>();
         for (UUID id : ids) {
             RestingOrder order = tracked.get(id);
             Instant tradedAt = order.side() == OrderSide.BUY ? range.lowAt() : range.highAt();
@@ -163,13 +265,9 @@ public final class PaperOrderBook {
             } else {
                 tracked.remove(id);
                 ahead.remove(id);
-                reached.add(order);
+                reached.add(new Reached(order, tradedAt));
             }
         }
-        if (pair.isEmpty()) {
-            books.remove(key);
-        }
-        reached.sort(PRIORITY);
         return reached;
     }
 
@@ -230,6 +328,14 @@ public final class PaperOrderBook {
      */
     public record BookKey(MarketType market, UUID pairId) {}
 
+    /**
+     * An order a range reached.
+     *
+     * @param order the order as it was tracked
+     * @param at when the price that reached it traded: a trade's time, or a candle's open time
+     */
+    public record Reached(RestingOrder order, Instant at) {}
+
     /** The quantity the exchange's book shows now at a price, on the side an order of {@code side} would wait. */
     @FunctionalInterface
     public interface QueueLookup {
@@ -266,6 +372,22 @@ public final class PaperOrderBook {
             if (ids != null && ids.remove(id) && ids.isEmpty()) {
                 levels.remove(level);
             }
+        }
+
+        /** The ids at levels at or above {@code low}: the buys a price down to it may reach. */
+        List<UUID> idsFrom(BigDecimal low) {
+            return ids(levels.tailMap(low, true));
+        }
+
+        /** The ids at levels at or below {@code high}: the sells a price up to it may reach. */
+        List<UUID> idsUpTo(BigDecimal high) {
+            return ids(levels.headMap(high, true));
+        }
+
+        private static List<UUID> ids(NavigableMap<BigDecimal, Set<UUID>> range) {
+            List<UUID> ids = new ArrayList<>();
+            range.values().forEach(ids::addAll);
+            return ids;
         }
 
         /** The ids waiting at exactly {@code level}, or {@code null}. */

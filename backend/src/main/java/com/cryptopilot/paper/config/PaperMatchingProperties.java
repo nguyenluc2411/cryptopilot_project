@@ -27,6 +27,9 @@ import org.springframework.validation.annotation.Validated;
  *     priority order. Keep it below the connection pool, which the order placements share
  * @param stopTimeout how long a stop waits for the engine's threads to end
  * @param replay the replay of the closed 1-minute candles missed while the engine was down or the stream was lost
+ * @param recentTrades the live trades each pair keeps after matching them, for an order tracked after they were read
+ * @param pendingTradesMax how many market trades of one pair wait for the consumer one by one; past that the oldest
+ *     are folded into the waiting range's low, high and volumes, so no price extreme is lost
  */
 @Validated
 @ConfigurationProperties("cryptopilot.paper.matching")
@@ -38,7 +41,22 @@ public record PaperMatchingProperties(
         @NotNull @DefaultValue("10m") Duration retryDeadline,
         @Min(1) @DefaultValue("8") int fillParallelism,
         @NotNull @DefaultValue("10s") Duration stopTimeout,
-        @NotNull @Valid @DefaultValue Replay replay) {
+        @NotNull @Valid @DefaultValue Replay replay,
+        @NotNull @Valid @DefaultValue RecentTrades recentTrades,
+        @Min(1) @DefaultValue("50000") int pendingTradesMax) {
+
+    /**
+     * The recent live trades of each pair (TR-05, D-77). An order committed while the trades after its placement were
+     * already read into a range is tracked after that range ran; it is matched against these when it is tracked. Kept
+     * only for a pair with an order tracked or about to be.
+     *
+     * @param window how far back from a pair's latest trade they are kept
+     * @param maxTrades how many at most per pair, sized for a burst within the window; the oldest go first, and one
+     *     still within the window going is logged
+     */
+    public record RecentTrades(
+            @NotNull @DefaultValue("10s") Duration window,
+            @Min(1) @DefaultValue("20000") int maxTrades) {}
 
     /**
      * The replay of missed candles (Q-T6). Off by default and on in the {@code dev} and {@code prod} profiles, like the

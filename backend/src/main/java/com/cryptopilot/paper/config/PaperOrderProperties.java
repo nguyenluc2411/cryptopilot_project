@@ -2,6 +2,7 @@ package com.cryptopilot.paper.config;
 
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -11,12 +12,17 @@ import org.springframework.validation.annotation.Validated;
 /**
  * The commission of paper orders, under {@code cryptopilot.paper.order}: a share of what a fill trades, taken in the
  * coin the fill brings in, as Binance charges an account that pays no fee in BNB. The defaults are Binance's standard
- * Spot rates, 0.1% maker and taker. An invalid value stops the application at start-up.
+ * Spot rates, 0.1% maker and taker. Also the open-order limits a pair without its own falls back to. An invalid value
+ * stops the application at start-up.
  *
  * <p>Rule: TR-02.
  *
  * @param spotMakerFeeRate the rate of a Spot fill that waited in the book, e.g. {@code 0.001} for 0.1%
  * @param spotTakerFeeRate the rate of a Spot fill that executed on arrival
+ * @param spotMaxNumOrders the most open orders of an account on one pair, when the exchange sent no
+ *     {@code MAX_NUM_ORDERS} for it; Binance's usual figure
+ * @param spotMaxNumAlgoOrders the most open stops of an account on one pair, when the exchange sent no
+ *     {@code MAX_NUM_ALGO_ORDERS} for it; Binance's usual figure
  */
 @Validated
 @ConfigurationProperties("cryptopilot.paper.order")
@@ -25,4 +31,8 @@ public record PaperOrderProperties(
         BigDecimal spotMakerFeeRate,
 
         @NotNull @DecimalMin("0") @DecimalMax("0.1") @DefaultValue("0.001")
-        BigDecimal spotTakerFeeRate) {}
+        BigDecimal spotTakerFeeRate,
+
+        @Min(1) @DefaultValue("200") int spotMaxNumOrders,
+
+        @Min(1) @DefaultValue("5") int spotMaxNumAlgoOrders) {}

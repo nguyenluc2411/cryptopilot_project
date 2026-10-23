@@ -309,6 +309,41 @@ public enum ErrorCode {
      */
     PAPER_PAIR_NOT_VALUED(HttpStatus.CONFLICT, "MSG43"),
 
+    /*
+     * The Spot symbol filters a paper order is refused by, as the exchange refuses it rather than rounding (TR-02;
+     * Binance Spot API documentation, "Filters"). 400 with MSG15, the text of a field whose value is not allowed. The
+     * message arguments are the field, its value, the limit it broke and which one: MIN, MAX or STEP, so the client
+     * can say "Order value must be at least 5 USDT".
+     */
+
+    /** {@code PRICE_FILTER}: a price or stopPrice off the tick, below minPrice or above maxPrice. */
+    PAPER_PRICE_FILTER(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /** {@code LOT_SIZE}: a quantity off the step, below minQty or above maxQty. */
+    PAPER_LOT_SIZE(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /** {@code MARKET_LOT_SIZE}: the quantity of a MARKET order off its step, below its minQty or above its maxQty. */
+    PAPER_MARKET_LOT_SIZE(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /** {@code NOTIONAL}: an order worth less than minNotional or more than maxNotional. */
+    PAPER_NOTIONAL(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /** {@code PERCENT_PRICE_BY_SIDE}: a limit price too far from the last price on its side. */
+    PAPER_PERCENT_PRICE(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /** {@code TRAILING_DELTA}: a trailing delta outside the symbol's range for the side its stop triggers on. */
+    PAPER_TRAILING_DELTA(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /**
+     * {@code MAX_NUM_ORDERS}: the account already has as many open orders on the pair as allowed. Borrows MSG43 like
+     * {@link #PAPER_ORDER_WOULD_TAKE} (A-38). 409, as {@link #PLAN_LIMIT_REACHED}: the request would succeed with
+     * fewer open orders. The message arguments are {@code orders}, the count with this placement and the limit.
+     */
+    PAPER_MAX_NUM_ORDERS(HttpStatus.CONFLICT, "MSG43"),
+
+    /** {@code MAX_NUM_ALGO_ORDERS}: as {@link #PAPER_MAX_NUM_ORDERS}, for the open stops of the pair. */
+    PAPER_MAX_NUM_ALGO_ORDERS(HttpStatus.CONFLICT, "MSG43"),
+
     /**
      * A file named for a post is not one the post may carry (BR-44): not uploaded, not the caller's, already attached
      * to another post, of a type or size outside the limits, a video too long, or a combination of files a post may

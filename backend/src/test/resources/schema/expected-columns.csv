@@ -87,9 +87,29 @@ crypto_pair,max_leverage,integer,32,0,YES
 crypto_pair,pair_id,uuid,,,NO
 crypto_pair,pair_status,character varying,,,NO
 crypto_pair,quote_coin_id,uuid,,,NO
+crypto_pair,spot_apply_max_to_market,boolean,,,YES
+crypto_pair,spot_apply_min_to_market,boolean,,,YES
+crypto_pair,spot_ask_multiplier_down,numeric,28,12,YES
+crypto_pair,spot_ask_multiplier_up,numeric,28,12,YES
+crypto_pair,spot_bid_multiplier_down,numeric,28,12,YES
+crypto_pair,spot_bid_multiplier_up,numeric,28,12,YES
 crypto_pair,spot_exchange_status,character varying,,,YES
 crypto_pair,spot_exchange_status_raw,text,,,YES
+crypto_pair,spot_market_max_qty,numeric,28,12,YES
+crypto_pair,spot_market_min_qty,numeric,28,12,YES
+crypto_pair,spot_market_step_size,numeric,28,12,YES
+crypto_pair,spot_max_notional,numeric,28,12,YES
+crypto_pair,spot_max_num_algo_orders,integer,32,0,YES
+crypto_pair,spot_max_num_orders,integer,32,0,YES
+crypto_pair,spot_max_price,numeric,28,12,YES
+crypto_pair,spot_max_qty,numeric,28,12,YES
+crypto_pair,spot_max_trailing_above_delta,integer,32,0,YES
+crypto_pair,spot_max_trailing_below_delta,integer,32,0,YES
 crypto_pair,spot_min_notional,numeric,28,8,YES
+crypto_pair,spot_min_price,numeric,28,12,YES
+crypto_pair,spot_min_qty,numeric,28,12,YES
+crypto_pair,spot_min_trailing_above_delta,integer,32,0,YES
+crypto_pair,spot_min_trailing_below_delta,integer,32,0,YES
 crypto_pair,spot_step_size,numeric,28,12,YES
 crypto_pair,spot_tick_size,numeric,28,12,YES
 crypto_pair,symbol,character varying,,,NO
@@ -327,6 +347,7 @@ paper_matching_watermark,market_type,character varying,,,NO
 paper_matching_watermark,pair_id,uuid,,,NO
 paper_matching_watermark,updated_at,timestamp with time zone,,,NO
 paper_order,account_id,uuid,,,NO
+paper_order,activated_at,timestamp with time zone,,,YES
 paper_order,activation_price,numeric,28,12,YES
 paper_order,avg_price,numeric,28,12,YES
 paper_order,callback_rate,numeric,12,8,YES
@@ -359,6 +380,7 @@ paper_order,version,bigint,64,0,NO
 paper_order,working_type,character varying,,,YES
 paper_order_list,account_id,uuid,,,NO
 paper_order_list,created_at,timestamp with time zone,,,NO
+paper_order_list,list_client_order_id,character varying,,,NO
 paper_order_list,list_id,uuid,,,NO
 paper_order_list,list_status,character varying,,,NO
 paper_order_list,list_type,character varying,,,NO

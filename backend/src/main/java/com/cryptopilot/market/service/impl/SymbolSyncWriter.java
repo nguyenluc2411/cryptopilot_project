@@ -4,6 +4,7 @@ import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.client.ExchangeSymbol;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
+import com.cryptopilot.market.event.SpotPairStoppedTrading;
 import com.cryptopilot.market.model.ExchangeListing;
 import com.cryptopilot.market.model.SyncReport;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
@@ -22,6 +23,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,7 +53,9 @@ import org.springframework.transaction.annotation.Transactional;
  * </ul>
  *
  * <p>A pair that stops trading or disappears is flagged at WARN for an administrator (NSF-01: "flagged on
- * SCR-37 and Admin is notified"); the notification itself arrives with the notification module.
+ * SCR-37 and Admin is notified"); the notification itself arrives with the notification module. A Spot pair that
+ * stops trading is also published as {@link SpotPairStoppedTrading}, recorded with this transaction (ADR-010), so the
+ * paper orders on it are cancelled once the new status commits.
  *
  * <h2>Idempotent</h2>
  *
@@ -74,6 +78,7 @@ public class SymbolSyncWriter {
     private final CryptoPairRepository pairs;
     private final CoinRepository coins;
     private final CoinWriter coinWriter;
+    private final ApplicationEventPublisher events;
 
     /** Applies one market's exchange information to the table, all of it or none of it. */
     @Transactional
@@ -147,8 +152,16 @@ public class SymbolSyncWriter {
         ExchangeStatus now = symbol.isTrading() ? ExchangeStatus.TRADING : ExchangeStatus.NOT_TRADING;
         if (now != ExchangeStatus.TRADING && before != now) {
             flag(market, pair, "is no longer trading (" + symbol.status() + ")", flagged);
+            stoppedTrading(market, pair, now);
         }
         pair.recordExchangeStatus(market, now, symbol.status());
+    }
+
+    /** A Spot pair the exchange stopped trading: its paper orders are cancelled once this run commits. */
+    private void stoppedTrading(MarketType market, CryptoPair pair, ExchangeStatus status) {
+        if (market == MarketType.SPOT) {
+            events.publishEvent(new SpotPairStoppedTrading(pair.getId(), pair.getSymbol(), status));
+        }
     }
 
     private void reconcileAbsent(MarketType market, CryptoPair pair, ExchangeStatus before, List<String> flagged) {
@@ -158,6 +171,7 @@ public class SymbolSyncWriter {
         }
         if (before != ExchangeStatus.DELISTED) {
             flag(market, pair, "no longer appears in the exchange information", flagged);
+            stoppedTrading(market, pair, ExchangeStatus.DELISTED);
         }
         pair.recordExchangeStatus(market, ExchangeStatus.DELISTED, null);
     }
@@ -227,6 +241,7 @@ public class SymbolSyncWriter {
     private static boolean sameFilters(PairFilters a, PairFilters b) {
         return a.tickSize().compareTo(b.tickSize()) == 0
                 && a.stepSize().compareTo(b.stepSize()) == 0
-                && a.minNotional().compareTo(b.minNotional()) == 0;
+                && a.minNotional().compareTo(b.minNotional()) == 0
+                && a.rules().equals(b.rules());
     }
 }

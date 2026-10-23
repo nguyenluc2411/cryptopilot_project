@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Configuration;
     PaperOrderProperties.class,
     PaperMatchingProperties.class,
     PaperEquityProperties.class,
-    PaperGrantCostProperties.class
+    PaperGrantCostProperties.class,
+    PaperPairStopSweepProperties.class
 })
 public class PaperConfig {}

@@ -383,6 +383,11 @@ cryptopilot:
       # the dev and prod profiles.
       enabled: false
       interval: 5m
+    pair-stop-sweep:
+      # NSF-01: the Spot paper orders a pair stop missed are looked for and cancelled this often. Off here, on in the
+      # dev and prod profiles.
+      enabled: false
+      interval: 5m
     matching:
       # TR-05, Q-T8: a price through a waiting LIMIT order's own always fills it. At exactly its price: QUEUE, as
       # Binance's price-time priority, once the quantity the exchange's book showed ahead of it there is traded; CROSS

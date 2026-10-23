@@ -2,6 +2,7 @@ package com.cryptopilot.market.entity;
 
 import com.cryptopilot.common.entity.BaseEntity;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.SymbolRules;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.PairStatus;
@@ -87,6 +88,68 @@ public class CryptoPair extends BaseEntity {
     @Column(name = "spot_min_notional", precision = 28, scale = 8)
     private BigDecimal spotMinNotional;
 
+    // The Spot symbol filters beyond the three above (V30); null when the exchange turned the rule off.
+
+    @Column(name = "spot_min_price", precision = 28, scale = 12)
+    private BigDecimal spotMinPrice;
+
+    @Column(name = "spot_max_price", precision = 28, scale = 12)
+    private BigDecimal spotMaxPrice;
+
+    @Column(name = "spot_min_qty", precision = 28, scale = 12)
+    private BigDecimal spotMinQty;
+
+    @Column(name = "spot_max_qty", precision = 28, scale = 12)
+    private BigDecimal spotMaxQty;
+
+    @Column(name = "spot_market_min_qty", precision = 28, scale = 12)
+    private BigDecimal spotMarketMinQty;
+
+    @Column(name = "spot_market_max_qty", precision = 28, scale = 12)
+    private BigDecimal spotMarketMaxQty;
+
+    @Column(name = "spot_market_step_size", precision = 28, scale = 12)
+    private BigDecimal spotMarketStepSize;
+
+    @Column(name = "spot_apply_min_to_market")
+    private Boolean spotApplyMinToMarket;
+
+    @Column(name = "spot_max_notional", precision = 28, scale = 12)
+    private BigDecimal spotMaxNotional;
+
+    @Column(name = "spot_apply_max_to_market")
+    private Boolean spotApplyMaxToMarket;
+
+    @Column(name = "spot_bid_multiplier_up", precision = 28, scale = 12)
+    private BigDecimal spotBidMultiplierUp;
+
+    @Column(name = "spot_bid_multiplier_down", precision = 28, scale = 12)
+    private BigDecimal spotBidMultiplierDown;
+
+    @Column(name = "spot_ask_multiplier_up", precision = 28, scale = 12)
+    private BigDecimal spotAskMultiplierUp;
+
+    @Column(name = "spot_ask_multiplier_down", precision = 28, scale = 12)
+    private BigDecimal spotAskMultiplierDown;
+
+    @Column(name = "spot_min_trailing_above_delta")
+    private Integer spotMinTrailingAboveDelta;
+
+    @Column(name = "spot_max_trailing_above_delta")
+    private Integer spotMaxTrailingAboveDelta;
+
+    @Column(name = "spot_min_trailing_below_delta")
+    private Integer spotMinTrailingBelowDelta;
+
+    @Column(name = "spot_max_trailing_below_delta")
+    private Integer spotMaxTrailingBelowDelta;
+
+    @Column(name = "spot_max_num_orders")
+    private Integer spotMaxNumOrders;
+
+    @Column(name = "spot_max_num_algo_orders")
+    private Integer spotMaxNumAlgoOrders;
+
     @Column(name = "futures_tick_size", precision = 28, scale = 12)
     private BigDecimal futuresTickSize;
 
@@ -170,6 +233,7 @@ public class CryptoPair extends BaseEntity {
                 this.spotTickSize = filters.tickSize();
                 this.spotStepSize = filters.stepSize();
                 this.spotMinNotional = filters.minNotional();
+                applySpotRules(filters.rules());
             }
             case FUTURES -> {
                 this.futuresTickSize = filters.tickSize();
@@ -185,9 +249,56 @@ public class CryptoPair extends BaseEntity {
      */
     public Optional<PairFilters> filters(MarketType market) {
         return switch (Objects.requireNonNull(market, "market must not be null")) {
-            case SPOT -> filtersOf(spotTickSize, spotStepSize, spotMinNotional);
-            case FUTURES -> filtersOf(futuresTickSize, futuresStepSize, futuresMinNotional);
+            case SPOT -> filtersOf(spotTickSize, spotStepSize, spotMinNotional, spotRules());
+            case FUTURES -> filtersOf(futuresTickSize, futuresStepSize, futuresMinNotional, SymbolRules.NONE);
         };
+    }
+
+    private void applySpotRules(SymbolRules rules) {
+        this.spotMinPrice = rules.minPrice();
+        this.spotMaxPrice = rules.maxPrice();
+        this.spotMinQty = rules.minQuantity();
+        this.spotMaxQty = rules.maxQuantity();
+        this.spotMarketMinQty = rules.marketMinQuantity();
+        this.spotMarketMaxQty = rules.marketMaxQuantity();
+        this.spotMarketStepSize = rules.marketStepSize();
+        this.spotApplyMinToMarket = rules.applyMinToMarket();
+        this.spotMaxNotional = rules.maxNotional();
+        this.spotApplyMaxToMarket = rules.applyMaxToMarket();
+        this.spotBidMultiplierUp = rules.bidMultiplierUp();
+        this.spotBidMultiplierDown = rules.bidMultiplierDown();
+        this.spotAskMultiplierUp = rules.askMultiplierUp();
+        this.spotAskMultiplierDown = rules.askMultiplierDown();
+        this.spotMinTrailingAboveDelta = rules.minTrailingAboveDelta();
+        this.spotMaxTrailingAboveDelta = rules.maxTrailingAboveDelta();
+        this.spotMinTrailingBelowDelta = rules.minTrailingBelowDelta();
+        this.spotMaxTrailingBelowDelta = rules.maxTrailingBelowDelta();
+        this.spotMaxNumOrders = rules.maxNumOrders();
+        this.spotMaxNumAlgoOrders = rules.maxNumAlgoOrders();
+    }
+
+    private SymbolRules spotRules() {
+        return new SymbolRules(
+                spotMinPrice,
+                spotMaxPrice,
+                spotMinQty,
+                spotMaxQty,
+                spotMarketMinQty,
+                spotMarketMaxQty,
+                spotMarketStepSize,
+                spotApplyMinToMarket,
+                spotMaxNotional,
+                spotApplyMaxToMarket,
+                spotBidMultiplierUp,
+                spotBidMultiplierDown,
+                spotAskMultiplierUp,
+                spotAskMultiplierDown,
+                spotMinTrailingAboveDelta,
+                spotMaxTrailingAboveDelta,
+                spotMinTrailingBelowDelta,
+                spotMaxTrailingBelowDelta,
+                spotMaxNumOrders,
+                spotMaxNumAlgoOrders);
     }
 
     /**
@@ -269,10 +380,11 @@ public class CryptoPair extends BaseEntity {
         this.lastSyncedAt = Objects.requireNonNull(at, "at must not be null");
     }
 
-    private static Optional<PairFilters> filtersOf(BigDecimal tick, BigDecimal step, BigDecimal minNotional) {
+    private static Optional<PairFilters> filtersOf(
+            BigDecimal tick, BigDecimal step, BigDecimal minNotional, SymbolRules rules) {
         if (tick == null || step == null || minNotional == null) {
             return Optional.empty();
         }
-        return Optional.of(new PairFilters(tick, step, minNotional));
+        return Optional.of(new PairFilters(tick, step, minNotional, rules));
     }
 }

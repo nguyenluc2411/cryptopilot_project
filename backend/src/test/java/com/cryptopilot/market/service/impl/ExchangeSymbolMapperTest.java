@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.SymbolRules;
 import com.cryptopilot.market.client.ExchangeSymbol;
 import com.cryptopilot.market.model.ExchangeListing;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -81,6 +82,65 @@ class ExchangeSymbolMapperTest {
         assertThat(listing.filters())
                 .isEqualTo(new PairFilters(
                         new BigDecimal("0.01000000"), new BigDecimal("0.00001000"), new BigDecimal("5.00000000")));
+    }
+
+    /** TR-02: the other Spot filters travel with a Spot listing; a futures listing carries none of them. */
+    @Test
+    void TR02_theOtherFilters_areKeptOnSpotOnly() {
+        SymbolRules rules = new SymbolRules(
+                BigDecimal.ONE,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                200,
+                5);
+        ExchangeSymbol spot = new ExchangeSymbol(
+                "XYZUSDT",
+                "TRADING",
+                "XYZ",
+                "USDT",
+                null,
+                BigDecimal.ONE,
+                BigDecimal.ONE,
+                BigDecimal.ONE,
+                BigDecimal.TEN,
+                rules);
+        ExchangeSymbol futures = new ExchangeSymbol(
+                "XYZUSDT",
+                "TRADING",
+                "XYZ",
+                "USDT",
+                "PERPETUAL",
+                BigDecimal.ONE,
+                BigDecimal.ONE,
+                BigDecimal.ONE,
+                BigDecimal.TEN,
+                rules);
+
+        assertThat(ExchangeSymbolMapper.toListing(MarketType.SPOT, spot)
+                        .orElseThrow()
+                        .filters()
+                        .rules())
+                .isEqualTo(rules);
+        assertThat(ExchangeSymbolMapper.toListing(MarketType.FUTURES, futures)
+                        .orElseThrow()
+                        .filters()
+                        .rules())
+                .isEqualTo(SymbolRules.NONE);
     }
 
     /** The same symbol on futures is the same pair's other market, with its own, coarser filters. */

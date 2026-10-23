@@ -14,6 +14,7 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
@@ -60,7 +61,18 @@ public class MarketApiImpl implements MarketApi {
     @Transactional(readOnly = true)
     public Optional<TradablePair> tradablePair(UUID pairId, MarketType market) {
         return pairs.findById(pairId).filter(pair -> pair.isEnabledOn(market)).flatMap(pair -> pair.filters(market)
-                .map(filters -> new TradablePair(pair.getId(), pair.getSymbol(), market, filters)));
+                .map(filters -> new TradablePair(
+                        pair.getId(),
+                        pair.getSymbol(),
+                        market,
+                        filters,
+                        pair.exchangeStatus(market) == null || pair.exchangeStatus(market) == ExchangeStatus.TRADING)));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UUID> spotPairsNotTrading() {
+        return pairs.findIdsNotTradingOnSpot();
     }
 
     @Override

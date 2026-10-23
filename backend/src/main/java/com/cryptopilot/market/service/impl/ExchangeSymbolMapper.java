@@ -1,6 +1,7 @@
 package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.SymbolRules;
 import com.cryptopilot.market.client.ExchangeSymbol;
 import com.cryptopilot.market.model.ExchangeListing;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -53,17 +54,19 @@ public final class ExchangeSymbolMapper {
         if (market == MarketType.FUTURES && !PERPETUAL.equals(symbol.contractType())) {
             return Optional.empty();
         }
-        return filtersOf(symbol)
+        return filtersOf(market, symbol)
                 .map(filters -> new ExchangeListing(
                         market, symbol.symbol(), symbol.baseAsset(), symbol.quoteAsset(), symbol.isTrading(), filters));
     }
 
-    private static Optional<PairFilters> filtersOf(ExchangeSymbol symbol) {
+    /** The filters; the other rules only on Spot, the market paper orders are checked on (TR-02). */
+    private static Optional<PairFilters> filtersOf(MarketType market, ExchangeSymbol symbol) {
         if (symbol.tickSize() == null || symbol.stepSize() == null || symbol.minNotional() == null) {
             return Optional.empty();
         }
+        SymbolRules rules = market == MarketType.SPOT ? symbol.rules() : SymbolRules.NONE;
         try {
-            return Optional.of(new PairFilters(symbol.tickSize(), symbol.stepSize(), symbol.minNotional()));
+            return Optional.of(new PairFilters(symbol.tickSize(), symbol.stepSize(), symbol.minNotional(), rules));
         } catch (IllegalArgumentException unusable) {
             return Optional.empty();
         }

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 
+import com.cryptopilot.market.SymbolRules;
 import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.model.enums.BinanceVenue;
 import com.cryptopilot.market.model.enums.MarketInterval;
@@ -124,9 +125,59 @@ class BinanceRestClientTest {
         void NSF01_theOlderSpotMinNotionalFilter_isReadToo() {
             exchange.on(SPOT_EXCHANGE_INFO, Answer.ok("""
                     {"symbols":[{"symbol":"ETHUSDT","status":"TRADING","baseAsset":"ETH","quoteAsset":"USDT",
-                      "filters":[{"filterType":"MIN_NOTIONAL","minNotional":"10.00000000"}]}]}"""));
+                      "filters":[{"filterType":"MIN_NOTIONAL","minNotional":"10.00000000","applyToMarket":false}]}]}"""));
 
-            assertThat(client.spotExchangeInfo().get(0).minNotional()).isEqualTo(new BigDecimal("10.00000000"));
+            ExchangeSymbol eth = client.spotExchangeInfo().get(0);
+            assertThat(eth.minNotional()).isEqualTo(new BigDecimal("10.00000000"));
+            assertThat(eth.rules().applyMinToMarket()).isFalse();
+        }
+
+        /** TR-02: every other Spot filter is read into the rules, a zero turned off; one missing is off too. */
+        @Test
+        void TR02_spotExchangeInfo_readsEveryOtherFilterIntoTheRules() {
+            exchange.on(SPOT_EXCHANGE_INFO, Answer.ok("""
+                    {"symbols":[
+                      {"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","filters":[
+                        {"filterType":"PRICE_FILTER","minPrice":"0.01000000","maxPrice":"1000000.00000000","tickSize":"0.01000000"},
+                        {"filterType":"LOT_SIZE","minQty":"0.00001000","maxQty":"9000.00000000","stepSize":"0.00001000"},
+                        {"filterType":"MARKET_LOT_SIZE","minQty":"0.00000000","maxQty":"124.19455715","stepSize":"0.00000000"},
+                        {"filterType":"TRAILING_DELTA","minTrailingAboveDelta":10,"maxTrailingAboveDelta":2000,
+                         "minTrailingBelowDelta":20,"maxTrailingBelowDelta":3000},
+                        {"filterType":"PERCENT_PRICE_BY_SIDE","bidMultiplierUp":"1.2","bidMultiplierDown":"0.5",
+                         "askMultiplierUp":"2","askMultiplierDown":"0.8","avgPriceMins":5},
+                        {"filterType":"NOTIONAL","minNotional":"5.00000000","applyMinToMarket":true,
+                         "maxNotional":"9000000.00000000","applyMaxToMarket":false,"avgPriceMins":5},
+                        {"filterType":"MAX_NUM_ORDERS","maxNumOrders":200},
+                        {"filterType":"MAX_NUM_ALGO_ORDERS","maxNumAlgoOrders":5}]},
+                      {"symbol":"BADUSDT","status":"TRADING","baseAsset":"BAD","quoteAsset":"USDT","filters":[
+                        {"filterType":"PRICE_FILTER","minPrice":"-1","tickSize":"0.01"}]}]}"""));
+
+            List<ExchangeSymbol> symbols = client.spotExchangeInfo();
+
+            SymbolRules btc = symbols.get(0).rules();
+            assertThat(btc.minPrice()).isEqualByComparingTo("0.01");
+            assertThat(btc.maxPrice()).isEqualByComparingTo("1000000");
+            assertThat(btc.minQuantity()).isEqualByComparingTo("0.00001");
+            assertThat(btc.maxQuantity()).isEqualByComparingTo("9000");
+            assertThat(btc.marketMinQuantity()).as("zero is off").isNull();
+            assertThat(btc.marketMaxQuantity()).isEqualByComparingTo("124.19455715");
+            assertThat(btc.marketStepSize()).isNull();
+            assertThat(btc.applyMinToMarket()).isTrue();
+            assertThat(btc.maxNotional()).isEqualByComparingTo("9000000");
+            assertThat(btc.applyMaxToMarket()).isFalse();
+            assertThat(btc.bidMultiplierUp()).isEqualByComparingTo("1.2");
+            assertThat(btc.bidMultiplierDown()).isEqualByComparingTo("0.5");
+            assertThat(btc.askMultiplierUp()).isEqualByComparingTo("2");
+            assertThat(btc.askMultiplierDown()).isEqualByComparingTo("0.8");
+            assertThat(btc.minTrailingAboveDelta()).isEqualTo(10);
+            assertThat(btc.maxTrailingAboveDelta()).isEqualTo(2000);
+            assertThat(btc.minTrailingBelowDelta()).isEqualTo(20);
+            assertThat(btc.maxTrailingBelowDelta()).isEqualTo(3000);
+            assertThat(btc.maxNumOrders()).isEqualTo(200);
+            assertThat(btc.maxNumAlgoOrders()).isEqualTo(5);
+            assertThat(symbols.get(1).rules())
+                    .as("a rule out of shape leaves the symbol without rules, not the response unread")
+                    .isEqualTo(SymbolRules.NONE);
         }
 
         /** NSF-02: the documented field order, the query the exchange needs, and the Spot path. */

@@ -107,6 +107,10 @@ public class PaperOrder extends BaseEntity {
     @Column(name = "triggered_at")
     private Instant triggeredAt;
 
+    /** When a pending order of a group was placed, its working order having filled; {@code null} for every other. */
+    @Column(name = "activated_at")
+    private Instant activatedAt;
+
     /** The quantity asked for, or {@code null} for a MARKET buy sized by what it spends. */
     @Column(name = "orig_quantity", precision = 28, scale = 12, updatable = false)
     private BigDecimal origQuantity;
@@ -321,12 +325,16 @@ public class PaperOrder extends BaseEntity {
         return orderStatus == OrderStatus.PENDING_NEW;
     }
 
-    /** Places a pending order of a group, now that its working order filled: it works from now on. */
-    public void activate() {
+    /**
+     * Places a pending order of a group, now that its working order filled at {@code at}: it works from then on, and
+     * no price traded before then reaches it (D-77).
+     */
+    public void activate(Instant at) {
         if (!isPending()) {
             throw new IllegalStateException("order " + getId() + " is " + orderStatus + ", not PENDING_NEW");
         }
         orderStatus = OrderStatus.NEW;
+        activatedAt = Objects.requireNonNull(at, "at must not be null");
     }
 
     /**
@@ -368,11 +376,25 @@ public class PaperOrder extends BaseEntity {
     }
 
     /**
-     * When the order started waiting at its limit price: when it was placed, or for a stop when it triggered. A price
-     * traded before then never fills it (D-77).
+     * When the order started waiting at its limit price: for a stop when it triggered, for a pending order of a group
+     * when it was activated, otherwise when it was placed. A price traded before then never fills it (D-77).
+     *
+     * <p>Reference: Akidau, T. et al. (2015). The Dataflow Model. <i>PVLDB</i>, 8(12), 1792-1803 (event time, not
+     * processing time: the same instant live and after a restart).
      */
     public Instant restingSince() {
-        return triggeredAt != null ? triggeredAt : getCreatedAt();
+        if (triggeredAt != null) {
+            return triggeredAt;
+        }
+        return activatedAt != null ? activatedAt : getCreatedAt();
+    }
+
+    /**
+     * When a stop started being watched for its trigger: when a pending order of a group was activated, otherwise
+     * when it was placed. A price traded before then never triggers it (D-77).
+     */
+    public Instant watchedSince() {
+        return activatedAt != null ? activatedAt : getCreatedAt();
     }
 
     /** Records that the last price triggered the stop at {@code at}: from then on it works as the order it carries. */
@@ -476,10 +498,20 @@ public class PaperOrder extends BaseEntity {
 
     /** Ends a working order, or a pending order of a group, the Trader cancelled. */
     public void cancel(Instant at) {
+        cancel(null, at);
+    }
+
+    /**
+     * Ends a working order, or a pending order of a group, cancelled for a reason of the system rather than by the
+     * Trader, e.g. its pair stopped trading.
+     *
+     * @param reason a short code the order history shows; {@code null} for a cancel of the Trader
+     */
+    public void cancel(String reason, Instant at) {
         if (!isPending()) {
             requireOpen("cancelled");
         }
-        end(OrderStatus.CANCELED, null, at);
+        end(OrderStatus.CANCELED, reason, at);
     }
 
     /**

@@ -147,7 +147,10 @@ public class SpotArrival {
         }
     }
 
-    /** Hands a working limit order to the matching engine, which tracks it once the transaction commits. */
+    /**
+     * Hands a working limit order to the matching engine, which tracks it once the transaction commits, waiting since
+     * {@link PaperOrder#restingSince()}: the same instant a restart rebuilds it from (D-77).
+     */
     public void rest(PaperAccount account, PaperOrder order) {
         events.publishEvent(new PaperOrderRested(new RestingOrder(
                 order.getId(),
@@ -159,7 +162,10 @@ public class SpotArrival {
                 order.restingSince())));
     }
 
-    /** Hands a Spot stop to the matching engine, which watches it once the placement commits. */
+    /**
+     * Hands a Spot stop to the matching engine, which watches it once the transaction commits, since
+     * {@link PaperOrder#watchedSince()}: the same instant a restart rebuilds it from (D-77).
+     */
     public void awaitTrigger(PaperAccount account, PaperOrder order) {
         events.publishEvent(new PaperOrderAwaitingTrigger(new TriggerOrder(
                 order.getId(),
@@ -171,7 +177,7 @@ public class SpotArrival {
                 order.getStopPrice(),
                 order.getCallbackRate(),
                 order.getTrailingExtremePrice(),
-                order.getCreatedAt())));
+                order.watchedSince())));
     }
 
     /**

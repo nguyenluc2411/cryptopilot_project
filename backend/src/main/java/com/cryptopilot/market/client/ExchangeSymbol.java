@@ -1,6 +1,8 @@
 package com.cryptopilot.market.client;
 
+import com.cryptopilot.market.SymbolRules;
 import java.math.BigDecimal;
+import java.util.Objects;
 
 /**
  * One tradable symbol of an exchange-information response, reduced to what the system uses: its
@@ -22,6 +24,7 @@ import java.math.BigDecimal;
  * @param minQuantity the smallest quantity ({@code LOT_SIZE.minQty}), or {@code null}
  * @param minNotional the smallest order value (Spot {@code NOTIONAL.minNotional} or
  *     {@code MIN_NOTIONAL.minNotional}, futures {@code MIN_NOTIONAL.notional}), or {@code null}
+ * @param rules the other filters the symbol sent, each {@code null} when not sent or zero
  */
 public record ExchangeSymbol(
         String symbol,
@@ -32,10 +35,39 @@ public record ExchangeSymbol(
         BigDecimal tickSize,
         BigDecimal stepSize,
         BigDecimal minQuantity,
-        BigDecimal minNotional) {
+        BigDecimal minNotional,
+        SymbolRules rules) {
 
     /** The status a symbol has while it can be traded; any other status is flagged by NSF-01. */
     public static final String TRADING = "TRADING";
+
+    public ExchangeSymbol {
+        Objects.requireNonNull(rules, "rules");
+    }
+
+    /** A symbol with no filter beyond the tick, the step, the minimum quantity and the minimum notional. */
+    public ExchangeSymbol(
+            String symbol,
+            String status,
+            String baseAsset,
+            String quoteAsset,
+            String contractType,
+            BigDecimal tickSize,
+            BigDecimal stepSize,
+            BigDecimal minQuantity,
+            BigDecimal minNotional) {
+        this(
+                symbol,
+                status,
+                baseAsset,
+                quoteAsset,
+                contractType,
+                tickSize,
+                stepSize,
+                minQuantity,
+                minNotional,
+                SymbolRules.NONE);
+    }
 
     /** Whether the exchange still trades this symbol (NSF-01: a pair that stops trading is flagged). */
     public boolean isTrading() {

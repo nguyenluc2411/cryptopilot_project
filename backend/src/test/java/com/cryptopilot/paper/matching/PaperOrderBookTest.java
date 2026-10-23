@@ -302,6 +302,145 @@ class PaperOrderBookTest {
         assertThat(queue.queueAhead(buy.orderId())).contains(new BigDecimal("1"));
     }
 
+    @Test
+    void D77_mergedTrades_aTradeAfterThePlacement_fillsTheOrder_thoughAnEarlierOneSetTheLow() {
+        PaperOrderBook cross = new PaperOrderBook(LimitFillMode.CROSS);
+        RestingOrder buy = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.BUY,
+                new BigDecimal("99"),
+                at(5));
+        cross.track(buy);
+        PriceRange merged = tradeAt("98", "1", true, 3).withTrades(tradeAt("98.5", "1", true, 7));
+
+        assertThat(merged.lowAt())
+                .as("the low still carries its earliest trade")
+                .isEqualTo(at(3));
+        assertThat(cross.reach(merged, NO_QUEUE)).containsExactly(new PaperOrderBook.Reached(buy, at(7)));
+        assertThat(cross.size()).isZero();
+    }
+
+    @Test
+    void D77_mergedTrades_allBeforeThePlacement_neverFillTheOrder() {
+        RestingOrder buy = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.BUY,
+                new BigDecimal("99"),
+                at(5));
+        book.track(buy);
+
+        assertThat(book.reach(tradeAt("98", "1", true, 3).withTrades(tradeAt("97", "1", true, 4)), NO_QUEUE))
+                .isEmpty();
+        assertThat(book.size()).isEqualTo(1);
+    }
+
+    @Test
+    void D77_queue_onlyTheVolumeTradedAfterThePlacement_consumesTheQueue() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder buy = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.BUY,
+                new BigDecimal("80000"),
+                at(5));
+        queue.track(buy, new BigDecimal("1"));
+        PriceRange merged = tradeAt("80000", "5", true, 3).withTrades(tradeAt("80000", "0.4", true, 7));
+
+        assertThat(queue.reach(merged, NO_QUEUE)).isEmpty();
+        assertThat(queue.queueAhead(buy.orderId())).contains(new BigDecimal("0.6"));
+        assertThat(queue.reach(tradeAt("80000", "0.7", true, 8), NO_QUEUE))
+                .containsExactly(new PaperOrderBook.Reached(buy, at(8)));
+    }
+
+    @Test
+    void D77_queue_mergedTrades_fillAtTheTradeThatConsumedTheQueue() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder buy = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.BUY,
+                new BigDecimal("80000"),
+                at(5));
+        RestingOrder sell = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.SELL,
+                new BigDecimal("80001"),
+                at(5));
+        queue.track(buy, new BigDecimal("1"));
+        queue.track(sell, new BigDecimal("1"));
+        PriceRange merged = tradeAt("80000", "0.6", true, 6)
+                .withTrades(tradeAt("80000", "0.6", true, 7))
+                .withTrades(tradeAt("80001", "0.1", true, 9));
+
+        assertThat(queue.reach(merged, NO_QUEUE))
+                .as("the sell sees a taker of the other side at its price")
+                .containsExactly(new PaperOrderBook.Reached(buy, at(7)), new PaperOrderBook.Reached(sell, at(9)));
+    }
+
+    @Test
+    void TR05_catchUp_fillsAnOrderJustTrackedByAnEarlierReadTrade_withoutConsumingItsQueue() {
+        PaperOrderBook queue = new PaperOrderBook(LimitFillMode.QUEUE);
+        RestingOrder through = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.BUY,
+                new BigDecimal("99"),
+                at(5));
+        RestingOrder atPrice = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                OrderSide.BUY,
+                new BigDecimal("98"),
+                at(5));
+        queue.track(through, BigDecimal.ONE);
+        queue.track(atPrice, BigDecimal.ONE);
+        List<PriceRange.Print> prints =
+                List.of(new PriceRange.Print(new BigDecimal("98"), BigDecimal.TEN, true, at(7)));
+
+        assertThat(queue.catchUp(through.orderId(), prints)).contains(new PaperOrderBook.Reached(through, at(7)));
+        assertThat(queue.catchUp(atPrice.orderId(), prints))
+                .as("its queue was read from the book after that trade")
+                .isEmpty();
+        assertThat(queue.queueAhead(atPrice.orderId())).contains(BigDecimal.ONE);
+        assertThat(queue.catchUp(UUID.randomUUID(), prints)).isEmpty();
+        assertThat(queue.size()).isEqualTo(1);
+    }
+
+    private static final PaperOrderBook.QueueLookup NO_QUEUE = (market, pairId, side, price) -> Optional.empty();
+
+    private static Instant at(int second) {
+        return NEXT_MINUTE.plusSeconds(second);
+    }
+
+    private static PriceRange tradeAt(String price, String quantity, boolean buyerMaker, int second) {
+        return PriceRange.of(new MarketTrade(
+                MarketType.SPOT,
+                PAIR,
+                1,
+                new BigDecimal(price),
+                new BigDecimal(quantity),
+                at(second),
+                buyerMaker,
+                at(second)));
+    }
+
     private static PriceRange trade(String price, String quantity, boolean buyerMaker) {
         return PriceRange.of(new MarketTrade(
                 MarketType.SPOT,

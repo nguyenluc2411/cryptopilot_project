@@ -8,6 +8,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import java.math.BigDecimal;
 import java.util.UUID;
 
@@ -24,8 +25,13 @@ import java.util.UUID;
  *   <li>OTOCO: {@code working} and {@code oco}: a limit with TP/SL, the OCO placed once the working order has filled.
  * </ul>
  *
- * <p>Prices are rounded to the pair's tick and quantities floored to its step, as for one order. Every LIMIT and
- * limit stop of a group is GTC. Cancelling any order of a group cancels the group.
+ * <p>Every price and quantity is checked against the pair's Spot filters, as for one order, and refused, never
+ * rounded, when it breaks one. Every LIMIT and limit stop of a group is GTC. Cancelling any order of a group cancels
+ * the group.
+ *
+ * <p>A pending stop of an OTO, and the pending OCO of an OTOCO, are checked against the working order's price, where
+ * they start: a stop already met there is refused ({@code PAPER_ORDER_WOULD_TRIGGER}), and an OCO's take profit and
+ * stop lie on either side of it (for a SELL the take profit above and the stop below).
  *
  * @param pairId the pair, enabled on the market
  * @param market {@code SPOT}
@@ -33,6 +39,8 @@ import java.util.UUID;
  * @param working OTO and OTOCO: the order placed now
  * @param pending OTO: the order placed once the working order has filled
  * @param oco OCO: the two orders placed now; OTOCO: the two orders placed once the working order has filled
+ * @param listClientOrderId the idempotency key: a request sent again with the same key returns the group already
+ *     placed instead of placing a second one; up to 64 letters, digits and {@code . _ : -}. Optional
  */
 public record PlaceOrderListRequest(
         @NotNull(message = "MSG01") UUID pairId,
@@ -40,7 +48,10 @@ public record PlaceOrderListRequest(
         @NotNull(message = "MSG01") OrderListType type,
         @Valid Leg working,
         @Valid Leg pending,
-        @Valid Oco oco) {
+        @Valid Oco oco,
+
+        @Pattern(regexp = "[A-Za-z0-9._:-]{1,64}", message = "MSG15")
+        String listClientOrderId) {
 
     /**
      * One order of an OTO or OTOCO.

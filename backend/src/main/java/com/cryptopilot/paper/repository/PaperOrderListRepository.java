@@ -21,6 +21,9 @@ public interface PaperOrderListRepository extends Repository<PaperOrderList, UUI
     @Transactional(readOnly = true)
     Optional<PaperOrderList> findById(UUID id);
 
+    /** The account's group with this idempotency key, or empty. */
+    Optional<PaperOrderList> findByAccountIdAndListClientOrderId(UUID accountId, String listClientOrderId);
+
     /** Writes a group. Not transactional here; the unit of work is the calling service's. */
     PaperOrderList save(PaperOrderList list);
 }
