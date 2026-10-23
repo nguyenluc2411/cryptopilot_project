@@ -451,11 +451,14 @@ public class TradingPlan extends BaseEntity {
 
     /**
      * The values a plan of this entry type must or must not carry: an analysis timeframe always (MSG01), no invalidation
-     * price on a MARKET plan, which never waits (MSG01, as for a value a plan type fixes).
+     * price on a MARKET plan, which never waits (MSG01, as for a value a plan type fixes). Every save runs it; the
+     * calculation panel runs it too, so it accepts only what a save accepts.
      *
      * <p>Rule: BR-68, BR-70; D-111, D-112.
+     *
+     * @throws FieldValidationException naming the field (MSG01)
      */
-    private static void requireValidDetails(PlanDetails details) {
+    public static void requireValidDetails(PlanDetails details) {
         if (details.analysisTimeframe() == null) {
             throw new FieldValidationException(
                     "a plan needs an analysis timeframe", Map.of("analysisTimeframe", "MSG01"));

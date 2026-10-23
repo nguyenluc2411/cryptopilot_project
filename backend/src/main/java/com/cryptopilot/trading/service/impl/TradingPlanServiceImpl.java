@@ -115,7 +115,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     public PlanCalculationResponse calculate(UUID userId, CreateTradingPlanRequest request) {
         CalculatedPlan calculated = calculate(userId, request.pairId(), terms(request), NO_PLAN);
         // The save's checks too, so the panel accepts only what create accepts.
-        requireValidAtSave(request.pairId(), calculated, details(userId, request, calculated, clock.instant()), false);
+        PlanDetails details = details(userId, request, calculated, clock.instant());
+        requireValidAtSave(request.pairId(), calculated, details, false);
+        TradingPlan.requireValidDetails(details);
         return PlanResponses.calculation(calculated);
     }
 

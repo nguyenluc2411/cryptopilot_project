@@ -182,6 +182,24 @@ class TradingPlanApiTest {
         assertThat(plansOf(trader)).isZero();
     }
 
+    /** The panel answers what a save answers: a MARKET plan takes no invalidation price (MSG01). */
+    @Test
+    void MSG01_thePanel_refusesAMarketPlanWithAnInvalidationPrice_asCreateDoes() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        String body = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110, \"invalidationPrice\": 120}";
+
+        as(trader, post(PLANS + "/calculate"), body)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG01"))
+                .andExpect(jsonPath("$.errors.invalidationPrice").value("MSG01"));
+        as(trader, post(PLANS), body)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.invalidationPrice").value("MSG01"));
+        assertThat(plansOf(trader)).isZero();
+    }
+
     @Test
     void MSG01_aMissingValue_isNamedUnderErrors() throws Exception {
         as(

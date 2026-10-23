@@ -1044,6 +1044,16 @@ class TradingPlanServiceImplTest {
         verify(plans, never()).save(any());
     }
 
+    /** The panel refuses what a save refuses: a MARKET plan carrying an invalidation price. */
+    @Test
+    void MSG01_thePanel_refusesAMarketPlanWithAnInvalidationPrice_asASaveDoes() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
+
+        assertThatThrownBy(() -> service.calculate(USER, withValidity(spotMarket("95", "110"), "120", null, null)))
+                .satisfies(e -> assertFields(e, Map.of("invalidationPrice", "MSG01")));
+        verify(plans, never()).save(any());
+    }
+
     @Test
     void BR68_anInvalidationPrice_isNotCheckedWithoutACurrentPrice_soTheSaveIsRefused() {
         when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.empty());
