@@ -79,7 +79,7 @@ public class TradingPlanController {
             description = "MSG18: a BLOCKING warning; MSG27: the limit of ACTIVE plans and open positions")
     @ApiResponse(
             responseCode = "503",
-            description = "MSG43: no current price for a MARKET entry or to check the invalidation price")
+            description = "MSG43: no current price for a MARKET entry or to check the invalidation or stop price")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public TradingPlanResponse create(
@@ -128,7 +128,7 @@ public class TradingPlanController {
             description = "MSG43: the plan is not a draft; MSG18: a BLOCKING warning; MSG27: the plan limit")
     @ApiResponse(
             responseCode = "503",
-            description = "MSG43: no current price for a MARKET entry or to check the invalidation price")
+            description = "MSG43: no current price for a MARKET entry or to check the invalidation or stop price")
     @PutMapping("/{id}")
     public TradingPlanResponse update(
             @AuthenticationPrincipal Jwt caller,
@@ -142,7 +142,7 @@ public class TradingPlanController {
     @ApiResponse(
             responseCode = "400",
             description =
-                    "MSG01, MSG15, MSG16: the plan no longer passes the calculation, or its invalidation price is no longer on the far side of the current price")
+                    "MSG01, MSG15, MSG16: the plan no longer passes the calculation, its invalidation price is no longer on the far side of the current price, or its STOP is already triggered")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller, or the pair is not enabled")
@@ -151,7 +151,7 @@ public class TradingPlanController {
             description = "MSG43: the plan is not a draft; MSG18: a BLOCKING warning; MSG27: the plan limit")
     @ApiResponse(
             responseCode = "503",
-            description = "MSG43: no current price for a MARKET entry or to check the invalidation price")
+            description = "MSG43: no current price for a MARKET entry or to check the invalidation or stop price")
     @PostMapping("/{id}/activate")
     public TradingPlanResponse activate(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
         return plans.activate(callerOf(caller), id);

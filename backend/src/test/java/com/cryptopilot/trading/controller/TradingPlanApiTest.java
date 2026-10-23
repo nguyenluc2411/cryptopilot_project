@@ -11,7 +11,9 @@ import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.model.PlanListQuery;
@@ -34,6 +36,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.AfterEach;
@@ -61,8 +64,8 @@ import org.springframework.test.web.servlet.ResultActions;
  * BR-29 thresholds V3 seeded, the D-63 lock under two concurrent activations and the statements a list costs.
  *
  * <p>Nothing is rolled back: the concurrency test needs two committed transactions, so every test writes its own
- * Traders, pair and plans and {@link #removeRows()} deletes them. LIMIT plans only: a MARKET entry needs a streamed
- * price, which {@code TradingPlanServiceImplTest} covers.
+ * Traders, pair and plans and {@link #removeRows()} deletes them. No MARKET plans: their entry price is covered by
+ * {@code TradingPlanServiceImplTest}; the STOP activation tests stream a Spot last price into the cache.
  *
  * <p>Rule: UC-16 to UC-20; BR-62; SRS 3.1.3; CR-04; D-63.
  */
@@ -91,12 +94,18 @@ class TradingPlanApiTest {
     @Autowired
     private EntityManagerFactory emf;
 
+    @Autowired
+    private PriceCacheService prices;
+
+    private static final AtomicLong TICKS = new AtomicLong();
+
     private final List<UUID> accounts = new ArrayList<>();
     private UUID pair;
+    private String symbol;
 
     @BeforeEach
     void insertPair() {
-        String symbol = "TP" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
+        symbol = "TP" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
         pair = new MarketTestData(sql, Instant.now()).pair(symbol, true, true, "TRADING", "TRADING", 0);
         sql.sql("""
                         update crypto_pair set spot_tick_size = 0.01, spot_step_size = 0.001, spot_min_notional = 5,
@@ -480,9 +489,50 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.statusHistory[2].status").value("INVALIDATED"));
     }
 
+    @ParameterizedTest(name = "last price {0}")
+    @CsvSource({"100", "101"})
+    void MSG16_saveAndActivateAStopTheLastPriceAlreadyTriggered_isRefusedOnTheEntryPrice(String last) throws Exception {
+        UUID trader = trader();
+        lastPrice(last);
+
+        as(trader, post(PLANS), spotStop("{\"activate\": true}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.errors.entryPrice").value("MSG16"));
+        assertThat(plansOf(trader)).isZero();
+    }
+
+    @Test
+    void BR33_saveAndActivateAStopNotYetTriggered_isActiveAndWaits() throws Exception {
+        lastPrice("99.99");
+
+        as(trader(), post(PLANS), spotStop("{\"activate\": true}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+    }
+
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
+
+    /** Streams a Spot ticker of the test pair into the price cache, newer than every earlier one. */
+    private void lastPrice(String last) {
+        BigDecimal value = new BigDecimal(last);
+        prices.record(
+                MarketType.SPOT,
+                new TickerMessage(
+                        symbol,
+                        value,
+                        value,
+                        value,
+                        value,
+                        value,
+                        BigDecimal.ZERO,
+                        BigDecimal.ONE,
+                        BigDecimal.ONE,
+                        Instant.now().plusMillis(TICKS.incrementAndGet())));
+        prices.flush();
+    }
 
     private ResultActions as(
             UUID trader,

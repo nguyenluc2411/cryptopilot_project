@@ -17,7 +17,8 @@ import java.util.UUID;
  * @param market the market
  * @param pairId the pair
  * @param direction LONG or SHORT
- * @param entryType LIMIT or STOP (a MARKET entry fills at activation and is never published here)
+ * @param entryType LIMIT or STOP (a MARKET entry, or a LIMIT the last price reached at activation, fills at once and
+ *     is never published here)
  * @param entryPrice the entry price of the stored snapshot
  * @param activatedAt when the plan became ACTIVE
  */

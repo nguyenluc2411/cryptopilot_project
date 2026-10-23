@@ -12,7 +12,7 @@ import java.util.Optional;
  * lie and how far its own entry deviation limit may go. Pure functions; the caller reads the current price and the
  * settings and reports a violation on its field.
  *
- * <p>Rule: BR-68, BR-69; D-111, D-112.
+ * <p>Rule: BR-33, BR-68, BR-69; D-111, D-112.
  */
 public final class PlanValidityRule {
 
@@ -59,6 +59,38 @@ public final class PlanValidityRule {
                 WRONG_SIDE,
                 "the invalidation price of a " + entryType + " " + direction + " plan must be "
                         + (mustBeAbove ? "above" : "below") + " the current price " + currentPrice.toPlainString()));
+    }
+
+    /**
+     * A STOP whose trigger the last price has already reached may not be activated: at or above the stop price for a
+     * LONG, at or below it for a SHORT (MSG16 on {@code entryPrice}). It is never turned into a MARKET entry.
+     *
+     * <p>Rule: BR-33; D-112 (Q-72).
+     *
+     * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges</i>. Oxford University Press, ch. 4 (a stop order
+     * triggers at or through its stop price).
+     *
+     * @param direction LONG or SHORT
+     * @param stopPrice the plan's stop price
+     * @param lastPrice the current last price of the pair
+     * @return the violation, or empty when the stop is not triggered yet
+     */
+    public static Optional<InputViolation> stopAlreadyTriggered(
+            Direction direction, BigDecimal stopPrice, BigDecimal lastPrice) {
+        Objects.requireNonNull(direction, "direction");
+        Objects.requireNonNull(stopPrice, "stopPrice");
+        Objects.requireNonNull(lastPrice, "lastPrice");
+        int compared = lastPrice.compareTo(stopPrice);
+        boolean triggered = direction == Direction.LONG ? compared >= 0 : compared <= 0;
+        if (!triggered) {
+            return Optional.empty();
+        }
+        return Optional.of(new InputViolation(
+                "entryPrice",
+                WRONG_SIDE,
+                "the stop price of a STOP " + direction + " plan must be "
+                        + (direction == Direction.LONG ? "above" : "below") + " the current price "
+                        + lastPrice.toPlainString()));
     }
 
     /**

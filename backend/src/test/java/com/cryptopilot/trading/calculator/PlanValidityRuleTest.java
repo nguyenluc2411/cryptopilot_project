@@ -65,6 +65,32 @@ class PlanValidityRuleTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /** Equal to the stop counts as triggered on both sides. */
+    @ParameterizedTest(name = "{0} stop 100 at last {1} -> refused {2}")
+    @CsvSource({
+        "LONG,  99.99,  false",
+        "LONG,  100,    true",
+        "LONG,  100.01, true",
+        "SHORT, 100.01, false",
+        "SHORT, 100,    true",
+        "SHORT, 99.99,  true"
+    })
+    void BR33_aStopTheLastPriceAlreadyReached_isMsg16OnTheEntryPrice(
+            Direction direction, String last, boolean refused) {
+        Optional<InputViolation> violation =
+                PlanValidityRule.stopAlreadyTriggered(direction, new BigDecimal("100"), new BigDecimal(last));
+
+        if (refused) {
+            assertThat(violation).hasValueSatisfying(v -> {
+                assertThat(v.field()).isEqualTo("entryPrice");
+                assertThat(v.messageCode()).isEqualTo("MSG16");
+                assertThat(v.detail()).contains(direction.name()).contains("current price " + last);
+            });
+        } else {
+            assertThat(violation).isEmpty();
+        }
+    }
+
     @ParameterizedTest(name = "{0} R with block {1} -> {2}")
     @CsvSource({
         "0,          0.75, false",

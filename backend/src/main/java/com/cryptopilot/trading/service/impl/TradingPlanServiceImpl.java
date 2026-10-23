@@ -111,7 +111,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     @Override
     @Transactional(readOnly = true)
     public PlanCalculationResponse calculate(UUID userId, CreateTradingPlanRequest request) {
-        return PlanResponses.calculation(calculate(userId, request.pairId(), terms(request), NO_PLAN));
+        CalculatedPlan calculated = calculate(userId, request.pairId(), terms(request), NO_PLAN);
+        // The save's checks too, so the panel accepts only what create accepts.
+        requireValidAtSave(request.pairId(), calculated, details(userId, request, calculated, clock.instant()), false);
+        return PlanResponses.calculation(calculated);
     }
 
     @Override
@@ -123,8 +126,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             activePlanLock.lock(userId);
         }
         CalculatedPlan calculated = calculate(userId, request.pairId(), terms(request), NO_PLAN);
-        PlanDetails details = details(userId, request, now);
-        requireValidAtSave(request.pairId(), calculated, details);
+        PlanDetails details = details(userId, request, calculated, now);
+        requireValidAtSave(request.pairId(), calculated, details, activate);
         TradingPlan plan =
                 TradingPlan.draft(userId, request.pairId(), calculated.calculation(), details, calculated.warnings());
         if (activate) {
@@ -143,9 +146,13 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             activePlanLock.lock(userId);
         }
         TradingPlan plan = owned(userId, planId);
+        if (!plan.isEditable()) {
+            // Before any calculation, so a plan that is not a draft answers 409 and not a validation error.
+            throw new IllegalPlanStateException(plan.getId(), plan.getStatus(), "edit");
+        }
         CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(request), plan.getId());
-        PlanDetails details = details(userId, request, now);
-        requireValidAtSave(plan.getPairId(), calculated, details);
+        PlanDetails details = details(userId, request, calculated, now);
+        requireValidAtSave(plan.getPairId(), calculated, details, activate);
         plan.updateDraft(calculated.calculation(), details, calculated.warnings());
         if (activate) {
             requireRoomForAnActivePlan(userId);
@@ -165,9 +172,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             throw new IllegalPlanStateException(plan.getId(), plan.getStatus(), "move to " + PlanStatus.ACTIVE);
         }
         requireRoomForAnActivePlan(userId);
-        requireValidAtActivation(plan);
         // Stored prices are checked against the current tick, not rounded to it (BR-30, BR-31).
         CalculatedPlan calculated = calculate(userId, plan.getPairId(), terms(plan), plan.getId(), false);
+        // After the calculation, whose entitlement check answers MSG29 before a missing Futures price answers 503.
+        requireValidAtActivation(plan);
         activate(plan, calculated, now);
         return PlanResponses.detail(plans.save(plan));
     }
@@ -337,11 +345,12 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     /**
      * The request's details with their defaults: a LIMIT or STOP plan without an expiry expires after
      * {@link #LIMIT_EXPIRY} (a MARKET plan has none by default), and without an analysis timeframe the plan takes the
-     * one of the Trader's style preset. A timeframe outside BR-08 is MSG15.
+     * one of the Trader's style preset. A timeframe outside BR-08 is MSG15. The invalidation price is rounded to the
+     * pair's tick like the other prices.
      *
-     * <p>Rule: BR-08, BR-70; SRS 3.5.1; D-71, D-111 (M1), D-112.
+     * <p>Rule: BR-08, BR-30, BR-70; SRS 3.5.1; D-71, D-111 (M1), D-112.
      */
-    private PlanDetails details(UUID userId, PlanInputs request, Instant now) {
+    private PlanDetails details(UUID userId, PlanInputs request, CalculatedPlan calculated, Instant now) {
         Instant expiresAt = request.expiresAt();
         if (expiresAt == null && request.entryType() != EntryType.MARKET) {
             expiresAt = now.plus(LIMIT_EXPIRY);
@@ -350,7 +359,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 request.entryType(),
                 expiresAt,
                 request.note(),
-                request.invalidationPrice(),
+                request.invalidationPrice() == null
+                        ? null
+                        : calculated.calculation().plan().filters().roundPrice(request.invalidationPrice()),
                 request.maxEntryDeviationR(),
                 analysisTimeframe(userId, request.analysisTimeframe()));
     }
@@ -368,47 +379,53 @@ public class TradingPlanServiceImpl implements TradingPlanService {
 
     /**
      * BR-69: a plan's own deviation limit within the system's block value; BR-68: the invalidation price on the far
-     * side of the current price (a MARKET plan carrying one is the aggregate's error).
+     * side of the current price (a MARKET plan carrying one is the aggregate's error); when the save also activates,
+     * BR-33: a STOP not already triggered.
      */
-    private void requireValidAtSave(UUID pairId, CalculatedPlan calculated, PlanDetails details) {
+    private void requireValidAtSave(UUID pairId, CalculatedPlan calculated, PlanDetails details, boolean activating) {
         List<InputViolation> violations = new ArrayList<>();
         PlanValidityRule.maxEntryDeviation(details.maxEntryDeviationR(), settings.decimal(ENTRY_DEVIATION_BLOCK_R))
                 .ifPresent(violations::add);
-        if (details.entryType() != EntryType.MARKET) {
-            invalidationViolation(
-                            pairId,
-                            calculated.calculation().plan().market(),
-                            details.entryType(),
-                            calculated.calculation().plan().direction(),
-                            details.invalidationPrice())
-                    .ifPresent(violations::add);
-        }
+        RiskInput plan = calculated.calculation().plan();
+        violations.addAll(priceViolations(
+                pairId,
+                plan.market(),
+                details.entryType(),
+                plan.direction(),
+                plan.entryPrice(),
+                details.invalidationPrice(),
+                activating));
         requireNone(violations);
     }
 
-    /** BR-68 again at activation (BR-31): the price may have moved to the plan's invalidation price since the save. */
+    /** BR-68 and BR-33 again at activation (BR-31): the price may have moved since the save. */
     private void requireValidAtActivation(TradingPlan plan) {
-        if (plan.getEntryType() != EntryType.MARKET) {
-            requireNone(invalidationViolation(
-                            plan.getPairId(),
-                            plan.getMarket(),
-                            plan.getEntryType(),
-                            plan.getDirection(),
-                            plan.getInvalidationPrice())
-                    .stream()
-                    .toList());
-        }
+        requireNone(priceViolations(
+                plan.getPairId(),
+                plan.getMarket(),
+                plan.getEntryType(),
+                plan.getDirection(),
+                plan.getEntryPrice(),
+                plan.getInvalidationPrice(),
+                true));
     }
 
     /**
-     * The invalidation price against the pair's current last price, never the mark price (D-112). Without a current
-     * last price the rule cannot be checked, so the save or activation is refused (MSG43); on Futures the cache holds
-     * a last price from TP-0 on.
+     * The invalidation price and, at activation, the stop price of a STOP against one read of the pair's current last
+     * price, never the mark price (D-112). Without a current last price these cannot be checked, so the save or
+     * activation is refused (MSG43); on Futures the cache holds a last price from TP-0 on.
      */
-    private Optional<InputViolation> invalidationViolation(
-            UUID pairId, MarketType marketType, EntryType entryType, Direction direction, BigDecimal invalidation) {
-        if (invalidation == null) {
-            return Optional.empty();
+    private List<InputViolation> priceViolations(
+            UUID pairId,
+            MarketType marketType,
+            EntryType entryType,
+            Direction direction,
+            BigDecimal entryPrice,
+            BigDecimal invalidation,
+            boolean activating) {
+        boolean stopAtActivation = activating && entryType == EntryType.STOP;
+        if (entryType == EntryType.MARKET || (invalidation == null && !stopAtActivation)) {
+            return List.of();
         }
         TradablePair pair = market.tradablePair(pairId, marketType)
                 .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", pairId));
@@ -416,8 +433,14 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.MARKET_PRICE_UNAVAILABLE,
                         "no current last price for " + pair.symbol() + " on " + pair.market()
-                                + " to check the invalidation price"));
-        return PlanValidityRule.invalidationPrice(entryType, direction, invalidation, last);
+                                + " to check the invalidation or stop price"));
+        List<InputViolation> violations = new ArrayList<>();
+        if (stopAtActivation) {
+            PlanValidityRule.stopAlreadyTriggered(direction, entryPrice, last).ifPresent(violations::add);
+        }
+        PlanValidityRule.invalidationPrice(entryType, direction, invalidation, last)
+                .ifPresent(violations::add);
+        return violations;
     }
 
     private static void requireNone(List<InputViolation> violations) {
