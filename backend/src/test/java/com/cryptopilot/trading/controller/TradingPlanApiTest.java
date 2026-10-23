@@ -555,6 +555,19 @@ class TradingPlanApiTest {
         assertThat(plansOf(trader)).isZero();
     }
 
+    /** POSITION reads as SWING (BR-13), so a POSITION Trader's plan without a timeframe is analysed on 4h. */
+    @Test
+    void D112_aPositionTrader_createsAPlanWithoutATimeframe_andGets4h() throws Exception {
+        UUID trader = trader();
+        sql.sql("update user_profile set trading_style = 'POSITION' where user_id = ?")
+                .param(trader)
+                .update();
+
+        as(trader, post(PLANS), spotLimit("100", "95", "110", false))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.analysisTimeframe").value("4h"));
+    }
+
     @ParameterizedTest(name = "last price {0}")
     @CsvSource({"100", "101"})
     void MSG16_saveAndActivateAStopTheLastPriceAlreadyTriggered_isRefusedOnTheEntryPrice(String last) throws Exception {
