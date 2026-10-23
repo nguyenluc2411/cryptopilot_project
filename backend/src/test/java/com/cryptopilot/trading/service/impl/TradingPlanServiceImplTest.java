@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -25,6 +26,7 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -43,6 +45,7 @@ import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.exception.PlanActivationBlockedException;
 import com.cryptopilot.trading.model.PlanListQuery;
+import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
@@ -140,6 +143,14 @@ class TradingPlanServiceImplTest {
                                 b.maintenanceAmount()))
                         .toList());
         when(market.currentFundingRate("BTCUSDT")).thenReturn(Optional.empty());
+        // No stored analysis unless a test stores one: the score is null and the preset is the one asked for.
+        when(market.closedCandleSetupScore(any(), any(), anyString(), any(), any()))
+                .thenAnswer(call -> new SetupScoreReading(
+                        null,
+                        call.getArgument(3) == null ? SetupStyle.DAY_TRADING : call.getArgument(3),
+                        "v1",
+                        call.getArgument(2),
+                        null));
         when(settings.decimal(PlanCalculationAssembler.LOW_RR)).thenReturn(new BigDecimal("1.5"));
         when(settings.decimal(PlanCalculationAssembler.WIDE_STOP_LOSS)).thenReturn(BigDecimal.TEN);
         when(settings.decimal(PlanCalculationAssembler.HIGH_FUNDING_RATE)).thenReturn(new BigDecimal("0.001"));
@@ -1198,14 +1209,75 @@ class TradingPlanServiceImplTest {
                 .isEqualTo(LiquidityRole.TAKER);
     }
 
-    /** No public API of {@code market} gives the setup score of a (pair, market, timeframe, preset) yet (Q-74). */
+    /** D-112: Save and Activate keeps the score of the latest closed candle of the plan's timeframe and its preset. */
     @Test
-    void BR70_activation_recordsNoSetupScoreUntilMarketOffersOne_andIsNotBlocked() {
+    void BR70_saveAndActivate_recordsTheSetupScoreAndItsPreset() {
+        when(styles.styleOf(USER)).thenReturn(Optional.of(SetupStyle.DAY_TRADING));
+        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null))
+                .thenReturn(new SetupScoreReading(62, SetupStyle.DAY_TRADING, "v1", "1h", NOW.minusSeconds(3600)));
+
+        TradingPlanResponse plan = service.create(USER, activating(spotLimit("100", "95", "110")));
+
+        assertThat(plan.status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(plan.setupScoreAtPlan()).isEqualByComparingTo("62");
+        assertThat(plan.setupScorePreset()).isEqualTo("DAY_TRADING v1");
+    }
+
+    @Test
+    void BR70_activate_recordsTheSetupScore() {
+        TradingPlan plan = draft();
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        assertThat(plan.getSetupScorePreset()).as("a draft has none").isNull();
+        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", null, null))
+                .thenReturn(new SetupScoreReading(48, SetupStyle.DAY_TRADING, "v1", "1h", NOW.minusSeconds(3600)));
+        when(styles.styleOf(USER)).thenReturn(Optional.empty());
+
+        TradingPlanResponse active = service.activate(USER, plan.getId());
+
+        assertThat(active.setupScoreAtPlan()).isEqualByComparingTo("48");
+        assertThat(active.setupScorePreset()).isEqualTo("DAY_TRADING v1");
+    }
+
+    /** A score that cannot be read is stored as null beside its preset; the activation goes on. */
+    @Test
+    void BR70_aNullSetupScore_neverBlocksTheActivation() {
         TradingPlanResponse plan = service.create(USER, activating(spotLimit("100", "95", "110")));
 
         assertThat(plan.status()).isEqualTo(PlanStatus.ACTIVE);
         assertThat(plan.setupScoreAtPlan()).isNull();
-        assertThat(plan.setupScorePreset()).isNull();
+        assertThat(plan.setupScorePreset()).isEqualTo("DAY_TRADING v1");
+    }
+
+    @Test
+    void BR70_aMarketPlanFilledAtActivation_keepsTheSetupScoreOfItsActivation() {
+        currentPrice(MarketType.SPOT, "100");
+        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", null, null))
+                .thenReturn(new SetupScoreReading(70, SetupStyle.DAY_TRADING, "v1", "1h", NOW.minusSeconds(3600)));
+        when(styles.styleOf(USER)).thenReturn(Optional.empty());
+
+        TradingPlanResponse plan = service.create(USER, activating(spotMarket("95", "110")));
+
+        assertThat(plan.status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(plan.setupScoreAtPlan()).isEqualByComparingTo("70");
+    }
+
+    /**
+     * D-112: "at plan" is the activation, so the preset is the one the Trader's style selects then, while the
+     * analysis timeframe stays the one the draft saved.
+     */
+    @Test
+    void BR70_thePreset_isTheTradersAtActivation_notAtTheDraftSave() {
+        when(styles.styleOf(USER)).thenReturn(Optional.of(SetupStyle.DAY_TRADING));
+        TradingPlan plan = draft();
+        assertThat(plan.getAnalysisTimeframe()).isEqualTo(AnalysisTimeframe.ONE_HOUR);
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        when(styles.styleOf(USER)).thenReturn(Optional.of(SetupStyle.SWING));
+
+        TradingPlanResponse active = service.activate(USER, plan.getId());
+
+        verify(market).closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.SWING, null);
+        assertThat(active.setupScorePreset()).isEqualTo("SWING v1");
+        assertThat(active.analysisTimeframe()).isEqualTo("1h");
     }
 
     private void currentPrice(MarketType marketType, String price) {

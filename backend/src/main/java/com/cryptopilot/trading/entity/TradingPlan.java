@@ -355,6 +355,27 @@ public class TradingPlan extends BaseEntity {
         expiredAt = now;
     }
 
+    /**
+     * Keeps the setup score read when the plan was activated, and the preset it was read under; the score may be
+     * {@code null}, which never blocks the activation.
+     *
+     * <p>Rule: BR-70; D-111 (M4), D-112.
+     *
+     * @param score the score 0–100, or {@code null} when none could be read
+     * @param preset the preset name and version, e.g. {@code DAY_TRADING v1}
+     */
+    public void recordSetupScoreAtPlan(BigDecimal score, String preset) {
+        Objects.requireNonNull(preset, "preset");
+        if (status != PlanStatus.ACTIVE) {
+            throw new IllegalPlanStateException(getId(), status, "record the setup score of its activation");
+        }
+        if (score != null && (score.signum() < 0 || score.compareTo(BigDecimal.valueOf(100)) > 0)) {
+            throw new IllegalArgumentException("a setup score lies in 0–100, was " + score);
+        }
+        setupScoreAtPlan = score;
+        setupScorePreset = preset;
+    }
+
     /** The timeframe the plan was analysed on (BR-70, D-112). */
     public AnalysisTimeframe getAnalysisTimeframe() {
         return AnalysisTimeframe.fromCode(analysisTimeframe)

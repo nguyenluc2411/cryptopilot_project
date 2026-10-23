@@ -37,8 +37,10 @@ import java.util.UUID;
  * @param analysisTimeframe the timeframe the plan was analysed on, e.g. {@code 1h} (BR-70)
  * @param status the status
  * @param invalidationReason why the plan became INVALIDATED, or {@code null}
- * @param setupScoreAtPlan the setup score taken at activation, or {@code null} when none could be read
- * @param setupScorePreset the preset name and version of that score, or {@code null}
+ * @param setupScoreAtPlan the setup score of the latest closed candle of the analysis timeframe, taken at
+ *     activation; {@code null} before activation and when none could be read (never blocks the activation)
+ * @param setupScorePreset the preset name and version that score was read under, e.g. {@code DAY_TRADING v1};
+ *     {@code null} before activation
  * @param editable whether the plan may still be edited (DRAFT)
  * @param snapshot the stored calculation
  * @param warnings the stored warnings, most severe first

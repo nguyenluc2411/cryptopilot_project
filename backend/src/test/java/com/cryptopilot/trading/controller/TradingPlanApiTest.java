@@ -11,8 +11,12 @@ import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
+import com.cryptopilot.market.model.ComponentScores;
+import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
@@ -27,6 +31,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -96,6 +101,9 @@ class TradingPlanApiTest {
 
     @Autowired
     private PriceCacheService prices;
+
+    @Autowired
+    private TechnicalIndicatorRepository indicators;
 
     private static final AtomicLong TICKS = new AtomicLong();
 
@@ -511,9 +519,115 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.status").value("ACTIVE"));
     }
 
+    /**
+     * Pins a known gap that TP-0 closes on purpose: the cache holds no Futures last price, only the mark price, and
+     * D-112 checks the invalidation price and a STOP's trigger against the last price, never the mark price. So a
+     * Futures plan with an invalidation price, and a Futures STOP at activation, answer 503 MSG43 even while a current
+     * mark price is cached. When TP-0 adds the Futures last price, this test must change with it.
+     */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(
+            delimiter = '|',
+            value = {
+                "save with an invalidation price | LIMIT | \"invalidationPrice\": 120, \"activate\": false",
+                "save and activate a STOP        | STOP  | \"activate\": true"
+            })
+    void TP0_aFuturesPlanCheckedAgainstTheLastPrice_answersMsg43_whileOnlyTheMarkPriceIsCached(
+            String name, String entryType, String extra) throws Exception {
+        UUID trader = trader();
+        subscribeToPro(trader);
+        markPrice("100");
+
+        as(
+                        trader,
+                        post(PLANS),
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
+                                + " \"entryType\": \"" + entryType + "\", \"entryPrice\": 101, \"stopLoss\": 95,"
+                                + " \"takeProfit\": 110, \"leverage\": 5, " + extra + "}")
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value(ErrorCode.MARKET_PRICE_UNAVAILABLE.code()))
+                .andExpect(jsonPath("$.messageCode").value("MSG43"));
+        assertThat(plansOf(trader)).isZero();
+    }
+
+    /**
+     * D-112 end to end: Save and Activate stores the setup score of the latest closed candle of the plan's timeframe
+     * under the Trader's preset (no style: DAY_TRADING v1 on 1h, 35·75 + 30·50 + 15·40 + 20·60 → 59), which the
+     * detail then answers.
+     */
+    @Test
+    void BR70_saveAndActivate_storesTheSetupScoreOfTheLatestClosedCandle() throws Exception {
+        UUID trader = trader();
+        Instant closed = Instant.now().truncatedTo(ChronoUnit.HOURS).minus(Duration.ofHours(1));
+        indicators.upsert(new StoredIndicators(
+                pair,
+                closed,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new ComponentScores(
+                        MarketType.SPOT,
+                        "1h",
+                        "v1",
+                        new BigDecimal("75.00"),
+                        new BigDecimal("50.00"),
+                        new BigDecimal("40.00"),
+                        new BigDecimal("60.00"),
+                        null),
+                closed.plus(Duration.ofHours(1))));
+
+        String id = id(as(trader, post(PLANS), spotLimit("100", "95", "110", true))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
+                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1")));
+        as(trader, get(PLANS + "/" + id), null)
+                .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
+                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1"));
+    }
+
+    /** Nothing analysed on the plan's timeframe: the activation goes on, with a null score beside the preset. */
+    @Test
+    void BR70_activationWithoutAnAnalysedCandle_storesANullScore_andIsNotBlocked() throws Exception {
+        UUID trader = trader();
+        String id = id(as(trader, post(PLANS), spotLimit("100", "95", "110", false)));
+
+        as(trader, post(PLANS + "/" + id + "/activate"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.setupScoreAtPlan").doesNotExist())
+                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1"));
+    }
+
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
+
+    /** Streams a Futures mark price of the test pair into the price cache, newer than every earlier one. */
+    private void markPrice(String mark) {
+        BigDecimal value = new BigDecimal(mark);
+        prices.record(
+                MarketType.FUTURES,
+                new MarkPriceMessage(
+                        symbol,
+                        value,
+                        value,
+                        BigDecimal.ZERO,
+                        Instant.now().plus(Duration.ofHours(1)),
+                        Instant.now().plusMillis(TICKS.incrementAndGet())));
+        prices.flush();
+    }
 
     /** Streams a Spot ticker of the test pair into the price cache, newer than every earlier one. */
     private void lastPrice(String last) {

@@ -12,9 +12,11 @@ import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.trading.calculator.PlanValidityRule;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.dto.request.PlanInputs;
@@ -456,10 +458,12 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * Activates the plan and fills its entry at once when it is MARKET, or when it is LIMIT and the current last price
      * already reaches it (BR-33); otherwise it waits for the matching engine. A MARKET entry fills at the price the
      * activation was calculated with: the last price on Spot, the mark price on Futures (D-84). A fill at activation took liquidity, so it is TAKER (D-111 E1).
-     * A STOP waits: its trigger is the matching engine's (TP-B). The journal record of the fill is T-048.
+     * A STOP waits: its trigger is the matching engine's (TP-B). The journal record of the fill is T-048. The setup
+     * score of the moment is kept beside the plan, see {@link #recordSetupScore}.
      */
     private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now) {
         plan.activate(calculated.calculation(), calculated.warnings(), now);
+        recordSetupScore(plan);
         Optional<BigDecimal> fillPrice = plan.getEntryType() == EntryType.STOP
                 ? Optional.empty()
                 : EntryFillRule.atActivation(
@@ -470,6 +474,27 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         } else {
             publishActivated(plan);
         }
+    }
+
+    /**
+     * The setup score of the latest closed candle of the plan's analysis timeframe, under the preset the Trader's
+     * profile selects now (not at the draft save), with the preset's current version. A score that cannot be read is
+     * stored as {@code null} beside the preset and never refuses the activation.
+     *
+     * <p>Rule: BR-13, BR-70; D-111 (M4), D-112; Q-74.
+     */
+    private void recordSetupScore(TradingPlan plan) {
+        SetupStyleSource source = styles.getIfAvailable();
+        SetupStyle style =
+                source == null ? null : source.styleOf(plan.getUserId()).orElse(null);
+        SetupScoreReading reading = market.closedCandleSetupScore(
+                plan.getPairId(), plan.getMarket(), plan.getAnalysisTimeframe().code(), style, null);
+        // At the column's scale, so the response of this request reads as the stored value does later.
+        plan.recordSetupScoreAtPlan(
+                reading.score() == null
+                        ? null
+                        : BigDecimal.valueOf(reading.score()).setScale(2),
+                reading.preset());
     }
 
     /**

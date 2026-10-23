@@ -679,6 +679,52 @@ class TradingPlanTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Setup score at activation (BR-70, D-112)
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void BR70_anActivePlan_keepsTheSetupScoreOfItsActivation_aNullScoreIncluded() {
+        TradingPlan plan = planIn(PlanStatus.ACTIVE);
+
+        plan.recordSetupScoreAtPlan(new BigDecimal("59.00"), "DAY_TRADING v1");
+        assertThat(plan.getSetupScoreAtPlan()).isEqualByComparingTo("59");
+        assertThat(plan.getSetupScorePreset()).isEqualTo("DAY_TRADING v1");
+
+        plan.recordSetupScoreAtPlan(null, "SWING v1");
+        assertThat(plan.getSetupScoreAtPlan()).isNull();
+        assertThat(plan.getSetupScorePreset()).isEqualTo("SWING v1");
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = PlanStatus.class, names = "ACTIVE", mode = EnumSource.Mode.EXCLUDE)
+    void BR70_onlyAnActivePlan_recordsTheSetupScoreOfItsActivation(PlanStatus status) {
+        TradingPlan plan = planIn(status);
+
+        assertThatThrownBy(() -> plan.recordSetupScoreAtPlan(BigDecimal.TEN, "DAY_TRADING v1"))
+                .isInstanceOf(IllegalPlanStateException.class);
+        assertThat(plan.getSetupScorePreset()).isNull();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"-1", "100.01"})
+    void BR70_aScoreOutside0To100_isRefused(String score) {
+        TradingPlan plan = planIn(PlanStatus.ACTIVE);
+
+        assertThatThrownBy(() -> plan.recordSetupScoreAtPlan(new BigDecimal(score), "DAY_TRADING v1"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0", "100"})
+    void BR70_theBoundsOfTheScore_areAccepted(String score) {
+        TradingPlan plan = planIn(PlanStatus.ACTIVE);
+
+        plan.recordSetupScoreAtPlan(new BigDecimal(score), "DAY_TRADING v1");
+
+        assertThat(plan.getSetupScoreAtPlan()).isEqualByComparingTo(score);
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
 
