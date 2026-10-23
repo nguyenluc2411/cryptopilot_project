@@ -337,6 +337,8 @@ class TradingPlanRepositoryTest {
                         SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of())))
                 .getId();
         Instant at = NOW.plusSeconds(120);
+        long versionBefore =
+                inTransaction(() -> plans.findById(active).orElseThrow().getVersion());
 
         int first =
                 inTransaction(() -> plans.invalidateIfActive(active, at, InvalidationReason.TAKE_PROFIT_REACHED, NOW));
@@ -353,9 +355,42 @@ class TradingPlanRepositoryTest {
             assertThat(reread.getStatus()).isEqualTo(PlanStatus.INVALIDATED);
             assertThat(reread.getInvalidationReason()).isEqualTo(InvalidationReason.TAKE_PROFIT_REACHED);
             assertThat(reread.getInvalidatedAt()).isEqualTo(at);
+            assertThat(reread.getVersion()).as("raised once, by the move only").isEqualTo(versionBefore + 1);
             assertThat(plans.findById(draft).orElseThrow().getStatus()).isEqualTo(PlanStatus.DRAFT);
             return null;
         });
+    }
+
+    /**
+     * A cancel that read the plan before the engine invalidated it fails its optimistic lock, because the bulk update
+     * raised the version: the plan stays INVALIDATED and the Trader's stale copy changes nothing.
+     */
+    @Test
+    void BR68_aCancelLoadedBeforeTheInvalidation_failsItsOptimisticLock() {
+        UUID id = inTransaction(() -> {
+                    TradingPlan plan = TradingPlan.draft(
+                            SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of());
+                    plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
+                    return plans.save(plan);
+                })
+                .getId();
+        TransactionTemplate engine = new TransactionTemplate(transactions);
+        engine.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        assertThatThrownBy(() -> inTransaction(() -> {
+                    TradingPlan stale = plans.findById(id).orElseThrow();
+                    int moved = engine.execute(other -> plans.invalidateIfActive(
+                            id, NOW.plusSeconds(60), InvalidationReason.INVALIDATION_PRICE, NOW.plusSeconds(61)));
+                    assertThat(moved).isEqualTo(1);
+                    stale.cancel(NOW.plusSeconds(90));
+                    return null;
+                }))
+                .isInstanceOf(ObjectOptimisticLockingFailureException.class);
+        assertThat(jdbc.sql("select plan_status from trading_plan where plan_id = ?")
+                        .param(id)
+                        .query(String.class)
+                        .single())
+                .isEqualTo("INVALIDATED");
     }
 
     @Test
