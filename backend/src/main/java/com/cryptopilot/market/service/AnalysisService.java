@@ -39,4 +39,12 @@ public interface AnalysisService {
      */
     SetupScoreReading closedCandleSetupScore(
             UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at);
+
+    /**
+     * The timeframe a preset reads its setup score on, as {@link com.cryptopilot.market.MarketApi#presetTimeframe}
+     * describes it.
+     *
+     * @param style the preset, or {@code null} for the default one
+     */
+    String presetTimeframe(SetupStyle style);
 }

@@ -4,8 +4,9 @@ import com.cryptopilot.market.model.enums.SetupStyle;
 import java.util.Optional;
 
 /**
- * The timeframe a plan was analysed on, one of the BR-08 timeframes. Its setup score is read on this timeframe. Each
- * constant carries the code stored in {@code trading_plan.analysis_timeframe} and used by the API.
+ * The timeframe a plan was analysed on, one of the BR-08 timeframes: the chart's, and the one the indicators of the
+ * fill are read on. The plan's setup score is not: it is read on the preset's own timeframe (D-53). Each constant
+ * carries the code stored in {@code trading_plan.analysis_timeframe} and used by the API.
  *
  * <p>Rule: BR-08, BR-13, BR-70; D-112; TECHNICAL_DESIGN 7.4.
  */

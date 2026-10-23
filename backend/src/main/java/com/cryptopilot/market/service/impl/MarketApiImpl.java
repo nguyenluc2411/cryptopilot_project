@@ -236,6 +236,11 @@ public class MarketApiImpl implements MarketApi {
     }
 
     @Override
+    public String presetTimeframe(SetupStyle style) {
+        return analysis.presetTimeframe(style);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public List<LeverageTier> leverageBrackets(UUID pairId) {
         return brackets.findByPair(pairId);

@@ -43,22 +43,6 @@ public final class SetupScoreCalculator {
         return new SetupScore(score, components, preset.style(), preset.version(), preset.timeframe(), dominantSide);
     }
 
-    /**
-     * Weights {@code components} of any BR-08 timeframe under {@code preset}: the weighted sum of {@link #score}, without
-     * its check that the components are read on the preset's own timeframe. A plan's setup score is read on the plan's
-     * analysis timeframe with the weights of the Trader's preset, whichever timeframe that preset reads (D-112, Q-77).
-     *
-     * <p>Rule: BR-13, BR-70; TECHNICAL_DESIGN 7.4; D-53, D-112.
-     * <p>Reference: Weights per D-53 / ADR-013.
-     *
-     * @return the score 0–100, or {@code null} when a component it needs is missing
-     */
-    public static Integer weighOnAnyTimeframe(StylePreset preset, ComponentScores components) {
-        Objects.requireNonNull(preset, "preset");
-        Objects.requireNonNull(components, "components");
-        return weighted(preset.weights(components.market()), components);
-    }
-
     private static Integer weighted(ComponentWeights weights, ComponentScores c) {
         boolean futures = c.market() == MarketType.FUTURES;
         if (c.trend() == null

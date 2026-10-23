@@ -113,10 +113,10 @@ public class AnalysisServiceImpl implements AnalysisService {
      * {@link #analysis} does. That candle opened one interval before the last interval boundary at or before
      * {@code at} (intervals are aligned to the epoch in UTC, BR-08), and only its own row counts: when the newest
      * stored row is older, e.g. after an outage of the indicator job, the score is {@code null}, never a stale one. The
-     * score is also {@code null} when a component is missing or the version asked for is not the configured one (its
-     * weights are not held). The preset's weights apply to the components of {@code timeframe} also when it is not the
-     * timeframe the preset reads on the analysis screen (Q-77). Futures needs no dominant side here; it is never part of
-     * the score.
+     * score is also {@code null} when a component is missing, the version asked for is not the configured one (its
+     * weights are not held), or {@code timeframe} is not the preset's own: the weights of a preset are defined for its
+     * timeframe only (TECHNICAL_DESIGN 7.4), which {@link #presetTimeframe} names. Futures needs no dominant side here;
+     * it is never part of the score.
      *
      * <p>Rule: BR-08, BR-13, BR-70; TECHNICAL_DESIGN 7.4; D-53, D-112.
      *
@@ -141,10 +141,17 @@ public class AnalysisServiceImpl implements AnalysisService {
         String version = presetVersion == null ? preset.version() : presetVersion;
         Instant latestClosedOpen = latestClosedOpen(interval, at);
         Optional<StoredIndicators> row = indicators.at(pairId, market, timeframe, latestClosedOpen);
-        Integer score = row.filter(r -> version.equals(preset.version()))
-                .map(r -> SetupScoreCalculator.weighOnAnyTimeframe(preset, r.components()))
+        boolean weighable = version.equals(preset.version()) && timeframe.equals(preset.timeframe());
+        Integer score = row.filter(r -> weighable)
+                .map(r ->
+                        SetupScoreCalculator.score(preset, r.components(), null).score())
                 .orElse(null);
         return new SetupScoreReading(score, preset.style(), version, timeframe, latestClosedOpen);
+    }
+
+    @Override
+    public String presetTimeframe(SetupStyle style) {
+        return presets.preset(style == null ? DEFAULT_STYLE : style).timeframe();
     }
 
     /** The open time of the latest candle of {@code interval} whose close is at or before {@code at}. */

@@ -199,27 +199,42 @@ class ClosedCandleSetupScoreTest {
     }
 
     /**
-     * Q-77: the preset's v1 weights apply to the components of a timeframe it does not read on the analysis screen.
-     * DAY_TRADING Spot: 35·75 + 30·50 + 15·40 + 20·60 = 5925 → 59; SWING Spot: 40·75 + 20·50 + 10·40 + 30·60 = 6200 →
-     * 62; SCALPING Spot: 20·75 + 40·50 + 25·40 + 15·60 = 5400 → 54.
+     * A preset's weights hold for its own timeframe only (TECHNICAL_DESIGN 7.4): asked on another one, the read gives a
+     * null score even when that candle's row is stored. A plan therefore asks on {@link MarketApi#presetTimeframe}.
      */
     @ParameterizedTest(name = "{0} on {1}")
-    @CsvSource({
-        "DAY_TRADING, 4h,  59",
-        "DAY_TRADING, 1d,  59",
-        "SWING,       1h,  62",
-        "SWING,       1d,  62",
-        "SCALPING,    4h,  54"
-    })
-    void BR70_aTimeframeOtherThanThePresets_isWeightedWithThePreset(SetupStyle preset, String timeframe, int score) {
+    @CsvSource({"DAY_TRADING, 4h", "DAY_TRADING, 1d", "SWING, 1h", "SWING, 1d", "SCALPING, 4h"})
+    void BR70_aTimeframeOtherThanThePresets_givesANullScore(SetupStyle preset, String timeframe) {
         store(MarketType.SPOT, timeframe, latestClosedOpen(timeframe), "75", "50", "40", "60", null);
 
         SetupScoreReading reading =
                 market.closedCandleSetupScore(pair, MarketType.SPOT, timeframe, preset, null, FixedClockConfig.NOW);
 
-        assertThat(reading.score()).isEqualTo(score);
+        assertThat(reading.score()).isNull();
         assertThat(reading.preset()).isEqualTo(preset.name() + " v1");
         assertThat(reading.timeframe()).isEqualTo(timeframe);
+    }
+
+    /** D-53: each preset reads its own timeframe; no preset reads the default one, DAY_TRADING. */
+    @ParameterizedTest(name = "{0} reads {1}")
+    @CsvSource(
+            value = {"SCALPING, 15m", "DAY_TRADING, 1h", "SWING, 4h", "NULL, 1h"},
+            nullValues = "NULL")
+    void BR13_presetTimeframe_isThePresetsOwn(SetupStyle preset, String timeframe) {
+        assertThat(market.presetTimeframe(preset)).isEqualTo(timeframe);
+    }
+
+    /** On the preset's own timeframe the read weights that candle: SWING Spot 40·75 + 20·50 + 10·40 + 30·60 → 62. */
+    @Test
+    void BR70_onThePresetsTimeframe_theCandleIsWeighted() {
+        String timeframe = market.presetTimeframe(SetupStyle.SWING);
+        store(MarketType.SPOT, timeframe, latestClosedOpen(timeframe), "75", "50", "40", "60", null);
+
+        SetupScoreReading reading = market.closedCandleSetupScore(
+                pair, MarketType.SPOT, timeframe, SetupStyle.SWING, null, FixedClockConfig.NOW);
+
+        assertThat(reading.score()).isEqualTo(62);
+        assertThat(reading.timeframe()).isEqualTo("4h");
     }
 
     /** After an outage of the indicator job only rows of a day ago are stored: none of them is read. */

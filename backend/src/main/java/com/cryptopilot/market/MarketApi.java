@@ -113,6 +113,15 @@ public interface MarketApi {
     SetupScoreReading closedCandleSetupScore(
             UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at);
 
+    /**
+     * The timeframe a style preset reads its setup score on, as configured now, e.g. {@code 1h} for DAY_TRADING: the
+     * one the analysis screen scores on whatever chart timeframe is open (D-53), and the only one
+     * {@link #closedCandleSetupScore} weights for that preset.
+     *
+     * @param style the preset, or {@code null} for the default preset of a Trader who selects none (D-53)
+     */
+    String presetTimeframe(SetupStyle style);
+
     /** The pair's Futures leverage brackets, smallest notional first; empty when none are stored. */
     List<LeverageTier> leverageBrackets(UUID pairId);
 

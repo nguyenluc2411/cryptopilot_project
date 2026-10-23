@@ -183,17 +183,15 @@ class AnalysisServiceImplTest {
         assertThat(reading.preset()).isEqualTo("DAY_TRADING v0");
     }
 
-    /** Q-77: the preset's weights apply to the components of the timeframe asked for, not only to its own. */
+    /** A preset's weights are defined for its own timeframe only (TECHNICAL_DESIGN 7.4); Q-77 asks what else to do. */
     @Test
-    void BR70_aTimeframeOtherThanThePresets_isWeightedWithThePreset() {
-        when(indicators.at(PAIR, MarketType.SPOT, "4h", Instant.parse("2026-09-27T04:00:00Z")))
-                .thenReturn(Optional.of(row("4h")));
+    void BR70_aTimeframeOtherThanThePresets_givesANullScore() {
+        when(indicators.at(any(), any(), anyString(), any())).thenReturn(Optional.of(row("4h")));
 
         SetupScoreReading reading =
                 service(null).closedCandleSetupScore(PAIR, MarketType.SPOT, "4h", SetupStyle.DAY_TRADING, null, NOW);
 
-        assertThat(reading.score()).isEqualTo(40);
-        assertThat(reading.preset()).isEqualTo("DAY_TRADING v1");
+        assertThat(reading.score()).isNull();
         assertThat(reading.timeframe()).isEqualTo("4h");
     }
 

@@ -479,14 +479,15 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * The setup score of the latest candle of the plan's analysis timeframe closed at the activation, under the preset
-     * the Trader's profile selects now (not at the draft save), with the preset's current version. The score is read
-     * at {@code now}, the plan's {@code activated_at}, so the candle it came from is not stored: it is the one before
-     * the candle holding {@code activated_at}. A score that cannot be read is stored as {@code null} beside the preset
+     * The setup score the Trader sees on the analysis screen at the activation: the preset their profile selects now
+     * (not at the draft save), with its current version, read on that preset's own timeframe, whatever the plan's
+     * analysis timeframe is (D-53, D-112). The plan's analysis timeframe serves the chart and the indicators of the
+     * fill, not this score. The score is read at {@code now}, the plan's {@code activated_at}, so the candle it came
+     * from is not stored: it is the one before the candle holding {@code activated_at} on the preset's timeframe. A score that cannot be read is stored as {@code null} beside the preset
      * and never refuses the activation. When the read itself fails, the score and the preset both stay {@code null},
      * a warning names the plan, and the activation goes on.
      *
-     * <p>Rule: BR-13, BR-70; D-111 (M4), D-112; Q-74.
+     * <p>Rule: BR-13, BR-70; D-53, D-111 (M4), D-112; Q-74, Q-77.
      */
     private void recordSetupScore(TradingPlan plan, Instant now) {
         SetupStyleSource source = styles.getIfAvailable();
@@ -495,12 +496,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         SetupScoreReading reading;
         try {
             reading = market.closedCandleSetupScore(
-                    plan.getPairId(),
-                    plan.getMarket(),
-                    plan.getAnalysisTimeframe().code(),
-                    style,
-                    null,
-                    now);
+                    plan.getPairId(), plan.getMarket(), market.presetTimeframe(style), style, null, now);
         } catch (RuntimeException e) {
             log.warn("BR-70 plan {} activated without a setup score: the read failed", plan.getId(), e);
             return;

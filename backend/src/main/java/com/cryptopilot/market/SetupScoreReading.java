@@ -11,8 +11,8 @@ import java.util.Objects;
  * <p>Rule: BR-13, BR-70; TECHNICAL_DESIGN 7.4; D-53, D-112.
  *
  * @param score the weighted score 0–100, or {@code null} when it cannot be read: the candle's row not stored (a row of
- *     an older candle never stands in for it), a component missing, or a preset version whose weights are no longer
- *     configured
+ *     an older candle never stands in for it), a component missing, a preset version whose weights are no longer
+ *     configured, or a timeframe other than the preset's own
  * @param style the preset
  * @param presetVersion the preset version the score was asked for, e.g. {@code v1}
  * @param timeframe the timeframe the score was asked on, as BR-08 spells it

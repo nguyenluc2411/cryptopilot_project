@@ -622,7 +622,7 @@ class TradingPlanApiTest {
     }
 
     /**
-     * D-112 end to end: Save and Activate stores the setup score of the latest closed candle of the plan's timeframe
+     * D-112 end to end: Save and Activate stores the setup score of the latest closed candle of the preset's timeframe
      * under the Trader's preset (no style: DAY_TRADING v1 on 1h, 35·75 + 30·50 + 15·40 + 20·60 → 59), which the
      * detail then answers.
      */
@@ -642,25 +642,61 @@ class TradingPlanApiTest {
     }
 
     /**
-     * Q-77: a plan analysed on another timeframe than its preset's stores the preset's weights applied to that
-     * timeframe's latest closed candle: a DAY Trader (DAY_TRADING, which reads 1h) on 4h, 35·75 + 30·50 + 15·40 + 20·60
-     * → 59.
+     * Q-77: a plan analysed on another timeframe than its preset's stores the score of the preset's own timeframe: a
+     * DAY Trader (DAY_TRADING, which reads 1h) planning on 4h stores 35·75 + 30·50 + 15·40 + 20·60 → 59 from the 1h
+     * candle, not 35·10 + 30·10 + 15·10 + 20·10 → 10 from the 4h one. The analysis timeframe is kept.
      */
     @Test
-    void BR70_aPlanOnAnotherTimeframeThanItsPresets_storesThePresetsScoreOnThatTimeframe() throws Exception {
+    void BR70_aPlanOnAnotherTimeframeThanItsPresets_storesTheScoreOfThePresetsTimeframe() throws Exception {
         UUID trader = trader();
         sql.sql("update user_profile set trading_style = 'DAY' where user_id = ?")
                 .param(trader)
                 .update();
-        storeLatestClosedSpotComponents(Duration.ofHours(4), "4h");
-        String body = spotLimit("100", "95", "110", true);
+        storeLatestClosedSpotComponents(Duration.ofHours(1), "1h");
+        storeLatestClosedSpotComponents(Duration.ofHours(4), "4h", "10.00", "10.00", "10.00", "10.00");
 
-        as(trader, post(PLANS), body.substring(0, body.length() - 1) + ", \"analysisTimeframe\": \"4h\"}")
+        as(trader, post(PLANS), withTimeframe(spotLimit("100", "95", "110", true), "4h"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.analysisTimeframe").value("4h"))
                 .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
                 .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1"));
+    }
+
+    /**
+     * D-53, D-112: the stored score is the one the Setup Score card of the analysis screen shows the same Trader at the
+     * same moment, whichever chart timeframe is open: a SWING Trader (4h) planning on 1h, with the 1h chart open.
+     */
+    @Test
+    void BR70_theStoredScore_isTheOneTheAnalysisScreenShows() throws Exception {
+        UUID trader = trader();
+        sql.sql("update user_profile set trading_style = 'SWING' where user_id = ?")
+                .param(trader)
+                .update();
+        storeLatestClosedSpotComponents(Duration.ofHours(4), "4h");
+        storeLatestClosedSpotComponents(Duration.ofHours(1), "1h", "10.00", "10.00", "10.00", "10.00");
+
+        String card = as(trader, get("/api/v1/analysis/spot/" + symbol + "?tf=1h"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.setupScore.timeframe").value("4h"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String plan = as(trader, post(PLANS), withTimeframe(spotLimit("100", "95", "110", true), "1h"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.analysisTimeframe").value("1h"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        Integer shown = JsonPath.read(card, "$.setupScore.score");
+        String stored = JsonPath.read(plan, "$.setupScoreAtPlan");
+        // SWING Spot: 40·75 + 20·50 + 10·40 + 30·60 → 62
+        assertThat(shown).isEqualTo(62);
+        assertThat(new BigDecimal(stored)).isEqualByComparingTo(BigDecimal.valueOf(shown));
+        assertThat(JsonPath.<String>read(plan, "$.setupScorePreset"))
+                .isEqualTo(JsonPath.<String>read(card, "$.setupScore.preset") + " "
+                        + JsonPath.<String>read(card, "$.setupScore.presetVersion"));
     }
 
     /**
@@ -761,6 +797,12 @@ class TradingPlanApiTest {
 
     /** Spot components 75, 50, 40, 60 for the latest closed candle of {@code timeframe} by the system clock. */
     private void storeLatestClosedSpotComponents(Duration interval, String timeframe) {
+        storeLatestClosedSpotComponents(interval, timeframe, "75.00", "50.00", "40.00", "60.00");
+    }
+
+    /** These Spot components for the latest closed candle of {@code timeframe} by the system clock. */
+    private void storeLatestClosedSpotComponents(
+            Duration interval, String timeframe, String trend, String momentum, String volume, String level) {
         long seconds = interval.toSeconds();
         long now = Instant.now().getEpochSecond();
         Instant closed = Instant.ofEpochSecond(now - now % seconds - seconds);
@@ -785,12 +827,17 @@ class TradingPlanApiTest {
                         MarketType.SPOT,
                         timeframe,
                         "v1",
-                        new BigDecimal("75.00"),
-                        new BigDecimal("50.00"),
-                        new BigDecimal("40.00"),
-                        new BigDecimal("60.00"),
+                        new BigDecimal(trend),
+                        new BigDecimal(momentum),
+                        new BigDecimal(volume),
+                        new BigDecimal(level),
                         null),
                 closed.plus(interval)));
+    }
+
+    /** {@code body} with an analysis timeframe the Trader chose. */
+    private static String withTimeframe(String body, String timeframe) {
+        return body.substring(0, body.length() - 1) + ", \"analysisTimeframe\": \"" + timeframe + "\"}";
     }
 
     private String spotLimit(String entry, String stop, String takeProfit, boolean activate) {

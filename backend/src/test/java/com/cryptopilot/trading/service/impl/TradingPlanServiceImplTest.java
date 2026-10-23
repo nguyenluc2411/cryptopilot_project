@@ -148,6 +148,12 @@ class TradingPlanServiceImplTest {
                                 b.maintenanceAmount()))
                         .toList());
         when(market.currentFundingRate("BTCUSDT")).thenReturn(Optional.empty());
+        // The preset timeframes of the configuration (D-53); no style reads the default preset, DAY_TRADING.
+        when(market.presetTimeframe(any())).thenAnswer(call -> switch ((SetupStyle) call.getArgument(0)) {
+            case SCALPING -> "15m";
+            case SWING -> "4h";
+            case null, default -> "1h";
+        });
         // No stored analysis unless a test stores one: the score is null and the preset is the one asked for.
         when(market.closedCandleSetupScore(any(), any(), anyString(), any(), any(), any()))
                 .thenAnswer(call -> new SetupScoreReading(
@@ -1224,7 +1230,7 @@ class TradingPlanServiceImplTest {
                 .isEqualTo(LiquidityRole.TAKER);
     }
 
-    /** D-112: Save and Activate keeps the score of the latest closed candle of the plan's timeframe and its preset. */
+    /** D-112: Save and Activate keeps the score of the preset's latest closed candle and the preset. */
     @Test
     void BR70_saveAndActivate_recordsTheSetupScoreAndItsPreset() {
         when(styles.styleOf(USER)).thenReturn(Optional.of(SetupStyle.DAY_TRADING));
@@ -1306,8 +1312,8 @@ class TradingPlanServiceImplTest {
     }
 
     /**
-     * D-112: "at plan" is the activation, so the preset is the one the Trader's style selects then, while the
-     * analysis timeframe stays the one the draft saved.
+     * D-112: "at plan" is the activation, so the preset is the one the Trader's style selects then, and the score is
+     * read on that preset's timeframe (SWING 4h), while the analysis timeframe stays the one the draft saved (1h).
      */
     @Test
     void BR70_thePreset_isTheTradersAtActivation_notAtTheDraftSave() {
@@ -1319,9 +1325,28 @@ class TradingPlanServiceImplTest {
 
         TradingPlanResponse active = service.activate(USER, plan.getId());
 
-        verify(market).closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.SWING, null, NOW);
+        verify(market).closedCandleSetupScore(PAIR, MarketType.SPOT, "4h", SetupStyle.SWING, null, NOW);
         assertThat(active.setupScorePreset()).isEqualTo("SWING v1");
         assertThat(active.analysisTimeframe()).isEqualTo("1h");
+    }
+
+    /**
+     * Q-77: a plan analysed on another timeframe than its preset's stores the score of the preset's own timeframe, the
+     * one the analysis screen shows; the analysis timeframe is kept for the chart and the fill.
+     */
+    @Test
+    void BR70_aPlanOnAnotherTimeframeThanItsPresets_storesTheScoreOfThePresetsTimeframe() {
+        when(styles.styleOf(USER)).thenReturn(Optional.of(SetupStyle.DAY_TRADING));
+        when(market.closedCandleSetupScore(PAIR, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null, NOW))
+                .thenReturn(new SetupScoreReading(59, SetupStyle.DAY_TRADING, "v1", "1h", NOW.minusSeconds(3600)));
+
+        TradingPlanResponse plan =
+                service.create(USER, activating(withValidity(spotLimit("100", "95", "110"), null, null, "4h")));
+
+        assertThat(plan.analysisTimeframe()).isEqualTo("4h");
+        assertThat(plan.setupScoreAtPlan()).isEqualByComparingTo("59");
+        assertThat(plan.setupScorePreset()).isEqualTo("DAY_TRADING v1");
+        verify(market, never()).closedCandleSetupScore(any(), any(), eq("4h"), any(), any(), any());
     }
 
     private void currentPrice(MarketType marketType, String price) {
