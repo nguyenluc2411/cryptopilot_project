@@ -626,6 +626,25 @@ class FuturesMetricsServiceTest {
         assertThat(settlements(btc)).containsExactly(Instant.parse("2026-09-24T08:00:00Z"));
     }
 
+    /** Each settlement skipped for its missing mark price is logged with the pair and its instant, not only counted. */
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void BR37_aSettlementWithoutAMarkPrice_isLoggedWithThePairAndItsTime(CapturedOutput output) {
+        UUID btc = futuresPair("BTCUSDT");
+        markPrice(btc, "BTCUSDT", "2026-09-24T16:00:00Z", NOW.minusSeconds(1));
+        source.settlements(
+                "BTCUSDT",
+                epoch("2026-09-24T00:00:00Z") + ",0.00004796,",
+                epoch("2026-09-24T08:00:00Z") + ",0.00001422,84374.30000000");
+
+        service(500, 50).settleFunding();
+
+        assertThat(output)
+                .contains("WARN")
+                .contains("BTCUSDT funding settlement at 2026-09-24T00:00:00Z has no mark price")
+                .doesNotContain("settlement at 2026-09-24T08:00:00Z has no mark price");
+    }
+
     /** A settlement the source dates after now is not stored yet. */
     @Test
     void NSF04_aSettlementAfterNow_isNotStored() {
