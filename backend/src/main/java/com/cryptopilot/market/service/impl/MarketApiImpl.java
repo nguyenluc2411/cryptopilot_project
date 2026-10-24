@@ -248,7 +248,6 @@ public class MarketApiImpl implements MarketApi {
     @Override
     @Transactional(readOnly = true)
     public FundingHistory fundingHistory(UUID pairId, Instant after, Instant upTo) {
-        return new FundingHistory(
-                metrics.settledFunding(pairId, after, upTo), metrics.scheduledFundingTimes(pairId, after, upTo));
+        return metrics.fundingHistory(pairId, after, upTo);
     }
 }

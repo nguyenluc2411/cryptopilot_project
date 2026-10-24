@@ -13,6 +13,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.cryptopilot.market.FundingHistory;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.SettledFunding;
+import com.cryptopilot.market.SnapshotGap;
 import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.enums.Direction;
 import java.math.BigDecimal;
@@ -61,8 +62,7 @@ class FundingServiceImplTest {
 
     @Test
     void BR37_onClose_theFundingIsSummedFromTheStoredSettlements() {
-        when(market.fundingHistory(PAIR, ENTRY, EXIT))
-                .thenReturn(new FundingHistory(List.of(AT_8, AT_16), List.of(T8, T16)));
+        when(market.fundingHistory(PAIR, ENTRY, EXIT)).thenReturn(history(List.of(AT_8, AT_16), List.of(T8, T16)));
 
         FundingFee fee = service(EXIT).fundingFee(PAIR, Direction.LONG, QTY, ENTRY, EXIT);
 
@@ -74,7 +74,7 @@ class FundingServiceImplTest {
     /** A settlement announced but not stored: the known sum, provisional, and a WARN naming the pair and the instant. */
     @Test
     void A05_aMissingSettlement_isLoggedWithThePairAndItsTime_andKeepsTheKnownSum() {
-        when(market.fundingHistory(PAIR, ENTRY, EXIT)).thenReturn(new FundingHistory(List.of(AT_8), List.of(T8, T16)));
+        when(market.fundingHistory(PAIR, ENTRY, EXIT)).thenReturn(history(List.of(AT_8), List.of(T8, T16)));
 
         FundingFee fee = service(EXIT).fundingFee(PAIR, Direction.LONG, QTY, ENTRY, EXIT);
 
@@ -90,8 +90,8 @@ class FundingServiceImplTest {
     @Test
     void A05_aLateSettlementRow_isPickedUpByTheNextRead() {
         when(market.fundingHistory(PAIR, ENTRY, EXIT))
-                .thenReturn(new FundingHistory(List.of(AT_8), List.of(T8, T16)))
-                .thenReturn(new FundingHistory(List.of(AT_8, AT_16), List.of(T8, T16)));
+                .thenReturn(history(List.of(AT_8), List.of(T8, T16)))
+                .thenReturn(history(List.of(AT_8, AT_16), List.of(T8, T16)));
         FundingServiceImpl service = service(EXIT);
 
         FundingFee first = service.fundingFee(PAIR, Direction.SHORT, QTY, ENTRY, EXIT);
@@ -106,7 +106,7 @@ class FundingServiceImplTest {
     @Test
     void BR37_anOpenPosition_isReadUpToThePresent() {
         Instant now = T8.plusSeconds(300);
-        when(market.fundingHistory(PAIR, ENTRY, now)).thenReturn(new FundingHistory(List.of(AT_8), List.of(T8)));
+        when(market.fundingHistory(PAIR, ENTRY, now)).thenReturn(history(List.of(AT_8), List.of(T8)));
 
         FundingFee fee = service(now).fundingSoFar(PAIR, Direction.LONG, QTY, ENTRY);
 
@@ -116,11 +116,33 @@ class FundingServiceImplTest {
     /** A clock a moment behind the fill time reads an empty period, not one that ends before it starts. */
     @Test
     void BR37_anOpenPositionReadBeforeItsEntryTime_hasNoFundingYet() {
-        when(market.fundingHistory(PAIR, ENTRY, ENTRY)).thenReturn(new FundingHistory(List.of(), List.of()));
+        when(market.fundingHistory(PAIR, ENTRY, ENTRY)).thenReturn(history(List.of(), List.of()));
 
         FundingFee fee = service(ENTRY.minusSeconds(1)).fundingSoFar(PAIR, Direction.LONG, QTY, ENTRY);
 
         assertThat(fee.amount()).isEqualByComparingTo("0");
+    }
+
+    /** A gap in the snapshots with no interval to check it against: provisional, and one WARN naming the pair. */
+    @Test
+    void A05_aGapThatCannotBeChecked_isLoggedOnce() {
+        when(market.fundingHistory(PAIR, ENTRY, EXIT))
+                .thenReturn(new FundingHistory(
+                        List.of(AT_8), List.of(T8), List.of(), List.of(new SnapshotGap(T8, T16)), List.of()));
+
+        FundingFee fee = service(EXIT).fundingFee(PAIR, Direction.LONG, QTY, ENTRY, EXIT);
+
+        assertThat(fee.isComplete()).isFalse();
+        assertThat(fee.missingFundingTimes()).isEmpty();
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains(PAIR.toString()).contains("no known funding interval");
+        });
+    }
+
+    /** Stored settlements and announced instants with snapshots that have no gap. */
+    private static FundingHistory history(List<SettledFunding> settlements, List<Instant> scheduled) {
+        return new FundingHistory(settlements, scheduled, List.of(), List.of(), List.of());
     }
 
     private FundingServiceImpl service(Instant now) {
