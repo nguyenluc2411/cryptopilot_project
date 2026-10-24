@@ -19,7 +19,8 @@ import java.util.UUID;
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT
  * @param entryType LIMIT, MARKET or STOP
- * @param entryPrice the entry price
+ * @param entryPrice the entry price, as in the plan detail: for MARKET the reference price
+ * @param expectedFillPrice MARKET only: the price the quantity was sized on; {@code null} for LIMIT and STOP
  * @param stopLoss the stop loss
  * @param takeProfit the take profit
  * @param leverage the leverage; {@code null} on Spot
@@ -39,6 +40,7 @@ public record TradingPlanSummaryResponse(
         Direction direction,
         EntryType entryType,
         BigDecimal entryPrice,
+        BigDecimal expectedFillPrice,
         BigDecimal stopLoss,
         BigDecimal takeProfit,
         Integer leverage,

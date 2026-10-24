@@ -15,6 +15,7 @@ import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PlanStatus;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,7 +34,8 @@ final class PlanResponses {
                 plan.getMarket(),
                 plan.getDirection(),
                 plan.getEntryType(),
-                plan.getEntryPrice(),
+                entryPrice(plan),
+                expectedFillPrice(plan),
                 plan.getPlannedEntryPrice(),
                 plan.getStopLoss(),
                 plan.getTakeProfit(),
@@ -66,7 +68,8 @@ final class PlanResponses {
                 plan.getMarket(),
                 plan.getDirection(),
                 plan.getEntryType(),
-                plan.getEntryPrice(),
+                entryPrice(plan),
+                expectedFillPrice(plan),
                 plan.getStopLoss(),
                 plan.getTakeProfit(),
                 plan.getLeverage(),
@@ -78,6 +81,22 @@ final class PlanResponses {
                 plan.getExpiresAt(),
                 plan.getInvalidatedAt(),
                 plan.getInvalidationReason());
+    }
+
+    /**
+     * The entry price a response answers, the same in the panel, the detail and the list: for MARKET the reference
+     * price, which is the stored planned entry; a MARKET plan filled before the planned entry was stored (V32) has
+     * only its fill.
+     */
+    private static BigDecimal entryPrice(TradingPlan plan) {
+        return plan.getEntryType() == EntryType.MARKET && plan.getPlannedEntryPrice() != null
+                ? plan.getPlannedEntryPrice()
+                : plan.getEntryPrice();
+    }
+
+    /** MARKET only: the stored entry, the price the quantity was sized on (D-112 R6). */
+    private static BigDecimal expectedFillPrice(TradingPlan plan) {
+        return plan.getEntryType() == EntryType.MARKET ? plan.getEntryPrice() : null;
     }
 
     /**

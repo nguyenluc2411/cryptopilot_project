@@ -143,8 +143,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         CalculatedPlan calculated = calculate(userId, pair, terms, NO_PLAN, true, last);
         PlanDetails details = details(userId, request, calculated, now);
         requireValidAtSave(pair, calculated, details, activate, last);
-        TradingPlan plan =
-                TradingPlan.draft(userId, request.pairId(), calculated.calculation(), details, calculated.warnings());
+        TradingPlan plan = TradingPlan.draft(userId, request.pairId(), calculated, details);
         if (activate) {
             requireRoomForAnActivePlan(userId);
             activate(plan, calculated, now, last);
@@ -171,7 +170,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         CalculatedPlan calculated = calculate(userId, pair, terms, plan.getId(), true, last);
         PlanDetails details = details(userId, request, calculated, now);
         requireValidAtSave(pair, calculated, details, activate, last);
-        plan.updateDraft(calculated.calculation(), details, calculated.warnings());
+        plan.updateDraft(calculated, details);
         if (activate) {
             requireRoomForAnActivePlan(userId);
             activate(plan, calculated, now, last);

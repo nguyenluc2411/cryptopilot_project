@@ -266,6 +266,67 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.expectedFillPrice").isEmpty());
     }
 
+    /**
+     * D-112 R6: at 10 bps a MARKET plan answers the same pair of prices in the panel, the create response, the detail
+     * and the list: {@code entryPrice} the reference price 100.00 (the planned entry), {@code expectedFillPrice} the
+     * price the quantity is sized on, 100.00 × 1.001 = 100.10. Only the mapping differs from the stored row: its
+     * {@code entry_price} is 100.10 and its {@code planned_entry_price} 100.00.
+     */
+    @Test
+    void D112_aMarketPlan_answersTheSamePairOfPrices_inEveryResponse() throws Exception {
+        UUID trader = trader();
+        lastPrice("100.00");
+        String body = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110}";
+        sql.sql("update system_setting set setting_value = '10' where setting_key = 'SLIPPAGE_BPS'")
+                .update();
+        try {
+            String panel = content(as(trader, post(PLANS + "/calculate"), body).andExpect(status().isOk()));
+            String created = content(as(trader, post(PLANS), body).andExpect(status().isCreated()));
+            String id = JsonPath.read(created, "$.id");
+            String detail = content(as(trader, get(PLANS + "/" + id), null).andExpect(status().isOk()));
+            String list = content(as(trader, get(PLANS), null).andExpect(status().isOk()));
+
+            for (String[] pair : List.of(
+                    new String[] {panel, "$"}, new String[] {created, "$"}, new String[] {detail, "$"}, new String[] {
+                        list, "$.items[0]"
+                    })) {
+                assertThat(new BigDecimal((String) JsonPath.read(pair[0], pair[1] + ".entryPrice")))
+                        .isEqualByComparingTo("100.00");
+                assertThat(new BigDecimal((String) JsonPath.read(pair[0], pair[1] + ".expectedFillPrice")))
+                        .isEqualByComparingTo("100.10");
+            }
+            Map<String, Object> row = sql.sql(
+                            "select entry_price, planned_entry_price from trading_plan where plan_id = ?")
+                    .param(UUID.fromString(id))
+                    .query()
+                    .singleRow();
+            assertThat((BigDecimal) row.get("entry_price")).isEqualByComparingTo("100.10");
+            assertThat((BigDecimal) row.get("planned_entry_price")).isEqualByComparingTo("100.00");
+        } finally {
+            sql.sql("update system_setting set setting_value = '0' where setting_key = 'SLIPPAGE_BPS'")
+                    .update();
+        }
+    }
+
+    /** A LIMIT plan answers its entered price and no expected fill in the detail and the list too. */
+    @Test
+    void D112_aLimitPlan_answersNoExpectedFill_inTheDetailAndTheList() throws Exception {
+        UUID trader = trader();
+        String id =
+                id(as(trader, post(PLANS), spotLimit("100", "95", "110", false)).andExpect(status().isCreated()));
+
+        as(trader, get(PLANS + "/" + id), null)
+                .andExpect(jsonPath("$.entryPrice").value("100.000000000000"))
+                .andExpect(jsonPath("$.expectedFillPrice").isEmpty());
+        as(trader, get(PLANS), null)
+                .andExpect(jsonPath("$.items[0].expectedFillPrice").isEmpty());
+    }
+
+    private static String content(ResultActions response) throws Exception {
+        return response.andReturn().getResponse().getContentAsString();
+    }
+
     /** The panel answers what a save answers: a MARKET plan takes no invalidation price (MSG01). */
     @Test
     void MSG01_thePanel_refusesAMarketPlanWithAnInvalidationPrice_asCreateDoes() throws Exception {

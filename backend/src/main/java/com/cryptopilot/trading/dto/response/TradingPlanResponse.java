@@ -21,7 +21,10 @@ import java.util.UUID;
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT
  * @param entryType LIMIT, MARKET or STOP
- * @param entryPrice the entry price the snapshot was calculated with; the stop price of a STOP
+ * @param entryPrice the entry price: the entered price of LIMIT, the stop price of STOP; for MARKET the reference
+ *     price, the planned entry (as {@code POST /plans/calculate} answers it)
+ * @param expectedFillPrice MARKET only: the price the quantity was sized on, the reference price moved by
+ *     {@code SLIPPAGE_BPS} (D-112 R6); {@code null} for LIMIT and STOP
  * @param plannedEntryPrice the planned entry the deviation is measured from: the entered price for LIMIT and STOP,
  *     the reference price of the last save for MARKET (BR-69)
  * @param stopLoss the stop loss
@@ -55,6 +58,7 @@ public record TradingPlanResponse(
         Direction direction,
         EntryType entryType,
         BigDecimal entryPrice,
+        BigDecimal expectedFillPrice,
         BigDecimal plannedEntryPrice,
         BigDecimal stopLoss,
         BigDecimal takeProfit,

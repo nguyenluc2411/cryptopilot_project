@@ -1430,8 +1430,13 @@ class TradingPlanServiceImplTest {
         TradingPlanResponse plan = service.create(USER, activating(spotMarket("95", "110")));
 
         assertThat(plan.status()).isEqualTo(PlanStatus.EXECUTED);
-        assertThat(plan.entryPrice()).isEqualByComparingTo("100.10");
+        assertThat(plan.entryPrice())
+                .as("the reference price, as the panel answers it")
+                .isEqualByComparingTo("100");
+        assertThat(plan.expectedFillPrice()).isEqualByComparingTo("100.10");
         assertThat(plan.snapshot().positionQuantity()).isEqualByComparingTo("1.96");
+        assertThat(saved.getEntryPrice()).isEqualByComparingTo("100.10");
+        assertThat(saved.getPlannedEntryPrice()).isEqualByComparingTo("100");
         assertThat(saved.getFillPrice()).isEqualByComparingTo("100.10");
     }
 
