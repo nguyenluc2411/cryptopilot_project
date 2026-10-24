@@ -440,6 +440,17 @@ cryptopilot:
       connect-timeout: 5s
       # Above the AI Service's own 60-second limit and its one retry.
       request-timeout: 130s
+  news:
+    rss:
+      # NSF-10: each feed is read with a 30-second timeout. UC-49 reads a feed once before an administrator saves it.
+      connect-timeout: 10s
+      read-timeout: 30s
+      # Sent to a source that names no agent of its own (news_source.user_agent).
+      user-agent: "CryptoPilotNewsBot/1.0"
+      max-feed-size: 5MB
+      max-redirects: 5
+      # Never true outside a test that serves its feed locally: the server must not be made to read its own network.
+      allow-private-addresses: false
 
 springdoc:
   # TECHNICAL_DESIGN 8: the OpenAPI document and Swagger UI at their standard paths; off in the prod profile.

@@ -78,7 +78,10 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.ACADEMY_PATH_ORDER_TAKEN, "MSG43 409"),
             Map.entry(ErrorCode.ACADEMY_ARTICLE_PUBLISHED, "MSG43 409"),
             Map.entry(ErrorCode.ACADEMY_TOPIC_IN_USE, "MSG43 409"),
-            Map.entry(ErrorCode.ACADEMY_EDIT_CONFLICT, "MSG43 409"));
+            Map.entry(ErrorCode.ACADEMY_EDIT_CONFLICT, "MSG43 409"),
+            Map.entry(ErrorCode.NEWS_SOURCE_ALREADY_REGISTERED, "MSG43 409"),
+            Map.entry(ErrorCode.NEWS_SOURCE_IN_USE, "MSG43 409"),
+            Map.entry(ErrorCode.NEWS_FEED_UNREADABLE, "MSG15 400"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

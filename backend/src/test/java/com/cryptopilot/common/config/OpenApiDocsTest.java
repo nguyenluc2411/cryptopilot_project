@@ -142,9 +142,12 @@ class OpenApiDocsTest {
             "/api/v1/admin/users/{id}/role",
             "/api/v1/admin/dashboard",
             "/api/v1/admin/reports",
-            "/api/v1/admin/reports/export");
+            "/api/v1/admin/reports/export",
+            "/api/v1/admin/news-sources",
+            "/api/v1/admin/news-sources/{id}",
+            "/api/v1/admin/news-sources/{id}/crawl-logs");
 
-    private static final int OPERATIONS = 141;
+    private static final int OPERATIONS = 147;
 
     @Autowired
     private MockMvc mvc;
