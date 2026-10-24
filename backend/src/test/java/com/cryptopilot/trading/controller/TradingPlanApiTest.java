@@ -15,10 +15,13 @@ import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.client.Kline;
+import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.StoredIndicators;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.market.service.PriceCacheService;
@@ -35,6 +38,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -760,9 +764,35 @@ class TradingPlanApiTest {
         lastPrice(MarketType.SPOT, last);
     }
 
-    /** Streams a ticker of the test pair on {@code market} into the price cache, newer than every earlier one. */
+    /**
+     * Streams the last price of the test pair on {@code market} into the price cache, newer than every earlier one:
+     * a ticker on Spot, a forming 1-minute candle update on Futures, whose close is the last price (D-111 E2/E3).
+     */
     private void lastPrice(MarketType market, String last) {
         BigDecimal value = new BigDecimal(last);
+        Instant at = Instant.now().plusMillis(TICKS.incrementAndGet());
+        if (market == MarketType.FUTURES) {
+            Instant open = at.truncatedTo(ChronoUnit.MINUTES);
+            prices.record(
+                    market,
+                    new KlineMessage(
+                            symbol,
+                            MarketInterval.ONE_MINUTE,
+                            new Kline(
+                                    open,
+                                    open.plusSeconds(60).minusMillis(1),
+                                    value,
+                                    value,
+                                    value,
+                                    value,
+                                    BigDecimal.ONE,
+                                    BigDecimal.ONE,
+                                    1),
+                            false,
+                            at));
+            prices.flush();
+            return;
+        }
         prices.record(
                 market,
                 new TickerMessage(
@@ -775,7 +805,7 @@ class TradingPlanApiTest {
                         BigDecimal.ZERO,
                         BigDecimal.ONE,
                         BigDecimal.ONE,
-                        Instant.now().plusMillis(TICKS.incrementAndGet())));
+                        at));
         prices.flush();
     }
 

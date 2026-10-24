@@ -80,6 +80,11 @@ class MarketUpdateServiceTest {
             public PriceLookup latest(MarketType market, String symbol) {
                 return PriceLookup.missing();
             }
+
+            @Override
+            public PriceLookup latestLast(MarketType market, String symbol) {
+                return PriceLookup.missing();
+            }
         };
     }
 
