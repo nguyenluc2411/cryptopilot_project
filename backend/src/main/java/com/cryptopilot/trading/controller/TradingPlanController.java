@@ -59,7 +59,9 @@ public class TradingPlanController {
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: the pair is not enabled on the market")
-    @ApiResponse(responseCode = "503", description = "MSG43: no current last price for a MARKET entry")
+    @ApiResponse(
+            responseCode = "503",
+            description = "MSG43: no current price for a MARKET entry or to check the invalidation price")
     @PostMapping("/calculate")
     public PlanCalculationResponse calculate(
             @AuthenticationPrincipal Jwt caller, @Valid @RequestBody CreateTradingPlanRequest request) {
@@ -75,7 +77,9 @@ public class TradingPlanController {
     @ApiResponse(
             responseCode = "409",
             description = "MSG18: a BLOCKING warning; MSG27: the limit of ACTIVE plans and open positions")
-    @ApiResponse(responseCode = "503", description = "MSG43: no current last price for a MARKET entry")
+    @ApiResponse(
+            responseCode = "503",
+            description = "MSG43: no current price for a MARKET entry or to check the invalidation or stop price")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public TradingPlanResponse create(
@@ -90,7 +94,9 @@ public class TradingPlanController {
     @GetMapping
     public PageResponse<TradingPlanSummaryResponse> list(
             @AuthenticationPrincipal Jwt caller,
-            @Parameter(description = "DRAFT, ACTIVE, EXECUTED or CANCELLED_EXPIRED; every status when absent")
+            @Parameter(
+                            description =
+                                    "DRAFT, ACTIVE, EXECUTED or CANCELLED_EXPIRED (with INVALIDATED); every status when absent")
                     @RequestParam(required = false)
                     PlanTab tab,
             @Parameter(description = "Only this pair") @RequestParam(required = false) UUID pairId,
@@ -120,7 +126,9 @@ public class TradingPlanController {
     @ApiResponse(
             responseCode = "409",
             description = "MSG43: the plan is not a draft; MSG18: a BLOCKING warning; MSG27: the plan limit")
-    @ApiResponse(responseCode = "503", description = "MSG43: no current last price for a MARKET entry")
+    @ApiResponse(
+            responseCode = "503",
+            description = "MSG43: no current price for a MARKET entry or to check the invalidation or stop price")
     @PutMapping("/{id}")
     public TradingPlanResponse update(
             @AuthenticationPrincipal Jwt caller,
@@ -131,14 +139,19 @@ public class TradingPlanController {
 
     @Operation(summary = "Activate a draft (UC-18, BR-62)")
     @ApiResponse(responseCode = "200", description = "MSG19: the plan is ACTIVE")
-    @ApiResponse(responseCode = "400", description = "MSG01, MSG15, MSG16: the plan no longer passes the calculation")
+    @ApiResponse(
+            responseCode = "400",
+            description =
+                    "MSG01, MSG15, MSG16: the plan no longer passes the calculation, its invalidation price is no longer on the far side of the current price, or its STOP is already triggered")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller, or the pair is not enabled")
     @ApiResponse(
             responseCode = "409",
             description = "MSG43: the plan is not a draft; MSG18: a BLOCKING warning; MSG27: the plan limit")
-    @ApiResponse(responseCode = "503", description = "MSG43: no current last price for a MARKET entry")
+    @ApiResponse(
+            responseCode = "503",
+            description = "MSG43: no current price for a MARKET entry or to check the invalidation or stop price")
     @PostMapping("/{id}/activate")
     public TradingPlanResponse activate(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
         return plans.activate(callerOf(caller), id);

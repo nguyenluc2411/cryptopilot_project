@@ -11,7 +11,7 @@ import java.util.Set;
  * which; the plan changes status through it and nowhere else. The names are the values {@code trading_plan.plan_status}
  * accepts.
  *
- * <p>Rule: BR-32.
+ * <p>Rule: BR-32, BR-68; D-111.
  *
  * <p>Reference: Harel, D. (1987). Statecharts: A visual formalism for complex systems. <i>Science of Computer
  * Programming</i>, 8(3), 231–274 (states with an explicit, finite set of transitions).
@@ -21,7 +21,7 @@ public enum PlanStatus {
     /** Saved and still editable; may be activated or cancelled. */
     DRAFT,
 
-    /** Waiting for its entry; may be filled, cancelled or expire. */
+    /** Waiting for its entry; may be filled, cancelled, expire or be invalidated. */
     ACTIVE,
 
     /** The entry was filled; the position lives on in the journal. Terminal for the plan. */
@@ -31,7 +31,10 @@ public enum PlanStatus {
     CANCELLED,
 
     /** The expiry passed before the entry was filled. Terminal. */
-    EXPIRED;
+    EXPIRED,
+
+    /** The setup no longer holds: an invalidation level was reached before the entry (BR-68). Terminal. */
+    INVALIDATED;
 
     private static final Map<PlanStatus, Set<PlanStatus>> NEXT = transitions();
 
@@ -48,10 +51,11 @@ public enum PlanStatus {
     private static Map<PlanStatus, Set<PlanStatus>> transitions() {
         Map<PlanStatus, Set<PlanStatus>> next = new EnumMap<>(PlanStatus.class);
         next.put(DRAFT, EnumSet.of(ACTIVE, CANCELLED));
-        next.put(ACTIVE, EnumSet.of(EXECUTED, CANCELLED, EXPIRED));
+        next.put(ACTIVE, EnumSet.of(EXECUTED, CANCELLED, EXPIRED, INVALIDATED));
         next.put(EXECUTED, EnumSet.noneOf(PlanStatus.class));
         next.put(CANCELLED, EnumSet.noneOf(PlanStatus.class));
         next.put(EXPIRED, EnumSet.noneOf(PlanStatus.class));
+        next.put(INVALIDATED, EnumSet.noneOf(PlanStatus.class));
         next.replaceAll((status, targets) -> Collections.unmodifiableSet(targets));
         return Collections.unmodifiableMap(next);
     }

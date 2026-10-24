@@ -15,19 +15,22 @@ import java.time.Instant;
 /**
  * The new values of a DRAFT plan (UC-17); the pair stays the one the plan was created on. Only the shape is checked here; the rules of BR-21 to BR-30 are the calculation's.
  *
- * <p>Rule: SRS 3.5.1; BR-30 (ranges).
+ * <p>Rule: SRS 3.5.1; BR-30 (ranges), BR-68, BR-69, BR-70; D-111, D-112.
  *
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT; a Spot plan is LONG (BR-21)
- * @param entryType LIMIT or MARKET
- * @param entryPrice required for LIMIT; ignored for MARKET, which takes the current last price
+ * @param entryType LIMIT, MARKET or STOP
+ * @param entryPrice required for LIMIT, the stop price of a STOP; ignored for MARKET, which takes the current price
  * @param stopLoss the stop loss
  * @param takeProfit the take profit
  * @param capital the capital, or {@code null} for the profile's default capital
  * @param riskPercent 0.1 to 10, or {@code null} for the profile's default
  * @param leverage 1 or more on Futures, {@code null} for 1; 1 or {@code null} on Spot
- * @param expiresAt when the ACTIVE plan expires unfilled; {@code null} is 7 days for LIMIT and none for MARKET
+ * @param expiresAt when the ACTIVE plan expires unfilled; {@code null} is 7 days for LIMIT and STOP, none for MARKET
  * @param note the Trader's note
+ * @param invalidationPrice the price that invalidates a waiting LIMIT or STOP plan (BR-68); none on MARKET
+ * @param maxEntryDeviationR the plan's own limit on the entry deviation in R, at most the system's (BR-69)
+ * @param analysisTimeframe {@code 15m}, {@code 1h}, {@code 4h} or {@code 1d}; {@code null} for the style preset's
  * @param activate whether to activate right after saving
  */
 public record UpdateTradingPlanRequest(
@@ -65,6 +68,16 @@ public record UpdateTradingPlanRequest(
         Instant expiresAt,
 
         @Size(max = 1000, message = "MSG15") String note,
+
+        @DecimalMin(value = "0", inclusive = false, message = "MSG15")
+        @Digits(integer = 16, fraction = 12, message = "MSG15")
+        BigDecimal invalidationPrice,
+
+        @DecimalMin(value = "0", inclusive = false, message = "MSG15")
+        @Digits(integer = 4, fraction = 8, message = "MSG15")
+        BigDecimal maxEntryDeviationR,
+
+        String analysisTimeframe,
 
         Boolean activate)
         implements PlanInputs {}

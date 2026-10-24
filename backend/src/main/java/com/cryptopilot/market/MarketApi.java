@@ -1,6 +1,7 @@
 package com.cryptopilot.market;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
@@ -11,10 +12,11 @@ import java.util.UUID;
 
 /**
  * What the {@code market} module tells other modules about a pair: whether it may be traded on a market and with which
- * filters, which markets it is listed on, its current last price and funding rate, its leverage brackets, and its closed 1-minute candles after downtime. Read
- * only; a price that is not current is never returned as one.
+ * filters, which markets it is listed on, its current last price and funding rate, its leverage brackets, the setup
+ * score of its latest closed candle, and its closed 1-minute candles after downtime. Read only; a price that is not
+ * current is never returned as one.
  *
- * <p>Rule: BR-07, BR-26, BR-27, BR-29, BR-33; NSF-03, NSF-07; TECHNICAL_DESIGN section 2; A-04.
+ * <p>Rule: BR-07, BR-13, BR-26, BR-27, BR-29, BR-33, BR-70; NSF-03, NSF-07; TECHNICAL_DESIGN section 2; A-04; D-112.
  */
 public interface MarketApi {
 
@@ -91,6 +93,29 @@ public interface MarketApi {
     /** The predicted funding rate of the coming Futures settlement, when the cache holds a current one. */
     Optional<BigDecimal> currentFundingRate(String symbol);
 
+    /**
+     * The setup score of the pair's latest candle of {@code timeframe} closed at {@code at}, weighted under a style
+     * preset the same way as the analysis screen (BR-13). Neither a candle still forming nor an older one is read: when
+     * that candle's indicators are not stored, the score is {@code null} (see {@link SetupScoreReading#score()}); this
+     * never throws for missing data.
+     *
+     * @param timeframe one of the BR-08 timeframes, e.g. {@code 1h}
+     * @param style the preset, or {@code null} for the default preset of a Trader who selects none (D-53)
+     * @param presetVersion the preset version, or {@code null} for the one configured now
+     * @param at the instant the score is read for, e.g. a plan's activation; not after now
+     */
+    SetupScoreReading closedCandleSetupScore(
+            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at);
+
+    /**
+     * The timeframe a style preset reads its setup score on, as configured now, e.g. {@code 1h} for DAY_TRADING: the
+     * one the analysis screen scores on whatever chart timeframe is open (D-53), and the only one
+     * {@link #closedCandleSetupScore} weights for that preset.
+     *
+     * @param style the preset, or {@code null} for the default preset of a Trader who selects none (D-53)
+     */
+    String presetTimeframe(SetupStyle style);
+
     /** The pair's Futures leverage brackets, smallest notional first; empty when none are stored. */
     List<LeverageTier> leverageBrackets(UUID pairId);
 
@@ -100,4 +125,13 @@ public interface MarketApi {
      * market. A refusal of the exchange is returned with the instant to ask again, never thrown.
      */
     MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from);
+
+    /**
+     * The pair's funding settlements with an instant in {@code (after, upTo]}, read from {@code funding_rate_history},
+     * and the settlement instants the exchange announced in that interval, read from the mark price snapshots, so the
+     * caller can tell a settlement that is not stored yet (A-05). For the settlements no snapshot announced, also the
+     * announcements, the snapshot gaps and the stored settlements of a look-back window before {@code after}. Empty
+     * lists for a pair without Futures data, apart from the one gap that spans its whole window.
+     */
+    FundingHistory fundingHistory(UUID pairId, Instant after, Instant upTo);
 }

@@ -2,6 +2,7 @@ package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.CoinListing;
+import com.cryptopilot.market.FundingHistory;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKline;
@@ -10,16 +11,19 @@ import com.cryptopilot.market.OpenInterestSample;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairListing;
+import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
+import com.cryptopilot.market.service.AnalysisService;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
 import java.math.BigDecimal;
@@ -42,7 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The {@link MarketApi} other modules read: pairs and brackets from the database, prices from the latest-price cache.
  *
- * <p>Rule: BR-07, BR-26, BR-27, BR-29, BR-33; NSF-03.
+ * <p>Rule: BR-07, BR-13, BR-26, BR-27, BR-29, BR-33, BR-70; NSF-03; D-112.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -56,6 +60,7 @@ public class MarketApiImpl implements MarketApi {
     private final CoinWriter coinWriter;
     private final TradingMarketData trading;
     private final FuturesMetricsRepository metrics;
+    private final AnalysisService analysis;
 
     @Override
     @Transactional(readOnly = true)
@@ -220,6 +225,17 @@ public class MarketApiImpl implements MarketApi {
     }
 
     @Override
+    public SetupScoreReading closedCandleSetupScore(
+            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at) {
+        return analysis.closedCandleSetupScore(pairId, market, timeframe, style, presetVersion, at);
+    }
+
+    @Override
+    public String presetTimeframe(SetupStyle style) {
+        return analysis.presetTimeframe(style);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public List<LeverageTier> leverageBrackets(UUID pairId) {
         return brackets.findByPair(pairId);
@@ -236,5 +252,11 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from) {
         return minuteKlines.closedMinuteKlines(market, pairId, from);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public FundingHistory fundingHistory(UUID pairId, Instant after, Instant upTo) {
+        return metrics.fundingHistory(pairId, after, upTo);
     }
 }

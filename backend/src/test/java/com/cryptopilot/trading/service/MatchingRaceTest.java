@@ -15,6 +15,7 @@ import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
@@ -58,8 +59,10 @@ class MatchingRaceTest {
 
     private static final Instant NOW = Instant.parse("2026-10-03T08:00:00Z");
     private static final Instant FILLED_AT = NOW.plusSeconds(60);
-    private static final PlanDetails LIMIT = new PlanDetails(EntryType.LIMIT, NOW.plus(Duration.ofDays(7)), null);
-    private static final PlanDetails MARKET = new PlanDetails(EntryType.MARKET, null, null);
+    private static final PlanDetails LIMIT = new PlanDetails(
+            EntryType.LIMIT, NOW.plus(Duration.ofDays(7)), null, null, null, AnalysisTimeframe.ONE_HOUR);
+    private static final PlanDetails MARKET =
+            new PlanDetails(EntryType.MARKET, null, null, null, null, AnalysisTimeframe.ONE_HOUR);
 
     @Autowired
     private MatchingService matching;
