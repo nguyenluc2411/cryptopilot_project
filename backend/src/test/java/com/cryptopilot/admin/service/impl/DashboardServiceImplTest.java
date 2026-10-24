@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 import com.cryptopilot.admin.AdminMetricSource;
+import com.cryptopilot.admin.dto.response.ReportResponse;
 import com.cryptopilot.admin.model.enums.ReportGrouping;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -18,7 +19,7 @@ import org.junit.jupiter.api.Test;
  * The dashboard and the report gather every module's metrics; a metric name two modules both report is a defect the
  * service refuses, instead of one module's figure silently replacing the other's.
  *
- * <p>Rule: UC-49, UC-50.
+ * <p>Rule: UC-41, UC-49, UC-50.
  */
 class DashboardServiceImplTest {
 
@@ -51,6 +52,39 @@ class DashboardServiceImplTest {
         assertThatIllegalStateException()
                 .isThrownBy(() -> service.report(DAY, DAY, ReportGrouping.DAY))
                 .withMessageContaining("newUsers");
+    }
+
+    /** A WEEK report from a Wednesday to a Tuesday: two weeks, each cut to the days of the period. */
+    @Test
+    void UC41_aCutWeek_saysWhichDaysItCounts() {
+        DashboardServiceImpl service = new DashboardServiceImpl(List.of(source("newUsers", "1")), CLOCK);
+
+        List<ReportResponse.Row> rows = service.report(
+                        LocalDate.parse("2026-10-14"), LocalDate.parse("2026-10-20"), ReportGrouping.WEEK)
+                .rows();
+
+        assertThat(rows).hasSize(2);
+        assertThat(rows.get(0).period()).isEqualTo("2026-10-12");
+        assertThat(rows.get(0).coveredFrom()).isEqualTo("2026-10-14");
+        assertThat(rows.get(0).coveredTo()).isEqualTo("2026-10-18");
+        assertThat(rows.get(1).period()).isEqualTo("2026-10-19");
+        assertThat(rows.get(1).coveredFrom()).isEqualTo("2026-10-19");
+        assertThat(rows.get(1).coveredTo()).isEqualTo("2026-10-20");
+    }
+
+    /** A MONTH report inside one month: one row, labelled with the 1st, counting only the period. */
+    @Test
+    void UC41_aCutMonth_saysWhichDaysItCounts() {
+        DashboardServiceImpl service = new DashboardServiceImpl(List.of(source("newUsers", "1")), CLOCK);
+
+        ReportResponse.Row row = service.report(
+                        LocalDate.parse("2026-10-10"), LocalDate.parse("2026-10-20"), ReportGrouping.MONTH)
+                .rows()
+                .getFirst();
+
+        assertThat(row.period()).isEqualTo("2026-10-01");
+        assertThat(row.coveredFrom()).isEqualTo("2026-10-10");
+        assertThat(row.coveredTo()).isEqualTo("2026-10-20");
     }
 
     private static AdminMetricSource source(String metric, String value) {

@@ -91,6 +91,8 @@ public class DashboardServiceImpl implements DashboardService {
         List<ReportResponse.Row> rows = buckets.stream()
                 .map(bucket -> new ReportResponse.Row(
                         bucket,
+                        bucket.isBefore(first) ? first : bucket,
+                        lastDayOf(bucket, grouping).isAfter(last) ? last : lastDayOf(bucket, grouping),
                         columns.stream()
                                 .collect(Collectors.toMap(
                                         column -> column,
@@ -103,11 +105,15 @@ public class DashboardServiceImpl implements DashboardService {
 
     @Override
     public String csv(ReportResponse report) {
-        StringBuilder csv = new StringBuilder("period");
+        StringBuilder csv = new StringBuilder("period,coveredFrom,coveredTo");
         report.columns().forEach(column -> csv.append(',').append(column));
         csv.append("\r\n");
         for (ReportResponse.Row row : report.rows()) {
-            csv.append(row.period());
+            csv.append(row.period())
+                    .append(',')
+                    .append(row.coveredFrom())
+                    .append(',')
+                    .append(row.coveredTo());
             for (String column : report.columns()) {
                 csv.append(',')
                         .append(row.values().get(column).stripTrailingZeros().toPlainString());
@@ -143,6 +149,11 @@ public class DashboardServiceImpl implements DashboardService {
             case WEEK -> day.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
             case MONTH -> day.withDayOfMonth(1);
         };
+    }
+
+    /** The last day of the day, week or month a bucket starts. */
+    private static LocalDate lastDayOf(LocalDate bucket, ReportGrouping grouping) {
+        return next(bucket, grouping).minusDays(1);
     }
 
     private static LocalDate next(LocalDate bucket, ReportGrouping grouping) {
