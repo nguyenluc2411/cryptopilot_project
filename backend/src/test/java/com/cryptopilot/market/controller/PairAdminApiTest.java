@@ -10,11 +10,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.ExchangeSymbol;
+import com.cryptopilot.market.service.PairAdminService;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -25,6 +27,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,6 +75,9 @@ class PairAdminApiTest {
 
     @Autowired
     private MarketApi marketApi;
+
+    @Autowired
+    private PairAdminService pairAdmin;
 
     @MockitoBean
     private BinanceRestClient exchange;
@@ -311,6 +321,54 @@ class PairAdminApiTest {
         as(admin, post(PAIRS), "{\"symbol\": \"" + base + "XYZ\"}")
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("PAIR_NOT_TRADING"));
+    }
+
+    /**
+     * Two administrators adding the same symbol at once: one pair, placed, with one CREATED audit row; the other is
+     * told it is already a pair. The pair, its place and its audit row are written in one transaction (BR-57).
+     */
+    @Test
+    void UC45_twoAdministratorsAddingOneSymbol_makeOnePair_auditedOnce() throws Exception {
+        String symbol = base + "USDT";
+        when(exchange.spotExchangeInfo()).thenReturn(List.of(listed(symbol, null)));
+        when(exchange.futuresExchangeInfo()).thenReturn(List.of());
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<String>> calls = new ArrayList<>();
+        try {
+            for (int i = 0; i < 2; i++) {
+                calls.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        pairAdmin.register(admin, symbol);
+                        return "CREATED";
+                    } catch (BusinessException refused) {
+                        return refused.errorCode().name();
+                    }
+                }));
+            }
+            start.countDown();
+            List<String> outcomes = new ArrayList<>();
+            for (Future<String> call : calls) {
+                outcomes.add(call.get(60, TimeUnit.SECONDS));
+            }
+            assertThat(outcomes).containsExactlyInAnyOrder("CREATED", "PAIR_ALREADY_REGISTERED");
+        } finally {
+            pool.shutdownNow();
+        }
+        UUID pair = sql.sql("select pair_id from crypto_pair where symbol = ?")
+                .param(symbol)
+                .query(UUID.class)
+                .single();
+        pairs.add(pair);
+        assertThat(sql.sql("select display_order from crypto_pair where pair_id = ?")
+                        .param(pair)
+                        .query(Integer.class)
+                        .single())
+                .isPositive();
+        assertThat(sql.sql("""
+                        select count(*) from audit_log
+                         where entity_id = ? and action_code = 'CONFIGURATION_CREATED'""").param(pair).query(Long.class).single()).isEqualTo(1);
     }
 
     // ------------------------------------------------------------------------------------------
