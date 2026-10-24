@@ -21,6 +21,8 @@ public interface NewsCrawlLogRepository extends Repository<NewsCrawlLog, UUID> {
 
     NewsCrawlLog save(NewsCrawlLog log);
 
+    void flush();
+
     /** One page of a source's crawls, the latest first. */
     @Transactional(readOnly = true)
     Page<NewsCrawlLog> findBySourceIdOrderByStartedAtDescIdDesc(UUID sourceId, Pageable page);
@@ -32,4 +34,11 @@ public interface NewsCrawlLogRepository extends Repository<NewsCrawlLog, UUID> {
                      where source_id in (:sources)
                      order by source_id, started_at desc, crawl_log_id desc""", nativeQuery = true)
     List<NewsCrawlLog> findLatestOf(@Param("sources") Collection<UUID> sources);
+
+    /** The statuses of a source's latest {@code limit} crawls, the latest first: how many failed in a row (NSF-10). */
+    @Transactional(readOnly = true)
+    @Query(value = """
+                    select crawl_status from news_crawl_log where source_id = :source
+                     order by started_at desc, crawl_log_id desc limit :limit""", nativeQuery = true)
+    List<String> findLatestStatuses(@Param("source") UUID source, @Param("limit") int limit);
 }

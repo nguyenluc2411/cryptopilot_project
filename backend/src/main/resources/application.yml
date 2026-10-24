@@ -451,6 +451,34 @@ cryptopilot:
       max-redirects: 5
       # Never true outside a test that serves its feed locally: the server must not be made to read its own network.
       allow-private-addresses: false
+    crawl:
+      # NSF-10: every 5 minutes, the due sources only. Off here, on in the dev and prod profiles, so a test context
+      # crawls nothing.
+      enabled: false
+      period: 5m
+      initial-delay: 1m
+      # BR-48: the same normalized title published within 48 hours is the same story.
+      duplicate-title-window: 48h
+      # NSF-10: the administrators are told after this many failed crawls in a row of one source.
+      failure-notice-after: 5
+      # What outlets call each coin. The exchange names a coin after its symbol, so a headline that writes "Bitcoin"
+      # tags BTC only through this list. A name that spells a symbol is never used as a name. The coins of the 13
+      # demo pairs; a coin listed later without an entry is still tagged by its symbol.
+      coin-names:
+        BTC: [Bitcoin]
+        ETH: [Ethereum, Ether]
+        BNB: [Binance Coin]
+        SOL: [Solana]
+        XRP: [Ripple]
+        DOGE: [Dogecoin]
+        ADA: [Cardano]
+        AVAX: [Avalanche]
+        LINK: [Chainlink]
+        LTC: [Litecoin]
+        BCH: [Bitcoin Cash]
+        UNI: [Uniswap]
+        ARB: [Arbitrum]
+        USDT: [Tether]
 
 springdoc:
   # TECHNICAL_DESIGN 8: the OpenAPI document and Swagger UI at their standard paths; off in the prod profile.

@@ -336,6 +336,8 @@ class UserAccountRepositoryTest {
      * MSG04 can no longer see it. It decides when a write is sent, never what is read, so the rule
      * this test exists for is untouched. {@code findByIdForUpdate} joined it with BR-03 under
      * concurrency: it reads one row by its key, as {@code findById} does, and only adds the row lock.
+     * {@code findIdsOfActiveAdministrators} joined it with the notice about a failing news source: it reads the keys
+     * of the administrators only, a list as short as the staff, and takes no role a caller could widen to Traders.
      */
     @Test
     void theRepository_offersNoUnboundedReadOfATableThatGrowsWithUsers() {
@@ -346,6 +348,7 @@ class UserAccountRepositoryTest {
                         "findByEmailIgnoringCase",
                         "findById",
                         "findByIdForUpdate",
+                        "findIdsOfActiveAdministrators",
                         "save",
                         "flush");
 

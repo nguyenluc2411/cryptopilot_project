@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
@@ -50,6 +51,15 @@ public interface NewsSourceRepository extends Repository<NewsSource, UUID> {
                             or last_crawled_at + make_interval(mins => crawl_interval_minutes) <= :now)
                      order by last_crawled_at nulls first, source_id""", nativeQuery = true)
     List<NewsSource> findDue(@Param("now") Instant now);
+
+    /**
+     * Records that the crawl read the source at {@code at}, so it waits one interval from then (BR-49). One statement
+     * rather than a save of the entity: an administrator editing the source at the same time does not make the crawl
+     * fail on the version, and the crawl does not undo the edit. 0 when the source was deleted meanwhile.
+     */
+    @Modifying
+    @Query(value = "update news_source set last_crawled_at = :at where source_id = :id", nativeQuery = true)
+    int markCrawled(@Param("id") UUID id, @Param("at") Instant at);
 
     /** Whether any article came from the source; such a source can be switched off but not deleted. */
     @Transactional(readOnly = true)
