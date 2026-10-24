@@ -143,10 +143,14 @@ public class PairAdminServiceImpl implements PairAdminService {
         Instant now = clock.instant();
         try {
             return transactions.execute(status -> created(adminId, wanted, spot, futures, now));
-        } catch (DataIntegrityViolationException taken) {
-            // Another administrator registered it meanwhile: uq_crypto_pair_symbol refused the second row, and the
-            // whole registration rolled back with it, so no second CREATED audit row was written (BR-57).
-            throw new BusinessException(ErrorCode.PAIR_ALREADY_REGISTERED, wanted + " is already a pair");
+        } catch (DataIntegrityViolationException refused) {
+            // The whole registration rolled back, so no CREATED audit row was written for it (BR-57). The pair being
+            // there now means another administrator registered it meanwhile. Anything else, such as two pairs of one
+            // new coin (SOLUSDT and SOLUSDC) racing on uq_coin_symbol, is a conflict the client may simply retry.
+            if (pairs.findBySymbol(wanted).isPresent()) {
+                throw new BusinessException(ErrorCode.PAIR_ALREADY_REGISTERED, wanted + " is already a pair");
+            }
+            throw refused;
         }
     }
 
