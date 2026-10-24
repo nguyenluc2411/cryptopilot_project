@@ -377,6 +377,13 @@ public class FuturesMetricsServiceImpl implements FuturesMetricsService {
                     .toList();
             List<FundingRate> storable =
                     settled.stream().filter(rate -> rate.markPrice() != null).toList();
+            settled.stream()
+                    .filter(rate -> rate.markPrice() == null)
+                    .forEach(rate -> log.warn(
+                            "NSF-04 {} funding settlement at {} has no mark price and is not stored; positions open"
+                                    + " then keep a provisional funding (BR-37)",
+                            pair.getSymbol(),
+                            rate.fundingTime()));
             withoutMarkPrice += settled.size() - storable.size();
             if (!storable.isEmpty()) {
                 inserted += transaction.execute(status -> metrics.insertFundingRates(pair.getId(), storable));

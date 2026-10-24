@@ -1,7 +1,9 @@
 package com.cryptopilot.trading.calculator;
 
 import com.cryptopilot.common.util.Rounding;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.FeeSchedule;
+import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.LeverageBracket;
 import com.cryptopilot.trading.model.TradeClose;
 import com.cryptopilot.trading.model.TradeResult;
@@ -12,16 +14,26 @@ import java.math.BigDecimal;
 /**
  * The realized profit and loss and the fees of a closed position. Realized is the price result only. Each fill pays
  * notional × rate: maker for a LIMIT entry and a take profit, taker for a MARKET entry, a stop loss and a manual
- * close. A liquidation pays the clearance fee instead of the taker fee.
+ * close. A liquidation pays the clearance fee instead of the taker fee. Funding is computed by
+ * {@link FundingCalculator} and passed in.
  *
- * <p>Rule: BR-35, BR-36, BR-38; D-97; Q-54; TECHNICAL_DESIGN 7.8.
+ * <p>Rule: BR-35, BR-36, BR-37, BR-38; D-97; Q-54; TECHNICAL_DESIGN 7.8.
  */
 public final class TradeResultCalculator {
 
     private TradeResultCalculator() {}
 
-    /** The amounts of the trade, rounded to the stored scale. */
-    public static TradeResult calculate(TradeClose in) {
+    /**
+     * The amounts of the trade, rounded to the stored scale.
+     *
+     * @param funding the funding of a Futures trade from {@link FundingCalculator}, complete or not: an incomplete
+     *     funding never blocks the close, the result carries it and its net is provisional (A-05); {@code null} for
+     *     Spot, which has none (BR-37)
+     */
+    public static TradeResult calculate(TradeClose in, FundingFee funding) {
+        if ((in.market() == MarketType.SPOT) != (funding == null)) {
+            throw new IllegalArgumentException("a Futures trade needs its funding and a Spot trade has none");
+        }
         BigDecimal priceMove = in.exitPrice().subtract(in.entryPrice());
         BigDecimal realized =
                 (in.direction() == Direction.LONG ? priceMove : priceMove.negate()).multiply(in.quantity());
@@ -35,7 +47,8 @@ public final class TradeResultCalculator {
                     case STOP_LOSS, MANUAL -> exitNotional.multiply(fees.taker());
                     case LIQUIDATION -> clearanceFee(exitNotional, fees.liquidationClearance(), liquidationBracket(in));
                 };
-        return new TradeResult(Rounding.toAmount(realized), Rounding.toAmount(entryFee), Rounding.toAmount(exitFee));
+        return new TradeResult(
+                Rounding.toAmount(realized), Rounding.toAmount(entryFee), Rounding.toAmount(exitFee), funding);
     }
 
     /**

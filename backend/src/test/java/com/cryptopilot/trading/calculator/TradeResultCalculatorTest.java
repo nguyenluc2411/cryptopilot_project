@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.FeeSchedule;
+import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.LeverageBracket;
 import com.cryptopilot.trading.model.LiquidationEstimate;
 import com.cryptopilot.trading.model.LiquidationInput;
@@ -16,6 +17,7 @@ import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -25,7 +27,7 @@ import org.junit.jupiter.params.provider.CsvSource;
  * Realized profit and loss, fees and net of a closed trade against the amounts of the T-044 acceptance criteria and
  * the TECHNICAL_DESIGN 7.8 worked example.
  *
- * <p>Rule: BR-35, BR-36, BR-38; D-97; Q-54, Q-58; TECHNICAL_DESIGN 7.8.
+ * <p>Rule: BR-35, BR-36, BR-37, BR-38; D-97; Q-54, Q-58; A-05; TECHNICAL_DESIGN 7.8.
  */
 class TradeResultCalculatorTest {
 
@@ -94,7 +96,7 @@ class TradeResultCalculatorTest {
         assertThat(r.realizedPnl()).isEqualByComparingTo("-19.26");
         assertThat(r.exitFee()).isEqualByComparingTo("0.72296");
         assertThat(r.feeAmount()).isEqualByComparingTo("0.76296");
-        assertThat(r.netPnl()).isEqualByComparingTo("-20.02296");
+        assertThat(r.netPnl().amount()).isEqualByComparingTo("-20.02296");
     }
 
     /** (d) Spot manual close, LONG qty 0.5, MARKET 60000, close 62000: realized 1000, fee 30 + 31, net 939. */
@@ -112,6 +114,176 @@ class TradeResultCalculatorTest {
                 List.of());
 
         assertAmounts(r, "1000", "61", "939");
+    }
+
+    // ------------------------------------------------------------------ T-045: the same cases with funding
+
+    /**
+     * TECHNICAL_DESIGN 7.8 test vector, case (a) with one settlement at mark 101, rate 0.0001: the LONG pays
+     * 2 × 101 × 0.0001 = 0.0202; net 30 − 0.086 − 0.0202 = 29.8938.
+     */
+    @Test
+    void BR38_longTakeProfitWithOneFunding_isTheDesignVector() {
+        TradeResult r =
+                withFunding(Direction.LONG, EntryType.LIMIT, CloseReason.TAKE_PROFIT, "115", List.of(), Direction.LONG);
+
+        assertThat(r.fundingFeeAmount()).isEqualByComparingTo("-0.0202");
+        assertAmounts(r, "30", "0.086", "29.8938");
+    }
+
+    /** Case (b) with the same settlement: the SHORT receives 0.0202; net −10.205 + 0.0202 = −10.1848. */
+    @Test
+    void BR38_shortStopLossWithOneFunding_receivesIt() {
+        TradeResult r = withFunding(
+                Direction.SHORT, EntryType.MARKET, CloseReason.STOP_LOSS, "105", List.of(), Direction.SHORT);
+
+        assertThat(r.fundingFeeAmount()).isEqualByComparingTo("0.0202");
+        assertAmounts(r, "-10", "0.205", "-10.1848");
+    }
+
+    /** Case (c), the liquidation vector, with the same settlement: net −20.02296 − 0.0202 = −20.04316. */
+    @Test
+    void BR38_longLiquidationWithOneFunding_paysItOnTopOfTheClearanceFee() {
+        TradeResult r = withFunding(
+                Direction.LONG, EntryType.LIMIT, CloseReason.LIQUIDATION, "90.37", BRACKETS, Direction.LONG);
+
+        assertThat(r.fundingFeeAmount()).isEqualByComparingTo("-0.0202");
+        assertAmounts(r, "-19.26", "0.76296", "-20.04316");
+    }
+
+    /** Case (d): Spot has no funding, null and not 0, so net = realized − fees = 939. */
+    @Test
+    void BR37_spotTrade_hasNullFunding_andNetIsRealizedMinusFees() {
+        TradeResult r = calculate(
+                MarketType.SPOT,
+                Direction.LONG,
+                EntryType.MARKET,
+                "60000",
+                "0.5",
+                CloseReason.MANUAL,
+                "62000",
+                SPOT,
+                List.of(),
+                null);
+
+        assertThat(r.fundingFeeAmount()).isNull();
+        assertThat(r.amounts().fundingFeeAmount()).isNull();
+        assertAmounts(r, "1000", "61", "939");
+    }
+
+    @Test
+    void BR37_aSpotTradeWithFunding_orAFuturesTradeWithout_isRefused() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> calculate(
+                        MarketType.SPOT,
+                        Direction.LONG,
+                        EntryType.MARKET,
+                        "60000",
+                        "0.5",
+                        CloseReason.MANUAL,
+                        "62000",
+                        SPOT,
+                        List.of(),
+                        FundingFee.complete(BigDecimal.ZERO)));
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> calculate(
+                        MarketType.FUTURES,
+                        Direction.LONG,
+                        EntryType.LIMIT,
+                        "100",
+                        "2",
+                        CloseReason.TAKE_PROFIT,
+                        "115",
+                        FUTURES,
+                        List.of(),
+                        null));
+    }
+
+    /**
+     * A-05, D-97 note of 2026-10-24: a Futures trade closes while its 16:00 settlement is missing. It carries the
+     * known sum (the LONG paid 0.0202 at 08:00), the flag and the missing instant, and its net 30 − 0.086 − 0.0202 =
+     * 29.8938 is provisional.
+     */
+    @Test
+    void A05_aFuturesTradeWithIncompleteFunding_closes_withTheKnownSumAndAProvisionalNet() {
+        Instant missing = Instant.parse("2026-10-20T16:00:00Z");
+        FundingFee funding = FundingFee.partial(new BigDecimal("-0.02020000"), List.of(missing));
+
+        TradeResult r = calculate(
+                MarketType.FUTURES,
+                Direction.LONG,
+                EntryType.LIMIT,
+                "100",
+                "2",
+                CloseReason.TAKE_PROFIT,
+                "115",
+                FUTURES,
+                List.of(),
+                funding);
+
+        assertThat(r.fundingFeeAmount()).isEqualByComparingTo("-0.0202");
+        assertThat(r.fundingIncomplete()).isTrue();
+        assertThat(r.missingFundingTimes()).containsExactly(missing);
+        assertThat(r.netPnl().amount()).isEqualByComparingTo("29.8938");
+        assertThat(r.netPnl().provisional()).isTrue();
+        assertThat(r.amounts().fundingIncomplete()).isTrue();
+        assertThat(r.amounts().netPnl().provisional()).isTrue();
+    }
+
+    /** A complete funding gives a final net; Spot has no funding, so neither flag nor missing instants. */
+    @Test
+    void A05_aCompleteFunding_orASpotTrade_givesAFinalNet() {
+        TradeResult futures =
+                withFunding(Direction.LONG, EntryType.LIMIT, CloseReason.TAKE_PROFIT, "115", List.of(), Direction.LONG);
+        TradeResult spot = calculate(
+                MarketType.SPOT,
+                Direction.LONG,
+                EntryType.MARKET,
+                "60000",
+                "0.5",
+                CloseReason.MANUAL,
+                "62000",
+                SPOT,
+                List.of(),
+                null);
+
+        assertThat(futures.fundingIncomplete()).isFalse();
+        assertThat(futures.netPnl().provisional()).isFalse();
+        assertThat(spot.funding()).isNull();
+        assertThat(spot.fundingIncomplete()).isFalse();
+        assertThat(spot.missingFundingTimes()).isEmpty();
+        assertThat(spot.netPnl().provisional()).isFalse();
+    }
+
+    /** A Spot trade is refused an incomplete funding just as a complete one. */
+    @Test
+    void BR37_aSpotTradeWithIncompleteFunding_isRefused() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> calculate(
+                        MarketType.SPOT,
+                        Direction.LONG,
+                        EntryType.MARKET,
+                        "60000",
+                        "0.5",
+                        CloseReason.MANUAL,
+                        "62000",
+                        SPOT,
+                        List.of(),
+                        FundingFee.partial(BigDecimal.ZERO, List.of())));
+    }
+
+    /** Qty 2, entry 100, one settlement at mark 101 and rate 0.0001, signed for the position by the calculator. */
+    private static TradeResult withFunding(
+            Direction direction,
+            EntryType entryType,
+            CloseReason reason,
+            String exit,
+            List<LeverageBracket> brackets,
+            Direction fundingSide) {
+        FundingFee funding = FundingFee.complete(Rounding.toAmount(FundingCalculator.settlementAmount(
+                fundingSide, new BigDecimal("2"), new BigDecimal("101"), new BigDecimal("0.0001"))));
+        return calculate(
+                MarketType.FUTURES, direction, entryType, "100", "2", reason, exit, FUTURES, brackets, funding);
     }
 
     // ------------------------------------------------------------------ further cases
@@ -438,16 +610,34 @@ class TradeResultCalculatorTest {
             String exit,
             FeeSchedule fees,
             List<LeverageBracket> brackets) {
-        return TradeResultCalculator.calculate(new TradeClose(
-                market,
-                direction,
-                entryType,
-                new BigDecimal(entry),
-                new BigDecimal(qty),
-                reason,
-                new BigDecimal(exit),
-                fees,
-                brackets));
+        // A Futures trade with no settlement while it was open: its funding is a complete 0.
+        FundingFee funding = market == MarketType.SPOT ? null : FundingFee.complete(Rounding.toAmount(BigDecimal.ZERO));
+        return calculate(market, direction, entryType, entry, qty, reason, exit, fees, brackets, funding);
+    }
+
+    private static TradeResult calculate(
+            MarketType market,
+            Direction direction,
+            EntryType entryType,
+            String entry,
+            String qty,
+            CloseReason reason,
+            String exit,
+            FeeSchedule fees,
+            List<LeverageBracket> brackets,
+            FundingFee funding) {
+        return TradeResultCalculator.calculate(
+                new TradeClose(
+                        market,
+                        direction,
+                        entryType,
+                        new BigDecimal(entry),
+                        new BigDecimal(qty),
+                        reason,
+                        new BigDecimal(exit),
+                        fees,
+                        brackets),
+                funding);
     }
 
     /** The liquidation price of qty 1 at this entry, from the same calculation a plan uses (tick 0.01). */
@@ -473,7 +663,7 @@ class TradeResultCalculatorTest {
     private static void assertAmounts(TradeResult r, String realized, String fee, String net) {
         assertThat(r.realizedPnl()).isEqualByComparingTo(realized);
         assertThat(r.feeAmount()).isEqualByComparingTo(fee);
-        assertThat(r.netPnl()).isEqualByComparingTo(net);
+        assertThat(r.netPnl().amount()).isEqualByComparingTo(net);
         assertThat(r.realizedPnl().scale()).isEqualTo(8);
     }
 

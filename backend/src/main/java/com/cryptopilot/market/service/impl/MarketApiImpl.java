@@ -2,6 +2,7 @@ package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.CoinListing;
+import com.cryptopilot.market.FundingHistory;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKline;
@@ -257,5 +258,11 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from) {
         return minuteKlines.closedMinuteKlines(market, pairId, from);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public FundingHistory fundingHistory(UUID pairId, Instant after, Instant upTo) {
+        return metrics.fundingHistory(pairId, after, upTo);
     }
 }

@@ -66,7 +66,7 @@ class MatchingWorkerTest {
             new MatchingProperties.Retry(Duration.ZERO, Duration.ZERO, 0, Duration.ofMinutes(10));
 
     private static final MatchingProperties.Replay REPLAY =
-            new MatchingProperties.Replay(false, Duration.ofHours(24), Duration.ZERO, 3, 1440);
+            new MatchingProperties.Replay(false, Duration.ofDays(7), Duration.ZERO, 3, 1440);
 
     private final MatchingService matching = mock(MatchingService.class);
     private final MutableTestClock clock = new MutableTestClock(AT);
@@ -829,7 +829,7 @@ class MatchingWorkerTest {
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, AT.plusSeconds(120));
         assertThat(logged()).anySatisfy(event -> assertThat(event.getFormattedMessage())
                 .contains("watermark is held")
-                .contains("A restart is required within replay.max-window (PT24H)"));
+                .contains("A restart is required within replay.max-window (PT168H)"));
     }
 
     @Test

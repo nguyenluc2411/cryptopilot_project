@@ -1,14 +1,21 @@
 package com.cryptopilot.market.repository;
 
+import com.cryptopilot.market.FundingAnnouncement;
+import com.cryptopilot.market.FundingHistory;
 import com.cryptopilot.market.OpenInterestSample;
+import com.cryptopilot.market.SettledFunding;
+import com.cryptopilot.market.SnapshotGap;
 import com.cryptopilot.market.calculator.FundingTimes;
 import com.cryptopilot.market.client.FundingRate;
 import com.cryptopilot.market.client.LongShortRatio;
 import com.cryptopilot.market.client.OpenInterestStatistic;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +51,19 @@ import org.springframework.stereotype.Repository;
 @Repository
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class FuturesMetricsRepository {
+
+    /**
+     * How far before an interval the snapshots announcing its first settlement are read, and the window in which
+     * the funding interval of the pair is looked for: well above the longest gap NSF-03 is expected to leave and the
+     * longest funding interval, and no assumption about the interval itself.
+     */
+    static final Duration ANNOUNCEMENT_LOOKBACK = Duration.ofDays(1);
+
+    /**
+     * The spacing of NSF-03's snapshots, whose instants are truncated to the minute: two snapshots further apart
+     * have at least one missing between them.
+     */
+    static final Duration SNAPSHOT_SPACING = Duration.ofMinutes(1);
 
     private final JdbcClient sql;
 
@@ -141,6 +161,106 @@ public class FuturesMetricsRepository {
                     .update();
         }
         return inserted;
+    }
+
+    /**
+     * What the funding of a position open in {@code (after, upTo]} is computed and checked from (A-05): the stored
+     * settlements of that interval with the instants the snapshots announced in it, and for the completeness check
+     * the announcements and snapshot gaps of the window from {@link #ANNOUNCEMENT_LOOKBACK} before {@code after} to
+     * {@code upTo}, and the settlements stored in that look-back.
+     */
+    public FundingHistory fundingHistory(UUID pairId, Instant after, Instant upTo) {
+        Instant windowStart = after.minus(ANNOUNCEMENT_LOOKBACK);
+        List<FundingAnnouncement> announcements = fundingAnnouncements(pairId, windowStart, upTo);
+        List<Instant> scheduled = announcements.stream()
+                .map(FundingAnnouncement::fundingTime)
+                .filter(time -> time.isAfter(after) && !time.isAfter(upTo))
+                .toList();
+        return new FundingHistory(
+                settledFunding(pairId, after, upTo),
+                scheduled,
+                announcements,
+                snapshotGaps(pairId, windowStart, upTo),
+                settledFunding(pairId, windowStart, after).stream()
+                        .map(SettledFunding::fundingTime)
+                        .toList());
+    }
+
+    /** The pair's stored funding settlements with an instant in {@code (after, upTo]}, oldest first (BR-37). */
+    public List<SettledFunding> settledFunding(UUID pairId, Instant after, Instant upTo) {
+        return sql.sql("""
+                        select funding_time, funding_rate, mark_price from funding_rate_history
+                         where pair_id = ? and funding_time > ? and funding_time <= ?
+                         order by funding_time""")
+                .params(pairId, Timestamp.from(after), Timestamp.from(upTo))
+                .query((row, index) -> new SettledFunding(
+                        row.getTimestamp("funding_time").toInstant(),
+                        row.getBigDecimal("funding_rate"),
+                        row.getBigDecimal("mark_price")))
+                .list();
+    }
+
+    /**
+     * Every settlement instant the pair's mark price snapshots of {@code [from, upTo]} announced as the next funding
+     * time, with the first and last snapshot announcing it, oldest first. Every minute NSF-03 stores the next
+     * settlement the exchange states, so this is how the funding times of a pair are known without assuming an
+     * interval (BR-11). The database groups the snapshots, so only a few rows per settlement come back however long
+     * the window is; the instants are then normalized by {@link FundingTimes#normalize} like a stored settlement,
+     * and the stamps of one settlement merged.
+     */
+    List<FundingAnnouncement> fundingAnnouncements(UUID pairId, Instant from, Instant upTo) {
+        Map<Instant, FundingAnnouncement> byTime = new TreeMap<>();
+        sql.sql("""
+                        select next_funding_time, min(snapshot_time) as first_seen, max(snapshot_time) as last_seen
+                          from futures_market_data
+                         where pair_id = ? and snapshot_time >= ? and snapshot_time <= ?
+                           and next_funding_time is not null
+                         group by next_funding_time""")
+                .params(pairId, Timestamp.from(from), Timestamp.from(upTo))
+                .query((row, index) -> new FundingAnnouncement(
+                        FundingTimes.normalize(
+                                row.getTimestamp("next_funding_time").toInstant()),
+                        row.getTimestamp("first_seen").toInstant(),
+                        row.getTimestamp("last_seen").toInstant()))
+                .list()
+                .forEach(announcement -> byTime.merge(
+                        announcement.fundingTime(),
+                        announcement,
+                        (a, b) -> new FundingAnnouncement(
+                                a.fundingTime(),
+                                a.firstSeen().isBefore(b.firstSeen()) ? a.firstSeen() : b.firstSeen(),
+                                a.lastSeen().isAfter(b.lastSeen()) ? a.lastSeen() : b.lastSeen())));
+        return List.copyOf(byTime.values());
+    }
+
+    /**
+     * The stretches of {@code [from, upTo]} where two consecutive mark price snapshots of the pair, or a snapshot and
+     * an end of the window, are more than {@link #SNAPSHOT_SPACING} apart, oldest first. Computed in the database:
+     * a window of a month holds some 44,000 snapshots and only the gaps come back. A window without any snapshot is
+     * one gap.
+     */
+    List<SnapshotGap> snapshotGaps(UUID pairId, Instant from, Instant upTo) {
+        return sql.sql("""
+                        select previous_time, snapshot_time
+                          from (select snapshot_time, lag(snapshot_time) over (order by snapshot_time) as previous_time
+                                  from (select snapshot_time from futures_market_data
+                                         where pair_id = ? and snapshot_time > ? and snapshot_time < ?
+                                           and next_funding_time is not null
+                                        union all select cast(? as timestamptz)
+                                        union all select cast(? as timestamptz)) as series) as spaced
+                         where snapshot_time - previous_time > ? * interval '1 second'
+                         order by snapshot_time""")
+                .params(
+                        pairId,
+                        Timestamp.from(from),
+                        Timestamp.from(upTo),
+                        Timestamp.from(from),
+                        Timestamp.from(upTo),
+                        SNAPSHOT_SPACING.toSeconds())
+                .query((row, index) -> new SnapshotGap(
+                        row.getTimestamp("previous_time").toInstant(),
+                        row.getTimestamp("snapshot_time").toInstant()))
+                .list();
     }
 
     private Optional<Instant> latest(UUID pairId, Instant notBefore, String column) {
