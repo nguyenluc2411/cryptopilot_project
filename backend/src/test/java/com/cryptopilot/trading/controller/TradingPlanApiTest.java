@@ -72,6 +72,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.ResultMatcher;
 
 /**
  * The trading plan API end to end: security, validation, the plan limits of BR-62 against the seeded packages, the
@@ -185,6 +186,62 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.blocksActivation").value(false));
 
         assertThat(plansOf(trader)).isZero();
+    }
+
+    /**
+     * D-116: the panel and the saved plan answer the fee figures of the Spot vector (LONG LIMIT 100 / 98 / 106, risk
+     * 1 % of 10,000; Spot maker and taker are both 0.1 %) as decimal strings, and the stored snapshot keeps them
+     * (BR-31).
+     */
+    @Test
+    void D116_thePanelAndTheSavedPlan_answerTheFeeFigures() throws Exception {
+        UUID trader = trader();
+        String body = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"LIMIT\", \"entryPrice\": 100, \"stopLoss\": 98, \"takeProfit\": 106,"
+                + " \"capital\": 10000, \"riskPercent\": 1}";
+
+        as(trader, post(PLANS + "/calculate"), body).andExpect(status().isOk()).andExpectAll(feeFigures());
+        String id =
+                id(as(trader, post(PLANS), body).andExpect(status().isCreated()).andExpectAll(feeFigures()));
+        as(trader, get(PLANS + "/" + id), null).andExpect(status().isOk()).andExpectAll(feeFigures());
+    }
+
+    /**
+     * D-116: a Futures MARKET whose fees are 20 % of its risk (entry 100,250, SL 99,750) stores HIGH_FEE_SHARE, a
+     * WARNING the warning table accepts (V34), and activates anyway.
+     */
+    @Test
+    void D116_aHighFeeShare_isStoredAsAWarning_andNeverBlocks() throws Exception {
+        UUID trader = trader();
+        subscribeToPro(trader);
+        lastPrice(MarketType.FUTURES, "100250");
+
+        as(
+                        trader,
+                        post(PLANS),
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
+                                + " \"entryType\": \"MARKET\", \"stopLoss\": 99750, \"takeProfit\": 101750,"
+                                + " \"capital\": 10000, \"riskPercent\": 1, \"leverage\": 5, \"activate\": true}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("EXECUTED"))
+                .andExpect(jsonPath("$.snapshot.feeShareOfRisk").value("0.20000000"))
+                .andExpect(jsonPath("$.warnings[?(@.type == 'HIGH_FEE_SHARE')].severity")
+                        .value("WARNING"))
+                .andExpect(jsonPath("$.warnings[?(@.type == 'HIGH_FEE_SHARE')].message")
+                        .value("fees and slippage are 20% of your risk"));
+    }
+
+    private static ResultMatcher[] feeFigures() {
+        return new ResultMatcher[] {
+            jsonPath("$.snapshot.positionQuantity").value("50.000000000000"),
+            jsonPath("$.snapshot.estimatedEntryFee").value("5.00000000"),
+            jsonPath("$.snapshot.estimatedStopLossExitFee").value("4.90000000"),
+            jsonPath("$.snapshot.estimatedTakeProfitExitFee").value("5.30000000"),
+            jsonPath("$.snapshot.estimatedSlippage").value("0.00000000"),
+            jsonPath("$.snapshot.lossAtStopLoss").value("109.90000000"),
+            jsonPath("$.snapshot.feeShareOfRisk").value("0.09900000"),
+            jsonPath("$.snapshot.netRiskReward").value("2.63603276")
+        };
     }
 
     /** The panel answers what a save answers: a MARKET plan takes no invalidation price (MSG01). */

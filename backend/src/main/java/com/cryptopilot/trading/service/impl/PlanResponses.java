@@ -9,6 +9,7 @@ import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.model.CalculatedPlan;
+import com.cryptopilot.trading.model.PlanCosts;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.RiskInput;
@@ -91,6 +92,7 @@ final class PlanResponses {
     }
 
     private static PlanSnapshotResponse snapshot(PlanSnapshot snapshot) {
+        PlanCosts costs = snapshot.costs();
         return new PlanSnapshotResponse(
                 snapshot.positionQuantity(),
                 snapshot.notionalValue(),
@@ -99,7 +101,14 @@ final class PlanResponses {
                 snapshot.riskAmount(),
                 snapshot.rewardAmount(),
                 snapshot.riskRewardRatio(),
-                snapshot.estimatedLiquidationPrice());
+                snapshot.estimatedLiquidationPrice(),
+                costs == null ? null : costs.estimatedEntryFee(),
+                costs == null ? null : costs.estimatedStopLossExitFee(),
+                costs == null ? null : costs.estimatedTakeProfitExitFee(),
+                costs == null ? null : costs.estimatedSlippage(),
+                costs == null ? null : costs.lossAtStopLoss(),
+                costs == null ? null : costs.feeShareOfRisk(),
+                costs == null ? null : costs.netRiskReward());
     }
 
     private static List<PlanWarningResponse> warnings(List<PlanWarning> warnings) {

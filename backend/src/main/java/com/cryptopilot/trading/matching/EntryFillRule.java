@@ -5,6 +5,7 @@ import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.util.Objects;
 import java.util.Optional;
@@ -60,6 +61,26 @@ public final class EntryFillRule {
      */
     public static Fill byRange(TrackedEntry entry, PriceRange range) {
         return new Fill(entry.planId(), entry.entryPrice(), range.from());
+    }
+
+    /**
+     * The liquidity role an entry is expected to fill with: MARKET and STOP take liquidity; a LIMIT takes it when the
+     * last price already reaches it, so it fills at activation, and otherwise rests and is reached later as maker.
+     * The same test as {@link #atActivation}, so the estimate and the fill agree.
+     *
+     * <p>Rule: BR-33, BR-36; D-111 E1.
+     *
+     * @param lastPrice the current last price; empty when none is known, and then a LIMIT is expected to rest
+     */
+    public static LiquidityRole expectedLiquidity(
+            EntryType entryType, Direction direction, BigDecimal entryPrice, Optional<BigDecimal> lastPrice) {
+        return switch (Objects.requireNonNull(entryType, "entryType")) {
+            case MARKET, STOP -> LiquidityRole.TAKER;
+            case LIMIT ->
+                lastPrice.filter(price -> reaches(direction, price, entryPrice)).isPresent()
+                        ? LiquidityRole.TAKER
+                        : LiquidityRole.MAKER;
+        };
     }
 
     /**

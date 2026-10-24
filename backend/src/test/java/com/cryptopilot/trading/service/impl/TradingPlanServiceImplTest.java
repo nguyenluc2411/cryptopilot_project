@@ -39,6 +39,7 @@ import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.dto.request.UpdateTradingPlanRequest;
 import com.cryptopilot.trading.dto.response.PlanCalculationResponse;
+import com.cryptopilot.trading.dto.response.PlanSnapshotResponse;
 import com.cryptopilot.trading.dto.response.PlanWarningResponse;
 import com.cryptopilot.trading.dto.response.StatusChangeResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
@@ -124,7 +125,7 @@ class TradingPlanServiceImplTest {
     void setUp() {
         service = new TradingPlanServiceImpl(
                 plans,
-                new PlanCalculationAssembler(market, settings),
+                new PlanCalculationAssembler(market, settings, new FeeRates(settings)),
                 lock,
                 market,
                 riskProfiles,
@@ -165,6 +166,13 @@ class TradingPlanServiceImplTest {
         when(settings.decimal(PlanCalculationAssembler.LOW_RR)).thenReturn(new BigDecimal("1.5"));
         when(settings.decimal(PlanCalculationAssembler.WIDE_STOP_LOSS)).thenReturn(BigDecimal.TEN);
         when(settings.decimal(PlanCalculationAssembler.HIGH_FUNDING_RATE)).thenReturn(new BigDecimal("0.001"));
+        when(settings.decimal(PlanCalculationAssembler.FEE_RISK_WARN_RATIO)).thenReturn(new BigDecimal("0.2"));
+        when(settings.decimal(FeeRates.SPOT_MAKER)).thenReturn(new BigDecimal("0.001"));
+        when(settings.decimal(FeeRates.SPOT_TAKER)).thenReturn(new BigDecimal("0.001"));
+        when(settings.decimal(FeeRates.FUTURES_MAKER)).thenReturn(new BigDecimal("0.0002"));
+        when(settings.decimal(FeeRates.FUTURES_TAKER)).thenReturn(new BigDecimal("0.0005"));
+        when(settings.decimal(FeeRates.LIQUIDATION_CLEARANCE)).thenReturn(new BigDecimal("0.0125"));
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(0);
         when(riskProfiles.planDefaultsOf(USER)).thenReturn(new PlanDefaults(BALANCED, new BigDecimal("1000"), null));
         when(plans.activeRiskExcluding(eq(USER), any())).thenReturn(BigDecimal.ZERO);
         when(plans.save(any())).thenAnswer(call -> {
@@ -1385,6 +1393,114 @@ class TradingPlanServiceImplTest {
         assertThat(plan.setupScoreAtPlan()).isEqualByComparingTo("59");
         assertThat(plan.setupScorePreset()).isEqualTo("DAY_TRADING v1");
         verify(market, never()).closedCandleSetupScore(any(), any(), eq("4h"), any(), any(), any());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Slippage and the fee-aware risk panel (TP-0: D-111 E5, D-112 R6 and its note, D-116)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * A LIMIT the last price already reaches fills at activation at the last price moved by SLIPPAGE_BPS (10), never
+     * past its limit, and pays taker. LONG LIMIT 100 on Spot; SHORT LIMIT 100 on Futures.
+     */
+    @ParameterizedTest(name = "{0} LIMIT 100, last {1} -> fill {2}")
+    @CsvSource({"LONG, 99.95, 100.00", "LONG, 99.00, 99.10", "SHORT, 100.05, 100.00", "SHORT, 101.00, 100.89"})
+    void D112_aMarketableLimit_slipsAtActivation_butNeverPastItsLimit(Direction direction, String last, String fill) {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
+        CreateTradingPlanRequest request = direction == Direction.LONG
+                ? spotLimit("100", "95", "110")
+                : create(PAIR, MarketType.FUTURES, direction, EntryType.LIMIT, "100", "105", "90", null, null, 2);
+        currentPrice(request.market(), last);
+
+        assertThat(service.create(USER, activating(request)).status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(saved.getFillPrice()).isEqualByComparingTo(fill);
+        assertThat(saved.getFillLiquidity()).isEqualTo(LiquidityRole.TAKER);
+        assertThat(saved.getEntryPrice()).as("the plan keeps its limit").isEqualByComparingTo("100");
+    }
+
+    /**
+     * D-112 R6: with 10 bps a LONG MARKET at last price 100 is calculated, sized and filled at 100.10, the price paid:
+     * risk 10 over 5.10 is 1.960 units.
+     */
+    @Test
+    void D112_aMarketPlan_isSizedAndFilledAtThePricePaid() {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
+        currentPrice(MarketType.SPOT, "100");
+
+        TradingPlanResponse plan = service.create(USER, activating(spotMarket("95", "110")));
+
+        assertThat(plan.status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(plan.entryPrice()).isEqualByComparingTo("100.10");
+        assertThat(plan.snapshot().positionQuantity()).isEqualByComparingTo("1.96");
+        assertThat(saved.getFillPrice()).isEqualByComparingTo("100.10");
+    }
+
+    /** SLIPPAGE_BPS is read for every fill, never kept from an earlier one: 0, then 10. */
+    @Test
+    void BR36_theSlippage_isReadForEveryFill() {
+        currentPrice(MarketType.SPOT, "99.00");
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(0);
+        service.create(USER, activating(spotLimit("100", "95", "110")));
+        assertThat(saved.getFillPrice()).isEqualByComparingTo("99.00");
+
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
+        service.create(USER, activating(spotLimit("100", "95", "110")));
+        assertThat(saved.getFillPrice()).isEqualByComparingTo("99.10");
+    }
+
+    /**
+     * D-116: the panel answers the fee figures of the Spot vector (LONG resting LIMIT 100 / 98 / 106, risk 100), at
+     * the stored scale; a resting LIMIT pays maker. The quantity is still sized on the stop distance.
+     */
+    @Test
+    void D116_thePanel_answersTheFeeFiguresAtTheStoredScale() {
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.empty());
+
+        PlanSnapshotResponse snapshot = service.calculate(
+                        USER,
+                        create(
+                                PAIR,
+                                MarketType.SPOT,
+                                Direction.LONG,
+                                EntryType.LIMIT,
+                                "100",
+                                "98",
+                                "106",
+                                "10000",
+                                "1",
+                                null))
+                .snapshot();
+
+        assertThat(snapshot.positionQuantity()).isEqualByComparingTo("50");
+        assertThat(snapshot.riskAmount()).isEqualByComparingTo("100");
+        assertThat(snapshot.estimatedEntryFee()).isEqualTo(new BigDecimal("5.00000000"));
+        assertThat(snapshot.estimatedStopLossExitFee()).isEqualTo(new BigDecimal("4.90000000"));
+        assertThat(snapshot.estimatedTakeProfitExitFee()).isEqualTo(new BigDecimal("5.30000000"));
+        assertThat(snapshot.estimatedSlippage()).isEqualTo(new BigDecimal("0E-8"));
+        assertThat(snapshot.lossAtStopLoss()).isEqualTo(new BigDecimal("109.90000000"));
+        assertThat(snapshot.feeShareOfRisk()).isEqualTo(new BigDecimal("0.09900000"));
+        assertThat(snapshot.netRiskReward()).isEqualTo(new BigDecimal("2.63603276"));
+    }
+
+    /**
+     * D-116: a Futures MARKET whose fees and slippage are 20 % of its risk raises HIGH_FEE_SHARE, read from
+     * FEE_RISK_WARN_RATIO on every calculation, and never blocks activation.
+     */
+    @Test
+    void D116_aHighFeeShare_warnsFromTheSettingOfEachCalculation_andNeverBlocks() {
+        currentPrice(MarketType.FUTURES, "100250");
+        CreateTradingPlanRequest request = create(
+                PAIR, MarketType.FUTURES, Direction.LONG, EntryType.MARKET, null, "99750", "101750", "10000", "1", 5);
+
+        PlanCalculationResponse panel = service.calculate(USER, request);
+        assertThat(panel.warnings()).extracting(PlanWarningResponse::type).contains(WarningType.HIGH_FEE_SHARE);
+        assertThat(panel.blocksActivation()).isFalse();
+
+        when(settings.decimal(PlanCalculationAssembler.FEE_RISK_WARN_RATIO)).thenReturn(new BigDecimal("0.21"));
+        assertThat(service.calculate(USER, request).warnings())
+                .extracting(PlanWarningResponse::type)
+                .doesNotContain(WarningType.HIGH_FEE_SHARE);
+        assertThat(service.create(USER, activating(request)).status()).isEqualTo(PlanStatus.EXECUTED);
     }
 
     private void currentPrice(MarketType marketType, String price) {

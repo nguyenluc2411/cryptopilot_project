@@ -54,7 +54,12 @@ public class TradingPlanController {
     private final TradingPlanService plans;
 
     @Operation(summary = "Calculate the risk panel of the values entered; nothing is saved (SRS 3.5.1)")
-    @ApiResponse(responseCode = "200", description = "The calculation and its warnings (MSG17)")
+    @ApiResponse(
+            responseCode = "200",
+            description = "The calculation and its warnings (MSG17). The snapshot's fee figures (estimated entry, stop"
+                    + " loss and take profit fees, slippage, loss at stop loss, fee share of risk, risk/reward after"
+                    + " fees) include the trading fees and slippage only; funding and the liquidation clearance fee are"
+                    + " not included (D-116)")
     @ApiResponse(responseCode = "400", description = "MSG01, MSG15, MSG16: `errors` names each rejected field")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
@@ -109,7 +114,10 @@ public class TradingPlanController {
     }
 
     @Operation(summary = "A plan with its snapshot, warnings and status history (SCR-18)")
-    @ApiResponse(responseCode = "200", description = "The plan")
+    @ApiResponse(
+            responseCode = "200",
+            description = "The plan. The snapshot's fee figures exclude funding and the liquidation clearance fee, and"
+                    + " are null on a plan saved before they existed (D-116)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller")
     @GetMapping("/{id}")

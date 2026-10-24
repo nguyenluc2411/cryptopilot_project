@@ -212,6 +212,35 @@ class OpenApiDocsTest {
                 .containsKeys("invalidatedAt", "invalidationReason");
     }
 
+    /**
+     * TP-0 (D-116): the plan snapshot documents the fee figures as decimal strings, and the panel says which fees they
+     * leave out.
+     */
+    @Test
+    @SuppressWarnings("unchecked") // TP-0: the schema object of a JSON document is read as a raw map
+    void D116_theSnapshot_documentsTheFeeFiguresAsStrings() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Map<String, Object>> snapshot =
+                JsonPath.read(body, "$.components.schemas.PlanSnapshotResponse.properties");
+        for (String figure : java.util.List.of(
+                "estimatedEntryFee",
+                "estimatedStopLossExitFee",
+                "estimatedTakeProfitExitFee",
+                "estimatedSlippage",
+                "lossAtStopLoss",
+                "feeShareOfRisk",
+                "netRiskReward")) {
+            assertThat(snapshot).containsKey(figure);
+            assertThat(snapshot.get(figure)).containsEntry("type", "string").containsEntry("format", "decimal");
+        }
+        assertThat((String) JsonPath.read(body, "$.paths['/api/v1/plans/calculate'].post.responses.200.description"))
+                .contains("funding and the liquidation clearance fee are not included");
+        assertThat((java.util.List<String>)
+                        JsonPath.read(body, "$.components.schemas.PlanWarningResponse.properties.type.enum"))
+                .contains("HIGH_FEE_SHARE");
+    }
+
     /** D-65: the unconfirmed switch to AGGRESSIVE is documented as the 400 of MSG48, like every validation error. */
     @Test
     void D65_theRiskProfileChoice_documentsMsg48UnderBadRequest() throws Exception {

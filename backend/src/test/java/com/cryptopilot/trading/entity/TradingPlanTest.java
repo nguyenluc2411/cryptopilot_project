@@ -806,6 +806,7 @@ class TradingPlanTest {
                 in.filters(),
                 in.profile(),
                 in.otherOpenRisk());
-        return new PlanCalculation(changed, base.sized(), base.liquidation(), base.fundingRate(), base.thresholds());
+        return new PlanCalculation(
+                changed, base.sized(), base.liquidation(), base.fundingRate(), base.costs(), base.thresholds());
     }
 }

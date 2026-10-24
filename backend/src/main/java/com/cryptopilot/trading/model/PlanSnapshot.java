@@ -7,11 +7,12 @@ import java.util.Objects;
 
 /**
  * The calculation results a plan stores (BR-31), at the scale of the columns that hold them: the quantity and the
- * liquidation price are tick or step multiples kept at 12 decimals, the USDT amounts and the two rates are brought to
- * 8 decimals half-even (TECHNICAL_DESIGN 5.4). A snapshot is taken when the plan is saved and again at activation;
- * after that it never changes, whatever happens to brackets, fees or settings.
+ * liquidation price are tick or step multiples kept at 12 decimals, the USDT amounts and the rates and ratios are
+ * brought to 8 decimals half-even (TECHNICAL_DESIGN 5.4). A snapshot is taken when the plan is saved and again at
+ * activation; after that it never changes, whatever happens to brackets, fees or settings. The cost figures (D-116)
+ * are {@code null} on a plan stored before they existed.
  *
- * <p>Rule: BR-23 to BR-27, BR-31; TECHNICAL_DESIGN 5.4.
+ * <p>Rule: BR-23 to BR-27, BR-29, BR-31; TECHNICAL_DESIGN 5.4; D-116.
  *
  * @param positionQuantity the sized quantity
  * @param notionalValue quantity × entry price
@@ -21,6 +22,7 @@ import java.util.Objects;
  * @param rewardAmount the gain at the take profit
  * @param riskRewardRatio reward amount / risk amount
  * @param estimatedLiquidationPrice the estimated liquidation price; {@code null} on Spot
+ * @param costs the expected fees and slippage, see {@link PlanCosts}; {@code null} on a plan stored before D-116
  */
 public record PlanSnapshot(
         BigDecimal positionQuantity,
@@ -30,12 +32,13 @@ public record PlanSnapshot(
         BigDecimal riskAmount,
         BigDecimal rewardAmount,
         BigDecimal riskRewardRatio,
-        BigDecimal estimatedLiquidationPrice) {
+        BigDecimal estimatedLiquidationPrice,
+        PlanCosts costs) {
 
     /** Decimals of {@code numeric(28,12)}: the quantity and the prices. */
     private static final int PRICE_SCALE = 12;
 
-    /** Decimals of the two rate columns, the bracket rate and the risk/reward ratio. */
+    /** Decimals of the rate and ratio columns: the bracket rate, the risk/reward ratios and the fee share. */
     private static final int RATE_SCALE = 8;
 
     public PlanSnapshot {
@@ -60,7 +63,20 @@ public record PlanSnapshot(
                 rate(sized.riskRewardRatio()),
                 liquidation == null
                         ? null
-                        : liquidation.liquidationPrice().setScale(PRICE_SCALE, RoundingMode.UNNECESSARY));
+                        : liquidation.liquidationPrice().setScale(PRICE_SCALE, RoundingMode.UNNECESSARY),
+                stored(calculation.costs()));
+    }
+
+    /** The costs at the scale of their columns: amounts and ratios at 8 decimals half-even. */
+    private static PlanCosts stored(PlanCosts costs) {
+        return new PlanCosts(
+                Rounding.toAmount(costs.estimatedEntryFee()),
+                Rounding.toAmount(costs.estimatedStopLossExitFee()),
+                Rounding.toAmount(costs.estimatedTakeProfitExitFee()),
+                Rounding.toAmount(costs.estimatedSlippage()),
+                Rounding.toAmount(costs.lossAtStopLoss()),
+                rate(costs.feeShareOfRisk()),
+                rate(costs.netRiskReward()));
     }
 
     private static BigDecimal rate(BigDecimal value) {

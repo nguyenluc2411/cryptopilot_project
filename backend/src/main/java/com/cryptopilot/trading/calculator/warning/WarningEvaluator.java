@@ -11,7 +11,7 @@ import java.util.Optional;
  * Applies every warning rule to a calculated plan and returns the warnings it raises, the most severe first. A plan
  * with a BLOCKING warning can be saved as a draft but not activated.
  *
- * <p>Rule: BR-25, BR-26, BR-28, BR-29, BR-32; TECHNICAL_DESIGN 7.5; D-53; A-34; Q-27.
+ * <p>Rule: BR-25, BR-26, BR-28, BR-29, BR-32; TECHNICAL_DESIGN 7.5; D-53; D-116; A-34; Q-27.
  * <p>Reference: Evans, E., &amp; Fowler, M. (1997). <i>Specifications</i> (composite of independent rule objects).
  */
 public final class WarningEvaluator {
@@ -24,7 +24,8 @@ public final class WarningEvaluator {
             new HighLeverageRule(),
             new TotalOpenRiskRule(),
             new WideStopLossRule(),
-            new HighFundingRateRule());
+            new HighFundingRateRule(),
+            new HighFeeShareRule());
 
     private static final Comparator<PlanWarning> MOST_SEVERE_FIRST =
             Comparator.comparing(PlanWarning::severity).reversed().thenComparing(PlanWarning::type);

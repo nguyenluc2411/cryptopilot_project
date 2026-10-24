@@ -10,6 +10,7 @@ import com.cryptopilot.trading.calculator.warning.WarningEvaluator;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.exception.PlanActivationBlockedException;
 import com.cryptopilot.trading.model.PlanCalculation;
+import com.cryptopilot.trading.model.PlanCosts;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
@@ -149,6 +150,35 @@ public class TradingPlan extends BaseEntity {
     @Getter(AccessLevel.NONE)
     @Column(name = "estimated_liquidation_price", precision = 28, scale = 12)
     private BigDecimal estimatedLiquidationPrice;
+
+    /** The expected fees and slippage of the snapshot (D-116); all null on a plan saved before V34. */
+    @Getter(AccessLevel.NONE)
+    @Column(name = "estimated_entry_fee", precision = 28, scale = 8)
+    private BigDecimal estimatedEntryFee;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "estimated_stop_loss_exit_fee", precision = 28, scale = 8)
+    private BigDecimal estimatedStopLossExitFee;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "estimated_take_profit_exit_fee", precision = 28, scale = 8)
+    private BigDecimal estimatedTakeProfitExitFee;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "estimated_slippage", precision = 28, scale = 8)
+    private BigDecimal estimatedSlippage;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "loss_at_stop_loss", precision = 28, scale = 8)
+    private BigDecimal lossAtStopLoss;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "fee_share_of_risk", precision = 20, scale = 8)
+    private BigDecimal feeShareOfRisk;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "net_risk_reward_ratio", precision = 20, scale = 8)
+    private BigDecimal netRiskReward;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "plan_status", nullable = false, length = 32)
@@ -404,7 +434,17 @@ public class TradingPlan extends BaseEntity {
                 riskAmount,
                 rewardAmount,
                 riskRewardRatio,
-                estimatedLiquidationPrice);
+                estimatedLiquidationPrice,
+                estimatedEntryFee == null
+                        ? null
+                        : new PlanCosts(
+                                estimatedEntryFee,
+                                estimatedStopLossExitFee,
+                                estimatedTakeProfitExitFee,
+                                estimatedSlippage,
+                                lossAtStopLoss,
+                                feeShareOfRisk,
+                                netRiskReward));
     }
 
     /** The stored warnings, most severe first. */
@@ -500,6 +540,14 @@ public class TradingPlan extends BaseEntity {
         rewardAmount = snapshot.rewardAmount();
         riskRewardRatio = snapshot.riskRewardRatio();
         estimatedLiquidationPrice = snapshot.estimatedLiquidationPrice();
+        PlanCosts costs = snapshot.costs();
+        estimatedEntryFee = costs == null ? null : costs.estimatedEntryFee();
+        estimatedStopLossExitFee = costs == null ? null : costs.estimatedStopLossExitFee();
+        estimatedTakeProfitExitFee = costs == null ? null : costs.estimatedTakeProfitExitFee();
+        estimatedSlippage = costs == null ? null : costs.estimatedSlippage();
+        lossAtStopLoss = costs == null ? null : costs.lossAtStopLoss();
+        feeShareOfRisk = costs == null ? null : costs.feeShareOfRisk();
+        netRiskReward = costs == null ? null : costs.netRiskReward();
     }
 
     private void replaceWarnings(List<PlanWarning> newWarnings) {
