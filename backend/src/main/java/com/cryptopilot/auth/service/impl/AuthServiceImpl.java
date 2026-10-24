@@ -1,5 +1,6 @@
 package com.cryptopilot.auth.service.impl;
 
+import com.cryptopilot.admin.SystemSettingApi;
 import com.cryptopilot.auth.PasswordPolicy;
 import com.cryptopilot.auth.config.TokenProperties;
 import com.cryptopilot.auth.entity.UserToken;
@@ -19,8 +20,6 @@ import com.cryptopilot.user.UserSummary;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -134,24 +133,23 @@ public class AuthServiceImpl implements AuthService {
      */
     static final Duration PASSWORD_RESET_TOKEN_LIFETIME = Duration.ofMinutes(30);
 
-    /** SRS 3.2.2: a verification mail may be resent once per 60 seconds. */
-    static final Duration RESEND_MINIMUM_INTERVAL = Duration.ofSeconds(60);
+    /**
+     * BR-65: the seconds between two verification mails to one address, 60 by default. A system setting, as SRS
+     * 3.11.8 lists the resend limits among them, so a change on SCR-43 applies to the next request.
+     */
+    static final String RESEND_MIN_INTERVAL_SECONDS = "RESEND_MIN_INTERVAL_SECONDS";
 
-    /** SRS 3.2.2: and at most five times a day. */
-    static final int RESEND_MAXIMUM_PER_DAY = 5;
+    /** BR-65: the verification mails to one address in any rolling 24 hours, 5 by default; a system setting too. */
+    static final String RESEND_MAX_PER_24_HOURS = "RESEND_MAX_PER_24_HOURS";
+
+    /** BR-65: the window the cap is counted over, rolling rather than a calendar day. */
+    static final Duration RESEND_WINDOW = Duration.ofHours(24);
 
     /**
      * The detail text of every refusal that means "this is not a live session", whichever of the four
      * reasons applies. One constant, so the four responses are identical byte for byte.
      */
     static final String SESSION_OVER_DETAIL = "the refresh token presented is not a live session";
-
-    /**
-     * The day the five-a-day cap is counted over. The SRS fixes no boundary for it; the one
-     * boundary the SRS does fix anywhere is BR-50's daily AI quota, which resets at 00:00 UTC+7, so
-     * the same one is used here rather than a second convention.
-     */
-    private static final ZoneId RESEND_DAY_ZONE = ZoneId.of("UTC+7");
 
     private final UserApi users;
     private final UserTokenRepository tokens;
@@ -162,6 +160,7 @@ public class AuthServiceImpl implements AuthService {
     private final TokenProperties tokenProperties;
     private final PasswordEncoder passwordEncoder;
     private final ApplicationEventPublisher events;
+    private final SystemSettingApi settings;
     private final Clock clock;
 
     /**
@@ -189,6 +188,7 @@ public class AuthServiceImpl implements AuthService {
             TokenProperties tokenProperties,
             PasswordEncoder passwordEncoder,
             ApplicationEventPublisher events,
+            SystemSettingApi settings,
             Clock clock) {
         this.users = users;
         this.tokens = tokens;
@@ -199,6 +199,7 @@ public class AuthServiceImpl implements AuthService {
         this.tokenProperties = tokenProperties;
         this.passwordEncoder = passwordEncoder;
         this.events = events;
+        this.settings = settings;
         this.clock = clock;
         this.hashOfNothing = passwordEncoder.encode(tokenFactory.newToken());
     }
@@ -576,18 +577,15 @@ public class AuthServiceImpl implements AuthService {
                         account.userId(), TokenType.EMAIL_VERIFICATION)
                 .map(UserToken::getCreatedAt);
         if (lastIssued.isPresent()
-                && lastIssued.get().plus(RESEND_MINIMUM_INTERVAL).isAfter(now)) {
+                && lastIssued
+                        .get()
+                        .plusSeconds(settings.integer(RESEND_MIN_INTERVAL_SECONDS))
+                        .isAfter(now)) {
             return true;
         }
-        int issuedToday = tokens.countIssuedSince(account.userId(), TokenType.EMAIL_VERIFICATION, startOfDay(now));
-        return issuedToday >= RESEND_MAXIMUM_PER_DAY;
-    }
-
-    /** Midnight of the current day in the zone the daily cap is counted in. */
-    private static Instant startOfDay(Instant now) {
-        return LocalDate.ofInstant(now, RESEND_DAY_ZONE)
-                .atStartOfDay(RESEND_DAY_ZONE)
-                .toInstant();
+        int issuedInWindow =
+                tokens.countIssuedSince(account.userId(), TokenType.EMAIL_VERIFICATION, now.minus(RESEND_WINDOW));
+        return issuedInWindow >= settings.integer(RESEND_MAX_PER_24_HOURS);
     }
 
     /**

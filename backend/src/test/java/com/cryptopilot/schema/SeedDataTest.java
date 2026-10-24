@@ -73,10 +73,10 @@ class SeedDataTest {
      * The tables the seed writes, with the number of rows each one holds after every migration: V3 seeds sixteen
      * settings, V10 removes the watchlist and active alert limits, which are the plan's (BR-62), and V13 the
      * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V26 adds the
-     * liquidation clearance fee (BR-36); V11 seeds the five packages.
+     * liquidation clearance fee (BR-36), V33 the two resend limits (BR-65); V11 seeds the five packages.
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
-            "system_setting", 13,
+            "system_setting", 15,
             "trading_strategy", 3,
             "user_account", 1,
             "user_profile", 1,
@@ -114,7 +114,7 @@ class SeedDataTest {
 
     @ParameterizedTest(name = "{0} holds {1} seeded rows")
     @CsvSource({
-        "system_setting, 13",
+        "system_setting, 15",
         "trading_strategy, 3",
         "user_account, 1",
         "user_profile, 1",
@@ -332,6 +332,13 @@ class SeedDataTest {
         assertThat(settingValue("ORDER_EXPIRY_MINUTES")).isEqualTo("15");
     }
 
+    /** BR-65: the resend limits are settings, seeded with the values the rule states. */
+    @Test
+    void BR65_theResendLimits_areSeededWithTheValuesTheRuleStates() {
+        assertThat(settingValue("RESEND_MIN_INTERVAL_SECONDS")).isEqualTo("60");
+        assertThat(settingValue("RESEND_MAX_PER_24_HOURS")).isEqualTo("5");
+    }
+
     @Test
     void everySeededSetting_carriesAValueItsDeclaredTypeParses() {
         List<Map<String, Object>> settings = jdbc.sql(
@@ -339,7 +346,7 @@ class SeedDataTest {
                 .query()
                 .listOfRows();
 
-        assertThat(settings).hasSize(13).allSatisfy(setting -> {
+        assertThat(settings).hasSize(15).allSatisfy(setting -> {
             String key = (String) setting.get("setting_key");
             String value = (String) setting.get("setting_value");
             switch ((String) setting.get("value_type")) {

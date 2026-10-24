@@ -57,8 +57,11 @@ public class SystemSettingServiceImpl implements SystemSettingService {
     @Override
     @Transactional
     public SystemSettingResponse update(UUID adminId, String key, String value) {
+        // Two partners are always locked in key order, so two administrators moving both at once never deadlock.
+        partnerOf(key).filter(partner -> partner.compareTo(key) < 0).ifPresent(settings::findForUpdate);
         StoredSetting before = stored(settings.findForUpdate(key), key);
         String plain = checked(before.valueType(), SettingRule.of(key), value.strip());
+        requireOrdered(key, plain);
         if (!plain.equals(before.value())) {
             settings.update(key, plain, adminId, clock.instant());
             admin.audit(new AuditEntry(
@@ -103,6 +106,30 @@ public class SystemSettingServiceImpl implements SystemSettingService {
         } catch (NumberFormatException notANumber) {
             throw refused(value, "is not a " + type);
         }
+    }
+
+    /**
+     * A setting with a partner keeps its side of it (BR-69: confirm at or below block), checked against the partner's
+     * stored value read under its own row lock, so two administrators moving the two bounds at once cannot cross them.
+     */
+    private static Optional<String> partnerOf(String key) {
+        return SettingRule.atMost(key).or(() -> SettingRule.atLeast(key));
+    }
+
+    private void requireOrdered(String key, String plain) {
+        BigDecimal value = new BigDecimal(plain);
+        SettingRule.atMost(key)
+                .flatMap(settings::findForUpdate)
+                .filter(partner -> value.compareTo(new BigDecimal(partner.value())) > 0)
+                .ifPresent(partner -> {
+                    throw refused(plain, "is above " + partner.key() + " " + partner.value());
+                });
+        SettingRule.atLeast(key)
+                .flatMap(settings::findForUpdate)
+                .filter(partner -> value.compareTo(new BigDecimal(partner.value())) < 0)
+                .ifPresent(partner -> {
+                    throw refused(plain, "is below " + partner.key() + " " + partner.value());
+                });
     }
 
     private static void requireInRange(Optional<SettingRule> rule, BigDecimal number, String value) {

@@ -138,6 +138,41 @@ class SystemSettingApiTest {
                 .isZero();
     }
 
+    /**
+     * BR-69: the entry deviation that asks for a confirmation never rises above the one that is refused, whichever of
+     * the two moves. The rows are TP-A's (V32); they are written here so the rule is proved before that lands.
+     */
+    @Test
+    void BR69_theConfirmBound_staysAtOrBelowTheBlockBound() throws Exception {
+        boolean seeded = sql.sql("select count(*) from system_setting where setting_key = 'ENTRY_DEVIATION_BLOCK_R'")
+                        .query(Long.class)
+                        .single()
+                > 0;
+        if (!seeded) {
+            sql.sql("""
+                            insert into system_setting (setting_key, setting_value, value_type, description, updated_at)
+                            values ('ENTRY_DEVIATION_CONFIRM_R', '0.25000000', 'DECIMAL', 'BR-69', now()),
+                                   ('ENTRY_DEVIATION_BLOCK_R', '0.75000000', 'DECIMAL', 'BR-69', now())""").update();
+        }
+        try {
+            change("ENTRY_DEVIATION_CONFIRM_R", "0.8")
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errors.value").value("MSG15"));
+            change("ENTRY_DEVIATION_BLOCK_R", "0.2").andExpect(status().isBadRequest());
+            change("ENTRY_DEVIATION_CONFIRM_R", "0.75").andExpect(status().isOk());
+            change("ENTRY_DEVIATION_BLOCK_R", "1").andExpect(status().isOk());
+            change("ENTRY_DEVIATION_CONFIRM_R", "0.9").andExpect(status().isOk());
+        } finally {
+            if (seeded) {
+                change("ENTRY_DEVIATION_CONFIRM_R", "0.25");
+                change("ENTRY_DEVIATION_BLOCK_R", "0.75");
+            } else {
+                sql.sql("delete from system_setting where setting_key like 'ENTRY_DEVIATION_%'")
+                        .update();
+            }
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
 
     private ResultActions change(String key, String value) throws Exception {
