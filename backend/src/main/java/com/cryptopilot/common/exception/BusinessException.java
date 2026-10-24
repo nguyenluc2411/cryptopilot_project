@@ -1,6 +1,7 @@
 package com.cryptopilot.common.exception;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -107,6 +108,19 @@ public class BusinessException extends RuntimeException {
      */
     public List<String> messageArgs() {
         return List.of(messageArgs);
+    }
+
+    /**
+     * The members a rejection adds to its problem detail beside the message arguments, for values a client acts on
+     * rather than only shows, such as the recalculated plan a confirmation dialog presents (MSG51). Each value is a
+     * text, a boolean or a number the client reads as it is; none by default. A subclass returns a new map, so a
+     * handler cannot change what a rule decided.
+     *
+     * <p>Reference: Nottingham, M., Wilde, E. &amp; Dalal, S. (2023). RFC 9457, <i>Problem Details for HTTP APIs</i>,
+     * section 3.2 (extension members).
+     */
+    public Map<String, Object> problemProperties() {
+        return Map.of();
     }
 
     private static String requireText(String detail) {

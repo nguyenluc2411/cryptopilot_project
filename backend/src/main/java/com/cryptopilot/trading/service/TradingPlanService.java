@@ -28,8 +28,11 @@ public interface TradingPlanService {
     /** Saves new values of a DRAFT plan, and activates it when the request asks to (UC-17). */
     TradingPlanResponse update(UUID userId, UUID planId, UpdateTradingPlanRequest request);
 
-    /** Activates a DRAFT plan within the plan's limit of ACTIVE plans and open positions (UC-18, BR-62). */
-    TradingPlanResponse activate(UUID userId, UUID planId);
+    /**
+     * Activates a DRAFT plan within the plan's limit of ACTIVE plans and open positions (UC-18, BR-62). A MARKET plan
+     * whose entry moved into the confirmation band of BR-69 is activated only with {@code confirmDeviation} (MSG51).
+     */
+    TradingPlanResponse activate(UUID userId, UUID planId, boolean confirmDeviation);
 
     /** Cancels a DRAFT or ACTIVE plan (UC-19). */
     TradingPlanResponse cancel(UUID userId, UUID planId);

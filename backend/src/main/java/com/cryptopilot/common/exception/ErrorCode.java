@@ -241,6 +241,23 @@ public enum ErrorCode {
     TRADING_BLOCKING_WARNING(HttpStatus.CONFLICT, "MSG18"),
 
     /**
+     * The expected fill of a MARKET plan has moved from the plan by at least {@code ENTRY_DEVIATION_CONFIRM_R} and at
+     * most the plan's limit (BR-69). The body carries the deviation and the recalculated quantity and risk/reward, so
+     * the client shows MSG51 and repeats the request with {@code confirmDeviation=true}.
+     *
+     * <p>400, as {@link #RISK_PROFILE_CONFIRMATION_REQUIRED}: a confirmation the request did not carry (D-65).
+     */
+    ENTRY_DEVIATION_CONFIRMATION_REQUIRED(HttpStatus.BAD_REQUEST, "MSG51"),
+
+    /**
+     * The expected fill of a MARKET plan has moved from the plan by more than its limit, or is at or past its take
+     * profit (BR-69). No confirmation lifts it; the plan stays a draft.
+     *
+     * <p>409, as {@link #TRADING_BLOCKING_WARNING}: the request is valid and the current price is what refuses it.
+     */
+    ENTRY_DEVIATION_REFUSED(HttpStatus.CONFLICT, "MSG52"),
+
+    /**
      * The action does not exist from the plan's current status: an edit outside DRAFT, or a transition BR-32 does not
      * list. SRS section 5.3 has no text for this, so it borrows MSG43 like {@link #DATA_CONFLICT} until A-38 is
      * answered (D-66).

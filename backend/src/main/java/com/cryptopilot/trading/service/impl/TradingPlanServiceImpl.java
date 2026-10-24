@@ -19,6 +19,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.TradeJournal;
+import com.cryptopilot.trading.calculator.EntryDeviationCalculator;
 import com.cryptopilot.trading.calculator.PlanValidityRule;
 import com.cryptopilot.trading.calculator.SlippageCalculator;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
@@ -32,14 +33,17 @@ import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.event.TradingPlanWithdrawn;
+import com.cryptopilot.trading.exception.EntryDeviationException;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.matching.EntryFillRule;
 import com.cryptopilot.trading.model.CalculatedPlan;
+import com.cryptopilot.trading.model.EntryDeviation;
 import com.cryptopilot.trading.model.EntryExpectation;
 import com.cryptopilot.trading.model.InputViolation;
 import com.cryptopilot.trading.model.OpenExposure;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanListQuery;
+import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanTerms;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskProfileLimits;
@@ -101,8 +105,11 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     /** How long an unfilled LIMIT or STOP plan stays ACTIVE when the Trader sets no expiry (SRS 3.5.1, D-71). */
     static final Duration LIMIT_EXPIRY = Duration.ofDays(7);
 
-    /** The setting a plan's own entry deviation limit may not exceed (BR-69). */
+    /** The setting a plan's own entry deviation limit may not exceed, and the default limit (BR-69). */
     static final String ENTRY_DEVIATION_BLOCK_R = "ENTRY_DEVIATION_BLOCK_R";
+
+    /** The entry deviation from which a MARKET activation needs the Trader's confirmation (BR-69). */
+    static final String ENTRY_DEVIATION_CONFIRM_R = "ENTRY_DEVIATION_CONFIRM_R";
 
     /** The simulated slippage of taker fills, read on every calculation and every fill (BR-36; D-111 E5). */
     static final String SLIPPAGE_BPS = "SLIPPAGE_BPS";
@@ -132,7 +139,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         PlanTerms terms = terms(request);
         TradablePair pair = pair(userId, request.pairId(), terms.market());
         Optional<BigDecimal> last = lastPriceRead(pair, terms.entryType(), request.invalidationPrice(), false);
-        CalculatedPlan calculated = calculate(userId, pair, terms, true, last, exposure(userId, NO_PLAN, false));
+        CalculatedPlan calculated = calculate(userId, pair, terms, true, last, exposure(userId, NO_PLAN, false), null);
         // The save's checks too, so the panel accepts only what create accepts.
         PlanDetails details = details(userId, request, calculated, clock.instant());
         requireValidAtSave(pair, calculated, details, false, last);
@@ -152,13 +159,14 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         TradablePair pair = pair(userId, request.pairId(), terms.market());
         Optional<BigDecimal> last = lastPriceRead(pair, terms.entryType(), request.invalidationPrice(), activate);
         OpenExposure exposure = exposure(userId, NO_PLAN, activate);
-        CalculatedPlan calculated = calculate(userId, pair, terms, true, last, exposure);
+        MarketEntryGate gate = activate ? new MarketEntryGate(null, request.maxEntryDeviationR()) : null;
+        CalculatedPlan calculated = calculate(userId, pair, terms, true, last, exposure, gate);
         PlanDetails details = details(userId, request, calculated, now);
         requireValidAtSave(pair, calculated, details, activate, last);
         TradingPlan plan = TradingPlan.draft(userId, request.pairId(), calculated, details);
         if (activate) {
             requireRoomForAnActivePlan(userId, exposure);
-            activate(plan, calculated, now, last);
+            activate(plan, calculated, now, last, gate, Boolean.TRUE.equals(request.confirmDeviation()));
         }
         return detail(store(plan));
     }
@@ -180,20 +188,21 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         TradablePair pair = pair(userId, plan.getPairId(), terms.market());
         Optional<BigDecimal> last = lastPriceRead(pair, terms.entryType(), request.invalidationPrice(), activate);
         OpenExposure exposure = exposure(userId, plan.getId(), activate);
-        CalculatedPlan calculated = calculate(userId, pair, terms, true, last, exposure);
+        MarketEntryGate gate = activate ? new MarketEntryGate(null, request.maxEntryDeviationR()) : null;
+        CalculatedPlan calculated = calculate(userId, pair, terms, true, last, exposure, gate);
         PlanDetails details = details(userId, request, calculated, now);
         requireValidAtSave(pair, calculated, details, activate, last);
         plan.updateDraft(calculated, details);
         if (activate) {
             requireRoomForAnActivePlan(userId, exposure);
-            activate(plan, calculated, now, last);
+            activate(plan, calculated, now, last, gate, Boolean.TRUE.equals(request.confirmDeviation()));
         }
         return detail(store(plan));
     }
 
     @Override
     @Transactional
-    public TradingPlanResponse activate(UUID userId, UUID planId) {
+    public TradingPlanResponse activate(UUID userId, UUID planId, boolean confirmDeviation) {
         Instant now = clock.instant();
         activePlanLock.lock(userId);
         TradingPlan plan = owned(userId, planId);
@@ -205,11 +214,12 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         requireRoomForAnActivePlan(userId, exposure);
         TradablePair pair = pair(userId, plan.getPairId(), plan.getMarket());
         Optional<BigDecimal> last = lastPriceRead(pair, plan.getEntryType(), plan.getInvalidationPrice(), true);
+        MarketEntryGate gate = new MarketEntryGate(plan.getPlannedEntryPrice(), plan.getMaxEntryDeviationR());
         // Stored prices are checked against the current tick, not rounded to it (BR-30, BR-31).
-        CalculatedPlan calculated = calculate(userId, pair, terms(plan), false, last, exposure);
+        CalculatedPlan calculated = calculate(userId, pair, terms(plan), false, last, exposure, gate);
         // After the calculation and its entitlement check, which answers MSG29 before a missing price answers 503.
         requireValidAtActivation(plan, last);
-        activate(plan, calculated, now, last);
+        activate(plan, calculated, now, last, gate, confirmDeviation);
         return detail(store(plan));
     }
 
@@ -336,9 +346,11 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * price, decides whether a LIMIT is expected to take or to supply liquidity). With {@code roundPrices} the prices
      * are rounded to the pair's tick, as for values just entered (BR-30); without it they are passed as stored, so a
      * price that is no longer a multiple of the current tick is refused by the calculation on its field (MSG15)
-     * instead of being moved to a price the Trader never entered.
+     * instead of being moved to a price the Trader never entered. An activation passes its {@code gate}, which sees a
+     * MARKET entry's expected fill before it is sized, so a fill at or past the take profit answers MSG52 rather than
+     * the sizing's MSG16; {@code null} otherwise.
      *
-     * <p>Rule: BR-23, BR-29, BR-30, BR-31, BR-36; D-111 E1, E5; D-112 R6; D-116.
+     * <p>Rule: BR-23, BR-29, BR-30, BR-31, BR-36, BR-69; D-111 E1, E5; D-112 R6; D-116.
      */
     private CalculatedPlan calculate(
             UUID userId,
@@ -346,7 +358,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             PlanTerms terms,
             boolean roundPrices,
             Optional<BigDecimal> last,
-            OpenExposure exposure) {
+            OpenExposure exposure,
+            MarketEntryGate gate) {
         PlanDefaults defaults = riskProfiles.planDefaultsOf(userId);
         BigDecimal capital = terms.capital() != null ? terms.capital() : defaults.defaultCapital();
         if (capital == null) {
@@ -376,6 +389,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 pair.filters(),
                 limits(defaults.riskProfile()),
                 exposure.otherOpenRisk());
+        if (gate != null && reference != null) {
+            gate.refuseBeyondLimit(input, reference);
+        }
         LiquidityRole role = EntryFillRule.expectedLiquidity(terms.entryType(), terms.direction(), entryPrice, last);
         BigDecimal slipsFrom =
                 switch (terms.entryType()) {
@@ -628,9 +644,19 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * A STOP waits: the matching engine triggers it (one already triggered was refused). The journal record of the
      * fill is opened when the plan is stored, see {@link #store}. The setup score of the moment is kept beside the plan,
      * see {@link #recordSetupScore}. {@code last} is the request's one read of the last price, see
-     * {@link #lastPriceRead}.
+     * {@link #lastPriceRead}. A MARKET entry in the confirmation band of BR-69 needs {@code confirmDeviation}, asked
+     * for after the plan's other checks so the Trader never confirms a plan that is then refused, and before anything
+     * changes.
      */
-    private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now, Optional<BigDecimal> last) {
+    private void activate(
+            TradingPlan plan,
+            CalculatedPlan calculated,
+            Instant now,
+            Optional<BigDecimal> last,
+            MarketEntryGate gate,
+            boolean confirmDeviation) {
+        plan.requireActivatable(calculated.calculation(), calculated.warnings(), now);
+        gate.requireConfirmed(calculated, confirmDeviation);
         plan.activate(calculated.calculation(), calculated.warnings(), now);
         recordSetupScore(plan, now);
         Optional<BigDecimal> fillPrice = plan.getEntryType() == EntryType.STOP
@@ -720,6 +746,61 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return new BusinessException(
                 ErrorCode.MARKET_PRICE_UNAVAILABLE,
                 "no current last price for " + pair.symbol() + " on " + pair.market());
+    }
+
+    /**
+     * The entry deviation check of one MARKET activation: the expected fill against the planned entry, the reference
+     * price of the plan's last draft save, which is this request's own reference when the request saves the plan
+     * before it activates it. The thresholds are read once, when the expected fill is known. A LIMIT or STOP plan never
+     * reaches it: its deviation is recorded at its fill.
+     *
+     * <p>Rule: BR-69; MSG51, MSG52; D-111 (M2), D-112 (R6, R7).
+     */
+    private final class MarketEntryGate {
+
+        /** The planned entry of a stored draft; {@code null} when this request saves the plan. */
+        private final BigDecimal plannedEntry;
+
+        private final BigDecimal planLimitR;
+
+        /** The decision on the expected fill; {@code null} until a MARKET entry was priced. */
+        private EntryDeviation deviation;
+
+        private BigDecimal expectedFill;
+
+        MarketEntryGate(BigDecimal plannedEntry, BigDecimal planLimitR) {
+            this.plannedEntry = plannedEntry;
+            this.planLimitR = planLimitR;
+        }
+
+        /** MSG52 when the expected fill lies beyond the limit or at or past the take profit; before the sizing. */
+        void refuseBeyondLimit(RiskInput input, BigDecimal reference) {
+            expectedFill = input.entryPrice();
+            deviation = EntryDeviationCalculator.atMarketActivation(
+                    input.direction(),
+                    plannedEntry == null ? reference : plannedEntry,
+                    expectedFill,
+                    input.stopLoss(),
+                    input.takeProfit(),
+                    settings.decimal(ENTRY_DEVIATION_CONFIRM_R),
+                    settings.decimal(ENTRY_DEVIATION_BLOCK_R),
+                    planLimitR);
+            if (deviation.verdict() == EntryDeviation.Verdict.REFUSE) {
+                throw EntryDeviationException.refused(deviation, expectedFill);
+            }
+        }
+
+        /** MSG51, with the plan recalculated at the expected fill, when the deviation needs a confirmation not given. */
+        void requireConfirmed(CalculatedPlan calculated, boolean confirmed) {
+            if (deviation == null || deviation.verdict() != EntryDeviation.Verdict.CONFIRM) {
+                return;
+            }
+            if (!confirmed) {
+                throw EntryDeviationException.confirmationRequired(
+                        deviation, expectedFill, PlanSnapshot.of(calculated.calculation()));
+            }
+            log.info("BR-69 MARKET entry {}R from the plan, confirmed by the Trader", deviation.deviationR());
+        }
     }
 
     private void publishActivated(TradingPlan plan) {
