@@ -13,6 +13,7 @@ import com.cryptopilot.trading.model.PlanCosts;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.RiskInput;
+import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -79,11 +80,16 @@ final class PlanResponses {
                 plan.getInvalidationReason());
     }
 
-    /** The live risk panel. */
+    /**
+     * The live risk panel. A MARKET entry answers its reference price and, beside it, the expected fill the plan is
+     * sized on (D-112 R6).
+     */
     static PlanCalculationResponse calculation(CalculatedPlan calculated) {
         RiskInput input = calculated.calculation().plan();
+        boolean market = calculated.entry().entryType() == EntryType.MARKET;
         return new PlanCalculationResponse(
-                input.entryPrice(),
+                market ? calculated.entry().reference() : input.entryPrice(),
+                market ? input.entryPrice() : null,
                 input.capital(),
                 input.riskPercent(),
                 snapshot(PlanSnapshot.of(calculated.calculation())),

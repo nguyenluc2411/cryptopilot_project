@@ -234,6 +234,10 @@ class OpenApiDocsTest {
             assertThat(snapshot).containsKey(figure);
             assertThat(snapshot.get(figure)).containsEntry("type", "string").containsEntry("format", "decimal");
         }
+        assertThat((Map<String, Object>) JsonPath.read(
+                        body, "$.components.schemas.PlanCalculationResponse.properties.expectedFillPrice"))
+                .containsEntry("type", "string")
+                .containsEntry("format", "decimal");
         assertThat((String) JsonPath.read(body, "$.paths['/api/v1/plans/calculate'].post.responses.200.description"))
                 .contains("funding and the liquidation clearance fee are not included");
         assertThat((java.util.List<String>)

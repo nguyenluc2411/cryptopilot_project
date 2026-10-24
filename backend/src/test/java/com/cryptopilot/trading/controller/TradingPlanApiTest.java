@@ -244,6 +244,28 @@ class TradingPlanApiTest {
         };
     }
 
+    /**
+     * D-112 R6: the panel answers a MARKET entry's reference price and its expected fill beside it, equal at the seeded
+     * SLIPPAGE_BPS of 0; a LIMIT has no expected fill.
+     */
+    @Test
+    void D112_thePanel_answersTheExpectedFillOfAMarketEntry() throws Exception {
+        UUID trader = trader();
+        lastPrice("100.25");
+
+        as(
+                        trader,
+                        post(PLANS + "/calculate"),
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.entryPrice").value("100.25"))
+                .andExpect(jsonPath("$.expectedFillPrice").value("100.25"));
+        as(trader, post(PLANS + "/calculate"), spotLimit("100", "95", "110", false))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.expectedFillPrice").isEmpty());
+    }
+
     /** The panel answers what a save answers: a MARKET plan takes no invalidation price (MSG01). */
     @Test
     void MSG01_thePanel_refusesAMarketPlanWithAnInvalidationPrice_asCreateDoes() throws Exception {

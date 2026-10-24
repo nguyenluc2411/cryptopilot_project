@@ -71,7 +71,7 @@ public class PlanCalculationAssembler {
         }
         PlanCosts costs = PlanCostCalculator.calculate(input, sized, entry, feeRates.of(input.market()));
         PlanCalculation calculation = new PlanCalculation(input, sized, liquidation, fundingRate, costs, thresholds());
-        return new CalculatedPlan(calculation, WarningEvaluator.evaluate(calculation));
+        return new CalculatedPlan(calculation, WarningEvaluator.evaluate(calculation), entry);
     }
 
     private LiquidationEstimate liquidation(TradablePair pair, RiskInput input, RiskCalculation sized) {

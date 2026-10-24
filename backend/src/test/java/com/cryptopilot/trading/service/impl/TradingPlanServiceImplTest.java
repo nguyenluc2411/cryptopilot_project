@@ -1435,6 +1435,42 @@ class TradingPlanServiceImplTest {
         assertThat(saved.getFillPrice()).isEqualByComparingTo("100.10");
     }
 
+    /**
+     * D-112 R6: the panel answers a MARKET entry's reference price (the last price, 100.00) as {@code entryPrice} and
+     * beside it the expected fill the quantity is sized on: the same price at 0 bps; with 10 bps a LONG buys at 100.10
+     * and a SHORT sells at 99.90, against the Trader.
+     */
+    @ParameterizedTest(name = "{0} at {1} bps -> expected fill {2}")
+    @CsvSource({"LONG, 0, 100.00", "LONG, 10, 100.10", "SHORT, 0, 100.00", "SHORT, 10, 99.90"})
+    void D112_thePanel_answersTheExpectedFillOfAMarketEntry_besideItsReferencePrice(
+            Direction direction, int bps, String expectedFill) {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(bps);
+        currentPrice(MarketType.FUTURES, "100.00");
+        CreateTradingPlanRequest request = direction == Direction.LONG
+                ? create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, "95", "110", null, null, 5)
+                : create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, "105", "90", null, null, 5);
+
+        PlanCalculationResponse panel = service.calculate(USER, request);
+
+        assertThat(panel.entryPrice()).isEqualByComparingTo("100.00");
+        assertThat(panel.expectedFillPrice()).isEqualByComparingTo(expectedFill);
+        if (bps == 0) {
+            assertThat(panel.expectedFillPrice()).isEqualTo(panel.entryPrice());
+        }
+    }
+
+    /** A LIMIT or STOP entry has no expected fill in the panel: it fills at its own price or later. */
+    @Test
+    void D112_aLimitEntry_hasNoExpectedFillInThePanel() {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("101")));
+
+        PlanCalculationResponse panel = service.calculate(USER, spotLimit("100", "95", "110"));
+
+        assertThat(panel.entryPrice()).isEqualByComparingTo("100");
+        assertThat(panel.expectedFillPrice()).isNull();
+    }
+
     /** SLIPPAGE_BPS is read for every fill, never kept from an earlier one: 0, then 10. */
     @Test
     void BR36_theSlippage_isReadForEveryFill() {
