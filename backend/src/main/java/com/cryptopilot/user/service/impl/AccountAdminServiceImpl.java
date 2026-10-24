@@ -9,6 +9,7 @@ import com.cryptopilot.billing.model.enums.PlanTier;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.user.AccountActivityCounter;
@@ -47,8 +48,11 @@ import org.springframework.transaction.annotation.Transactional;
  * with the reason, and ends the account's sessions through {@link AccountSuspended} when it locks, bans or changes
  * the role: {@code auth} revokes them in the same transaction.
  *
- * <p>Two administrators demoting each other at once could each count the other as the remaining one; the row lock is on
- * the target only. The race needs two administrators acting within the same instant on each other, and is accepted.
+ * <p>The row lock is on the target only, so two administrators locking, banning or demoting each other at once would
+ * each count the other as the one left and both commit, leaving no active administrator. Every action that can take
+ * an administrator out therefore first takes one lock for the whole roster ({@link #ROSTER_SCOPE}), before the row
+ * lock, so such actions run one after the other and the second counts what the first left; taking it first also keeps
+ * two of them from waiting on each other's rows.
  *
  * <p>Rule: SRS 3.11.2, UC-42; BR-05, BR-06, BR-57, BR-58.
  */
@@ -59,6 +63,12 @@ public class AccountAdminServiceImpl implements AccountAdminService {
     /** The audit entries SCR-35 shows. */
     static final int RECENT_AUDIT = 20;
 
+    /** The scope of the one lock every lock, ban and role change takes first (BR-58). */
+    static final String ROSTER_SCOPE = "admin-roster";
+
+    /** The key under {@link #ROSTER_SCOPE}: a single lock, not one per account. */
+    private static final UUID ROSTER = new UUID(0L, 0L);
+
     private final UserAccountRepository accounts;
     private final UserProfileRepository profiles;
     private final AccountSearchRepository search;
@@ -66,6 +76,7 @@ public class AccountAdminServiceImpl implements AccountAdminService {
     private final List<AccountActivityCounter> counters;
     private final AdminApi admin;
     private final ApplicationEventPublisher events;
+    private final UserLock lock;
     private final Clock clock;
 
     @Override
@@ -118,6 +129,7 @@ public class AccountAdminServiceImpl implements AccountAdminService {
     @Override
     @Transactional
     public AdminUserDetailResponse changeRole(UUID adminId, UUID userId, Role role, String reason) {
+        lock.lock(ROSTER_SCOPE, ROSTER);
         UserAccount account = account(accounts.findByIdForUpdate(userId), userId);
         if (account.getRole() == role) {
             return detail(account);
@@ -138,6 +150,9 @@ public class AccountAdminServiceImpl implements AccountAdminService {
             AuditAction action,
             boolean endsSessions,
             Consumer<UserAccount> transition) {
+        if (endsSessions) {
+            lock.lock(ROSTER_SCOPE, ROSTER);
+        }
         UserAccount account = account(accounts.findByIdForUpdate(userId), userId);
         if (endsSessions) {
             requireNotSelf(adminId, userId, "lock or ban");

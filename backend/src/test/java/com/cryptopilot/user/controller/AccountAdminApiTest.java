@@ -16,6 +16,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -211,6 +215,46 @@ class AccountAdminApiTest {
         }
     }
 
+    /**
+     * BR-58 under concurrency: two administrators, the last two ACTIVE ones, locking each other at the same instant.
+     * Each request locks only its target's row, so without the roster lock both counted the other as the one left and
+     * both committed; now exactly one succeeds and one administrator stays ACTIVE, round after round.
+     */
+    @Test
+    void BR58_twoAdministratorsLockingEachOtherAtOnce_leaveOneActive() throws Exception {
+        UUID other = account("ADMIN", "Second Admin");
+        List<UUID> paused = sql.sql("""
+                        select user_id from user_account
+                         where role = 'ADMIN' and account_status = 'ACTIVE' and user_id not in (?, ?)""").params(admin, other).query(UUID.class).list();
+        sql.sql("update user_account set account_status = 'LOCKED' where user_id in (:ids)")
+                .param("ids", paused.isEmpty() ? List.of(UUID.randomUUID()) : paused)
+                .update();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 20; round++) {
+                sql.sql("update user_account set account_status = 'ACTIVE' where user_id in (?, ?)")
+                        .params(admin, other)
+                        .update();
+                CyclicBarrier start = new CyclicBarrier(2);
+                Future<Integer> first = pool.submit(() -> lockAtOnce(admin, other, start));
+                Future<Integer> second = pool.submit(() -> lockAtOnce(other, admin, start));
+
+                assertThat(List.of(first.get(), second.get())).containsExactlyInAnyOrder(200, 409);
+                assertThat(sql.sql("""
+                                select count(*) from user_account
+                                 where user_id in (?, ?) and account_status = 'ACTIVE'""").params(admin, other).query(Long.class).single())
+                        .isOne();
+            }
+        } finally {
+            pool.shutdownNow();
+            if (!paused.isEmpty()) {
+                sql.sql("update user_account set account_status = 'ACTIVE' where user_id in (:ids)")
+                        .param("ids", paused)
+                        .update();
+            }
+        }
+    }
+
     @Test
     void BR05_aRoleChange_endsTheSessions_andIsAudited() throws Exception {
         UUID alice = account("TRADER", "Alice");
@@ -226,6 +270,14 @@ class AccountAdminApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+
+    private int lockAtOnce(UUID caller, UUID target, CyclicBarrier start) throws Exception {
+        start.await();
+        return as(caller, post(USERS + "/" + target + "/lock"), "{\"reason\": \"race\"}")
+                .andReturn()
+                .getResponse()
+                .getStatus();
+    }
 
     private ResultActions action(UUID user, String action, String reason) throws Exception {
         return as(admin, post(USERS + "/" + user + "/" + action), "{\"reason\": \"" + reason + "\"}");
