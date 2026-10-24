@@ -12,9 +12,9 @@ import org.junit.jupiter.api.Test;
 class PlanTabTest {
 
     @Test
-    void SCR16_cancelledAndExpired_shareOneTab() {
+    void BR68_cancelledExpiredAndInvalidated_shareOneTab() {
         assertThat(PlanTab.CANCELLED_EXPIRED.statuses())
-                .containsExactlyInAnyOrder(PlanStatus.CANCELLED, PlanStatus.EXPIRED);
+                .containsExactlyInAnyOrder(PlanStatus.CANCELLED, PlanStatus.EXPIRED, PlanStatus.INVALIDATED);
         assertThat(PlanTab.DRAFT.statuses()).containsExactly(PlanStatus.DRAFT);
     }
 

@@ -180,6 +180,38 @@ class OpenApiDocsTest {
                 .isEqualTo("bearer");
     }
 
+    /** TP-A (D-111, D-112): the plan's validity fields, the STOP entry and the INVALIDATED status are documented. */
+    @Test
+    @SuppressWarnings("unchecked") // TP-A: the schema object of a JSON document is read as a raw map
+    void D111_thePlanSchemas_documentTheValidityFields() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Object> request = JsonPath.read(body, "$.components.schemas.CreateTradingPlanRequest.properties");
+        assertThat(request).containsKeys("invalidationPrice", "maxEntryDeviationR", "analysisTimeframe");
+        assertThat((java.util.List<String>)
+                        JsonPath.read(body, "$.components.schemas.CreateTradingPlanRequest.properties.entryType.enum"))
+                .containsExactly("LIMIT", "MARKET", "STOP");
+        assertThat((String) JsonPath.read(
+                        body, "$.components.schemas.CreateTradingPlanRequest.properties.invalidationPrice.type"))
+                .isEqualTo("string");
+        Map<String, Object> plan = JsonPath.read(body, "$.components.schemas.TradingPlanResponse.properties");
+        assertThat(plan)
+                .containsKeys(
+                        "plannedEntryPrice",
+                        "invalidationPrice",
+                        "maxEntryDeviationR",
+                        "analysisTimeframe",
+                        "invalidationReason",
+                        "setupScoreAtPlan",
+                        "setupScorePreset");
+        assertThat((java.util.List<String>)
+                        JsonPath.read(body, "$.components.schemas.TradingPlanResponse.properties.status.enum"))
+                .contains("INVALIDATED");
+        assertThat((Map<String, Object>)
+                        JsonPath.read(body, "$.components.schemas.TradingPlanSummaryResponse.properties"))
+                .containsKeys("invalidatedAt", "invalidationReason");
+    }
+
     /** D-65: the unconfirmed switch to AGGRESSIVE is documented as the 400 of MSG48, like every validation error. */
     @Test
     void D65_theRiskProfileChoice_documentsMsg48UnderBadRequest() throws Exception {

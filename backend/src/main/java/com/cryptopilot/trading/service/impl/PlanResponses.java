@@ -32,6 +32,7 @@ final class PlanResponses {
                 plan.getDirection(),
                 plan.getEntryType(),
                 plan.getEntryPrice(),
+                plan.getPlannedEntryPrice(),
                 plan.getStopLoss(),
                 plan.getTakeProfit(),
                 plan.getCapital(),
@@ -40,7 +41,13 @@ final class PlanResponses {
                 plan.getMarginMode(),
                 plan.getExpiresAt(),
                 plan.getNote(),
+                plan.getInvalidationPrice(),
+                plan.getMaxEntryDeviationR(),
+                plan.getAnalysisTimeframe().code(),
                 plan.getStatus(),
+                plan.getInvalidationReason(),
+                plan.getSetupScoreAtPlan(),
+                plan.getSetupScorePreset(),
                 plan.isEditable(),
                 snapshot(plan.getSnapshot()),
                 warnings(warnings),
@@ -66,7 +73,9 @@ final class PlanResponses {
                 plan.getStatus(),
                 plan.getCreatedAt(),
                 plan.getActivatedAt(),
-                plan.getExpiresAt());
+                plan.getExpiresAt(),
+                plan.getInvalidatedAt(),
+                plan.getInvalidationReason());
     }
 
     /** The live risk panel. */
@@ -107,6 +116,7 @@ final class PlanResponses {
         add(history, PlanStatus.EXECUTED, plan.getExecutedAt());
         add(history, PlanStatus.CANCELLED, plan.getCancelledAt());
         add(history, PlanStatus.EXPIRED, plan.getExpiredAt());
+        add(history, PlanStatus.INVALIDATED, plan.getInvalidatedAt());
         return history;
     }
 

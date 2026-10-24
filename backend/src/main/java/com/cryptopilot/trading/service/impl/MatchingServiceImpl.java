@@ -3,6 +3,7 @@ package com.cryptopilot.trading.service.impl;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.repository.MatchingWatermarkRepository;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import com.cryptopilot.trading.service.MatchingService;
@@ -46,7 +47,10 @@ public class MatchingServiceImpl implements MatchingService {
     @Override
     @Transactional
     public boolean fill(Fill fill) {
-        boolean filled = plans.executeIfActive(fill.planId(), fill.executedAt(), fill.price(), clock.instant()) == 1;
+        // The engine fills resting LIMIT entries only, which supplied liquidity (BR-36; D-111 E1).
+        boolean filled = plans.executeIfActive(
+                        fill.planId(), fill.executedAt(), fill.price(), LiquidityRole.MAKER, clock.instant())
+                == 1;
         if (filled) {
             log.info("NSF-07 plan {} filled at {} ({})", fill.planId(), fill.price(), fill.executedAt());
         }

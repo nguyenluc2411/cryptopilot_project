@@ -1,13 +1,17 @@
 package com.cryptopilot.market.service;
 
+import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.dto.response.AnalysisResponse;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
  * The analysis of a pair for SCR-10 and SCR-11 (UC-10, UC-11); implemented by
  * {@link com.cryptopilot.market.service.impl.AnalysisServiceImpl}.
  *
- * <p>Rule: UC-10, UC-11, BR-12, BR-13, BR-14; TECHNICAL_DESIGN 7.4; D-48, D-53.
+ * <p>Rule: UC-10, UC-11, BR-12, BR-13, BR-14, BR-70; TECHNICAL_DESIGN 7.4; D-48, D-53, D-112.
  */
 public interface AnalysisService {
 
@@ -24,4 +28,23 @@ public interface AnalysisService {
      *     that market (BR-07)
      */
     AnalysisResponse analysis(String market, String symbol, String timeframe, UUID userId);
+
+    /**
+     * The setup score of the pair's latest candle of {@code timeframe} closed at {@code at} under a preset, as
+     * {@link com.cryptopilot.market.MarketApi#closedCandleSetupScore} describes it.
+     *
+     * @param style the preset, or {@code null} for the default one
+     * @param presetVersion the preset version, or {@code null} for the configured one
+     * @param at the instant of the read, not after now
+     */
+    SetupScoreReading closedCandleSetupScore(
+            UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at);
+
+    /**
+     * The timeframe a preset reads its setup score on, as {@link com.cryptopilot.market.MarketApi#presetTimeframe}
+     * describes it.
+     *
+     * @param style the preset, or {@code null} for the default one
+     */
+    String presetTimeframe(SetupStyle style);
 }

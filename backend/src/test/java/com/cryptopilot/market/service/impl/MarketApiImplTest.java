@@ -14,16 +14,19 @@ import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.PairListing;
+import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
+import com.cryptopilot.market.service.AnalysisService;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
 import java.math.BigDecimal;
@@ -49,6 +52,7 @@ class MarketApiImplTest {
     private final LeverageBracketRepository brackets = mock(LeverageBracketRepository.class);
     private final PriceCacheService prices = mock(PriceCacheService.class);
     private final MinuteKlineService minuteKlines = mock(MinuteKlineService.class);
+    private final AnalysisService analysis = mock(AnalysisService.class);
     private final MarketApiImpl api = new MarketApiImpl(
             pairs,
             coins,
@@ -57,7 +61,8 @@ class MarketApiImplTest {
             minuteKlines,
             coinWriter,
             mock(TradingMarketData.class),
-            mock(FuturesMetricsRepository.class));
+            mock(FuturesMetricsRepository.class),
+            analysis);
 
     @Test
     void TR04_coins_areNamedBySymbol_andAnUnknownSymbolIsLeftOut() {
@@ -259,6 +264,20 @@ class MarketApiImplTest {
         when(brackets.findByPair(pairId)).thenReturn(stored);
 
         assertThat(api.leverageBrackets(pairId)).isEqualTo(stored);
+    }
+
+    /** D-112: the setup score of a plan comes from the analysis path, never from a second weighting here. */
+    @Test
+    void BR70_theSetupScoreRead_isTheAnalysisServicesOwn() {
+        UUID pairId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-10-01T08:00:00Z");
+        SetupScoreReading reading =
+                new SetupScoreReading(59, SetupStyle.DAY_TRADING, "v1", "1h", Instant.parse("2026-10-01T07:00:00Z"));
+        when(analysis.closedCandleSetupScore(pairId, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null, now))
+                .thenReturn(reading);
+
+        assertThat(api.closedCandleSetupScore(pairId, MarketType.SPOT, "1h", SetupStyle.DAY_TRADING, null, now))
+                .isSameAs(reading);
     }
 
     private static CryptoPair pair() {

@@ -531,26 +531,38 @@ technical_indicator,timeframe,character varying,,,NO
 technical_indicator,trend_score,numeric,5,2,YES
 technical_indicator,volume_score,numeric,5,2,YES
 technical_indicator,volume_sma_20,numeric,28,10,YES
+trading_journal,analysis_timeframe,character varying,,,YES
 trading_journal,chart_image_url,character varying,,,YES
 trading_journal,close_reason,character varying,,,YES
 trading_journal,created_at,timestamp with time zone,,,NO
 trading_journal,direction,character varying,,,NO
+trading_journal,entry_deviation_r,numeric,20,8,YES
+trading_journal,entry_liquidity,character varying,,,YES
 trading_journal,entry_price,numeric,28,12,NO
 trading_journal,entry_time,timestamp with time zone,,,NO
 trading_journal,exit_price,numeric,28,12,YES
 trading_journal,exit_time,timestamp with time zone,,,YES
 trading_journal,fee_amount,numeric,28,8,YES
+trading_journal,fill_indicators,jsonb,,,YES
 trading_journal,funding_fee_amount,numeric,28,8,YES
 trading_journal,journal_id,uuid,,,NO
 trading_journal,lessons_learned,text,,,YES
 trading_journal,leverage,integer,32,0,YES
 trading_journal,market_type,character varying,,,NO
+trading_journal,max_adverse_price,numeric,28,12,YES
+trading_journal,max_favorable_price,numeric,28,12,YES
 trading_journal,mistakes,text,,,YES
 trading_journal,pair_id,uuid,,,NO
 trading_journal,plan_id,uuid,,,YES
+trading_journal,planned_entry_price,numeric,28,12,YES
 trading_journal,quantity,numeric,28,12,NO
 trading_journal,realized_pnl,numeric,28,8,YES
+trading_journal,risk_amount,numeric,28,8,YES
 trading_journal,setup_description,text,,,YES
+trading_journal,setup_score_at_fill,numeric,5,2,YES
+trading_journal,setup_score_at_plan,numeric,5,2,YES
+trading_journal,setup_score_drop_warned,boolean,,,YES
+trading_journal,setup_score_preset,character varying,,,YES
 trading_journal,source,character varying,,,NO
 trading_journal,stop_loss_price,numeric,28,12,YES
 trading_journal,strategy_id,uuid,,,YES
@@ -560,6 +572,7 @@ trading_journal,updated_at,timestamp with time zone,,,NO
 trading_journal,user_id,uuid,,,NO
 trading_journal,version,bigint,64,0,NO
 trading_plan,activated_at,timestamp with time zone,,,YES
+trading_plan,analysis_timeframe,character varying,,,NO
 trading_plan,cancelled_at,timestamp with time zone,,,YES
 trading_plan,capital_amount,numeric,28,8,NO
 trading_plan,created_at,timestamp with time zone,,,NO
@@ -570,22 +583,30 @@ trading_plan,estimated_liquidation_price,numeric,28,12,YES
 trading_plan,executed_at,timestamp with time zone,,,YES
 trading_plan,expired_at,timestamp with time zone,,,YES
 trading_plan,expires_at,timestamp with time zone,,,YES
+trading_plan,fill_liquidity,character varying,,,YES
 trading_plan,fill_price,numeric,28,12,YES
 trading_plan,initial_margin,numeric,28,8,YES
+trading_plan,invalidated_at,timestamp with time zone,,,YES
+trading_plan,invalidation_price,numeric,28,12,YES
+trading_plan,invalidation_reason,character varying,,,YES
 trading_plan,leverage,integer,32,0,YES
 trading_plan,maintenance_margin_rate_used,numeric,12,8,YES
 trading_plan,margin_mode,character varying,,,YES
 trading_plan,market_type,character varying,,,NO
+trading_plan,max_entry_deviation_r,numeric,12,8,YES
 trading_plan,notional_value,numeric,28,8,YES
 trading_plan,pair_id,uuid,,,NO
 trading_plan,plan_id,uuid,,,NO
 trading_plan,plan_note,text,,,YES
 trading_plan,plan_status,character varying,,,NO
+trading_plan,planned_entry_price,numeric,28,12,YES
 trading_plan,position_quantity,numeric,28,12,YES
 trading_plan,reward_amount,numeric,28,8,YES
 trading_plan,risk_amount,numeric,28,8,YES
 trading_plan,risk_percent,numeric,6,3,NO
 trading_plan,risk_reward_ratio,numeric,20,8,YES
+trading_plan,setup_score_at_plan,numeric,5,2,YES
+trading_plan,setup_score_preset,character varying,,,YES
 trading_plan,stop_loss_price,numeric,28,12,NO
 trading_plan,take_profit_price,numeric,28,12,NO
 trading_plan,updated_at,timestamp with time zone,,,NO

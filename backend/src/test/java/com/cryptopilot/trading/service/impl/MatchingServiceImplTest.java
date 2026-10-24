@@ -9,6 +9,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.repository.MatchingWatermarkRepository;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import java.math.BigDecimal;
@@ -33,14 +34,16 @@ class MatchingServiceImplTest {
 
     @Test
     void NSF07_theCompareAndSetThatChangesTheRow_isAFill() {
-        when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), NOW)).thenReturn(1);
+        when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), LiquidityRole.MAKER, NOW))
+                .thenReturn(1);
 
         assertThat(service.fill(new Fill(PLAN, new BigDecimal("100"), AT))).isTrue();
     }
 
     @Test
     void NSF07_theCompareAndSetThatChangesNothing_isNoFill() {
-        when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), NOW)).thenReturn(0);
+        when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), LiquidityRole.MAKER, NOW))
+                .thenReturn(0);
 
         assertThat(service.fill(new Fill(PLAN, new BigDecimal("100"), AT))).isFalse();
     }
