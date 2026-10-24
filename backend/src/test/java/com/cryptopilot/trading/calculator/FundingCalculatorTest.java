@@ -367,6 +367,121 @@ class FundingCalculatorTest {
         assertThat(fee.isComplete()).isTrue();
     }
 
+    // ------------------------------------------------------------------ safety net: the edges of the period
+
+    /**
+     * Trailing edge: the snapshots stop at 15:00 (an outage still running at close, or a pair disabled while the
+     * position is open) and the position closes at 20:00. The 15:00 snapshot announced 16:00, which is not stored:
+     * incomplete, 16:00 named.
+     */
+    @Test
+    void A05_snapshotsStoppingBeforeTheExit_withTheNextSettlementNotStored_isIncomplete_andNamesIt() {
+        FundingHistory history = observed(
+                Duration.ofHours(8),
+                T0,
+                at(20),
+                List.<Instant[]>of(new Instant[] {T0.minus(Duration.ofDays(1)), at(15)}),
+                stored(T0.minus(Duration.ofHours(16)), T0.minus(Duration.ofHours(8)), T0),
+                settled(T8, "101", "0.0001"));
+
+        assertThat(history.snapshotGaps()).last().isEqualTo(new SnapshotGap(at(15), at(20)));
+        FundingFee fee = FundingCalculator.fundingFee(Direction.LONG, QTY, T0, at(20), history);
+
+        assertThat(fee.isComplete()).isFalse();
+        assertThat(fee.missingFundingTimes()).containsExactly(T16);
+        assertThat(fee.amount()).isEqualByComparingTo("-0.0202");
+    }
+
+    /** The same trailing edge with 16:00 stored: complete. */
+    @Test
+    void A05_snapshotsStoppingBeforeTheExit_withEverySettlementStored_isComplete() {
+        FundingHistory history = observed(
+                Duration.ofHours(8),
+                T0,
+                at(20),
+                List.<Instant[]>of(new Instant[] {T0.minus(Duration.ofDays(1)), at(15)}),
+                stored(T0.minus(Duration.ofHours(16)), T0.minus(Duration.ofHours(8)), T0),
+                settled(T8, "101", "0.0001"),
+                settled(T16, "99", "-0.0002"));
+
+        FundingFee fee = FundingCalculator.fundingFee(Direction.LONG, QTY, T0, at(20), history);
+
+        assertThat(fee.isComplete()).isTrue();
+        assertThat(fee.amount()).isEqualByComparingTo("0.0194");
+    }
+
+    /**
+     * No snapshot after the entry at all: the last one is 23:59 the evening before, so the trailing gap runs to the
+     * exit at 20:00, longer than 8h. Its funding times 08:00 and 16:00 are not stored: incomplete, both named.
+     */
+    @Test
+    void A05_noSnapshotAfterTheEntry_isIncomplete_andNamesTheSettlementsOfThePeriod() {
+        FundingHistory history = observed(
+                Duration.ofHours(8),
+                T0,
+                at(20),
+                List.<Instant[]>of(new Instant[] {T0.minus(Duration.ofDays(1)), T0.minusSeconds(60)}),
+                stored(T0.minus(Duration.ofHours(16)), T0.minus(Duration.ofHours(8)), T0));
+
+        FundingFee fee = FundingCalculator.fundingFee(Direction.LONG, QTY, T0, at(20), history);
+
+        assertThat(fee.isComplete()).isFalse();
+        assertThat(fee.missingFundingTimes()).containsExactly(T8, T16);
+        assertThat(fee.amount()).isEqualByComparingTo("0");
+    }
+
+    /** No snapshot in the whole window and no stored settlement: no interval, so incomplete without named times. */
+    @Test
+    void A05_noSnapshotAndNoSettlementAtAll_isIncomplete_withoutNamedTimes() {
+        FundingHistory history = observed(Duration.ofHours(8), T0, at(20), List.of(), List.of());
+
+        assertThat(history.snapshotGaps()).containsExactly(new SnapshotGap(T0.minus(Duration.ofDays(1)), at(20)));
+        FundingFee fee = FundingCalculator.fundingFee(Direction.LONG, QTY, T0, at(20), history);
+
+        assertThat(fee.isComplete()).isFalse();
+        assertThat(fee.missingFundingTimes()).isEmpty();
+    }
+
+    /**
+     * The other side of the rule: no snapshot after the entry, but a position of two hours. The 23:59 snapshot
+     * announced 08:00, after the exit, and a gap of at most one interval can hold no other settlement: complete.
+     */
+    @Test
+    void A05_noSnapshotAfterTheEntry_onAPeriodShorterThanTheInterval_withNoSettlementInIt_isComplete() {
+        FundingHistory history = observed(
+                Duration.ofHours(8),
+                T0,
+                at(2),
+                List.<Instant[]>of(new Instant[] {T0.minus(Duration.ofDays(1)), T0.minusSeconds(60)}),
+                stored(T0.minus(Duration.ofHours(16)), T0.minus(Duration.ofHours(8)), T0));
+
+        FundingFee fee = FundingCalculator.fundingFee(Direction.LONG, QTY, T0, at(2), history);
+
+        assertThat(fee.isComplete()).isTrue();
+    }
+
+    /**
+     * Leading edge: no snapshot in the look-back day nor after the entry until 10:00. The gap from the start of the
+     * window to 10:00 overlaps the period; the interval comes from the 16:00 → 00:00 change-over after it, and 08:00
+     * inside the gap is not stored: incomplete, 08:00 named.
+     */
+    @Test
+    void A05_snapshotsStartingAfterTheEntry_areALeadingGap() {
+        FundingHistory history = observed(
+                Duration.ofHours(8),
+                T0,
+                at(20).plus(Duration.ofHours(8)),
+                List.<Instant[]>of(new Instant[] {at(10), at(28)}),
+                stored(T0.minus(Duration.ofHours(8)), T0),
+                settled(T16, "99", "-0.0002"),
+                settled(T24, "100", "0.0001"));
+
+        FundingFee fee = FundingCalculator.fundingFee(Direction.LONG, QTY, T0, at(28), history);
+
+        assertThat(FundingCalculator.fundingInterval(history)).contains(Duration.ofHours(8));
+        assertThat(fee.missingFundingTimes()).containsExactly(T8);
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /** Every settlement stored is also announced and the snapshots have no gap, so the history is complete. */
