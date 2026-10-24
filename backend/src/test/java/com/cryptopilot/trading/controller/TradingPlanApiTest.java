@@ -41,6 +41,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -595,34 +596,81 @@ class TradingPlanApiTest {
     }
 
     /**
-     * Pins a known gap that TP-0 closes on purpose: the cache holds no Futures last price, only the mark price, and
-     * D-112 checks the invalidation price and a STOP's trigger against the last price, never the mark price. So a
-     * Futures plan with an invalidation price, and a Futures STOP at activation, answer 503 MSG43 even while a current
-     * mark price is cached. When TP-0 adds the Futures last price, this test must change with it.
+     * D-111 E2/E3 (TP-0 closes the gap TP-A pinned): a Futures plan's invalidation price and a Futures STOP at
+     * activation are checked against the Futures last price, the close of the latest 1-minute candle update, never
+     * against the mark price. Mark 100 and last 103 are cached together: an invalidation price of 102 lies on the
+     * entry's side of the last price (MSG16) though above the mark price; a LONG STOP at 101 is already triggered by
+     * the last price (MSG16) though not by the mark price. On the right side of the last price both are accepted.
      */
     @ParameterizedTest(name = "{0}")
     @CsvSource(
             delimiter = '|',
             value = {
-                "save with an invalidation price | LIMIT | \"invalidationPrice\": 120, \"activate\": false",
-                "save and activate a STOP        | STOP  | \"activate\": true"
+                "invalidation 102 below last 103 | LIMIT | \"invalidationPrice\": 102, \"activate\": false | 400 | invalidationPrice",
+                "invalidation 104 above last 103 | LIMIT | \"invalidationPrice\": 104, \"activate\": false | 201 |",
+                "STOP 101 triggered by last 103  | STOP  | \"activate\": true                             | 400 | entryPrice",
+                "STOP 104 not triggered by 103   | STOP  | \"activate\": true, \"entryPrice\": 104        | 201 |"
             })
-    void TP0_aFuturesPlanCheckedAgainstTheLastPrice_answersMsg43_whileOnlyTheMarkPriceIsCached(
-            String name, String entryType, String extra) throws Exception {
+    void D111_aFuturesPlan_isCheckedAgainstTheLastPrice_notTheMarkPrice(
+            String name, String entryType, String extra, int httpStatus, String refusedField) throws Exception {
         UUID trader = trader();
         subscribeToPro(trader);
         markPrice("100");
+        lastPrice(MarketType.FUTURES, "103");
+        String entryPrice = extra.contains("entryPrice") ? "" : " \"entryPrice\": 101,";
 
-        as(
+        ResultActions response = as(
+                trader,
+                post(PLANS),
+                "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
+                        + " \"entryType\": \"" + entryType + "\"," + entryPrice + " \"stopLoss\": 95,"
+                        + " \"takeProfit\": 110, \"leverage\": 5, " + extra + "}");
+
+        response.andExpect(status().is(httpStatus));
+        if (refusedField != null) {
+            response.andExpect(jsonPath("$.errors." + refusedField).value("MSG16"));
+            assertThat(plansOf(trader)).isZero();
+        }
+    }
+
+    /**
+     * D-111 E2/E3: a Futures MARKET plan activates and fills at the Futures last price, not the mark price cached
+     * beside it, and pays taker (E1).
+     */
+    @Test
+    void D111_aFuturesMarketPlan_fillsAtTheLastPrice_notTheMarkPrice() throws Exception {
+        UUID trader = trader();
+        subscribeToPro(trader);
+        markPrice("100.50");
+        lastPrice(MarketType.FUTURES, "100.20");
+
+        String id = id(as(
                         trader,
                         post(PLANS),
                         "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
-                                + " \"entryType\": \"" + entryType + "\", \"entryPrice\": 101, \"stopLoss\": 95,"
-                                + " \"takeProfit\": 110, \"leverage\": 5, " + extra + "}")
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value(ErrorCode.MARKET_PRICE_UNAVAILABLE.code()))
-                .andExpect(jsonPath("$.messageCode").value("MSG43"));
-        assertThat(plansOf(trader)).isZero();
+                                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110,"
+                                + " \"leverage\": 5, \"activate\": true}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("EXECUTED"))
+                .andExpect(jsonPath("$.entryPrice").value(100.2)));
+        assertFill(id, "100.20", "TAKER");
+    }
+
+    /**
+     * D-111 E2/E3: a Futures LIMIT the last price already reached at activation fills at once at the last price, as
+     * taker; the mark price, which has not reached it, does not hold it back.
+     */
+    @Test
+    void D111_aFuturesLimitReachedByTheLastPriceAtActivation_fillsAtOnceAtTheLastPrice() throws Exception {
+        UUID trader = trader();
+        subscribeToPro(trader);
+        markPrice("100.50");
+        lastPrice(MarketType.FUTURES, "99.80");
+
+        String id = id(as(trader, post(PLANS), futuresLimit(true))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("EXECUTED")));
+        assertFill(id, "99.80", "TAKER");
     }
 
     /**
@@ -807,6 +855,16 @@ class TradingPlanApiTest {
                         BigDecimal.ONE,
                         at));
         prices.flush();
+    }
+
+    /** The plan's stored fill: its price and liquidity role. */
+    private void assertFill(String id, String price, String liquidity) {
+        Map<String, Object> fill = sql.sql("select fill_price, fill_liquidity from trading_plan where plan_id = ?")
+                .param(UUID.fromString(id))
+                .query()
+                .singleRow();
+        assertThat((BigDecimal) fill.get("fill_price")).isEqualByComparingTo(price);
+        assertThat(fill.get("fill_liquidity")).isEqualTo(liquidity);
     }
 
     private ResultActions as(

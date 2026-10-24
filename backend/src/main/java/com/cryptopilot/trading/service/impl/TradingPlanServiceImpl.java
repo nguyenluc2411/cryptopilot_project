@@ -445,7 +445,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     /**
      * The invalidation price and, at activation, the stop price of a STOP against the request's one read of the last
      * price, see {@link #lastPriceRead}. Without a current last price these cannot be checked, so the save or
-     * activation is refused (MSG43); on Futures the cache holds a last price from TP-0 on.
+     * activation is refused (MSG43).
      */
     private static List<InputViolation> priceViolations(
             UUID pairId,
@@ -545,21 +545,19 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * The price a MARKET entry executes at: the last trade price on Spot, the mark price on Futures, each only while the
-     * cache holds a current one. Futures uses the mark price because no Futures stream carries a last trade price
-     * (D-84, A-41).
+     * The price a MARKET entry executes at: the last trade price, on Futures the close of the latest 1-minute candle
+     * update, only while the cache holds a current one. The mark price stays for liquidation and unrealized P/L.
+     *
+     * <p>Rule: BR-33; D-111 E2/E3 (amends D-84 and A-41).
      */
     private Optional<BigDecimal> currentReferencePrice(TradablePair pair) {
-        return pair.market() == MarketType.FUTURES
-                ? market.currentMarkPrice(pair.symbol())
-                : market.currentLastPrice(pair.market(), pair.symbol());
+        return market.currentLastPrice(pair.market(), pair.symbol());
     }
 
     private static BusinessException priceUnavailable(TradablePair pair) {
         return new BusinessException(
                 ErrorCode.MARKET_PRICE_UNAVAILABLE,
-                "no current " + (pair.market() == MarketType.FUTURES ? "mark" : "last") + " price for " + pair.symbol()
-                        + " on " + pair.market());
+                "no current last price for " + pair.symbol() + " on " + pair.market());
     }
 
     private void publishActivated(TradingPlan plan) {

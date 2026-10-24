@@ -237,21 +237,26 @@ class TradingPlanServiceImplTest {
         assertThat(panel.entryPrice()).isEqualByComparingTo("101");
     }
 
-    /** Futures has no last trade price in the cache: a MARKET plan there is priced at the current mark price. */
+    /**
+     * D-111 E2/E3: a Futures MARKET plan is priced at the Futures last price, the close of the latest 1-minute candle
+     * update, never at the mark price, here cached at another value.
+     */
     @Test
-    void BR33_aFuturesMarketPlan_isCalculatedAtTheCurrentMarkPrice() {
+    void D111_aFuturesMarketPlan_isCalculatedAtTheLastPrice_notTheMarkPrice() {
         when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.5")));
+        when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.2")));
 
         PlanCalculationResponse panel = service.calculate(USER, futuresMarket());
 
-        assertThat(panel.entryPrice()).isEqualByComparingTo("100.5");
-        verify(market, never()).currentLastPrice(eq(MarketType.FUTURES), any());
+        assertThat(panel.entryPrice()).isEqualByComparingTo("100.2");
+        verify(market, never()).currentMarkPrice(any());
     }
 
-    /** No current mark price: the existing 503 MSG43 path, whatever else the pair has. */
+    /** No current Futures last price: the existing 503 MSG43 path, even with a current mark price. */
     @Test
-    void BR33_withoutACurrentMarkPrice_aFuturesMarketPlanCannotBeCalculated() {
-        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.empty());
+    void BR33_withoutACurrentLastPrice_aFuturesMarketPlanCannotBeCalculated() {
+        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.5")));
+        when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.empty());
         when(market.leverageBrackets(PAIR)).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.calculate(USER, futuresMarket()))
@@ -265,17 +270,17 @@ class TradingPlanServiceImplTest {
     }
 
     /**
-     * Pricing does not need leverage brackets (T-085): with none stored, a Futures MARKET plan is priced at the mark
+     * Pricing does not need leverage brackets (T-085): with none stored, a Futures MARKET plan is priced at the last
      * price and stops only at the bracket step, on the leverage field.
      */
     @Test
     void BR33_aFuturesMarketPlan_isPricedWithoutLeverageBrackets() {
-        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.5")));
+        when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.5")));
         when(market.leverageBrackets(PAIR)).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.calculate(USER, futuresMarket()))
                 .satisfies(e -> assertFields(e, Map.of("leverage", "MSG15")));
-        verify(market).currentMarkPrice("BTCUSDT");
+        verify(market).currentLastPrice(MarketType.FUTURES, "BTCUSDT");
     }
 
     /** Spot is unchanged: the last price, never the mark price. */
@@ -620,13 +625,13 @@ class TradingPlanServiceImplTest {
     @CsvSource({"LONG, 94, 95, 110", "SHORT, 106, 105, 90"})
     void MSG16_aMarketPlanRepricedPastItsStop_isRefusedAtActivationOnTheStopLoss(
             Direction direction, String lastPrice, String stop, String takeProfit) {
-        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
+        when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
         service.create(
                 USER,
                 create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, stop, takeProfit, null, null, 5));
         TradingPlan plan = saved;
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
-        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal(lastPrice)));
+        when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal(lastPrice)));
 
         assertThatThrownBy(() -> service.activate(USER, plan.getId()))
                 .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
