@@ -253,6 +253,27 @@ class PairAdminApiTest {
         assertThat(marketApi.leverageBrackets(pair)).isEmpty();
     }
 
+    /** BR-26: the pair's leverage ceiling stays within its first bracket, whichever of the two is changed. */
+    @Test
+    void BR26_thePairsMaximumLeverage_neverExceedsItsFirstBracket() throws Exception {
+        UUID pair = pair(false, false, "TRADING", "TRADING");
+        filters(pair);
+        as(admin, put(PAIRS + "/" + pair + "/brackets"), """
+                        {"brackets": [{"notionalFloor": 0, "notionalCap": 50000, "maxLeverage": 50,
+                                       "maintenanceMarginRate": 0.01}]}""").andExpect(status().isOk());
+
+        update(pair, "ACTIVE", false, true, 75, 1)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.maxLeverage").value("MSG15"));
+        update(pair, "ACTIVE", false, true, 50, 1).andExpect(status().isOk());
+        as(admin, put(PAIRS + "/" + pair + "/brackets"), """
+                        {"brackets": [{"notionalFloor": 0, "notionalCap": 50000, "maxLeverage": 20,
+                                       "maintenanceMarginRate": 0.01}]}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors['brackets[0].maxLeverage']").value("MSG15"));
+        assertThat(marketApi.leverageBrackets(pair).getFirst().maxLeverage()).isEqualTo(50);
+    }
+
     @Test
     void UC46_aPairNeverListedOnFutures_hasNoBrackets() throws Exception {
         UUID pair = pair(true, false, "TRADING", null);

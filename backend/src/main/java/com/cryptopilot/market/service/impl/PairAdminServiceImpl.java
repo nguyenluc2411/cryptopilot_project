@@ -62,6 +62,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>Adding a pair reuses the synchronisation of NSF-01 with the symbol as its only seed, so a pair added here and one
  * seeded from configuration are created by the same code, with the same coins and filters.
  *
+ * <p>The pair's leverage ceiling and its first bracket are kept consistent from either side (BR-26).
+ *
  * <p>Rule: UC-45, UC-46; BR-07, BR-26, BR-27, BR-31, BR-57, BR-59; NSF-01.
  */
 @Service
@@ -169,6 +171,9 @@ public class PairAdminServiceImpl implements PairAdminService {
             throw new FieldValidationException(
                     "a futures market needs its maximum leverage", Map.of("maxLeverage", "MSG01"));
         }
+        if (request.futuresEnabled()) {
+            requireWithinFirstBracket(request.maxLeverage(), brackets.findByPair(pair.getId()), "maxLeverage");
+        }
         Map<String, Object> before = values(pair);
         Instant now = clock.instant();
         List<MarketType> disabled = new ArrayList<>();
@@ -233,6 +238,9 @@ public class PairAdminServiceImpl implements PairAdminService {
                     ErrorCode.PAIR_NOT_TRADING, "the exchange has never listed " + pair.getSymbol() + " on futures");
         }
         List<LeverageTier> tiers = checkedBrackets(request.brackets());
+        if (pair.getMaxLeverage() != null) {
+            requireWithinFirstBracket(pair.getMaxLeverage(), tiers, "brackets[0].maxLeverage");
+        }
         List<LeverageTier> before = brackets.findByPair(pair.getId());
         brackets.replace(pair.getId(), tiers, adminId, clock.instant());
         admin.audit(new AuditEntry(
@@ -286,6 +294,19 @@ public class PairAdminServiceImpl implements PairAdminService {
             throw new FieldValidationException("the brackets break " + errors.keySet(), errors);
         }
         return tiers;
+    }
+
+    /**
+     * The pair's leverage ceiling never exceeds the first bracket's maximum, the highest any position can use (BR-26):
+     * a higher one would offer the Trader a leverage every calculation refuses. Brackets not entered yet bound nothing.
+     */
+    private static void requireWithinFirstBracket(int maxLeverage, List<LeverageTier> tiers, String field) {
+        if (!tiers.isEmpty() && maxLeverage > tiers.getFirst().maxLeverage()) {
+            throw new FieldValidationException(
+                    "the pair's maximum leverage " + maxLeverage + " is above the first bracket's "
+                            + tiers.getFirst().maxLeverage(),
+                    Map.of(field, "MSG15"));
+        }
     }
 
     private void requireNoOpenPositions(CryptoPair pair, MarketType market) {
