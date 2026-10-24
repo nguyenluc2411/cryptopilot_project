@@ -108,9 +108,24 @@ class OpenApiDocsTest {
             "/api/v1/notifications",
             "/api/v1/notifications/unread-count",
             "/api/v1/notifications/{id}/read",
-            "/api/v1/notifications/read-all");
+            "/api/v1/notifications/read-all",
+            "/api/v1/admin/pairs",
+            "/api/v1/admin/pairs/exchange-symbols",
+            "/api/v1/admin/pairs/{id}",
+            "/api/v1/admin/pairs/{id}/brackets",
+            "/api/v1/admin/settings",
+            "/api/v1/admin/settings/{key}",
+            "/api/v1/admin/users",
+            "/api/v1/admin/users/{id}",
+            "/api/v1/admin/users/{id}/lock",
+            "/api/v1/admin/users/{id}/unlock",
+            "/api/v1/admin/users/{id}/ban",
+            "/api/v1/admin/users/{id}/role",
+            "/api/v1/admin/dashboard",
+            "/api/v1/admin/reports",
+            "/api/v1/admin/reports/export");
 
-    private static final int OPERATIONS = 95;
+    private static final int OPERATIONS = 114;
 
     @Autowired
     private MockMvc mvc;

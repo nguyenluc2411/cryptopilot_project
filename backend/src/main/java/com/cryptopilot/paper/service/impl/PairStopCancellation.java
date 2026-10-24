@@ -30,8 +30,9 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Cancels the paper orders of a pair the exchange stopped trading on Spot, one account at a time: an order that cannot
- * execute any more must not hold its funds (paper trading plan §6.2). Each order that works or waits in a group ends
+ * Cancels the paper orders of a pair the system no longer trades on Spot, one account at a time: the exchange stopped
+ * trading it, or an administrator took its Spot market out of service (BR-07), so no stream feeds it; an order that
+ * cannot execute any more must not hold its funds (paper trading plan §6.2). Each order that works or waits in a group ends
  * CANCELED with {@code PAIR_NOT_TRADING}, what it locked is given back (once for the two orders of an OCO), the
  * Trader's order queue hears of it and the matching engine drops it.
  *
@@ -39,13 +40,13 @@ import org.springframework.transaction.annotation.Transactional;
  * with it and a failure stays with its account. Run again, it finds nothing open and changes nothing. Only Spot orders
  * are touched. A fill or a trigger that reaches an order of such a pair cancels it the same way.
  *
- * <p>Rule: TR-02, TR-10; NSF-01.
+ * <p>Rule: TR-02, TR-10; NSF-01; BR-07, UC-45.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class PairStopCancellation {
 
-    /** Why the orders of a pair that stopped trading ended. */
+    /** Why the orders of a pair the system no longer trades ended, whichever of the two took it out. */
     public static final String PAIR_NOT_TRADING = "PAIR_NOT_TRADING";
 
     /** The statuses of an order this cancels: working, or waiting in a group to be placed. */
@@ -64,6 +65,22 @@ public class PairStopCancellation {
     private final MarketApi market;
     private final ApplicationEventPublisher events;
     private final Clock clock;
+
+    /** The pairs with a Spot order that works or waits in a group. */
+    @Transactional(readOnly = true)
+    public List<UUID> pairsWithOrders() {
+        return orders.findPairIdsWithOrders(MarketType.SPOT, CANCELLED);
+    }
+
+    /**
+     * Whether the system no longer trades the pair on Spot: the exchange stopped trading it (NSF-01), or the pair or its
+     * Spot market is disabled (BR-07), which {@link MarketApi#tradablePair} reports as no tradable pair at all.
+     */
+    public boolean outOfService(UUID pairId) {
+        return market.tradablePair(pairId, MarketType.SPOT)
+                .map(pair -> !pair.exchangeTrading())
+                .orElse(true);
+    }
 
     /** The accounts with a Spot order of the pair that works or waits in a group. */
     @Transactional(readOnly = true)

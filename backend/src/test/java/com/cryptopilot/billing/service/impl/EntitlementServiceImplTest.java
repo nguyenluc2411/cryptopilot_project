@@ -70,7 +70,7 @@ class EntitlementServiceImplTest {
     @BeforeEach
     void setUp() {
         packageIds = PlanFixtures.seededIds(packages);
-        service = new EntitlementServiceImpl(packages, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new EntitlementServiceImpl(packages, null, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     /** Other modules reach the checks through the module's public interface, which this service implements. */
@@ -156,8 +156,8 @@ class EntitlementServiceImplTest {
     /** The seeded FREE package cannot be removed, so a repository that finds no package stands for an unseeded one. */
     @Test
     void BR62_withoutAStoredFreePackage_theServiceFailsLoudly() {
-        EntitlementServiceImpl unseeded =
-                new EntitlementServiceImpl(mock(SubscriptionPackageRepository.class), Clock.fixed(NOW, ZoneOffset.UTC));
+        EntitlementServiceImpl unseeded = new EntitlementServiceImpl(
+                mock(SubscriptionPackageRepository.class), null, Clock.fixed(NOW, ZoneOffset.UTC));
 
         assertThatIllegalStateException()
                 .isThrownBy(() -> unseeded.effectivePlan(UUID.randomUUID()))

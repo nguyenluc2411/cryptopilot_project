@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
+import com.cryptopilot.admin.SystemSettingApi;
 import com.cryptopilot.auth.entity.UserToken;
 import com.cryptopilot.auth.event.VerificationTokenIssued;
 import com.cryptopilot.auth.model.enums.TokenType;
@@ -90,6 +91,9 @@ class AuthServiceTest {
 
     @Autowired
     private IssuedLinks issuedLinks;
+
+    @Autowired
+    private SystemSettingApi settings;
 
     @BeforeEach
     void resetTheClockAndTheMailbox() {
@@ -434,6 +438,14 @@ class AuthServiceTest {
 
     // ---------------------------------------------------------- SRS 3.2.2 resend
 
+    private Duration resendInterval() {
+        return Duration.ofSeconds(settings.integer("RESEND_MIN_INTERVAL_SECONDS"));
+    }
+
+    private int resendCap() {
+        return settings.integer("RESEND_MAX_PER_24_HOURS");
+    }
+
     /**
      * SRS 3.2.2: "a new token invalidates previous unused verification tokens". Without it every
      * resend would leave another working link behind in a mailbox.
@@ -441,7 +453,7 @@ class AuthServiceTest {
     @Test
     void UC02_aResend_issuesANewLinkAndStopsThePreviousOne() {
         VerificationTokenIssued first = registerAndTakeTheLink("resend" + TEST_DOMAIN);
-        clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL);
+        clock.advance(resendInterval());
 
         authService.resendVerification("resend" + TEST_DOMAIN);
 
@@ -461,7 +473,7 @@ class AuthServiceTest {
     void UC02_aResendWithinTheMinimumInterval_sendsNothing() {
         registerAndTakeTheLink("throttle" + TEST_DOMAIN);
 
-        clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL.minusMillis(1));
+        clock.advance(resendInterval().minusMillis(1));
         authService.resendVerification("throttle" + TEST_DOMAIN);
         assertThat(issuedLinks.all())
                 .as("one millisecond short of the interval, nothing is sent")
@@ -471,32 +483,59 @@ class AuthServiceTest {
         authService.resendVerification("throttle" + TEST_DOMAIN);
         assertThat(issuedLinks.all()).as("at the interval, a link is sent").hasSize(1);
 
-        assertThat(AuthServiceImpl.RESEND_MINIMUM_INTERVAL)
-                .as("SRS 3.2.2 states the interval")
+        assertThat(resendInterval())
+                .as("BR-65 states the interval, seeded as RESEND_MIN_INTERVAL_SECONDS")
                 .isEqualTo(Duration.ofSeconds(60));
     }
 
-    /** SRS 3.2.2: at most five a day per address, counted over the tokens the account already holds. */
+    /** BR-65: at most five in any rolling 24 hours per address, counted over the tokens the account already holds. */
     @Test
     void UC02_aSixthLinkInOneDay_isNotSent() {
         registerAndTakeTheLink("daily" + TEST_DOMAIN);
-        int resendsLeftAfterRegistration = AuthServiceImpl.RESEND_MAXIMUM_PER_DAY - 1;
+        int resendsLeftAfterRegistration = resendCap() - 1;
 
         for (int resend = 0; resend < resendsLeftAfterRegistration; resend++) {
-            clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL);
+            clock.advance(resendInterval());
             authService.resendVerification("daily" + TEST_DOMAIN);
         }
         assertThat(issuedLinks.all())
                 .as("the registration link plus four resends is the five the SRS allows")
                 .hasSize(resendsLeftAfterRegistration);
 
-        clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL);
+        clock.advance(resendInterval());
         authService.resendVerification("daily" + TEST_DOMAIN);
 
         assertThat(issuedLinks.all()).as("the sixth is refused").hasSize(resendsLeftAfterRegistration);
-        assertThat(AuthServiceImpl.RESEND_MAXIMUM_PER_DAY)
-                .as("SRS 3.2.2 states the daily cap")
+        assertThat(resendCap())
+                .as("BR-65 states the cap, seeded as RESEND_MAX_PER_24_HOURS")
                 .isEqualTo(5);
+    }
+
+    /**
+     * BR-65: the window is any rolling 24 hours, not a calendar day, so midnight does not give back the five; the
+     * first link leaving the window does.
+     */
+    @Test
+    void BR65_theCap_isCountedOverRolling24Hours_notACalendarDay() {
+        Instant first = clock.instant();
+        registerAndTakeTheLink("rolling" + TEST_DOMAIN);
+        for (int resend = 1; resend < resendCap(); resend++) {
+            clock.advance(resendInterval());
+            authService.resendVerification("rolling" + TEST_DOMAIN);
+        }
+        issuedLinks.clear();
+
+        // 17:00 UTC is midnight at UTC+7, the boundary the cap was once counted from.
+        clock.advance(Duration.between(clock.instant(), first.plus(Duration.ofHours(8))));
+        authService.resendVerification("rolling" + TEST_DOMAIN);
+        assertThat(issuedLinks.all())
+                .as("a new calendar day, still five in the last 24 hours")
+                .isEmpty();
+
+        clock.advance(Duration.between(
+                clock.instant(), first.plus(Duration.ofHours(24)).plusSeconds(1)));
+        authService.resendVerification("rolling" + TEST_DOMAIN);
+        assertThat(issuedLinks.all()).as("the first link left the window").hasSize(1);
     }
 
     /**
@@ -511,7 +550,7 @@ class AuthServiceTest {
 
         VerificationTokenIssued issued = registerAndTakeTheLink("already" + TEST_DOMAIN);
         authService.verifyEmail(issued.token());
-        clock.advance(AuthServiceImpl.RESEND_MINIMUM_INTERVAL);
+        clock.advance(resendInterval());
 
         assertThatCode(() -> authService.resendVerification("already" + TEST_DOMAIN))
                 .doesNotThrowAnyException();

@@ -19,6 +19,7 @@ import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.OrderBookDepth.PriceLevel;
+import com.cryptopilot.market.PairMarketDisabled;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.event.SpotPairStoppedTrading;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
@@ -2485,6 +2486,86 @@ class PaperOrderApiTest {
         }
         as(trader, get(PAPER + "/fills"), null)
                 .andExpect(jsonPath("$.items.length()").value(1));
+        assertThat(locked(trader, "USDT")).isZero();
+        assertThat(locked(trader, base())).isZero();
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /**
+     * BR-07, UC-45: an administrator taking the pair's Spot market out of service cancels its open orders with their
+     * funds given back, as the exchange's stop does, since no stream feeds the pair any more; a Futures market taken
+     * out leaves the Spot orders alone.
+     */
+    @Test
+    void BR07_aSpotMarketAnAdministratorDisables_cancelsItsOrders_andGivesBackTheirFunds() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String limit = id(place(trader, limit("BUY", "90", "1", null)).andExpect(status().isCreated()));
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("90");
+
+        transactions.executeWithoutResult(
+                status -> events.publishEvent(new PairMarketDisabled(pair, symbol, MarketType.FUTURES, Instant.now())));
+        assertThat(sql.sql("select order_status from paper_order where order_id = ?")
+                        .param(UUID.fromString(limit))
+                        .query(String.class)
+                        .single())
+                .isEqualTo("NEW");
+
+        rule("is_spot_enabled", "false");
+        transactions.executeWithoutResult(
+                status -> events.publishEvent(new PairMarketDisabled(pair, symbol, MarketType.SPOT, Instant.now())));
+
+        awaitStatus(trader, limit, "CANCELED");
+        as(trader, get(PAPER + "/orders/" + limit), null)
+                .andExpect(jsonPath("$.statusReason").value("PAIR_NOT_TRADING"));
+        assertThat(locked(trader, "USDT")).isZero();
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /** BR-07: an order the disabling's listener missed is cancelled by the sweep, which also sees disabled pairs. */
+    @Test
+    void BR07_anOrderLeftOnADisabledPair_isCancelledByTheSweep_once() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String limit = id(place(trader, limit("BUY", "90", "1", null)).andExpect(status().isCreated()));
+        assertThat(sweep.run()).isZero();
+        rule("pair_status", "'INACTIVE'");
+
+        assertThat(sweep.run()).isEqualTo(1);
+
+        as(trader, get(PAPER + "/orders/" + limit), null)
+                .andExpect(jsonPath("$.status").value("CANCELED"))
+                .andExpect(jsonPath("$.statusReason").value("PAIR_NOT_TRADING"));
+        assertThat(locked(trader, "USDT")).isZero();
+        assertThat(sweep.run()).isZero();
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    /**
+     * BR-07: a fill or a trigger that reaches an order of a pair an administrator disabled cancels it instead, rather
+     * than executing it or failing on a pair that is no longer tradable.
+     */
+    @Test
+    void BR07_aFillOrATriggerReachingAnOrderOfADisabledPair_cancelsItInstead() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 1")).andExpect(status().isCreated());
+        String limit = id(place(trader, limit("BUY", "90", "1", null)).andExpect(status().isCreated()));
+        String stop = id(place(trader, stop("STOP_LOSS", "SELL", "95", null, null, "0.5"))
+                .andExpect(status().isCreated()));
+        RestingOrder resting = resting(limit);
+        TriggerOrder watched = watched(stop);
+        rule("is_spot_enabled", "false");
+
+        assertThat(matching.fill(resting, Instant.now(), FillSource.LIVE)).isFalse();
+        assertThat(matching.trigger(watched, Instant.now(), watched.stopPrice(), FillSource.LIVE, null))
+                .isFalse();
+
+        for (String id : List.of(limit, stop)) {
+            as(trader, get(PAPER + "/orders/" + id), null)
+                    .andExpect(jsonPath("$.status").value("CANCELED"))
+                    .andExpect(jsonPath("$.statusReason").value("PAIR_NOT_TRADING"));
+        }
         assertThat(locked(trader, "USDT")).isZero();
         assertThat(locked(trader, base())).isZero();
         assertLedgerAddsUpToTheBalances(trader);

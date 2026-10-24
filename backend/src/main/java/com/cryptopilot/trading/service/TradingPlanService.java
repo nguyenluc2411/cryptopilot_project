@@ -1,12 +1,14 @@
 package com.cryptopilot.trading.service;
 
 import com.cryptopilot.common.web.PageResponse;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.dto.request.UpdateTradingPlanRequest;
 import com.cryptopilot.trading.dto.response.PlanCalculationResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.model.PlanListQuery;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -31,6 +33,14 @@ public interface TradingPlanService {
 
     /** Cancels a DRAFT or ACTIVE plan (UC-19). */
     TradingPlanResponse cancel(UUID userId, UUID planId);
+
+    /**
+     * Cancels every ACTIVE plan of a pair's market that an administrator took out of service (BR-59), in the caller's
+     * transaction, and tells each owner through {@link com.cryptopilot.trading.event.TradingPlanWithdrawn}.
+     *
+     * @return how many plans were cancelled
+     */
+    int cancelForDisabledMarket(UUID pairId, String symbol, MarketType market, Instant at);
 
     /** A plan in full (SCR-18). */
     TradingPlanResponse get(UUID userId, UUID planId);

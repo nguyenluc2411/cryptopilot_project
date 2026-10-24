@@ -1,11 +1,16 @@
 package com.cryptopilot.admin.service.impl;
 
 import com.cryptopilot.admin.AuditEntry;
+import com.cryptopilot.admin.AuditRecord;
 import com.cryptopilot.admin.entity.AuditLog;
+import com.cryptopilot.admin.model.enums.AuditedEntity;
+import com.cryptopilot.admin.repository.AuditLogReader;
 import com.cryptopilot.admin.repository.AuditLogRepository;
 import com.cryptopilot.admin.service.AuditService;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -41,6 +46,7 @@ public class AuditServiceImpl implements AuditService {
 
     private final AuditLogRepository entries;
     private final ObjectMapper json;
+    private final AuditLogReader reader;
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
@@ -69,5 +75,14 @@ public class AuditServiceImpl implements AuditService {
         return address == null || address.length() <= IP_ADDRESS_LENGTH
                 ? address
                 : address.substring(0, IP_ADDRESS_LENGTH);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<AuditRecord> recentEntries(AuditedEntity entityType, UUID entityId, int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("limit must be 1 to 100: " + limit);
+        }
+        return reader.latest(entityType, entityId, limit);
     }
 }

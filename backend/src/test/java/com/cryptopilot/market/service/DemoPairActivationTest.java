@@ -71,6 +71,24 @@ class DemoPairActivationTest {
         assertThat(enabled(xrp, MarketType.SPOT)).as("not trading").isFalse();
         assertThat(enabled(xrp, MarketType.FUTURES)).as("delisted").isFalse();
         assertThat(enabled(sol, MarketType.SPOT)).as("not a seed").isFalse();
+        assertThat(pairs.findById(btc).orElseThrow().getMaxLeverage())
+                .as("a futures market enabled with a leverage ceiling, as SCR-37 requires")
+                .isEqualTo(20);
+    }
+
+    /**
+     * Q-16: a demo futures market an earlier version enabled without a leverage ceiling gets one, so it can be edited
+     * on SCR-37 without entering one first; it is not reported as newly enabled.
+     */
+    @Test
+    void Q16_anEnabledFuturesMarketWithoutALeverageCeiling_getsOne() {
+        sql.sql("update crypto_pair set is_futures_enabled = true, pair_status = 'ACTIVE' where pair_id = ?")
+                .param(btc)
+                .update();
+
+        assertThat(activation.activate(MarketType.FUTURES, SEEDS)).isEmpty();
+
+        assertThat(pairs.findById(btc).orElseThrow().getMaxLeverage()).isEqualTo(20);
     }
 
     /** Q-16: idempotent — a second run enables nothing and writes nothing. */

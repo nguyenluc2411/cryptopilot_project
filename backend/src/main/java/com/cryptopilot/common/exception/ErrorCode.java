@@ -380,7 +380,22 @@ public enum ErrorCode {
      * Only a hidden post can be restored (UC-43); this one is published or deleted. Borrows MSG43 (A-38). 409: the
      * request is valid and the post's status refuses it.
      */
-    POST_NOT_HIDDEN(HttpStatus.CONFLICT, "MSG43");
+    POST_NOT_HIDDEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A pair or market with open simulated positions cannot be disabled (BR-59); nothing is changed. MSG40, "Pair
+     * cannot be disabled", shown in line on SCR-37. 409: the request is valid and the positions refuse it.
+     */
+    PAIR_HAS_OPEN_POSITIONS(HttpStatus.CONFLICT, "MSG40"),
+
+    /**
+     * A market is switched on, or brackets are entered, for a pair the exchange does not trade there (NSF-01), or whose
+     * filters it has not sent yet; nothing is changed. Borrows MSG43 (A-38). 409: the exchange's listing refuses it.
+     */
+    PAIR_NOT_TRADING(HttpStatus.CONFLICT, "MSG43"),
+
+    /** The symbol to add is already a pair of the system (UC-45). Borrows MSG43 (A-38). 409: the pair exists. */
+    PAIR_ALREADY_REGISTERED(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

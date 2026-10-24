@@ -316,12 +316,12 @@ class SymbolSyncServiceTest {
     }
 
     /**
-     * A seed pair is placed in lists where it stands in the seed list, whether the sync created it or found it;
-     * a pair outside the list keeps its place. So BTCUSDT leads when the list starts with it, not ADAUSDT by
-     * the alphabet.
+     * A seed pair never placed is placed in lists where it stands in the seed list, whether the sync created it or
+     * found it; a pair outside the list keeps its place. So BTCUSDT leads when the list starts with it, not ADAUSDT
+     * by the alphabet. Once placed, the order is the administrator's (UC-45): a later run does not move it.
      */
     @Test
-    void NSF01_seedPairs_arePlacedInTheOrderOfTheSeedList() {
+    void NSF01_seedPairs_arePlacedInTheOrderOfTheSeedList_once() {
         register("BTCUSDT", "BTC", "USDT");
         register("SHIBUSDT", "SHIB", "USDT");
 
@@ -333,8 +333,8 @@ class SymbolSyncServiceTest {
 
         service(List.of("BTCUSDT", "XRPUSDT")).sync(MarketType.SPOT);
 
-        assertThat(pair("BTCUSDT").getDisplayOrder()).as("the list reordered").isEqualTo(1);
-        assertThat(pair("XRPUSDT").getDisplayOrder()).isEqualTo(2);
+        assertThat(pair("BTCUSDT").getDisplayOrder()).as("placed already, kept").isEqualTo(2);
+        assertThat(pair("XRPUSDT").getDisplayOrder()).isEqualTo(1);
     }
 
     /**
