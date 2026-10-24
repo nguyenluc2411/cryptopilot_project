@@ -164,8 +164,8 @@ class SystemSettingApiTest {
             change("ENTRY_DEVIATION_CONFIRM_R", "0.9").andExpect(status().isOk());
         } finally {
             if (seeded) {
-                change("ENTRY_DEVIATION_CONFIRM_R", "0.25");
-                change("ENTRY_DEVIATION_BLOCK_R", "0.75");
+                change("ENTRY_DEVIATION_CONFIRM_R", "0.25000000");
+                change("ENTRY_DEVIATION_BLOCK_R", "0.75000000");
             } else {
                 sql.sql("delete from system_setting where setting_key like 'ENTRY_DEVIATION_%'")
                         .update();

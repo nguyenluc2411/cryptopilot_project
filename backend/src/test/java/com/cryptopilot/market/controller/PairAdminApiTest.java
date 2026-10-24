@@ -353,9 +353,9 @@ class PairAdminApiTest {
         sql.sql("""
                         insert into trading_plan (plan_id, user_id, pair_id, market_type, direction, entry_type,
                                                   stop_loss_price, take_profit_price, capital_amount, risk_percent,
-                                                  plan_status, activated_at, executed_at, fill_price, created_at,
-                                                  updated_at)
-                        values (?, ?, ?, 'SPOT', 'LONG', 'MARKET', 90, 120, 1000, 1, ?, ?, ?, ?, ?, ?)""")
+                                                  plan_status, activated_at, executed_at, fill_price, fill_liquidity,
+                                                  analysis_timeframe, created_at, updated_at)
+                        values (?, ?, ?, 'SPOT', 'LONG', 'MARKET', 90, 120, 1000, 1, ?, ?, ?, ?, ?, '1h', ?, ?)""")
                 .params(
                         id,
                         trader,
@@ -364,6 +364,7 @@ class PairAdminApiTest {
                         status.equals("DRAFT") ? null : now,
                         status.equals("EXECUTED") ? now : null,
                         status.equals("EXECUTED") ? new BigDecimal("100") : null,
+                        status.equals("EXECUTED") ? "TAKER" : null,
                         now,
                         now)
                 .update();

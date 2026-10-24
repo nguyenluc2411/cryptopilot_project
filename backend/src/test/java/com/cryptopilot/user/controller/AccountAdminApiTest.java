@@ -320,8 +320,8 @@ class AccountAdminApiTest {
         sql.sql("""
                         insert into trading_plan (plan_id, user_id, pair_id, market_type, direction, entry_type,
                                                   stop_loss_price, take_profit_price, capital_amount, risk_percent,
-                                                  plan_status, created_at, updated_at)
-                        values (?, ?, ?, 'SPOT', 'LONG', 'MARKET', 90, 120, 1000, 1, 'DRAFT', ?, ?)""").params(UUID.randomUUID(), user, pair, now, now).update();
+                                                  plan_status, analysis_timeframe, created_at, updated_at)
+                        values (?, ?, ?, 'SPOT', 'LONG', 'MARKET', 90, 120, 1000, 1, 'DRAFT', '1h', ?, ?)""").params(UUID.randomUUID(), user, pair, now, now).update();
     }
 
     private void subscribeToPro(UUID user) {
