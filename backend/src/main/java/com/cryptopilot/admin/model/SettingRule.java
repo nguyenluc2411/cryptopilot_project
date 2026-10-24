@@ -14,7 +14,7 @@ import java.util.Optional;
  *
  * <p>A rule may name a partner it must not cross ({@link #atMost}): BR-69's two entry deviation bounds.
  *
- * <p>Rule: SRS 3.11.8; BR-29, BR-36, BR-44, BR-65, BR-69, BR-70; D-97.
+ * <p>Rule: SRS 3.11.8; BR-29, BR-36, BR-44, BR-65, BR-69, BR-70; D-97, D-116.
  *
  * @param min the lowest value allowed
  * @param max the highest value allowed
@@ -44,6 +44,8 @@ public record SettingRule(BigDecimal min, BigDecimal max, int scale) {
             Map.entry("ENTRY_DEVIATION_CONFIRM_R", decimal("0", "10", 8)),
             Map.entry("ENTRY_DEVIATION_BLOCK_R", decimal("0", "10", 8)),
             Map.entry("SETUP_SCORE_DROP_WARN", integer(1, 100)),
+            // A share of the plan's risk amount in (0, 1]: zero would warn on every plan (TP-0's key).
+            Map.entry("FEE_RISK_WARN_RATIO", decimal("0.00000001", "1", 8)),
             Map.entry("RESEND_MIN_INTERVAL_SECONDS", integer(1, 3600)),
             Map.entry("RESEND_MAX_PER_24_HOURS", integer(1, 100)));
 

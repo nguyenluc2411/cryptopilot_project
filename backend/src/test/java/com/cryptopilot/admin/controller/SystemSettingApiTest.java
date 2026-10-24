@@ -139,6 +139,39 @@ class SystemSettingApiTest {
     }
 
     /**
+     * BR-29: the share of the risk amount at which a plan's fees warn lies in (0, 1]. The row is TP-0's; it is written
+     * here so the rule is proved before that lands.
+     */
+    @Test
+    void BR29_theFeeWarningShare_isAboveZeroAndAtMostOne() throws Exception {
+        boolean seeded = sql.sql("select count(*) from system_setting where setting_key = 'FEE_RISK_WARN_RATIO'")
+                        .query(Long.class)
+                        .single()
+                > 0;
+        if (!seeded) {
+            sql.sql("""
+                            insert into system_setting (setting_key, setting_value, value_type, description, updated_at)
+                            values ('FEE_RISK_WARN_RATIO', '0.20000000', 'DECIMAL', 'BR-29', now())""").update();
+        }
+        try {
+            for (String value : List.of("0", "-0.1", "1.00000001", "0.000000001")) {
+                change("FEE_RISK_WARN_RATIO", value)
+                        .andExpect(status().isBadRequest())
+                        .andExpect(jsonPath("$.errors.value").value("MSG15"));
+            }
+            change("FEE_RISK_WARN_RATIO", "0.00000001").andExpect(status().isOk());
+            change("FEE_RISK_WARN_RATIO", "1").andExpect(status().isOk());
+        } finally {
+            if (seeded) {
+                change("FEE_RISK_WARN_RATIO", "0.20000000");
+            } else {
+                sql.sql("delete from system_setting where setting_key = 'FEE_RISK_WARN_RATIO'")
+                        .update();
+            }
+        }
+    }
+
+    /**
      * BR-69: the entry deviation that asks for a confirmation never rises above the one that is refused, whichever of
      * the two moves. The rows are TP-A's (V32); they are written here so the rule is proved before that lands.
      */
