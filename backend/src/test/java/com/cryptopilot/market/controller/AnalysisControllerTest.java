@@ -7,15 +7,15 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.billing.model.enums.PlanTier;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.support.FixedClockConfig;
+import com.cryptopilot.support.PlanTraders;
 import com.cryptopilot.support.TestcontainersConfig;
-import com.cryptopilot.user.model.enums.UserRole;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -27,6 +27,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -34,21 +35,20 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.security.oauth2.jwt.JwsHeader;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
 /**
  * The analysis API of UC-10 and UC-11 end to end, against the migrated schema: what a stored row answers, which
  * timeframe the setup score is read on, the dominant side beside a Futures score and its absence on Spot, the nulls of
- * a series that is still warming up or has nothing stored, and the refusals.
+ * a series that is still warming up or has nothing stored, the plan gates, and the refusals. Unless a test says
+ * otherwise the caller is a PRO Trader, whose plan includes the Futures analysis and the component scores.
  *
  * <p>The application's clock is fixed ({@link FixedClockConfig}); the data and the tokens are written relative to it.
  *
- * <p>Rule: UC-10, UC-11, BR-07, BR-08, BR-12, BR-13, BR-14; SRS 3.3.2; TECHNICAL_DESIGN 7.4; D-53.
+ * <p>Rule: UC-10, UC-11, BR-07, BR-08, BR-12, BR-13, BR-14, BR-62; SRS 3.3.2, CR-08; TECHNICAL_DESIGN 7.4; D-53,
+ * D-60.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -70,17 +70,20 @@ class AnalysisControllerTest {
     private JwtEncoder jwtEncoder;
 
     private MarketTestData data;
+    private PlanTraders traders;
     private Instant hour;
 
     @BeforeEach
     void setUp() {
         hour = FixedClockConfig.NOW.truncatedTo(ChronoUnit.HOURS).minus(Duration.ofHours(1));
         data = new MarketTestData(sql, hour);
+        traders = new PlanTraders(sql, jwtEncoder, FixedClockConfig.NOW);
     }
 
     @AfterEach
     void clear() {
         data.clear();
+        traders.clear();
     }
 
     // ------------------------------------------------------------------ Spot
@@ -104,6 +107,7 @@ class AnalysisControllerTest {
                 .andExpect(jsonPath("$.indicators.rsi14").value("55.5000000000"))
                 .andExpect(jsonPath("$.nearestSupport").value("95.0000000000"))
                 .andExpect(jsonPath("$.nearestResistance").value("120.0000000000"))
+                .andExpect(jsonPath("$.componentsLocked").value(false))
                 .andExpect(jsonPath("$.components.trend").value("75.00"))
                 .andExpect(jsonPath("$.components.formulaVersion").value("v1"))
                 .andExpect(jsonPath("$.components", not(hasKey("derivatives"))))
@@ -143,7 +147,7 @@ class AnalysisControllerTest {
         UUID pair = data.pair("BTCUSDT", true, false, "TRADING", null, 0);
         store(pair, MarketType.SPOT, "1h", hour, full(), spot("75", "50", "40", "60"));
 
-        mvc.perform(get(BASE + "/spot/BTCUSDT").header(HttpHeaders.AUTHORIZATION, trader()))
+        mvc.perform(get(BASE + "/spot/BTCUSDT").header(HttpHeaders.AUTHORIZATION, traders.bearer(PlanTier.PRO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.timeframe").value("1h"))
                 .andExpect(jsonPath("$.openTime").value(hour.toString()));
@@ -244,6 +248,82 @@ class AnalysisControllerTest {
                 .andExpect(jsonPath("$.setupScore.dominantSide").value(nullValue()));
     }
 
+    // ------------------------------------------------------------------ plan gates
+
+    /**
+     * CR-08: on FREE the Spot analysis is answered with its total score, preset and version, and both component blocks
+     * are withheld and marked locked — not null inside, which would read as insufficient data.
+     */
+    @Test
+    void BR62_freeSpot_locksBothComponentBlocks_andKeepsTheScore() throws Exception {
+        UUID pair = data.pair("BTCUSDT", true, false, "TRADING", null, 0);
+        store(pair, MarketType.SPOT, "1h", hour, full(), spot("75", "50", "40", "60"));
+
+        analysis("spot", "BTCUSDT", "1h", traders.bearer(PlanTier.FREE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.indicators.rsi14").value("55.5000000000"))
+                .andExpect(jsonPath("$.nearestSupport").value("95.0000000000"))
+                .andExpect(jsonPath("$.componentsLocked").value(true))
+                .andExpect(jsonPath("$", hasKey("components")))
+                .andExpect(jsonPath("$.components").value(nullValue()))
+                .andExpect(jsonPath("$.setupScore.score").value(59))
+                .andExpect(jsonPath("$.setupScore.preset").value("DAY_TRADING"))
+                .andExpect(jsonPath("$.setupScore.presetVersion").value("v1"))
+                .andExpect(jsonPath("$.setupScore", hasKey("components")))
+                .andExpect(jsonPath("$.setupScore.components").value(nullValue()));
+    }
+
+    /** CR-08: the lock does not depend on stored data; with nothing stored FREE still reads locked, not empty. */
+    @Test
+    void BR62_freeSpot_withNothingStored_isStillLocked() throws Exception {
+        data.pair("BTCUSDT", true, false, "TRADING", null, 0);
+
+        analysis("spot", "BTCUSDT", "1h", traders.bearer(PlanTier.FREE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.componentsLocked").value(true))
+                .andExpect(jsonPath("$.components").value(nullValue()))
+                .andExpect(jsonPath("$.setupScore.score").value(nullValue()))
+                .andExpect(jsonPath("$.setupScore.components").value(nullValue()));
+    }
+
+    /** D-60 and UC-11: on FREE the Futures analysis is refused as a whole with MSG29, naming no data. */
+    @Test
+    void BR62_freeFutures_isMsg29() throws Exception {
+        UUID pair = data.pair("ETHUSDT", false, true, null, "TRADING", 0);
+        store(pair, MarketType.FUTURES, "1h", hour, emas("105", "100", "90"), futures());
+
+        analysis("futures", "ETHUSDT", "1h", traders.bearer(PlanTier.FREE))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.messageCode").value("MSG29"))
+                .andExpect(jsonPath("$.setupScore").doesNotExist());
+    }
+
+    /** PRO and PREMIUM read the component scores on both markets and the Futures analysis with its dominant side. */
+    @ParameterizedTest
+    @EnumSource(
+            value = PlanTier.class,
+            names = {"PRO", "PREMIUM"})
+    void BR62_paidPlans_readTheComponentsOnBothMarkets(PlanTier tier) throws Exception {
+        UUID btc = data.pair("BTCUSDT", true, false, "TRADING", null, 0);
+        UUID eth = data.pair("ETHUSDT", false, true, null, "TRADING", 1);
+        store(btc, MarketType.SPOT, "1h", hour, full(), spot("75", "50", "40", "60"));
+        store(eth, MarketType.FUTURES, "1h", hour, emas("105", "100", "90"), futures());
+        candle(eth, MarketType.FUTURES, hour, "110");
+        String token = traders.bearer(tier);
+
+        analysis("spot", "BTCUSDT", "1h", token)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.componentsLocked").value(false))
+                .andExpect(jsonPath("$.components.trend").value("75.00"))
+                .andExpect(jsonPath("$.setupScore.components.level").value("60.00"));
+        analysis("futures", "ETHUSDT", "1h", token)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.componentsLocked").value(false))
+                .andExpect(jsonPath("$.components.derivatives").value("50.00"))
+                .andExpect(jsonPath("$.setupScore.score").value(85))
+                .andExpect(jsonPath("$.setupScore.dominantSide").value("LONG"));
+    }
+
     // ------------------------------------------------------------------ refusals
 
     /** BR-08: only 15m, 1h, 4h and 1d are analysed; anything else is MSG01. */
@@ -278,20 +358,25 @@ class AnalysisControllerTest {
         }
     }
 
-    /** SRS 3.1.3: the analysis is not public. */
+    /** SRS 3.1.3: the analysis is not public, on either market. */
     @Test
     void SRS313_aGuest_isRefused() throws Exception {
-        data.pair("BTCUSDT", true, false, "TRADING", null, 0);
+        data.pair("BTCUSDT", true, true, "TRADING", "TRADING", 0);
 
         mvc.perform(get(BASE + "/spot/BTCUSDT").param("tf", "1h")).andExpect(status().isUnauthorized());
+        mvc.perform(get(BASE + "/futures/BTCUSDT").param("tf", "1h")).andExpect(status().isUnauthorized());
     }
 
     // ------------------------------------------------------------------ fixtures
 
     private ResultActions analysis(String market, String symbol, String timeframe) throws Exception {
+        return analysis(market, symbol, timeframe, traders.bearer(PlanTier.PRO));
+    }
+
+    private ResultActions analysis(String market, String symbol, String timeframe, String bearer) throws Exception {
         return mvc.perform(get(BASE + "/" + market + "/" + symbol)
                 .param("tf", timeframe)
-                .header(HttpHeaders.AUTHORIZATION, trader()));
+                .header(HttpHeaders.AUTHORIZATION, bearer));
     }
 
     /** The indicators of a warmed-up series with an up-trend: close above EMA20 above EMA50 above EMA200. */
@@ -369,21 +454,5 @@ class AnalysisControllerTest {
                         Timestamp.from(openTime.plusSeconds(3599)),
                         new BigDecimal(close))
                 .update();
-    }
-
-    private String trader() {
-        Instant now = FixedClockConfig.NOW;
-        JwtClaimsSet claims = JwtClaimsSet.builder()
-                .issuer(JwtConfig.ISSUER)
-                .subject(UUID.randomUUID().toString())
-                .issuedAt(now)
-                .expiresAt(now.plusSeconds(900))
-                .claim(JwtConfig.ROLE_CLAIM, UserRole.TRADER.name())
-                .build();
-        return "Bearer "
-                + jwtEncoder
-                        .encode(JwtEncoderParameters.from(
-                                JwsHeader.with(JwtConfig.ALGORITHM).build(), claims))
-                        .getTokenValue();
     }
 }

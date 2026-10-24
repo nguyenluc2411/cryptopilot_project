@@ -2,13 +2,20 @@ package com.cryptopilot.market.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.billing.EntitlementApi;
+import com.cryptopilot.billing.model.enums.Feature;
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.config.SetupScoreProperties;
@@ -40,8 +47,9 @@ import org.springframework.beans.factory.ObjectProvider;
 /**
  * Which preset a setup score is read under (D-53): the one the caller's profile selects through the style source,
  * and DAY_TRADING when there is no caller, no source, or no selection. The score is read on that preset's timeframe.
+ * And what the caller's plan lets through (D-60): the component scores, and the Futures analysis at all.
  *
- * <p>Rule: BR-13; TECHNICAL_DESIGN 7.4; D-53.
+ * <p>Rule: BR-13, BR-62; SRS CR-08; TECHNICAL_DESIGN 7.4; D-53, D-60.
  */
 class AnalysisServiceImplTest {
 
@@ -55,9 +63,11 @@ class AnalysisServiceImplTest {
     private final TechnicalIndicatorRepository indicators = mock(TechnicalIndicatorRepository.class);
     private final OhlcvRepository candles = mock(OhlcvRepository.class);
     private final SetupStyleSource source = mock(SetupStyleSource.class);
+    private final EntitlementApi entitlements = mock(EntitlementApi.class);
 
     @BeforeEach
     void setUp() {
+        when(entitlements.hasFeature(USER, Feature.SCORE_COMPONENTS)).thenReturn(true);
         CryptoPair pair = mock(CryptoPair.class);
         when(pair.getId()).thenReturn(PAIR);
         when(pair.getSymbol()).thenReturn("BTCUSDT");
@@ -215,6 +225,56 @@ class AnalysisServiceImplTest {
                 .isThrownBy(() -> service.closedCandleSetupScore(PAIR, MarketType.SPOT, "5m", null, null, NOW));
     }
 
+    @Test
+    void BR62_aPlanWithoutScoreComponents_locksBothBlocks_andKeepsTheScore() {
+        when(entitlements.hasFeature(USER, Feature.SCORE_COMPONENTS)).thenReturn(false);
+
+        AnalysisResponse response = service(null).analysis("spot", "BTCUSDT", "1h", USER);
+
+        assertThat(response.componentsLocked()).isTrue();
+        assertThat(response.components()).isNull();
+        SpotSetupScoreResponse score = (SpotSetupScoreResponse) response.setupScore();
+        assertThat(score.components()).isNull();
+        assertThat(score.score()).isEqualTo(10);
+    }
+
+    @Test
+    void BR62_aPlanWithScoreComponents_answersBothBlocks() {
+        AnalysisResponse response = service(null).analysis("spot", "BTCUSDT", "1h", USER);
+
+        assertThat(response.componentsLocked()).isFalse();
+        assertThat(response.components()).isNotNull();
+        assertThat(((SpotSetupScoreResponse) response.setupScore()).components())
+                .isNotNull();
+    }
+
+    @Test
+    void BR62_withoutACaller_theComponentsAreLocked_andNoPlanIsAsked() {
+        AnalysisResponse response = service(null).analysis("spot", "BTCUSDT", "1h", null);
+
+        assertThat(response.componentsLocked()).isTrue();
+        verifyNoInteractions(entitlements);
+    }
+
+    @Test
+    void BR62_futuresWithoutThePlan_isRefusedBeforeAnythingIsRead() {
+        BusinessException msg29 = new BusinessException(ErrorCode.PLAN_FEATURE_NOT_INCLUDED, "test", "PRO");
+        doThrow(msg29).when(entitlements).requireFeature(USER, Feature.FUTURES_ANALYSIS);
+
+        assertThatThrownBy(() -> service(null).analysis("futures", "BTCUSDT", "1h", USER))
+                .isSameAs(msg29);
+        verify(requests, never()).enabledPair(any(), anyString());
+        verifyNoInteractions(indicators);
+    }
+
+    @Test
+    void BR62_futuresWithoutACaller_isMsg44() {
+        assertThatThrownBy(() -> service(null).analysis("futures", "BTCUSDT", "1h", null))
+                .isInstanceOfSatisfying(BusinessException.class, refusal -> assertThat(refusal.errorCode())
+                        .isEqualTo(ErrorCode.AUTHENTICATION_REQUIRED));
+        verifyNoInteractions(entitlements, indicators);
+    }
+
     private static SpotSetupScoreResponse score(AnalysisServiceImpl service, UUID caller) {
         AnalysisResponse response = service.analysis("spot", "BTCUSDT", "1h", caller);
         return (SpotSetupScoreResponse) response.setupScore();
@@ -224,7 +284,7 @@ class AnalysisServiceImplTest {
     private AnalysisServiceImpl service(SetupStyleSource styles) {
         ObjectProvider<SetupStyleSource> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(styles);
-        return new AnalysisServiceImpl(requests, indicators, candles, presets(), provider, CLOCK);
+        return new AnalysisServiceImpl(requests, indicators, candles, presets(), provider, CLOCK, entitlements);
     }
 
     /** The v1 presets; only the timeframes and versions matter here. */
