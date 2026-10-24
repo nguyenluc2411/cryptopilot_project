@@ -9,10 +9,13 @@ import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.model.CalculatedPlan;
+import com.cryptopilot.trading.model.PlanCosts;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.RiskInput;
+import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PlanStatus;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,7 +34,8 @@ final class PlanResponses {
                 plan.getMarket(),
                 plan.getDirection(),
                 plan.getEntryType(),
-                plan.getEntryPrice(),
+                entryPrice(plan),
+                expectedFillPrice(plan),
                 plan.getPlannedEntryPrice(),
                 plan.getStopLoss(),
                 plan.getTakeProfit(),
@@ -64,7 +68,8 @@ final class PlanResponses {
                 plan.getMarket(),
                 plan.getDirection(),
                 plan.getEntryType(),
-                plan.getEntryPrice(),
+                entryPrice(plan),
+                expectedFillPrice(plan),
                 plan.getStopLoss(),
                 plan.getTakeProfit(),
                 plan.getLeverage(),
@@ -78,11 +83,32 @@ final class PlanResponses {
                 plan.getInvalidationReason());
     }
 
-    /** The live risk panel. */
+    /**
+     * The entry price a response answers, the same in the panel, the detail and the list: for MARKET the reference
+     * price, which is the stored planned entry; a MARKET plan filled before the planned entry was stored (V32) has
+     * only its fill.
+     */
+    private static BigDecimal entryPrice(TradingPlan plan) {
+        return plan.getEntryType() == EntryType.MARKET && plan.getPlannedEntryPrice() != null
+                ? plan.getPlannedEntryPrice()
+                : plan.getEntryPrice();
+    }
+
+    /** MARKET only: the stored entry, the price the quantity was sized on (D-112 R6). */
+    private static BigDecimal expectedFillPrice(TradingPlan plan) {
+        return plan.getEntryType() == EntryType.MARKET ? plan.getEntryPrice() : null;
+    }
+
+    /**
+     * The live risk panel. A MARKET entry answers its reference price and, beside it, the expected fill the plan is
+     * sized on (D-112 R6).
+     */
     static PlanCalculationResponse calculation(CalculatedPlan calculated) {
         RiskInput input = calculated.calculation().plan();
+        boolean market = calculated.entry().entryType() == EntryType.MARKET;
         return new PlanCalculationResponse(
-                input.entryPrice(),
+                market ? calculated.entry().reference() : input.entryPrice(),
+                market ? input.entryPrice() : null,
                 input.capital(),
                 input.riskPercent(),
                 snapshot(PlanSnapshot.of(calculated.calculation())),
@@ -91,6 +117,7 @@ final class PlanResponses {
     }
 
     private static PlanSnapshotResponse snapshot(PlanSnapshot snapshot) {
+        PlanCosts costs = snapshot.costs();
         return new PlanSnapshotResponse(
                 snapshot.positionQuantity(),
                 snapshot.notionalValue(),
@@ -99,7 +126,14 @@ final class PlanResponses {
                 snapshot.riskAmount(),
                 snapshot.rewardAmount(),
                 snapshot.riskRewardRatio(),
-                snapshot.estimatedLiquidationPrice());
+                snapshot.estimatedLiquidationPrice(),
+                costs == null ? null : costs.estimatedEntryFee(),
+                costs == null ? null : costs.estimatedStopLossExitFee(),
+                costs == null ? null : costs.estimatedTakeProfitExitFee(),
+                costs == null ? null : costs.estimatedSlippage(),
+                costs == null ? null : costs.lossAtStopLoss(),
+                costs == null ? null : costs.feeShareOfRisk(),
+                costs == null ? null : costs.netRiskReward());
     }
 
     private static List<PlanWarningResponse> warnings(List<PlanWarning> warnings) {

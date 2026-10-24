@@ -30,7 +30,10 @@ public enum WarningType {
     WIDE_STOP_LOSS(WarningSeverity.INFO),
 
     /** Funding rate at or above the configured size, on the side that pays it (BR-29). */
-    HIGH_FUNDING_RATE(WarningSeverity.WARNING);
+    HIGH_FUNDING_RATE(WarningSeverity.WARNING),
+
+    /** Expected fees and slippage at or above the configured share of the risk amount (BR-29, D-116). */
+    HIGH_FEE_SHARE(WarningSeverity.WARNING);
 
     private final WarningSeverity severity;
 

@@ -47,7 +47,8 @@ public class MatchingServiceImpl implements MatchingService {
     @Override
     @Transactional
     public boolean fill(Fill fill) {
-        // The engine fills resting LIMIT entries only, which supplied liquidity (BR-36; D-111 E1).
+        // The engine fills resting LIMIT entries only, which supplied liquidity (BR-36; D-111 E1). STOP entries, which
+        // take liquidity, join this path with their trigger in TP-B, which must then pass the fill's own role.
         boolean filled = plans.executeIfActive(
                         fill.planId(), fill.executedAt(), fill.price(), LiquidityRole.MAKER, clock.instant())
                 == 1;

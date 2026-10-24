@@ -74,10 +74,11 @@ class SeedDataTest {
      * settings, V10 removes the watchlist and active alert limits, which are the plan's (BR-62), and V13 the
      * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V26 adds the
      * liquidation clearance fee (BR-36); V32 the entry deviation, setup score drop and slippage settings (BR-36, BR-69,
-     * BR-70), V33 the two resend limits (BR-65); V11 seeds the five packages.
+     * BR-70), V33 the two resend limits (BR-65), V34 the fee share threshold of HIGH_FEE_SHARE (BR-29, D-116); V11
+     * seeds the five packages.
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
-            "system_setting", 19,
+            "system_setting", 20,
             "trading_strategy", 3,
             "user_account", 1,
             "user_profile", 1,
@@ -115,7 +116,7 @@ class SeedDataTest {
 
     @ParameterizedTest(name = "{0} holds {1} seeded rows")
     @CsvSource({
-        "system_setting, 19",
+        "system_setting, 20",
         "trading_strategy, 3",
         "user_account, 1",
         "user_profile, 1",
@@ -272,7 +273,7 @@ class SeedDataTest {
     }
 
     /**
-     * BR-29: the three warning thresholds the risk profile does not define are configurable in system
+     * BR-29: the four warning thresholds the risk profile does not define are configurable in system
      * settings. What is proved here is that each one has the value the rule states, at the scale of
      * the column it will be compared against. That the risk calculation then raises the warning at that boundary
      * is the rule itself and belongs to the trading plan task.
@@ -281,7 +282,8 @@ class SeedDataTest {
     @CsvSource({
         "WARN_LOW_RR_RATIO, 1.50000000",
         "WARN_WIDE_STOP_LOSS_PERCENT, 10.000",
-        "WARN_HIGH_FUNDING_RATE, 0.00100000"
+        "WARN_HIGH_FUNDING_RATE, 0.00100000",
+        "FEE_RISK_WARN_RATIO, 0.20000000"
     })
     void BR29_warningThreshold_isSeededWithTheValueTheRuleStates(String key, String expected) {
         assertThat(settingValue(key)).isEqualTo(expected);
@@ -380,7 +382,7 @@ class SeedDataTest {
                 .query()
                 .listOfRows();
 
-        assertThat(settings).hasSize(19).allSatisfy(setting -> {
+        assertThat(settings).hasSize(20).allSatisfy(setting -> {
             String key = (String) setting.get("setting_key");
             String value = (String) setting.get("setting_value");
             switch ((String) setting.get("value_type")) {

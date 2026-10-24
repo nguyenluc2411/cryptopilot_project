@@ -612,6 +612,13 @@ trading_plan,take_profit_price,numeric,28,12,NO
 trading_plan,updated_at,timestamp with time zone,,,NO
 trading_plan,user_id,uuid,,,NO
 trading_plan,version,bigint,64,0,NO
+trading_plan,estimated_entry_fee,numeric,28,8,YES
+trading_plan,estimated_slippage,numeric,28,8,YES
+trading_plan,estimated_stop_loss_exit_fee,numeric,28,8,YES
+trading_plan,estimated_take_profit_exit_fee,numeric,28,8,YES
+trading_plan,fee_share_of_risk,numeric,20,8,YES
+trading_plan,loss_at_stop_loss,numeric,28,8,YES
+trading_plan,net_risk_reward_ratio,numeric,20,8,YES
 trading_plan_warning,created_at,timestamp with time zone,,,NO
 trading_plan_warning,plan_id,uuid,,,NO
 trading_plan_warning,severity,character varying,,,NO

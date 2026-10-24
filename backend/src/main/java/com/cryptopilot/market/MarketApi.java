@@ -51,7 +51,10 @@ public interface MarketApi {
      */
     List<CoinListing> ensureCoins(Collection<String> symbols);
 
-    /** The last traded price, when the cache holds a current one; empty when it is missing, old or unreadable. */
+    /**
+     * The last traded price, when the cache holds a current one; empty when it is missing, old or unreadable. On Spot
+     * it is the ticker's; on Futures the close of the latest 1-minute candle update (D-111 E2/E3).
+     */
     Optional<BigDecimal> currentLastPrice(MarketType market, String symbol);
 
     /**
@@ -73,14 +76,14 @@ public interface MarketApi {
     Optional<OrderBookDepth> currentDepth(MarketType market, UUID pairId);
 
     /**
-     * The current last prices of several pairs of one market, read in one round trip; a pair without a current price
-     * is left out.
+     * The current last prices of several pairs of one market, read in one round trip on Spot and one per pair on
+     * Futures; a pair without a current price is left out.
      */
     Map<String, BigDecimal> currentLastPrices(MarketType market, Collection<String> symbols);
 
     /**
-     * The Futures mark price, when the cache holds a current one; empty when it is missing, old or unreadable. The
-     * Futures streams carry the mark price and no last trade price, so this is the current price of a Futures pair.
+     * The Futures mark price, when the cache holds a current one; empty when it is missing, old or unreadable. It is
+     * the price of liquidation and unrealized P/L; fills and price checks use {@link #currentLastPrice} (D-111 E2/E3).
      */
     Optional<BigDecimal> currentMarkPrice(String symbol);
 

@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.matching;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.Exit;
@@ -8,6 +9,7 @@ import com.cryptopilot.trading.model.OpenPosition;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Optional;
@@ -123,6 +125,15 @@ class ExitRuleTest {
             assertThat(e.price()).isEqualByComparingTo(price);
             assertThat(e.exitedAt()).isEqualTo(at);
         });
+    }
+
+    /** D-111 E1: a take profit rested, so it is maker; a stop loss and a manual close took liquidity. */
+    @Test
+    void BR36_theLiquidityRoleOfAnExit_followsWhetherItRested() {
+        assertThat(ExitRule.liquidity(CloseReason.TAKE_PROFIT)).isEqualTo(LiquidityRole.MAKER);
+        assertThat(ExitRule.liquidity(CloseReason.STOP_LOSS)).isEqualTo(LiquidityRole.TAKER);
+        assertThat(ExitRule.liquidity(CloseReason.MANUAL)).isEqualTo(LiquidityRole.TAKER);
+        assertThatIllegalArgumentException().isThrownBy(() -> ExitRule.liquidity(CloseReason.LIQUIDATION));
     }
 
     private static PriceRange range(String low, String high) {

@@ -15,8 +15,10 @@ import java.util.Map;
 public interface PriceCacheService {
 
     /**
-     * Takes a Spot ticker or a futures mark price from the stream, without any I/O: the value waits in memory for the
-     * next flush, and a value older than the one waiting is dropped. Anything else is ignored.
+     * Takes a Spot ticker, a futures mark price or a futures 1-minute candle update from the stream, without any I/O:
+     * the value waits in memory for the next flush, and a value older than the one waiting is dropped. The close of a
+     * futures 1-minute candle update is the futures last price, kept with its own instant (D-111 E2/E3). Anything else
+     * is ignored.
      */
     void record(MarketType market, StreamMessage message);
 
@@ -28,8 +30,20 @@ public interface PriceCacheService {
      */
     int flush();
 
-    /** The cached price of a pair, with the state that says whether it may be used as current. */
+    /**
+     * The cached price of a pair, with the state that says whether it may be used as current. A futures entry is its
+     * mark price group; its last price, which has an instant of its own, is read by {@link #latestLast}.
+     */
     PriceLookup latest(MarketType market, String symbol);
+
+    /**
+     * The last trade price of a pair, with the state of its own instant: the ticker's on Spot (as {@link #latest}),
+     * the close of the latest 1-minute candle update on futures. Only {@code lastPrice} and {@code sourceTime} of a
+     * futures answer are set.
+     *
+     * <p>Rule: BR-33; D-111 E2/E3.
+     */
+    PriceLookup latestLast(MarketType market, String symbol);
 
     /**
      * The cached prices of several pairs of one market. Every symbol asked for has an entry, with the same states as

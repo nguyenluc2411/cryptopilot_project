@@ -7,6 +7,7 @@ import com.cryptopilot.market.client.BinanceStreamParser;
 import com.cryptopilot.market.client.StreamFrames;
 import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.config.PriceCacheProperties;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
@@ -88,7 +89,7 @@ class MarketApiStreamPricesTest {
         assertThat(api.currentMarkPrice("BTCUSDT")).contains(new BigDecimal("84286.39852899"));
         assertThat(api.currentFundingRate("BTCUSDT")).contains(new BigDecimal("0.00001583"));
         assertThat(api.currentLastPrice(MarketType.FUTURES, "BTCUSDT"))
-                .as("no Futures stream carries a last trade price")
+                .as("a mark price frame carries no last trade price")
                 .isEmpty();
     }
 
@@ -123,6 +124,54 @@ class MarketApiStreamPricesTest {
                 .containsOnlyKeys("BTCUSDT")
                 .containsEntry("BTCUSDT", new BigDecimal("84282.01"));
         assertThat(api.currentLastPrices(MarketType.SPOT, List.of())).isEmpty();
+    }
+
+    /**
+     * D-111 E2/E3: the close of a futures 1-minute candle update is the Futures last price. The captured candle is
+     * 144 ms older than the captured mark price, so both are kept, each with its own instant, and the mark price is
+     * unchanged.
+     */
+    @Test
+    void D111_aFuturesMinuteCandle_givesTheLastPrice_besideAnUnchangedMarkPrice() {
+        stream(MarketType.FUTURES, StreamFrames.MARK_PRICE_CAPTURED);
+        stream(MarketType.FUTURES, StreamFrames.FUTURES_KLINE_CAPTURED);
+
+        assertThat(api.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).contains(new BigDecimal("84285.90"));
+        assertThat(api.currentMarkPrice("BTCUSDT")).contains(new BigDecimal("84286.39852899"));
+        assertThat(api.currentFundingRate("BTCUSDT")).contains(new BigDecimal("0.00001583"));
+        assertThat(api.currentLastPrices(MarketType.FUTURES, List.of("BTCUSDT", "ETHUSDT")))
+                .containsOnlyKeys("BTCUSDT")
+                .containsEntry("BTCUSDT", new BigDecimal("84285.90"));
+    }
+
+    /**
+     * The last price and the mark price each age on their own instant: when the candles stop, the last price stops
+     * being current while a mark price that keeps arriving stays current, and the other way round.
+     */
+    @Test
+    void D111_theFuturesLastPrice_andTheMarkPrice_ageEachOnTheirOwnInstant() {
+        Instant candleAt = Instant.ofEpochMilli(1790259564856L);
+        stream(MarketType.FUTURES, StreamFrames.FUTURES_KLINE_CAPTURED);
+        Instant later = candleAt.plus(PROPERTIES.ttl()).plusSeconds(1);
+        clock.set(later);
+        stream(MarketType.FUTURES, StreamFrames.markPrice("BTCUSDT", later));
+
+        assertThat(api.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).isEmpty();
+        assertThat(api.currentMarkPrice("BTCUSDT")).isPresent();
+
+        clock.set(later.plus(PROPERTIES.ttl()).plusSeconds(2));
+        stream(MarketType.FUTURES, StreamFrames.kline("BTCUSDT", MarketInterval.ONE_MINUTE, clock.instant(), false));
+
+        assertThat(api.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).contains(new BigDecimal("101.20"));
+        assertThat(api.currentMarkPrice("BTCUSDT")).isEmpty();
+    }
+
+    /** Only the 1-minute candle is a last price; a forming candle of another timeframe is not. */
+    @Test
+    void D111_aFuturesCandleOfAnotherTimeframe_givesNoLastPrice() {
+        stream(MarketType.FUTURES, StreamFrames.kline("BTCUSDT", MarketInterval.ONE_HOUR, CAPTURED_AT, false));
+
+        assertThat(api.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).isEmpty();
     }
 
     private void stream(MarketType market, String frame) {

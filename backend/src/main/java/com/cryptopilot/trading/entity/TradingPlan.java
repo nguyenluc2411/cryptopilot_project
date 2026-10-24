@@ -9,7 +9,9 @@ import com.cryptopilot.trading.calculator.PositionSizeCalculator;
 import com.cryptopilot.trading.calculator.warning.WarningEvaluator;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.exception.PlanActivationBlockedException;
+import com.cryptopilot.trading.model.CalculatedPlan;
 import com.cryptopilot.trading.model.PlanCalculation;
+import com.cryptopilot.trading.model.PlanCosts;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
@@ -150,6 +152,35 @@ public class TradingPlan extends BaseEntity {
     @Column(name = "estimated_liquidation_price", precision = 28, scale = 12)
     private BigDecimal estimatedLiquidationPrice;
 
+    /** The expected fees and slippage of the snapshot (D-116); all null on a plan saved before V34. */
+    @Getter(AccessLevel.NONE)
+    @Column(name = "estimated_entry_fee", precision = 28, scale = 8)
+    private BigDecimal estimatedEntryFee;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "estimated_stop_loss_exit_fee", precision = 28, scale = 8)
+    private BigDecimal estimatedStopLossExitFee;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "estimated_take_profit_exit_fee", precision = 28, scale = 8)
+    private BigDecimal estimatedTakeProfitExitFee;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "estimated_slippage", precision = 28, scale = 8)
+    private BigDecimal estimatedSlippage;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "loss_at_stop_loss", precision = 28, scale = 8)
+    private BigDecimal lossAtStopLoss;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "fee_share_of_risk", precision = 20, scale = 8)
+    private BigDecimal feeShareOfRisk;
+
+    @Getter(AccessLevel.NONE)
+    @Column(name = "net_risk_reward_ratio", precision = 20, scale = 8)
+    private BigDecimal netRiskReward;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "plan_status", nullable = false, length = 32)
     private PlanStatus status;
@@ -245,7 +276,17 @@ public class TradingPlan extends BaseEntity {
     public static TradingPlan draft(
             UUID userId, UUID pairId, PlanCalculation calculation, PlanDetails details, List<PlanWarning> warnings) {
         TradingPlan plan = new TradingPlan(userId, pairId);
-        plan.save(calculation, details, warnings);
+        plan.save(calculation, details, warnings, calculation.plan().entryPrice());
+        return plan;
+    }
+
+    /**
+     * A new DRAFT from a calculated plan. The planned entry of a MARKET plan is its reference price, before the
+     * slippage its calculated entry holds (D-111 M2, D-112 R6); of LIMIT and STOP the entered price.
+     */
+    public static TradingPlan draft(UUID userId, UUID pairId, CalculatedPlan calculated, PlanDetails details) {
+        TradingPlan plan = new TradingPlan(userId, pairId);
+        plan.save(calculated.calculation(), details, calculated.warnings(), plannedEntry(calculated));
         return plan;
     }
 
@@ -254,7 +295,21 @@ public class TradingPlan extends BaseEntity {
         if (!isEditable()) {
             throw new IllegalPlanStateException(getId(), status, "edit");
         }
-        save(calculation, details, warnings);
+        save(calculation, details, warnings, calculation.plan().entryPrice());
+    }
+
+    /** As {@link #updateDraft(PlanCalculation, PlanDetails, List)}, with the planned entry of {@link #draft}. */
+    public void updateDraft(CalculatedPlan calculated, PlanDetails details) {
+        if (!isEditable()) {
+            throw new IllegalPlanStateException(getId(), status, "edit");
+        }
+        save(calculated.calculation(), details, calculated.warnings(), plannedEntry(calculated));
+    }
+
+    private static BigDecimal plannedEntry(CalculatedPlan calculated) {
+        return calculated.entry().entryType() == EntryType.MARKET
+                ? calculated.entry().reference()
+                : calculated.calculation().plan().entryPrice();
     }
 
     /**
@@ -404,7 +459,17 @@ public class TradingPlan extends BaseEntity {
                 riskAmount,
                 rewardAmount,
                 riskRewardRatio,
-                estimatedLiquidationPrice);
+                estimatedLiquidationPrice,
+                estimatedEntryFee == null
+                        ? null
+                        : new PlanCosts(
+                                estimatedEntryFee,
+                                estimatedStopLossExitFee,
+                                estimatedTakeProfitExitFee,
+                                estimatedSlippage,
+                                lossAtStopLoss,
+                                feeShareOfRisk,
+                                netRiskReward));
     }
 
     /** The stored warnings, most severe first. */
@@ -412,7 +477,8 @@ public class TradingPlan extends BaseEntity {
         return warnings.stream().map(TradingPlanWarning::toPlanWarning).toList();
     }
 
-    private void save(PlanCalculation calculation, PlanDetails details, List<PlanWarning> newWarnings) {
+    private void save(
+            PlanCalculation calculation, PlanDetails details, List<PlanWarning> newWarnings, BigDecimal plannedEntry) {
         Objects.requireNonNull(details, "details");
         requireAccepted(calculation);
         requireValidDetails(details);
@@ -422,7 +488,7 @@ public class TradingPlan extends BaseEntity {
         direction = in.direction();
         entryType = details.entryType();
         entryPrice = in.entryPrice();
-        plannedEntryPrice = in.entryPrice();
+        plannedEntryPrice = plannedEntry;
         stopLoss = in.stopLoss();
         takeProfit = in.takeProfit();
         capital = in.capital();
@@ -500,6 +566,14 @@ public class TradingPlan extends BaseEntity {
         rewardAmount = snapshot.rewardAmount();
         riskRewardRatio = snapshot.riskRewardRatio();
         estimatedLiquidationPrice = snapshot.estimatedLiquidationPrice();
+        PlanCosts costs = snapshot.costs();
+        estimatedEntryFee = costs == null ? null : costs.estimatedEntryFee();
+        estimatedStopLossExitFee = costs == null ? null : costs.estimatedStopLossExitFee();
+        estimatedTakeProfitExitFee = costs == null ? null : costs.estimatedTakeProfitExitFee();
+        estimatedSlippage = costs == null ? null : costs.estimatedSlippage();
+        lossAtStopLoss = costs == null ? null : costs.lossAtStopLoss();
+        feeShareOfRisk = costs == null ? null : costs.feeShareOfRisk();
+        netRiskReward = costs == null ? null : costs.netRiskReward();
     }
 
     private void replaceWarnings(List<PlanWarning> newWarnings) {

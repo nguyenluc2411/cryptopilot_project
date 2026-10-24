@@ -8,8 +8,11 @@ import java.util.List;
  *
  * <p>Rule: BR-23 to BR-29; SRS 3.5.1.
  *
- * @param entryPrice the entry price calculated with: the one entered, rounded to the tick, or the current last price
- *     for MARKET
+ * @param entryPrice the entry price: the one entered, rounded to the tick, or the current last price (the reference
+ *     price) for MARKET
+ * @param expectedFillPrice MARKET only: the reference price moved against the Trader by {@code SLIPPAGE_BPS}, rounded
+ *     to the tick against them; the price the quantity is sized on and the activation fills at (D-112 R6). Equal to
+ *     {@code entryPrice} at 0 bps; {@code null} for LIMIT and STOP
  * @param capital the capital calculated with
  * @param riskPercent the risk % calculated with
  * @param snapshot the calculated values
@@ -18,6 +21,7 @@ import java.util.List;
  */
 public record PlanCalculationResponse(
         BigDecimal entryPrice,
+        BigDecimal expectedFillPrice,
         BigDecimal capital,
         BigDecimal riskPercent,
         PlanSnapshotResponse snapshot,
