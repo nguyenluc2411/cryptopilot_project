@@ -3,7 +3,7 @@ package com.cryptopilot.paper.model.enums;
 import java.util.Set;
 
 /**
- * Where a paper order stands. The names are the values {@code paper_order.order_status} accepts.
+ * Where a paper order stands. The names are the values {@code trade_order.order_status} accepts.
  *
  * <p>Rule: TR-02.
  */

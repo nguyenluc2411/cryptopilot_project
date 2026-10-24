@@ -20,13 +20,12 @@ import com.cryptopilot.paper.dto.response.LedgerEntryResponse;
 import com.cryptopilot.paper.dto.response.PaperAccountResponse;
 import com.cryptopilot.paper.dto.response.TransferResponse;
 import com.cryptopilot.paper.dto.response.WalletResponse;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperLedgerEntry;
 import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
-import com.cryptopilot.paper.entity.PaperTransfer;
 import com.cryptopilot.paper.model.LedgerQuery;
 import com.cryptopilot.paper.model.OpenedAccount;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.RecordedTransfer;
 import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
@@ -35,9 +34,9 @@ import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperBalanceRepository;
 import com.cryptopilot.paper.repository.PaperLedgerEntryRepository;
-import com.cryptopilot.paper.repository.PaperTransferRepository;
 import com.cryptopilot.paper.service.PaperAccountService;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -93,7 +92,6 @@ public class PaperAccountServiceImpl implements PaperAccountService {
 
     private final PaperAccountRepository accounts;
     private final PaperBalanceRepository balances;
-    private final PaperTransferRepository transfers;
     private final PaperLedgerEntryRepository ledger;
     private final PaperWallets wallets;
     private final UserLock lock;
@@ -101,6 +99,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     private final MarketApi market;
     private final PaperEquity equity;
     private final QuoteUsdtRate usdtRates;
+    private final Clock clock;
 
     @Override
     @Transactional
@@ -115,12 +114,13 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         if (existing.isPresent()) {
             return new OpenedAccount(toResponse(existing.get()), false);
         }
-        PaperAccount opened = accounts.save(PaperAccount.open(userId));
-        accounts.flush();
-        grant(opened);
+        grant(new PaperAccount(userId, clock.instant()));
+        ledger.flush();
+        // Read back, so the opening is the instant its grant was written, as every later read finds it.
+        PaperAccount opened = accountOf(userId);
         // Today's PnL counts from the opening, as from 00:00 UTC on the days after (TR-13).
         equity.snapshot(opened);
-        log.info("Paper account {} opened for user {}", opened.getId(), userId);
+        log.info("Paper account opened for user {}", userId);
         return new OpenedAccount(toResponse(opened), true);
     }
 
@@ -134,7 +134,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     @Transactional(readOnly = true)
     public WalletResponse wallet(UUID userId, WalletType wallet) {
         PaperAccount account = accountOf(userId);
-        List<PaperBalance> held = balances.findByAccountIdAndWalletType(account.getId(), wallet);
+        List<PaperBalance> held = balances.findByUserIdAndWalletType(account.userId(), wallet);
         Map<UUID, CoinListing> coins =
                 coinsById(held.stream().map(PaperBalance::getCoinId).toList());
         // Every price the wallet needs, BTCUSDT for the BTC estimate included, in one read of the cache.
@@ -194,44 +194,55 @@ public class PaperAccountServiceImpl implements PaperAccountService {
                 .orElseThrow(() -> new IllegalStateException("coin " + asset + " of an open account is not stored"));
         if (request.clientTransferId() != null) {
             // Under the lock, so a retry that raced the original waited for it and finds it here.
-            Optional<PaperTransfer> made =
-                    transfers.findByAccountIdAndClientTransferId(account.getId(), request.clientTransferId());
+            Optional<PaperLedgerEntry> made = ledger.findTransfer(account.userId(), request.clientTransferId());
             if (made.isPresent()) {
                 return new RecordedTransfer(replayOf(made.get(), coin, request), false);
             }
         }
+        if (request.amount().signum() <= 0) {
+            throw new IllegalArgumentException("a transfer moves a positive amount, not "
+                    + request.amount().toPlainString());
+        }
         String key = request.clientTransferId() == null ? UuidV7.next().toString() : request.clientTransferId();
-        PaperTransfer transfer =
-                PaperTransfer.out(account.getId(), key, coin.coinId(), request.from(), request.amount());
-        Ref ref = Ref.to(LedgerRefType.TRANSFER, transfer.getId());
-        wallets.debit(account, transfer.getFromWallet(), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
-        wallets.credit(account, transfer.getToWallet(), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
-        transfers.save(transfer);
-        return new RecordedTransfer(toResponse(transfer, coin.symbol()), true);
+        // A transfer is its two entries: they share its id and its key (D-117).
+        Ref ref = Ref.transfer(UuidV7.next(), key);
+        wallets.debit(account, request.from(), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
+        wallets.credit(account, other(request.from()), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
+        PaperLedgerEntry debit = ledger.findTransfer(account.userId(), key)
+                .orElseThrow(() -> new IllegalStateException("transfer " + key + " was not written"));
+        return new RecordedTransfer(transferOf(debit, coin.symbol()), true);
+    }
+
+    /** The wallet a transfer out of {@code from} enters: the Spot and the Futures wallet trade places. */
+    private static WalletType other(WalletType from) {
+        return from == WalletType.SPOT ? WalletType.FUTURES : WalletType.SPOT;
     }
 
     /**
      * The transfer a retry asks for again. A key reused for a different transfer is a client error, refused rather
      * than answered with a transfer the client did not ask for.
      */
-    private static TransferResponse replayOf(PaperTransfer made, CoinListing coin, TransferRequest request) {
-        if (!made.sameAs(coin.coinId(), request.from(), request.amount())) {
+    private static TransferResponse replayOf(PaperLedgerEntry made, CoinListing coin, TransferRequest request) {
+        boolean same = made.getCoinId().equals(coin.coinId())
+                && made.getWalletType() == request.from()
+                && made.getAmount().negate().compareTo(request.amount()) == 0;
+        if (!same) {
             throw new BusinessException(
                     ErrorCode.DATA_CONFLICT,
-                    "clientTransferId " + request.clientTransferId() + " was used for transfer " + made.getId()
+                    "clientTransferId " + request.clientTransferId() + " was used for transfer " + made.getRefId()
                             + " of other values");
         }
-        return toResponse(made, coin.symbol());
+        return transferOf(made, coin.symbol());
     }
 
     @Override
     @Transactional(readOnly = true)
     public PageResponse<TransferResponse> transfers(UUID userId, Integer page, Integer pageSize) {
         PageRequest request = Paging.of(page, pageSize, NEWEST_FIRST);
-        Page<PaperTransfer> found = transfers.findByAccountId(accountOf(userId).getId(), request);
+        Page<PaperLedgerEntry> found = ledger.findTransfers(accountOf(userId).userId(), request);
         Map<UUID, CoinListing> coins = coinsById(
-                found.getContent().stream().map(PaperTransfer::getCoinId).toList());
-        return PageResponse.of(found, transfer -> toResponse(transfer, assetOf(coins, transfer.getCoinId())));
+                found.getContent().stream().map(PaperLedgerEntry::getCoinId).toList());
+        return PageResponse.of(found, debit -> transferOf(debit, assetOf(coins, debit.getCoinId())));
     }
 
     @Override
@@ -240,7 +251,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         PageRequest request = Paging.of(query.page(), query.pageSize());
         TimeBounds.requireOrdered(query.from(), query.to());
         Page<PaperLedgerEntry> found = ledger.search(
-                accountOf(userId).getId(),
+                accountOf(userId).userId(),
                 query.wallet() == null ? EnumSet.allOf(WalletType.class) : EnumSet.of(query.wallet()),
                 query.type() == null ? EnumSet.allOf(LedgerEntryType.class) : EnumSet.of(query.type()),
                 TimeBounds.fromOrEarliest(query.from()),
@@ -265,7 +276,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         symbols.addAll(properties.futuresGrant().keySet());
         Map<String, CoinListing> coins = market.ensureCoins(symbols).stream()
                 .collect(Collectors.toMap(CoinListing::symbol, Function.identity()));
-        Ref ref = Ref.to(LedgerRefType.ACCOUNT, account.getId());
+        Ref ref = Ref.to(LedgerRefType.USER, account.userId());
         grant(account, WalletType.SPOT, properties.spotGrant(), coins, ref);
         grant(account, WalletType.FUTURES, properties.futuresGrant(), coins, ref);
     }
@@ -315,7 +326,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         return found;
     }
 
-    // fk_paper_balance_coin and its siblings keep every coin stored, so a missing one is a defect.
+    // fk_wallet_balance_coin and its siblings keep every coin stored, so a missing one is a defect.
     private static String assetOf(Map<UUID, CoinListing> coins, UUID coinId) {
         CoinListing coin = coins.get(coinId);
         if (coin == null) {
@@ -325,18 +336,19 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     }
 
     private static PaperAccountResponse toResponse(PaperAccount account) {
-        return new PaperAccountResponse(account.getId(), account.getPositionMode(), account.getCreatedAt());
+        return new PaperAccountResponse(account.openedAt());
     }
 
-    private static TransferResponse toResponse(PaperTransfer transfer, String asset) {
+    /** The transfer its debit entry stands for: the wallet it left, the amount it moved and the instant. */
+    private static TransferResponse transferOf(PaperLedgerEntry debit, String asset) {
         return new TransferResponse(
-                transfer.getId(),
-                transfer.getClientTransferId(),
+                debit.getRefId(),
+                debit.getClientTransferId(),
                 asset,
-                transfer.getFromWallet(),
-                transfer.getToWallet(),
-                Rounding.toAmount(transfer.getAmount()),
-                transfer.getCreatedAt());
+                debit.getWalletType(),
+                other(debit.getWalletType()),
+                Rounding.toAmount(debit.getAmount().negate()),
+                debit.getCreatedAt());
     }
 
     private static LedgerEntryResponse toResponse(PaperLedgerEntry entry, String asset) {

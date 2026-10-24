@@ -5,6 +5,7 @@ import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.WalletType;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -26,13 +27,13 @@ public interface PaperLedgerEntryRepository extends Repository<PaperLedgerEntry,
     @Transactional(readOnly = true)
     @Query(
             value =
-                    "select e from PaperLedgerEntry e where e.accountId = :accountId and e.walletType in :wallets"
+                    "select e from PaperLedgerEntry e where e.userId = :userId and e.walletType in :wallets"
                             + " and e.entryType in :types and e.createdAt >= :from and e.createdAt < :to order by e.createdAt desc, e.id desc",
-            countQuery = "select count(e) from PaperLedgerEntry e where e.accountId = :accountId"
+            countQuery = "select count(e) from PaperLedgerEntry e where e.userId = :userId"
                     + " and e.walletType in :wallets and e.entryType in :types"
                     + " and e.createdAt >= :from and e.createdAt < :to")
     Page<PaperLedgerEntry> search(
-            UUID accountId,
+            UUID userId,
             Collection<WalletType> wallets,
             Collection<LedgerEntryType> types,
             Instant from,
@@ -41,9 +42,33 @@ public interface PaperLedgerEntryRepository extends Repository<PaperLedgerEntry,
 
     /** Whether the wallet's coin has an entry of another type than {@code type}. */
     @Transactional(readOnly = true)
-    boolean existsByAccountIdAndWalletTypeAndCoinIdAndEntryTypeNot(
-            UUID accountId, WalletType walletType, UUID coinId, LedgerEntryType type);
+    boolean existsByUserIdAndWalletTypeAndCoinIdAndEntryTypeNot(
+            UUID userId, WalletType walletType, UUID coinId, LedgerEntryType type);
+
+    /**
+     * One page of the Trader's transfers between wallets, as the pageable orders them: each is its debit entry, which
+     * names the wallet it left and the amount it moved (negated).
+     */
+    @Transactional(readOnly = true)
+    @Query(
+            value = "select e from PaperLedgerEntry e where e.userId = :userId"
+                    + " and e.entryType = com.cryptopilot.paper.model.enums.LedgerEntryType.TRANSFER and e.amount < 0",
+            countQuery = "select count(e) from PaperLedgerEntry e where e.userId = :userId"
+                    + " and e.entryType = com.cryptopilot.paper.model.enums.LedgerEntryType.TRANSFER and e.amount < 0")
+    Page<PaperLedgerEntry> findTransfers(UUID userId, Pageable pageable);
+
+    /** The debit entry of the Trader's transfer with this idempotency key, or empty. */
+    @Transactional(readOnly = true)
+    @Query("select e from PaperLedgerEntry e where e.userId = :userId and e.clientTransferId = :clientTransferId"
+            + " and e.entryType = com.cryptopilot.paper.model.enums.LedgerEntryType.TRANSFER and e.amount < 0")
+    Optional<PaperLedgerEntry> findTransfer(UUID userId, String clientTransferId);
 
     /** Writes an entry. Not transactional here; the unit of work is the calling service's. */
     PaperLedgerEntry save(PaperLedgerEntry entry);
+
+    /**
+     * Sends pending statements: the opening reads its grant back through plain SQL, and a second grant of the same
+     * coin answers {@code uq_wallet_ledger_entry_grant} where the caller can read it.
+     */
+    void flush();
 }

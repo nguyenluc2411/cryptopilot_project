@@ -177,7 +177,7 @@ class PaperOrderTest {
         PaperFill fill = PaperFill.of(order, execution);
 
         assertThat(fill.getOrderId()).isEqualTo(order.getId());
-        assertThat(fill.getAccountId()).isEqualTo(ACCOUNT);
+        assertThat(fill.getUserId()).isEqualTo(ACCOUNT);
         assertThat(fill.getPairId()).isEqualTo(PAIR);
         assertThat(fill.getMarketType()).isEqualTo(MarketType.SPOT);
         assertThat(fill.getSide()).isEqualTo(OrderSide.BUY);

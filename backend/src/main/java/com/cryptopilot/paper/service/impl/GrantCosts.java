@@ -3,8 +3,8 @@ package com.cryptopilot.paper.service.impl;
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperBalance;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.WalletType;
@@ -64,28 +64,28 @@ public class GrantCosts {
                 continue;
             }
             try {
-                if (Boolean.TRUE.equals(transactions.execute(status -> value(balance.getAccountId(), coin)))) {
+                if (Boolean.TRUE.equals(transactions.execute(status -> value(balance.getUserId(), coin)))) {
                     valued++;
                 }
             } catch (RuntimeException failure) {
                 log.warn(
                         "PT-R13 grant cost of {} in paper account {} not set: {}",
                         coin.symbol(),
-                        balance.getAccountId(),
+                        balance.getUserId(),
                         failure.toString());
             }
         }
         return valued;
     }
 
-    private boolean value(UUID accountId, CoinListing coin) {
-        PaperAccount account = accounts.findById(accountId)
-                .orElseThrow(() -> new IllegalStateException("account " + accountId + " is not stored"));
-        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.getUserId());
-        PaperBalance balance = balances.findByAccountIdAndWalletTypeAndCoinId(accountId, WalletType.SPOT, coin.coinId())
+    private boolean value(UUID userId, CoinListing coin) {
+        PaperAccount account = accounts.findByUserId(userId)
+                .orElseThrow(() -> new IllegalStateException("account " + userId + " is not stored"));
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.userId());
+        PaperBalance balance = balances.findByUserIdAndWalletTypeAndCoinId(userId, WalletType.SPOT, coin.coinId())
                 .orElseThrow(() -> new IllegalStateException("balance of " + coin.symbol() + " is not stored"));
-        boolean grantOnly = !ledger.existsByAccountIdAndWalletTypeAndCoinIdAndEntryTypeNot(
-                accountId, WalletType.SPOT, coin.coinId(), LedgerEntryType.INITIAL_GRANT);
+        boolean grantOnly = !ledger.existsByUserIdAndWalletTypeAndCoinIdAndEntryTypeNot(
+                userId, WalletType.SPOT, coin.coinId(), LedgerEntryType.INITIAL_GRANT);
         if (balance.getCostBasisAmount() != null
                 || !grantOnly
                 || balance.total().signum() == 0) {
@@ -97,7 +97,7 @@ public class GrantCosts {
         }
         balance.valueUnknownCost(price.valueOf(balance.total()));
         balances.save(balance);
-        log.info("PT-R13 granted {} of paper account {} valued at {}", coin.symbol(), accountId, price.rate());
+        log.info("PT-R13 granted {} of paper account {} valued at {}", coin.symbol(), userId, price.rate());
         return true;
     }
 }

@@ -1,14 +1,11 @@
 package com.cryptopilot.paper.dto.response;
 
-import com.cryptopilot.paper.model.enums.PositionMode;
 import java.time.Instant;
-import java.util.UUID;
 
 /**
- * The caller's paper account.
+ * The caller's paper account. It is the Trader's own: the wallets, orders and fills belong to the Trader directly, so
+ * the account has no key of its own.
  *
- * @param accountId the account
- * @param positionMode how Futures positions are held (Q-T4)
  * @param openedAt when the account was opened and its virtual funds granted
  */
-public record PaperAccountResponse(UUID accountId, PositionMode positionMode, Instant openedAt) {}
+public record PaperAccountResponse(Instant openedAt) {}

@@ -5,9 +5,9 @@ import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperEquityProperties;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperEquitySnapshot;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.PaperBalanceRepository;
 import com.cryptopilot.paper.repository.PaperEquitySnapshotRepository;
@@ -55,8 +55,8 @@ public class PaperEquity {
 
     /** What the account's two wallets are worth now. */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Worth worth(UUID accountId) {
-        List<PaperBalance> held = balances.findByAccountId(accountId);
+    public Worth worth(UUID userId) {
+        List<PaperBalance> held = balances.findByUserId(userId);
         Map<UUID, String> assets =
                 market.coins(held.stream().map(PaperBalance::getCoinId).collect(Collectors.toSet())).stream()
                         .collect(Collectors.toMap(CoinListing::coinId, CoinListing::symbol, (a, b) -> a));
@@ -86,7 +86,7 @@ public class PaperEquity {
     /** Takes today's snapshot of the account, unless one was taken already. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void snapshot(PaperAccount account) {
-        snapshot(account.getId());
+        snapshot(account.userId());
     }
 
     /**
@@ -94,17 +94,17 @@ public class PaperEquity {
      * this call took it. One left untaken is taken by a later call of the same day.
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public boolean snapshot(UUID accountId) {
+    public boolean snapshot(UUID userId) {
         LocalDate day = today();
-        if (snapshots.findByAccountIdAndSnapshotDate(accountId, day).isPresent()) {
+        if (snapshots.findByUserIdAndSnapshotDate(userId, day).isPresent()) {
             return false;
         }
-        Worth worth = worth(accountId);
+        Worth worth = worth(userId);
         if (!worth.complete()) {
-            log.debug("TR-13 no snapshot of paper account {} yet: no price of {}", accountId, worth.unpriced());
+            log.debug("TR-13 no snapshot of paper account {} yet: no price of {}", userId, worth.unpriced());
             return false;
         }
-        snapshots.save(PaperEquitySnapshot.of(accountId, day, worth.spot(), worth.futures()));
+        snapshots.save(PaperEquitySnapshot.of(userId, day, worth.spot(), worth.futures()));
         return true;
     }
 

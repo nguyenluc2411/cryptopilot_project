@@ -7,12 +7,12 @@ import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderRested;
 import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.matching.BookSweep.Slice;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
@@ -154,7 +154,7 @@ public class SpotArrival {
     public void rest(PaperAccount account, PaperOrder order) {
         events.publishEvent(new PaperOrderRested(new RestingOrder(
                 order.getId(),
-                account.getId(),
+                account.userId(),
                 order.getMarketType(),
                 order.getPairId(),
                 order.getSide(),
@@ -169,7 +169,7 @@ public class SpotArrival {
     public void awaitTrigger(PaperAccount account, PaperOrder order) {
         events.publishEvent(new PaperOrderAwaitingTrigger(new TriggerOrder(
                 order.getId(),
-                account.getId(),
+                account.userId(),
                 order.getMarketType(),
                 order.getPairId(),
                 order.getSide(),

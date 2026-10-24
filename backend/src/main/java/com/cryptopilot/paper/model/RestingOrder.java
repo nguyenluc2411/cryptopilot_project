@@ -13,7 +13,7 @@ import java.util.UUID;
  * <p>Rule: TR-02; NSF-07; D-77.
  *
  * @param orderId the order
- * @param accountId its account, whose Trader's lock a fill is made under
+ * @param userId its account, whose Trader's lock a fill is made under
  * @param market the market
  * @param pairId the pair
  * @param side BUY waits below the price, SELL above it
@@ -22,7 +22,7 @@ import java.util.UUID;
  */
 public record RestingOrder(
         UUID orderId,
-        UUID accountId,
+        UUID userId,
         MarketType market,
         UUID pairId,
         OrderSide side,
@@ -31,7 +31,7 @@ public record RestingOrder(
 
     public RestingOrder {
         Objects.requireNonNull(orderId, "orderId");
-        Objects.requireNonNull(accountId, "accountId");
+        Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(market, "market");
         Objects.requireNonNull(pairId, "pairId");
         Objects.requireNonNull(side, "side");

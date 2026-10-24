@@ -165,23 +165,20 @@ class PaperOrderApiTest {
     @AfterEach
     void removeRows() {
         for (UUID trader : traders) {
-            String account = "(select account_id from paper_account where user_id = ?)";
             for (String table : List.of(
-                    "paper_fill",
-                    "paper_order",
-                    "paper_order_list",
-                    "paper_ledger_entry",
-                    "paper_transfer",
-                    "paper_balance",
-                    "paper_equity_snapshot")) {
-                sql.sql("delete from " + table + " where account_id = " + account)
+                    "order_fill",
+                    "trade_order",
+                    "order_list",
+                    "wallet_ledger_entry",
+                    "wallet_balance",
+                    "equity_snapshot")) {
+                sql.sql("delete from " + table + " where user_id = ?")
                         .param(trader)
                         .update();
             }
-            sql.sql("delete from paper_account where user_id = ?").param(trader).update();
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
-        sql.sql("delete from paper_matching_watermark where pair_id = ?")
+        sql.sql("delete from order_matching_watermark where pair_id = ?")
                 .param(pair)
                 .update();
         UUID base = sql.sql("select base_coin_id from crypto_pair where pair_id = ?")
@@ -1074,8 +1071,8 @@ class PaperOrderApiTest {
         pnl.snapshotAll();
 
         assertThat(sql.sql("""
-                        select count(*) from paper_equity_snapshot s join paper_account a on a.account_id = s.account_id
-                         where a.user_id = ?""").param(trader).query(Long.class).single()).isZero();
+                        select count(*) from equity_snapshot s
+                         where s.user_id = ?""").param(trader).query(Long.class).single()).isZero();
         as(trader, get(PAPER + "/equity").param("days", "0"), null)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.days").value("MSG01"));
@@ -1184,7 +1181,7 @@ class PaperOrderApiTest {
         as(trader, get(PAPER + "/fills"), null)
                 .andExpect(jsonPath("$.items.length()").value(2))
                 .andExpect(jsonPath("$.items[*].liquidity").value(everyItem(is("TAKER"))));
-        assertThat(sql.sql("select fill_price from paper_fill where pair_id = ? order by fill_price")
+        assertThat(sql.sql("select fill_price from order_fill where pair_id = ? order by fill_price")
                         .param(pair)
                         .query(BigDecimal.class)
                         .list())
@@ -1518,7 +1515,7 @@ class PaperOrderApiTest {
         } finally {
             pool.shutdownNow();
         }
-        assertThat(sql.sql("select count(*) from paper_fill where pair_id = ?")
+        assertThat(sql.sql("select count(*) from order_fill where pair_id = ?")
                         .param(pair)
                         .query(Long.class)
                         .single())
@@ -1639,7 +1636,7 @@ class PaperOrderApiTest {
         as(trader, get(PAPER + "/orders/" + takeProfit), null)
                 .andExpect(jsonPath("$.status").value("FILLED"))
                 .andExpect(jsonPath("$.avgPrice").value(62500.0));
-        assertThat(sql.sql("select fill_source from paper_fill where order_id = ?")
+        assertThat(sql.sql("select fill_source from order_fill where order_id = ?")
                         .param(UUID.fromString(gapped))
                         .query(String.class)
                         .single())
@@ -1752,7 +1749,7 @@ class PaperOrderApiTest {
                 assertThat(filled)
                         .as("iteration %s: the cancel answered %s", i, cancelled)
                         .isEqualTo(cancelled != 200);
-                assertThat(sql.sql("select order_status from paper_order where order_id = ?")
+                assertThat(sql.sql("select order_status from trade_order where order_id = ?")
                                 .param(UUID.fromString(id))
                                 .query(String.class)
                                 .single())
@@ -2069,12 +2066,12 @@ class PaperOrderApiTest {
         trade("95.5", 4);
 
         awaitStatus(trader, pending, "FILLED");
-        Instant filledAt = sql.sql("select closed_at from paper_order where order_id = ?")
+        Instant filledAt = sql.sql("select closed_at from trade_order where order_id = ?")
                 .param(UUID.fromString(working))
                 .query(Timestamp.class)
                 .single()
                 .toInstant();
-        Instant triggeredAt = sql.sql("select triggered_at from paper_order where order_id = ?")
+        Instant triggeredAt = sql.sql("select triggered_at from trade_order where order_id = ?")
                 .param(UUID.fromString(pending))
                 .query(Timestamp.class)
                 .single()
@@ -2300,13 +2297,13 @@ class PaperOrderApiTest {
         as(trader, get(PAPER + "/orders/" + stop), null)
                 .andExpect(jsonPath("$.status").value("FILLED"))
                 .andExpect(jsonPath("$.avgPrice").value(85.0));
-        assertThat(sql.sql("select triggered_at from paper_order where order_id = ?")
+        assertThat(sql.sql("select triggered_at from trade_order where order_id = ?")
                         .param(UUID.fromString(stop))
                         .query(Timestamp.class)
                         .single()
                         .toInstant())
                 .isEqualTo(candle);
-        assertThat(sql.sql("select fill_source from paper_fill where order_id = ?")
+        assertThat(sql.sql("select fill_source from order_fill where order_id = ?")
                         .param(UUID.fromString(stop))
                         .query(String.class)
                         .single())
@@ -2356,7 +2353,7 @@ class PaperOrderApiTest {
         TriggerOrder rebuiltStop = watched(stop);
         assertThat(rebuiltTakeProfit.placedAt()).isEqualTo(fell);
         assertThat(rebuiltStop.placedAt()).isEqualTo(fell);
-        assertThat(sql.sql("select activated_at from paper_order where order_id = ?")
+        assertThat(sql.sql("select activated_at from trade_order where order_id = ?")
                         .param(UUID.fromString(takeProfit))
                         .query(Timestamp.class)
                         .single()
@@ -2425,7 +2422,7 @@ class PaperOrderApiTest {
 
         assertThat(resting(limit).placedAt()).isEqualTo(createdAt(limit));
         assertThat(watched(stop).placedAt()).isEqualTo(createdAt(stop));
-        assertThat(sql.sql("select count(*) from paper_order where order_id in (?, ?) and activated_at is not null")
+        assertThat(sql.sql("select count(*) from trade_order where order_id in (?, ?) and activated_at is not null")
                         .params(UUID.fromString(limit), UUID.fromString(stop))
                         .query(Long.class)
                         .single())
@@ -2505,7 +2502,7 @@ class PaperOrderApiTest {
 
         transactions.executeWithoutResult(
                 status -> events.publishEvent(new PairMarketDisabled(pair, symbol, MarketType.FUTURES, Instant.now())));
-        assertThat(sql.sql("select order_status from paper_order where order_id = ?")
+        assertThat(sql.sql("select order_status from trade_order where order_id = ?")
                         .param(UUID.fromString(limit))
                         .query(String.class)
                         .single())
@@ -2638,8 +2635,7 @@ class PaperOrderApiTest {
     }
 
     private long ledgerRows(UUID trader) {
-        return sql.sql("select count(*) from paper_ledger_entry e join paper_account a on a.account_id = e.account_id"
-                        + " where a.user_id = ?")
+        return sql.sql("select count(*) from wallet_ledger_entry e" + " where e.user_id = ?")
                 .param(trader)
                 .query(Long.class)
                 .single();
@@ -2654,7 +2650,7 @@ class PaperOrderApiTest {
     }
 
     private Instant createdAt(String id) {
-        return sql.sql("select created_at from paper_order where order_id = ?")
+        return sql.sql("select created_at from trade_order where order_id = ?")
                 .param(UUID.fromString(id))
                 .query(Timestamp.class)
                 .single()
@@ -2775,7 +2771,7 @@ class PaperOrderApiTest {
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         String status;
         do {
-            status = sql.sql("select order_status from paper_order where order_id = ?")
+            status = sql.sql("select order_status from trade_order where order_id = ?")
                     .param(UUID.fromString(id))
                     .query(String.class)
                     .single();
@@ -2796,15 +2792,15 @@ class PaperOrderApiTest {
     }
 
     private UUID accountOf(UUID trader) {
-        return sql.sql("select account_id from paper_account where user_id = ?")
+        return sql.sql(
+                        "select distinct user_id from wallet_ledger_entry where user_id = ? and entry_type = 'INITIAL_GRANT'")
                 .param(trader)
                 .query(UUID.class)
                 .single();
     }
 
     private long orderCount(UUID trader) {
-        return sql.sql("select count(*) from paper_order o join paper_account a on a.account_id = o.account_id"
-                        + " where a.user_id = ?")
+        return sql.sql("select count(*) from trade_order o" + " where o.user_id = ?")
                 .param(trader)
                 .query(Long.class)
                 .single();
@@ -2822,10 +2818,9 @@ class PaperOrderApiTest {
         Map<String, BigDecimal> found = new HashMap<>();
         sql.sql("""
                         select b.free_amount + b.locked_amount as total, b.locked_amount as locked
-                          from paper_balance b
-                          join paper_account a on a.account_id = b.account_id
+                          from wallet_balance b
                           join coin c on c.coin_id = b.coin_id
-                         where a.user_id = ? and b.wallet_type = 'SPOT' and c.symbol = ?""").params(trader, coin).query().listOfRows().forEach(row -> {
+                         where b.user_id = ? and b.wallet_type = 'SPOT' and c.symbol = ?""").params(trader, coin).query().listOfRows().forEach(row -> {
             found.put("total", (BigDecimal) row.get("total"));
             found.put("locked", (BigDecimal) row.get("locked"));
         });
@@ -2836,12 +2831,11 @@ class PaperOrderApiTest {
         List<Map<String, Object>> drift = sql.sql("""
                         select b.wallet_type, b.coin_id, b.free_amount + b.locked_amount as total,
                                coalesce(sum(e.amount), 0) as entries
-                          from paper_balance b
-                          join paper_account a on a.account_id = b.account_id
-                          left join paper_ledger_entry e
-                            on e.account_id = b.account_id and e.wallet_type = b.wallet_type
+                          from wallet_balance b
+                          left join wallet_ledger_entry e
+                            on e.user_id = b.user_id and e.wallet_type = b.wallet_type
                            and e.coin_id = b.coin_id
-                         where a.user_id = ?
+                         where b.user_id = ?
                          group by b.wallet_type, b.coin_id, b.free_amount, b.locked_amount
                         having b.free_amount + b.locked_amount <> coalesce(sum(e.amount), 0)""").param(trader).query().listOfRows();
         assertThat(drift).as("balances whose ledger does not add up to them").isEmpty();

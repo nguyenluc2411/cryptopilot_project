@@ -87,14 +87,11 @@ class PaperAccountApiTest {
     @AfterEach
     void removeRows() {
         for (UUID trader : traders) {
-            String account = "(select account_id from paper_account where user_id = ?)";
-            for (String table :
-                    List.of("paper_ledger_entry", "paper_transfer", "paper_balance", "paper_equity_snapshot")) {
-                sql.sql("delete from " + table + " where account_id = " + account)
+            for (String table : List.of("wallet_ledger_entry", "wallet_balance", "equity_snapshot")) {
+                sql.sql("delete from " + table + " where user_id = ?")
                         .param(trader)
                         .update();
             }
-            sql.sql("delete from paper_account where user_id = ?").param(trader).update();
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         // The seed and schema tests expect no coin they did not write, so the coins an opening stored go again.
@@ -113,15 +110,17 @@ class PaperAccountApiTest {
     void QT5_opening_grantsTheVirtualFundsOnce() throws Exception {
         UUID trader = trader();
 
-        String id = JsonPath.read(
+        String openedAt = JsonPath.read(
                 as(trader, post(PAPER + "/account"), null)
                         .andExpect(status().isCreated())
-                        .andExpect(jsonPath("$.positionMode").value("ONE_WAY"))
                         .andExpect(jsonPath("$.openedAt").exists())
+                        // The account is the Trader's own (D-117): no key and no Futures position mode of its own.
+                        .andExpect(jsonPath("$.accountId").doesNotExist())
+                        .andExpect(jsonPath("$.positionMode").doesNotExist())
                         .andReturn()
                         .getResponse()
                         .getContentAsString(),
-                "$.accountId");
+                "$.openedAt");
 
         assertThat(holdings(trader, "SPOT"))
                 .containsOnlyKeys("USDT", "BTC", "ETH", "BNB")
@@ -136,7 +135,7 @@ class PaperAccountApiTest {
 
         as(trader, post(PAPER + "/account"), null)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.accountId").value(id));
+                .andExpect(jsonPath("$.openedAt").value(openedAt));
         assertThat(ledgerCount(trader, "INITIAL_GRANT"))
                 .as("opening again grants nothing")
                 .isEqualTo(5);
@@ -180,10 +179,9 @@ class PaperAccountApiTest {
         }
         as(trader, post(PAPER + "/transfers"), transfer("USDT", "SPOT", "1")).andExpect(status().isNotFound());
 
-        assertThat(sql.sql("select count(*) from paper_account where user_id = ?")
-                        .param(trader)
-                        .query(Long.class)
-                        .single())
+        assertThat(sql.sql("""
+                        select (select count(*) from wallet_ledger_entry where user_id = ?)
+                             + (select count(*) from wallet_balance where user_id = ?)""").params(trader, trader).query(Long.class).single())
                 .isZero();
     }
 
@@ -205,9 +203,9 @@ class PaperAccountApiTest {
             for (Future<OpenedAccount> result : calls) {
                 results.add(result.get(30, TimeUnit.SECONDS));
             }
-            UUID first = results.getFirst().account().accountId();
+            Instant first = results.getFirst().account().openedAt();
             assertThat(results)
-                    .extracting(opened -> opened.account().accountId())
+                    .extracting(opened -> opened.account().openedAt())
                     .containsOnly(first);
             assertThat(results).filteredOn(OpenedAccount::created).hasSize(1);
         } finally {
@@ -220,10 +218,18 @@ class PaperAccountApiTest {
 
     @Test
     void eachTrader_seesOnlyTheirOwnAccount() throws Exception {
-        String first = accountId(opened());
-        String second = accountId(opened());
+        UUID first = opened();
+        UUID second = opened();
 
-        assertThat(first).isNotEqualTo(second);
+        as(first, post(PAPER + "/transfers"), transfer("USDT", "SPOT", "100")).andExpect(status().isCreated());
+
+        assertThat(holdings(first, "SPOT"))
+                .hasEntrySatisfying("USDT", amount -> assertThat(amount).isEqualByComparingTo("9900"));
+        assertThat(holdings(second, "SPOT"))
+                .hasEntrySatisfying("USDT", amount -> assertThat(amount).isEqualByComparingTo("10000"));
+        as(second, get(PAPER + "/transfers"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").isEmpty());
     }
 
     @Test
@@ -404,12 +410,11 @@ class PaperAccountApiTest {
         List<Map<String, Object>> drift = sql.sql("""
                         select b.wallet_type, b.coin_id, b.free_amount + b.locked_amount as total,
                                coalesce(sum(e.amount), 0) as entries
-                          from paper_balance b
-                          join paper_account a on a.account_id = b.account_id
-                          left join paper_ledger_entry e
-                            on e.account_id = b.account_id and e.wallet_type = b.wallet_type
+                          from wallet_balance b
+                          left join wallet_ledger_entry e
+                            on e.user_id = b.user_id and e.wallet_type = b.wallet_type
                            and e.coin_id = b.coin_id
-                         where a.user_id = ?
+                         where b.user_id = ?
                          group by b.wallet_type, b.coin_id, b.free_amount, b.locked_amount
                         having b.free_amount + b.locked_amount <> coalesce(sum(e.amount), 0)""").param(trader).query().listOfRows();
         assertThat(drift).as("balances whose ledger does not add up to them").isEmpty();
@@ -419,10 +424,9 @@ class PaperAccountApiTest {
         Map<String, BigDecimal> held = new HashMap<>();
         sql.sql("""
                         select c.symbol, b.free_amount + b.locked_amount as total
-                          from paper_balance b
-                          join paper_account a on a.account_id = b.account_id
+                          from wallet_balance b
                           join coin c on c.coin_id = b.coin_id
-                         where a.user_id = ? and b.wallet_type = ?""")
+                         where b.user_id = ? and b.wallet_type = ?""")
                 .params(trader, wallet)
                 .query()
                 .listOfRows()
@@ -432,18 +436,8 @@ class PaperAccountApiTest {
 
     private long ledgerCount(UUID trader, String type) {
         return sql.sql("""
-                        select count(*) from paper_ledger_entry e
-                          join paper_account a on a.account_id = e.account_id
-                         where a.user_id = ? and e.entry_type = ?""").params(trader, type).query(Long.class).single();
-    }
-
-    private String accountId(UUID trader) throws Exception {
-        return JsonPath.read(
-                as(trader, get(PAPER + "/account"), null)
-                        .andReturn()
-                        .getResponse()
-                        .getContentAsString(),
-                "$.accountId");
+                        select count(*) from wallet_ledger_entry e
+                         where e.user_id = ? and e.entry_type = ?""").params(trader, type).query(Long.class).single();
     }
 
     private static String transfer(String asset, String from, String amount) {

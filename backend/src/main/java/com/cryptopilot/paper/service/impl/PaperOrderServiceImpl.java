@@ -22,13 +22,13 @@ import com.cryptopilot.paper.dto.request.PlaceOrderRequest;
 import com.cryptopilot.paper.dto.response.FillResponse;
 import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.entity.PaperOrderList;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.model.OrderQuery;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.PlacedOrder;
 import com.cryptopilot.paper.model.PlacedOrderList;
 import com.cryptopilot.paper.model.enums.OrderSide;
@@ -132,7 +132,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             // Under the lock, so a retry that raced the original waited for it and finds it here. Before the pair and
             // filter checks: a retry is answered with what was placed though the pair stopped or its filters changed.
             Optional<PaperOrder> placed =
-                    orders.findByAccountIdAndClientOrderId(account.getId(), request.clientOrderId());
+                    orders.findByUserIdAndClientOrderId(account.userId(), request.clientOrderId());
             if (placed.isPresent()) {
                 return new PlacedOrder(replayOf(placed.get(), request), false);
             }
@@ -143,7 +143,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", request.pairId()));
         Terms terms = termsOf(request, pair.filters());
         limits.requireRoom(
-                account.getId(), pair.pairId(), pair.filters(), 1, terms.type().isSpotStop() ? 1 : 0);
+                account.userId(), pair.pairId(), pair.filters(), 1, terms.type().isSpotStop() ? 1 : 0);
         if (terms.price() != null) {
             SpotFilters.requirePercentPrice(
                     pair.filters(),
@@ -181,7 +181,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     public OrderResponse cancel(UUID userId, UUID orderId) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         PaperAccount account = accountOf(userId);
-        PaperOrder order = orders.findByIdAndAccountId(orderId, account.getId())
+        PaperOrder order = orders.findByIdAndUserId(orderId, account.userId())
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
         if (!order.isOpen() && !order.isPending()) {
             throw new BusinessException(
@@ -203,8 +203,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     public List<OrderResponse> cancelAll(UUID userId, UUID pairId) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         PaperAccount account = accountOf(userId);
-        List<PaperOrder> open = orders.findByAccountIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(
-                account.getId(), pairId, OrderStatus.OPEN);
+        List<PaperOrder> open = orders.findByUserIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(
+                account.userId(), pairId, OrderStatus.OPEN);
         if (open.isEmpty()) {
             return List.of();
         }
@@ -219,7 +219,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             }
         }
         String symbol = symbolOf(symbolsOf(List.of(pairId)), pairId);
-        log.debug("Paper orders of account {} on {} cancelled: {}", account.getId(), symbol, open.size());
+        log.debug("Paper orders of account {} on {} cancelled: {}", account.userId(), symbol, open.size());
         return open.stream().map(order -> toResponse(order, symbol)).toList();
     }
 
@@ -235,7 +235,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     public OrderListResponse cancelList(UUID userId, UUID listId) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         PaperAccount account = accountOf(userId);
-        PaperOrderList list = groups.findByIdAndAccountId(listId, account.getId())
+        PaperOrderList list = groups.findByIdAndUserId(listId, account.userId())
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrderList", listId));
         if (!list.isExecuting()) {
             throw new BusinessException(
@@ -250,13 +250,12 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Override
     @Transactional(readOnly = true)
     public OrderListResponse orderList(UUID userId, UUID listId) {
-        PaperOrderList list = groups.findByIdAndAccountId(
-                        listId, accountOf(userId).getId())
+        PaperOrderList list = groups.findByIdAndUserId(listId, accountOf(userId).userId())
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrderList", listId));
         return lists.response(list);
     }
 
-    // fk_paper_order_list keeps the group of an order stored.
+    // fk_trade_order_list keeps the group of an order stored.
     private PaperOrderList groupOf(UUID listId) {
         return groups.findById(listId)
                 .orElseThrow(() -> new IllegalStateException("group " + listId + " of a paper order is not stored"));
@@ -273,8 +272,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Override
     @Transactional(readOnly = true)
     public OrderResponse order(UUID userId, UUID orderId) {
-        PaperOrder order = orders.findByIdAndAccountId(
-                        orderId, accountOf(userId).getId())
+        PaperOrder order = orders.findByIdAndUserId(orderId, accountOf(userId).userId())
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
         return toResponse(order, symbolsOf(List.of(order.getPairId())));
     }
@@ -283,8 +281,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Transactional(readOnly = true)
     public List<OrderResponse> openOrders(UUID userId, UUID pairId) {
         List<PaperOrder> open = orders
-                .findByAccountIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
-                        accountOf(userId).getId(), LISTED_OPEN)
+                .findByUserIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
+                        accountOf(userId).userId(), LISTED_OPEN)
                 .stream()
                 .filter(order -> pairId == null || order.getPairId().equals(pairId))
                 .toList();
@@ -298,14 +296,15 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     public PageResponse<OrderResponse> orders(UUID userId, OrderQuery query) {
         PageRequest request = Paging.of(query.page(), query.pageSize());
         TimeBounds.requireOrdered(query.from(), query.to());
-        UUID accountId = accountOf(userId).getId();
+        // MSG41 for a Trader who has not opened an account, before anything is read.
+        accountOf(userId);
         Set<OrderStatus> statuses =
                 query.status() == null ? EnumSet.allOf(OrderStatus.class) : EnumSet.of(query.status());
         Instant from = TimeBounds.fromOrEarliest(query.from());
         Instant to = TimeBounds.toOrLatest(query.to());
         Page<PaperOrder> found = query.pairId() == null
-                ? orders.search(accountId, statuses, from, to, request)
-                : orders.searchPair(accountId, query.pairId(), statuses, from, to, request);
+                ? orders.search(userId, statuses, from, to, request)
+                : orders.searchPair(userId, query.pairId(), statuses, from, to, request);
         Map<UUID, String> symbols =
                 symbolsOf(found.getContent().stream().map(PaperOrder::getPairId).toList());
         return PageResponse.of(found, order -> toResponse(order, symbols));
@@ -316,12 +315,13 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     public PageResponse<FillResponse> fills(UUID userId, OrderQuery query) {
         PageRequest request = Paging.of(query.page(), query.pageSize());
         TimeBounds.requireOrdered(query.from(), query.to());
-        UUID accountId = accountOf(userId).getId();
+        // MSG41 for a Trader who has not opened an account, before anything is read.
+        accountOf(userId);
         Instant from = TimeBounds.fromOrEarliest(query.from());
         Instant to = TimeBounds.toOrLatest(query.to());
         Page<PaperFill> found = query.pairId() == null
-                ? fills.search(accountId, from, to, request)
-                : fills.searchPair(accountId, query.pairId(), from, to, request);
+                ? fills.search(userId, from, to, request)
+                : fills.searchPair(userId, query.pairId(), from, to, request);
         Map<UUID, String> symbols =
                 symbolsOf(found.getContent().stream().map(PaperFill::getPairId).toList());
         Map<UUID, String> assets =
@@ -354,12 +354,12 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             SpotFilters.requirePositive(pair.filters(), sweep.quantity(), "quoteOrderQty");
             SpotFilters.requireMarketQuantity(pair.filters(), sweep.quantity(), "quoteOrderQty", false);
             SpotFilters.requireNotional(pair.filters(), sweep.notional(), true, "quoteOrderQty");
-            order = PaperOrder.spotMarketFor(account.getId(), pair.pairId(), key, terms.side(), terms.quoteAmount());
+            order = PaperOrder.spotMarketFor(account.userId(), pair.pairId(), key, terms.side(), terms.quoteAmount());
         } else {
             sweep = BookSweep.ofQuantity(book.levels(), terms.side(), terms.quantity(), null);
             SpotFilters.requirePositive(pair.filters(), sweep.quantity(), "quantity");
             SpotFilters.requireNotional(pair.filters(), sweep.notional(), true, "quantity");
-            order = PaperOrder.spotMarket(account.getId(), pair.pairId(), key, terms.side(), terms.quantity());
+            order = PaperOrder.spotMarket(account.userId(), pair.pairId(), key, terms.side(), terms.quantity());
         }
         orders.save(order);
         Instant now = clock.instant();
@@ -392,7 +392,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             throw priceUnavailable(pair);
         }
         PaperOrder order = orders.save(PaperOrder.spotLimit(
-                account.getId(), pair.pairId(), key, terms.side(), timeInForce, terms.price(), terms.quantity()));
+                account.userId(), pair.pairId(), key, terms.side(), timeInForce, terms.price(), terms.quantity()));
         lock(account, order, coins);
         arrival.limitOnArrival(account, order, coins, book, clock.instant());
         return order;
@@ -429,7 +429,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             }
         }
         PaperOrder order = orders.save(PaperOrder.spotStop(
-                account.getId(),
+                account.userId(),
                 pair.pairId(),
                 key,
                 type,
@@ -475,7 +475,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                             + " would execute on arrival");
         }
         PaperOrder order = orders.save(PaperOrder.spotLimitMaker(
-                account.getId(), pair.pairId(), key, terms.side(), terms.price(), terms.quantity()));
+                account.userId(), pair.pairId(), key, terms.side(), terms.price(), terms.quantity()));
         lock(account, order, coins);
         arrival.rest(account, order);
         return order;
@@ -682,7 +682,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 .orElseThrow(() -> new IllegalStateException("pair " + pairId + " of a paper order is not stored"));
     }
 
-    // fk_paper_order_pair keeps every pair of an order stored, so a missing one is a defect.
+    // fk_trade_order_pair keeps every pair of an order stored, so a missing one is a defect.
     private Map<UUID, String> symbolsOf(Collection<UUID> pairIds) {
         if (pairIds.isEmpty()) {
             return Map.of();

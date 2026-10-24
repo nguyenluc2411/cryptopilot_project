@@ -1,7 +1,7 @@
 package com.cryptopilot.paper.model.enums;
 
 /**
- * Where a group of paper orders stands. The names are the values {@code paper_order_list.list_status} accepts.
+ * Where a group of paper orders stands. The names are the values {@code order_list.list_status} accepts.
  *
  * <p>Rule: TR-10.
  */

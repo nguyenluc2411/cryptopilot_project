@@ -27,12 +27,12 @@ import lombok.Getter;
  */
 @Getter
 @Entity
-@Table(name = "paper_ledger_entry")
+@Table(name = "wallet_ledger_entry")
 @AttributeOverride(name = "id", column = @Column(name = "entry_id", nullable = false, updatable = false))
 public class PaperLedgerEntry extends BaseEntity {
 
-    @Column(name = "account_id", nullable = false, updatable = false)
-    private UUID accountId;
+    @Column(name = "user_id", nullable = false, updatable = false)
+    private UUID userId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "wallet_type", nullable = false, length = 32, updatable = false)
@@ -60,11 +60,18 @@ public class PaperLedgerEntry extends BaseEntity {
     @Column(name = "ref_id", updatable = false)
     private UUID refId;
 
+    /**
+     * The idempotency key of the transfer this entry is half of; {@code null} for every other entry. Both entries of a
+     * transfer carry it, and the debit is the one {@code uq_wallet_ledger_entry_client_transfer_id} keeps unique.
+     */
+    @Column(name = "client_transfer_id", length = 64, updatable = false)
+    private String clientTransferId;
+
     /** For JPA only. */
     protected PaperLedgerEntry() {}
 
     private PaperLedgerEntry(PaperBalance balance, LedgerEntryType entryType, BigDecimal amount, Ref ref) {
-        this.accountId = balance.getAccountId();
+        this.userId = balance.getUserId();
         this.walletType = balance.getWalletType();
         this.coinId = balance.getCoinId();
         this.entryType = Objects.requireNonNull(entryType, "entryType must not be null");
@@ -76,6 +83,10 @@ public class PaperLedgerEntry extends BaseEntity {
         Ref cause = ref == null ? Ref.NONE : ref;
         this.refType = cause.type();
         this.refId = cause.id();
+        this.clientTransferId = cause.clientTransferId();
+        if ((entryType == LedgerEntryType.TRANSFER) != (cause.type() == LedgerRefType.TRANSFER)) {
+            throw new IllegalArgumentException("a TRANSFER entry, and only one, points at its transfer");
+        }
     }
 
     /**
@@ -92,24 +103,38 @@ public class PaperLedgerEntry extends BaseEntity {
     }
 
     /**
-     * The row a ledger entry points at: both parts or neither, as {@code ck_paper_ledger_entry_ref} requires.
+     * The row a ledger entry points at: both parts or neither, as {@code ck_wallet_ledger_entry_ref} requires. A
+     * transfer is not a row: its two entries share its id, and carry the key the client sent for it.
      *
      * @param type the kind of row
      * @param id its key
+     * @param clientTransferId the transfer's idempotency key; set exactly when {@code type} is TRANSFER
      */
-    public record Ref(LedgerRefType type, UUID id) {
+    public record Ref(LedgerRefType type, UUID id, String clientTransferId) {
 
         /** No cause recorded. */
-        public static final Ref NONE = new Ref(null, null);
+        public static final Ref NONE = new Ref(null, null, null);
 
         public Ref {
             if ((type == null) != (id == null)) {
                 throw new IllegalArgumentException("a ledger reference names both its type and its id, or neither");
             }
+            if ((type == LedgerRefType.TRANSFER) != (clientTransferId != null)) {
+                throw new IllegalArgumentException("a transfer, and only a transfer, is referenced with its key");
+            }
         }
 
+        /** The row of another kind than a transfer. */
         public static Ref to(LedgerRefType type, UUID id) {
-            return new Ref(Objects.requireNonNull(type, "type"), Objects.requireNonNull(id, "id"));
+            return new Ref(Objects.requireNonNull(type, "type"), Objects.requireNonNull(id, "id"), null);
+        }
+
+        /** The transfer {@code transferId}, which the client knows by {@code clientTransferId}. */
+        public static Ref transfer(UUID transferId, String clientTransferId) {
+            return new Ref(
+                    LedgerRefType.TRANSFER,
+                    Objects.requireNonNull(transferId, "transferId"),
+                    Objects.requireNonNull(clientTransferId, "clientTransferId"));
         }
     }
 }

@@ -16,11 +16,11 @@ import com.cryptopilot.paper.dto.request.PlaceOrderListRequest;
 import com.cryptopilot.paper.dto.request.PlaceOrderListRequest.Leg;
 import com.cryptopilot.paper.dto.request.PlaceOrderListRequest.Oco;
 import com.cryptopilot.paper.dto.response.OrderListResponse;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.entity.PaperOrderList;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.matching.BookSweep;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.PlacedOrderList;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.enums.FillSource;
@@ -142,7 +142,7 @@ public class PaperOrderLists {
             // Under the lock, so a retry that raced the original waited for it and finds it here. Before the pair and
             // filter checks: a retry is answered with what was placed though the pair stopped or its filters changed.
             Optional<PaperOrderList> placed =
-                    lists.findByAccountIdAndListClientOrderId(account.getId(), request.listClientOrderId());
+                    lists.findByUserIdAndListClientOrderId(account.userId(), request.listClientOrderId());
             if (placed.isPresent()) {
                 return new PlacedOrderList(replayOf(placed.get(), request), false);
             }
@@ -158,9 +158,9 @@ public class PaperOrderLists {
         BigDecimal last = market.currentLastPrice(MarketType.SPOT, pair.symbol())
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.MARKET_PRICE_UNAVAILABLE, "no current last price for " + pair.symbol() + " on SPOT"));
-        limits.requireRoom(account.getId(), pair.pairId(), filters, ordersOf(request), stopsOf(request));
+        limits.requireRoom(account.userId(), pair.pairId(), filters, ordersOf(request), stopsOf(request));
         PaperOrderList list = lists.save(
-                PaperOrderList.spot(account.getId(), pair.pairId(), request.type(), request.listClientOrderId()));
+                PaperOrderList.spot(account.userId(), pair.pairId(), request.type(), request.listClientOrderId()));
         Quote quote = new Quote(pair, filters, last);
         String key = list.getId().toString();
         Instant now = clock.instant();
@@ -554,9 +554,9 @@ public class PaperOrderLists {
         BigDecimal quantity = quantity(quote.filters(), leg.quantity(), price, "working.quantity");
         UUID pairId = quote.pair().pairId();
         PaperOrder order = leg.type() == OrderType.LIMIT_MAKER
-                ? PaperOrder.spotLimitMaker(account.getId(), pairId, key + WORKING, leg.side(), price, quantity)
+                ? PaperOrder.spotLimitMaker(account.userId(), pairId, key + WORKING, leg.side(), price, quantity)
                 : PaperOrder.spotLimit(
-                        account.getId(), pairId, key + WORKING, leg.side(), TimeInForce.GTC, price, quantity);
+                        account.userId(), pairId, key + WORKING, leg.side(), TimeInForce.GTC, price, quantity);
         return orders.save(order.inList(UUID.fromString(key), false));
     }
 
@@ -576,7 +576,7 @@ public class PaperOrderLists {
             BigDecimal stop = price(filters, leg.stopPrice(), "pending.stopPrice");
             requireNotMet(type, leg.side(), stop, workingPrice);
             order = PaperOrder.spotStop(
-                    account.getId(),
+                    account.userId(),
                     pairId,
                     key + PENDING,
                     type,
@@ -587,10 +587,10 @@ public class PaperOrderLists {
                     price,
                     quantity);
         } else if (type == OrderType.LIMIT_MAKER) {
-            order = PaperOrder.spotLimitMaker(account.getId(), pairId, key + PENDING, leg.side(), price, quantity);
+            order = PaperOrder.spotLimitMaker(account.userId(), pairId, key + PENDING, leg.side(), price, quantity);
         } else {
             order = PaperOrder.spotLimit(
-                    account.getId(), pairId, key + PENDING, leg.side(), TimeInForce.GTC, price, quantity);
+                    account.userId(), pairId, key + PENDING, leg.side(), TimeInForce.GTC, price, quantity);
         }
         orders.save(order.inList(UUID.fromString(key), true));
     }
@@ -625,7 +625,7 @@ public class PaperOrderLists {
         BigDecimal price = limitPrice(quote, oco.side(), oco.takeProfitPrice(), "oco.takeProfitPrice");
         BigDecimal quantity = quantity(quote.filters(), ocoQuantity, price, "oco.quantity");
         return orders.save(PaperOrder.spotLimitMaker(
-                        account.getId(), quote.pair().pairId(), key + TAKE_PROFIT, oco.side(), price, quantity)
+                        account.userId(), quote.pair().pairId(), key + TAKE_PROFIT, oco.side(), price, quantity)
                 .inList(UUID.fromString(key), pending));
     }
 
@@ -638,7 +638,7 @@ public class PaperOrderLists {
         BigDecimal limit = market ? null : limitPrice(quote, oco.side(), oco.stopLimitPrice(), "oco.stopLimitPrice");
         BigDecimal quantity = quantity(filters, ocoQuantity, market ? stopPrice : limit, "oco.quantity");
         return orders.save(PaperOrder.spotStop(
-                        account.getId(),
+                        account.userId(),
                         quote.pair().pairId(),
                         key + STOP,
                         market ? OrderType.STOP_LOSS : OrderType.STOP_LOSS_LIMIT,

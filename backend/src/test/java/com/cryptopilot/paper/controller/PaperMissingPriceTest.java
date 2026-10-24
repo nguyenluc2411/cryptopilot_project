@@ -115,24 +115,21 @@ class PaperMissingPriceTest {
     @AfterEach
     void removeRows() {
         for (UUID trader : traders) {
-            String account = "(select account_id from paper_account where user_id = ?)";
             for (String table : List.of(
-                    "paper_fill",
-                    "paper_order",
-                    "paper_order_list",
-                    "paper_ledger_entry",
-                    "paper_transfer",
-                    "paper_balance",
-                    "paper_equity_snapshot")) {
-                sql.sql("delete from " + table + " where account_id = " + account)
+                    "order_fill",
+                    "trade_order",
+                    "order_list",
+                    "wallet_ledger_entry",
+                    "wallet_balance",
+                    "equity_snapshot")) {
+                sql.sql("delete from " + table + " where user_id = ?")
                         .param(trader)
                         .update();
             }
-            sql.sql("delete from paper_account where user_id = ?").param(trader).update();
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         for (UUID pair : pairs) {
-            sql.sql("delete from paper_matching_watermark where pair_id = ?")
+            sql.sql("delete from order_matching_watermark where pair_id = ?")
                     .param(pair)
                     .update();
             sql.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
@@ -285,19 +282,19 @@ class PaperMissingPriceTest {
 
     private long snapshots(UUID trader) {
         return sql.sql("""
-                        select count(*) from paper_equity_snapshot s join paper_account a on a.account_id = s.account_id
-                         where a.user_id = ?""").param(trader).query(Long.class).single();
+                        select count(*) from equity_snapshot s
+                         where s.user_id = ?""").param(trader).query(Long.class).single();
     }
 
     private BigDecimal snapshotTotal(UUID trader) {
         return sql.sql("""
-                        select s.total_equity_amount from paper_equity_snapshot s
-                          join paper_account a on a.account_id = s.account_id
-                         where a.user_id = ?""").param(trader).query(BigDecimal.class).single();
+                        select s.total_equity_amount from equity_snapshot s
+                         where s.user_id = ?""").param(trader).query(BigDecimal.class).single();
     }
 
     private UUID accountOf(UUID trader) {
-        return sql.sql("select account_id from paper_account where user_id = ?")
+        return sql.sql(
+                        "select distinct user_id from wallet_ledger_entry where user_id = ? and entry_type = 'INITIAL_GRANT'")
                 .param(trader)
                 .query(UUID.class)
                 .single();
@@ -308,10 +305,9 @@ class PaperMissingPriceTest {
         List<Map<String, Object>> found =
                 sql.sql("""
                         select b.cost_basis_amount as cost
-                          from paper_balance b
-                          join paper_account a on a.account_id = b.account_id
+                          from wallet_balance b
                           join coin c on c.coin_id = b.coin_id
-                         where a.user_id = ? and b.wallet_type = 'SPOT' and c.symbol = ?""").params(trader, coin).query().listOfRows();
+                         where b.user_id = ? and b.wallet_type = 'SPOT' and c.symbol = ?""").params(trader, coin).query().listOfRows();
         assertThat(found).hasSize(1);
         return (BigDecimal) found.get(0).get("cost");
     }

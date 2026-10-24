@@ -2,7 +2,7 @@ package com.cryptopilot.paper.model.enums;
 
 /**
  * The kind of a group of paper orders placed together (TR-10). The names are the values
- * {@code paper_order_list.list_type} accepts.
+ * {@code order_list.list_type} accepts.
  *
  * <p>Rule: TR-10.
  */

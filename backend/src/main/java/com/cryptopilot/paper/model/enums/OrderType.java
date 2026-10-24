@@ -4,7 +4,7 @@ import java.util.Set;
 
 /**
  * The kind of a paper order: on Spot the order types of the exchange's Spot API, on Futures those of its Futures API.
- * The names are the values {@code paper_order.order_type} accepts. {@code TAKE_PROFIT} names a take profit on both
+ * The names are the values {@code trade_order.order_type} accepts. {@code TAKE_PROFIT} names a take profit on both
  * markets; it executes as a MARKET order on Spot and as a LIMIT order on Futures, as on the exchange. The Futures kinds
  * are placed by a later stage of TR-02, so a request for one is refused for now.
  *

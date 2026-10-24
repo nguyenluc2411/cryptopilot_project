@@ -1,7 +1,7 @@
 package com.cryptopilot.paper.model.enums;
 
 /**
- * What decided a fill. The names are the values {@code paper_fill.fill_source} accepts.
+ * What decided a fill. The names are the values {@code order_fill.fill_source} accepts.
  *
  * <p>Rule: TR-02; Q-T6.
  */

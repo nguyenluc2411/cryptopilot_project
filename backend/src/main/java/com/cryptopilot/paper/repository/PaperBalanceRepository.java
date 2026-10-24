@@ -21,20 +21,20 @@ public interface PaperBalanceRepository extends Repository<PaperBalance, UUID> {
 
     /** The balances of one wallet, in no particular order. */
     @Transactional(readOnly = true)
-    List<PaperBalance> findByAccountIdAndWalletType(UUID accountId, WalletType walletType);
+    List<PaperBalance> findByUserIdAndWalletType(UUID userId, WalletType walletType);
 
     /** The balances of both wallets of an account. */
     @Transactional(readOnly = true)
-    List<PaperBalance> findByAccountId(UUID accountId);
+    List<PaperBalance> findByUserId(UUID userId);
 
     /** One coin of one wallet, or empty when the wallet has never held it. */
     @Transactional(readOnly = true)
-    Optional<PaperBalance> findByAccountIdAndWalletTypeAndCoinId(UUID accountId, WalletType walletType, UUID coinId);
+    Optional<PaperBalance> findByUserIdAndWalletTypeAndCoinId(UUID userId, WalletType walletType, UUID coinId);
 
     /** Several coins of one wallet, in one query; a coin the wallet has never held is left out. */
     @Transactional(readOnly = true)
-    List<PaperBalance> findByAccountIdAndWalletTypeAndCoinIdIn(
-            UUID accountId, WalletType walletType, Collection<UUID> coinIds);
+    List<PaperBalance> findByUserIdAndWalletTypeAndCoinIdIn(
+            UUID userId, WalletType walletType, Collection<UUID> coinIds);
 
     /**
      * The balances of a wallet held, not zero, whose cost is not known and whose only ledger entries are of
@@ -45,9 +45,9 @@ public interface PaperBalanceRepository extends Repository<PaperBalance, UUID> {
             select b from PaperBalance b
              where b.walletType = :wallet and b.costBasisAmount is null and b.freeAmount + b.lockedAmount > 0
                and not exists (select 1 from PaperLedgerEntry e
-                                where e.accountId = b.accountId and e.walletType = b.walletType
+                                where e.userId = b.userId and e.walletType = b.walletType
                                   and e.coinId = b.coinId and e.entryType <> :onlyType)
-             order by b.accountId, b.coinId""")
+             order by b.userId, b.coinId""")
     List<PaperBalance> findWithoutCostChangedOnlyBy(WalletType wallet, LedgerEntryType onlyType);
 
     /** Writes a balance. Not transactional here; the unit of work is the calling service's. */

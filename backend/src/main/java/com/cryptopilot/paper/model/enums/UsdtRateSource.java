@@ -2,7 +2,7 @@ package com.cryptopilot.paper.model.enums;
 
 /**
  * Where the USDT rate of a fill's quote coin came from. The names are the values
- * {@code paper_fill.quote_usdt_price_source} accepts.
+ * {@code order_fill.quote_usdt_price_source} accepts.
  *
  * <p>Rule: TR-13; D-96.
  */
