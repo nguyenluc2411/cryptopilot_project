@@ -59,6 +59,9 @@ public class CryptoPair extends BaseEntity {
     /** Longest symbol the column holds ({@code varchar(32)}). */
     static final int SYMBOL_LENGTH = 32;
 
+    /** The highest leverage Binance offers on any USDⓈ-M contract, and so the highest an administrator may set. */
+    public static final int MAX_LEVERAGE = 125;
+
     /** The coin bought and sold. */
     @Column(name = "base_coin_id", nullable = false, updatable = false)
     private UUID baseCoinId;
@@ -328,6 +331,48 @@ public class CryptoPair extends BaseEntity {
             case FUTURES -> this.futuresEnabled = true;
         }
         this.pairStatus = PairStatus.ACTIVE;
+    }
+
+    /**
+     * Turns one market's switch off; the other market and the pair's status are left as they were. A pair whose
+     * futures market is off has no leverage ceiling (the column's CHECK), so it is cleared with the switch.
+     *
+     * <p>Rule: BR-07, BR-59 (the caller checks open positions first); UC-45.
+     */
+    public void disable(MarketType market) {
+        switch (Objects.requireNonNull(market, "market must not be null")) {
+            case SPOT -> this.spotEnabled = false;
+            case FUTURES -> {
+                this.futuresEnabled = false;
+                this.maxLeverage = null;
+            }
+        }
+    }
+
+    /**
+     * Sets the administrator's switch for the pair as a whole (BR-07). An INACTIVE pair is offered on no market,
+     * whatever its market switches say; they are kept, so activating it again restores them.
+     *
+     * <p>Rule: BR-07, BR-59 (the caller checks open positions first); UC-45.
+     */
+    public void changeStatus(PairStatus status) {
+        this.pairStatus = Objects.requireNonNull(status, "status must not be null");
+    }
+
+    /**
+     * Sets the highest leverage the futures market allows, 1 to {@value #MAX_LEVERAGE}. Only a pair whose futures
+     * market is on has one.
+     *
+     * <p>Rule: BR-26; UC-45.
+     */
+    public void limitLeverage(int leverage) {
+        if (!futuresEnabled) {
+            throw new IllegalStateException("pair " + symbol + " has no futures market to limit");
+        }
+        if (leverage < 1 || leverage > MAX_LEVERAGE) {
+            throw new IllegalArgumentException("maxLeverage must be 1 to " + MAX_LEVERAGE + ": " + leverage);
+        }
+        this.maxLeverage = leverage;
     }
 
     /** The exchange's status of one market, or {@code null} when the pair has never been listed on it. */

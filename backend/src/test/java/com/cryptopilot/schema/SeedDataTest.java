@@ -74,10 +74,10 @@ class SeedDataTest {
      * settings, V10 removes the watchlist and active alert limits, which are the plan's (BR-62), and V13 the
      * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V26 adds the
      * liquidation clearance fee (BR-36); V32 the entry deviation, setup score drop and slippage settings (BR-36, BR-69,
-     * BR-70); V11 seeds the five packages.
+     * BR-70), V33 the two resend limits (BR-65); V11 seeds the five packages.
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
-            "system_setting", 17,
+            "system_setting", 19,
             "trading_strategy", 3,
             "user_account", 1,
             "user_profile", 1,
@@ -115,7 +115,7 @@ class SeedDataTest {
 
     @ParameterizedTest(name = "{0} holds {1} seeded rows")
     @CsvSource({
-        "system_setting, 17",
+        "system_setting, 19",
         "trading_strategy, 3",
         "user_account, 1",
         "user_profile, 1",
@@ -366,6 +366,13 @@ class SeedDataTest {
         assertThat(settingValue("ORDER_EXPIRY_MINUTES")).isEqualTo("15");
     }
 
+    /** BR-65: the resend limits are settings, seeded with the values the rule states. */
+    @Test
+    void BR65_theResendLimits_areSeededWithTheValuesTheRuleStates() {
+        assertThat(settingValue("RESEND_MIN_INTERVAL_SECONDS")).isEqualTo("60");
+        assertThat(settingValue("RESEND_MAX_PER_24_HOURS")).isEqualTo("5");
+    }
+
     @Test
     void everySeededSetting_carriesAValueItsDeclaredTypeParses() {
         List<Map<String, Object>> settings = jdbc.sql(
@@ -373,7 +380,7 @@ class SeedDataTest {
                 .query()
                 .listOfRows();
 
-        assertThat(settings).hasSize(17).allSatisfy(setting -> {
+        assertThat(settings).hasSize(19).allSatisfy(setting -> {
             String key = (String) setting.get("setting_key");
             String value = (String) setting.get("setting_value");
             switch ((String) setting.get("value_type")) {

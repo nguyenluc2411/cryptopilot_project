@@ -72,7 +72,7 @@ class DemoPairActivationJobTest {
     }
 
     private DemoPairActivationJob job(boolean enabled) {
-        DemoPairActivation activation = new DemoPairActivationImpl(null) {
+        DemoPairActivation activation = new DemoPairActivationImpl(null, null) {
             @Override
             public List<String> activate(MarketType market, List<String> symbols) {
                 calls.add(market + " " + symbols);

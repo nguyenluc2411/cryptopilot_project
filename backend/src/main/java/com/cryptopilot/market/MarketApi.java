@@ -23,12 +23,6 @@ public interface MarketApi {
     /** The pair, when it is enabled on the market and its filters there are known; otherwise empty. */
     Optional<TradablePair> tradablePair(UUID pairId, MarketType market);
 
-    /**
-     * The stored pairs the symbol synchronisation found no longer traded on Spot, NOT_TRADING or DELISTED, enabled by
-     * an administrator or not (NSF-01). A pair not read yet is not among them.
-     */
-    List<UUID> spotPairsNotTrading();
-
     /** The stored pairs among these ids, listed or not, in no particular order; an unknown id is left out. */
     List<PairListing> pairListings(Collection<UUID> pairIds);
 

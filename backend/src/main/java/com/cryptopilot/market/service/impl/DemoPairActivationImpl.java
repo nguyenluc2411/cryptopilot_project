@@ -4,6 +4,7 @@ import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CryptoPairRepository;
+import com.cryptopilot.market.repository.LeverageBracketRepository;
 import com.cryptopilot.market.service.DemoPairActivation;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,18 +19,26 @@ import org.springframework.transaction.annotation.Transactional;
  * there as {@code TRADING}; a pair already enabled there, missing, or not trading is left alone. So a repeated
  * call changes nothing, and a pair the exchange does not trade on a market is never offered on it.
  *
- * <p>This does what an administrator would do on SCR-37 (BR-07) and exists only because that screen does not
- * yet; the caller decides whether it runs, and it runs nowhere but in {@code dev}.
+ * <p>This does what an administrator does on SCR-37 (BR-07), so a fresh development database has pairs to show without
+ * an administrator; the caller decides whether it runs, and it runs nowhere but in {@code dev}. A demo futures market
+ * without a leverage ceiling, one it enables or one an earlier version enabled without it, gets the ceiling SCR-37
+ * would ask for: {@link #DEMO_MAX_LEVERAGE}, or the first bracket's maximum when that is lower, so the pair can be
+ * edited on SCR-37 without entering one first.
  *
  * <p>Rule: BR-07; NSF-01; Q-16.
  */
 @Service
 public class DemoPairActivationImpl implements DemoPairActivation {
 
-    private final CryptoPairRepository pairs;
+    /** The leverage ceiling of a demo futures market, as a cautious administrator would set it. */
+    static final int DEMO_MAX_LEVERAGE = 20;
 
-    public DemoPairActivationImpl(CryptoPairRepository pairs) {
+    private final CryptoPairRepository pairs;
+    private final LeverageBracketRepository brackets;
+
+    public DemoPairActivationImpl(CryptoPairRepository pairs, LeverageBracketRepository brackets) {
         this.pairs = pairs;
+        this.brackets = brackets;
     }
 
     /**
@@ -46,10 +55,21 @@ public class DemoPairActivationImpl implements DemoPairActivation {
                 continue;
             }
             CryptoPair pair = found.get();
+            boolean changed = false;
             if (pair.exchangeStatus(market) == ExchangeStatus.TRADING && !pair.isEnabledOn(market)) {
                 pair.enable(market);
-                pairs.save(pair);
                 activated.add(symbol);
+                changed = true;
+            }
+            if (market == MarketType.FUTURES && pair.isFuturesEnabled() && pair.getMaxLeverage() == null) {
+                pair.limitLeverage(brackets.findByPair(pair.getId()).stream()
+                        .findFirst()
+                        .map(first -> Math.min(first.maxLeverage(), DEMO_MAX_LEVERAGE))
+                        .orElse(DEMO_MAX_LEVERAGE));
+                changed = true;
+            }
+            if (changed) {
+                pairs.save(pair);
             }
         }
         return activated;

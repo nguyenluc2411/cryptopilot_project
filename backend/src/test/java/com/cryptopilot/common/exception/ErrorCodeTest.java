@@ -68,7 +68,10 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.MEDIA_STORAGE_UNAVAILABLE, "MSG43 503"),
             Map.entry(ErrorCode.POST_ALREADY_REPORTED, "MSG34 409"),
             Map.entry(ErrorCode.POST_REPORT_OWN_POST, "MSG43 409"),
-            Map.entry(ErrorCode.POST_NOT_HIDDEN, "MSG43 409"));
+            Map.entry(ErrorCode.POST_NOT_HIDDEN, "MSG43 409"),
+            Map.entry(ErrorCode.PAIR_HAS_OPEN_POSITIONS, "MSG40 409"),
+            Map.entry(ErrorCode.PAIR_NOT_TRADING, "MSG43 409"),
+            Map.entry(ErrorCode.PAIR_ALREADY_REGISTERED, "MSG43 409"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

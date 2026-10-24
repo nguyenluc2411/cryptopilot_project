@@ -205,13 +205,14 @@ public class SymbolSyncWriter {
     /**
      * A seed pair takes its place in lists from its place in the seed list, which is written in the order the
      * pairs should be shown (BTCUSDT first); a pair outside the list keeps its own. Without this every pair has
-     * the default 0 and lists fall back to the alphabet, ADAUSDT first.
+     * the default 0 and lists fall back to the alphabet, ADAUSDT first. Only a pair never placed (0) is placed: an
+     * order an administrator set on SCR-37 (UC-45, from 1) is theirs and survives the daily run.
      */
     private void placeSeeds(Collection<String> seeds, List<CryptoPair> universe) {
         List<String> ordered = List.copyOf(seeds);
         for (CryptoPair pair : universe) {
             int index = ordered.indexOf(pair.getSymbol());
-            if (index >= 0) {
+            if (index >= 0 && pair.getDisplayOrder() == 0) {
                 pair.placeAt(index + 1);
             }
         }

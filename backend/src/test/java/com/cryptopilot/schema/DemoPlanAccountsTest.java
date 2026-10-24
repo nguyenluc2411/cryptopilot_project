@@ -169,6 +169,6 @@ class DemoPlanAccountsTest {
     }
 
     private EntitlementApi entitlementsAt(Instant now) {
-        return new EntitlementServiceImpl(packages, Clock.fixed(now, ZoneOffset.UTC));
+        return new EntitlementServiceImpl(packages, null, Clock.fixed(now, ZoneOffset.UTC));
     }
 }

@@ -1,6 +1,10 @@
 package com.cryptopilot.billing;
 
 import com.cryptopilot.billing.model.enums.Feature;
+import com.cryptopilot.billing.model.enums.PlanTier;
+import java.util.Collection;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -21,6 +25,15 @@ public interface EntitlementApi {
 
     /** The tier and entitlements the Trader has now: those of the ACTIVE subscription, else FREE. */
     EffectivePlan effectivePlan(UUID userId);
+
+    /**
+     * The paid tier each of these users holds now, read as {@link #effectivePlan} reads it; a user on FREE is left
+     * out. For the user list of SCR-34, which shows many users at once.
+     */
+    Map<UUID, PlanTier> paidTiers(Collection<UUID> userIds);
+
+    /** The users holding a subscription of this paid tier now (SCR-34's subscription filter); empty for FREE. */
+    Set<UUID> holdersOf(PlanTier tier);
 
     /** Whether the Trader's plan includes the feature: a switch that is on, or a limit that is unlimited or above 0. */
     boolean hasFeature(UUID userId, Feature feature);

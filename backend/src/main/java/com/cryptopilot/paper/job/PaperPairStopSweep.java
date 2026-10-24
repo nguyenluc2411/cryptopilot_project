@@ -1,6 +1,5 @@
 package com.cryptopilot.paper.job;
 
-import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.paper.config.PaperPairStopSweepProperties;
 import com.cryptopilot.paper.service.impl.PairStopCancellation;
 import java.util.UUID;
@@ -12,13 +11,13 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
 /**
- * Cancels, every {@code interval}, the Spot paper orders still open on a pair the exchange stopped trading (NSF-01).
- * {@link PairStopListener} cancels them when the stop is found, but it reads the accounts without their locks: an
- * order whose placement read the pair as trading before the stop committed, and committed after that read, is missed
- * there. This run finds it from the stored state and cancels it through the same {@link PairStopCancellation}, each
+ * Cancels, every {@code interval}, the Spot paper orders still open on a pair the system no longer trades: the exchange
+ * stopped trading it (NSF-01) or an administrator disabled it (BR-07). {@link PairStopListener} cancels them when the
+ * stop or the disabling commits, but it reads the accounts without their locks: an order whose placement read the
+ * pair as trading before that committed, and committed after that read, is missed there. This run finds it from the stored state and cancels it through the same {@link PairStopCancellation}, each
  * account in its own transaction under its lock. Run again, or by a second instance, it cancels nothing twice.
  *
- * <p>Rule: TR-02; NSF-01.
+ * <p>Rule: TR-02; NSF-01; BR-07.
  *
  * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly, ch. 7 (write skew) and
  * ch. 11 (derived state reconciled from the source of truth).
@@ -28,17 +27,12 @@ public class PaperPairStopSweep {
 
     private static final Logger log = LoggerFactory.getLogger(PaperPairStopSweep.class);
 
-    private final MarketApi market;
     private final PairStopCancellation cancellation;
     private final TaskScheduler scheduler;
     private final PaperPairStopSweepProperties properties;
 
     public PaperPairStopSweep(
-            MarketApi market,
-            PairStopCancellation cancellation,
-            TaskScheduler scheduler,
-            PaperPairStopSweepProperties properties) {
-        this.market = market;
+            PairStopCancellation cancellation, TaskScheduler scheduler, PaperPairStopSweepProperties properties) {
         this.cancellation = cancellation;
         this.scheduler = scheduler;
         this.properties = properties;
@@ -63,7 +57,11 @@ public class PaperPairStopSweep {
     public int run() {
         int cancelled = 0;
         try {
-            for (UUID pairId : market.spotPairsNotTrading()) {
+            // Only the pairs with open orders, which are few, rather than every pair out of service.
+            for (UUID pairId : cancellation.pairsWithOrders()) {
+                if (!cancellation.outOfService(pairId)) {
+                    continue;
+                }
                 for (UUID accountId : cancellation.accountsWithOrders(pairId)) {
                     cancelled += cancelOne(accountId, pairId);
                 }
