@@ -2,6 +2,7 @@ package com.cryptopilot.trading.calculator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import com.cryptopilot.market.FundingHistory;
 import com.cryptopilot.market.SettledFunding;
@@ -116,16 +117,19 @@ class FundingCalculatorTest {
 
     // ------------------------------------------------------------------ completeness (A-05)
 
-    /** An announced settlement not stored yet: no amount at all, not the sum of the others; the instant is named. */
+    /**
+     * An announced settlement not stored yet: the funding is incomplete, carries the sum of the two stored ones
+     * (LONG −2 × 101 × 0.0001 − 2 × 100 × 0.0001 = −0.0402) and names the missing instant (D-97 note of 2026-10-24).
+     */
     @Test
-    void A05_aMissingSettlement_makesTheFundingIncomplete_withoutAnAmount() {
+    void A05_aMissingSettlement_makesTheFundingIncomplete_withTheKnownSum() {
         FundingHistory history = new FundingHistory(
                 List.of(settled(T8, "101", "0.0001"), settled(T24, "100", "0.0001")), List.of(T8, T16, T24));
 
         FundingFee fee = FundingCalculator.fundingFee(Direction.LONG, QTY, T0, T24, history);
 
         assertThat(fee.isComplete()).isFalse();
-        assertThat(fee.amount()).isNull();
+        assertThat(fee.amount()).isEqualByComparingTo("-0.0402");
         assertThat(fee.missingFundingTimes()).containsExactly(T16);
     }
 
@@ -181,9 +185,10 @@ class FundingCalculatorTest {
     }
 
     @Test
-    void A05_aFundingFee_hasAnAmountExactlyWhenNothingIsMissing() {
-        assertThatIllegalArgumentException().isThrownBy(() -> new FundingFee(BigDecimal.ONE, List.of(T8)));
-        assertThatIllegalArgumentException().isThrownBy(() -> new FundingFee(null, List.of()));
+    void A05_aFundingFee_alwaysHasAnAmount_andNamesMissingSettlementsOnlyWhenIncomplete() {
+        assertThatIllegalArgumentException().isThrownBy(() -> new FundingFee(BigDecimal.ONE, false, List.of(T8)));
+        assertThatNullPointerException().isThrownBy(() -> FundingFee.partial(null, List.of(T8)));
+        assertThat(FundingFee.partial(BigDecimal.ONE, List.of()).isComplete()).isFalse();
     }
 
     /** Every settlement stored is also announced, so the history is complete. */

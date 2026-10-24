@@ -28,7 +28,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * The funding of a position read on close and on read: computed from the market's history every time, a settlement
- * not stored yet logged and left unknown, and the full figure as soon as the late row is stored.
+ * not stored yet logged and its known sum kept as provisional, and the full figure as soon as the late row is stored.
  *
  * <p>Rule: BR-37; A-05; TECHNICAL_DESIGN 7.8.
  */
@@ -71,15 +71,15 @@ class FundingServiceImplTest {
         assertThat(logs.list).isEmpty();
     }
 
-    /** A settlement announced but not stored: no amount, and a WARN naming the pair and the missing instant. */
+    /** A settlement announced but not stored: the known sum, provisional, and a WARN naming the pair and the instant. */
     @Test
-    void A05_aMissingSettlement_isLoggedWithThePairAndItsTime_andLeavesNoAmount() {
+    void A05_aMissingSettlement_isLoggedWithThePairAndItsTime_andKeepsTheKnownSum() {
         when(market.fundingHistory(PAIR, ENTRY, EXIT)).thenReturn(new FundingHistory(List.of(AT_8), List.of(T8, T16)));
 
         FundingFee fee = service(EXIT).fundingFee(PAIR, Direction.LONG, QTY, ENTRY, EXIT);
 
         assertThat(fee.isComplete()).isFalse();
-        assertThat(fee.amount()).isNull();
+        assertThat(fee.amount()).isEqualByComparingTo("-0.0202");
         assertThat(logs.list).singleElement().satisfies(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
             assertThat(event.getFormattedMessage()).contains(PAIR.toString()).contains(T16.toString());

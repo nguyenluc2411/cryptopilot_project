@@ -39,7 +39,7 @@ public class FundingServiceImpl implements FundingService {
         for (Instant missing : fee.missingFundingTimes()) {
             log.warn(
                     "BR-37 pair {} has no stored funding settlement at {}; the funding of the position open from {}"
-                            + " to {} stays unknown until it is stored",
+                            + " to {} is provisional until it is stored",
                     pairId,
                     missing,
                     entryTime,

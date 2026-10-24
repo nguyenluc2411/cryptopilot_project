@@ -9,8 +9,8 @@ import java.util.UUID;
 /**
  * The funding of a simulated Futures position, computed from the stored settlements of its pair every time it is
  * asked for, never stored per settlement: on close for the closed trade, on read for an open one. An incomplete
- * answer becomes complete by asking again once the late settlement is stored. Spot has no funding and is never
- * asked.
+ * answer carries the known sum, never blocks a close, and becomes complete by asking again once the late settlement is
+ * stored. Spot has no funding and is never asked. No caller before T-048.
  *
  * <p>Rule: BR-37; NSF-08 as realized by A-05; D-97; TECHNICAL_DESIGN 7.8.
  */

@@ -29,10 +29,11 @@ public final class FundingCalculator {
      * settlement does.
      *
      * <p>When a settlement the exchange announced in that period is not in the history, the result is incomplete and
-     * carries no amount: a missing rate is never replaced by a guess or by zero. Computing again once the row is
-     * stored gives the full figure, and the same figure on every later call.
+     * its amount is the sum of the stored settlements only: a missing rate is never replaced by a guess or by zero,
+     * and the close is not blocked. Computing again once the row is stored gives the full figure, and the same figure
+     * on every later call.
      *
-     * <p>Rule: BR-37; A-05; D-97 rule 3; TECHNICAL_DESIGN 7.8.
+     * <p>Rule: BR-37; A-05; D-97 rule 3 and its note of 2026-10-24; TECHNICAL_DESIGN 7.8.
      * <p>Reference: Binance FAQ, <i>Introduction to Binance Futures Funding Rates</i> (only positions open at a
      * funding timestamp pay or receive it).
      *
@@ -67,7 +68,8 @@ public final class FundingCalculator {
                 .distinct()
                 .sorted()
                 .toList();
-        return missing.isEmpty() ? FundingFee.complete(Rounding.toAmount(sum)) : FundingFee.incomplete(missing);
+        BigDecimal amount = Rounding.toAmount(sum);
+        return missing.isEmpty() ? FundingFee.complete(amount) : FundingFee.partial(amount, missing);
     }
 
     /**

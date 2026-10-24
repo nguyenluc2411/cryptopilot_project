@@ -3,6 +3,7 @@ package com.cryptopilot.trading.calculator;
 import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.FeeSchedule;
+import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.LeverageBracket;
 import com.cryptopilot.trading.model.TradeClose;
 import com.cryptopilot.trading.model.TradeResult;
@@ -25,11 +26,12 @@ public final class TradeResultCalculator {
     /**
      * The amounts of the trade, rounded to the stored scale.
      *
-     * @param fundingFeeAmount the complete funding of a Futures trade from {@link FundingCalculator}; {@code null} for
+     * @param funding the funding of a Futures trade from {@link FundingCalculator}, complete or not: an incomplete
+     *     funding never blocks the close, the result carries it and its net is provisional (A-05); {@code null} for
      *     Spot, which has none (BR-37)
      */
-    public static TradeResult calculate(TradeClose in, BigDecimal fundingFeeAmount) {
-        if ((in.market() == MarketType.SPOT) != (fundingFeeAmount == null)) {
+    public static TradeResult calculate(TradeClose in, FundingFee funding) {
+        if ((in.market() == MarketType.SPOT) != (funding == null)) {
             throw new IllegalArgumentException("a Futures trade needs its funding and a Spot trade has none");
         }
         BigDecimal priceMove = in.exitPrice().subtract(in.entryPrice());
@@ -46,7 +48,7 @@ public final class TradeResultCalculator {
                     case LIQUIDATION -> clearanceFee(exitNotional, fees.liquidationClearance(), liquidationBracket(in));
                 };
         return new TradeResult(
-                Rounding.toAmount(realized), Rounding.toAmount(entryFee), Rounding.toAmount(exitFee), fundingFeeAmount);
+                Rounding.toAmount(realized), Rounding.toAmount(entryFee), Rounding.toAmount(exitFee), funding);
     }
 
     /**
