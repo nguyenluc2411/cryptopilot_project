@@ -31,14 +31,19 @@ public class BillingMetrics implements AdminMetricSource {
              from subscription_order o join subscription_package p on p.package_id = o.package_id
             where o.order_status = 'PAID' and o.paid_at >= :from and o.paid_at < :to""";
 
+    /** The subscriptions in force at an instant. */
+    private static final String ACTIVE = """
+            select count(*) from user_subscription
+             where subscription_status = 'ACTIVE' and start_at <= :now and end_at > :now""";
+
     private final JdbcClient sql;
 
     @Override
     public Map<String, Object> indicators(Instant from, Instant to, Instant now) {
-        long active =
-                sql.sql("""
-                        select count(*) from user_subscription
-                         where subscription_status = 'ACTIVE' and start_at <= :now and end_at > :now""").param("now", Timestamp.from(now)).query(Long.class).single();
+        long active = sql.sql(ACTIVE)
+                .param("now", Timestamp.from(now))
+                .query(Long.class)
+                .single();
         record PackageRevenue(String code, long orders, BigDecimal revenue) {}
         List<PackageRevenue> paid = sql.sql("select p.package_code, count(*) as orders, sum(o.amount) as revenue" + PAID
                         + " group by p.package_code")

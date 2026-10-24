@@ -19,13 +19,19 @@ import org.springframework.stereotype.Repository;
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class JournalOpenPositions implements OpenPositionCheck {
 
+    /** Whether a simulated trade of the pair on the market is open; the journal is written from T-048 on. */
+    private static final String ANY_OPEN = """
+            select exists (select 1 from trading_journal
+                            where pair_id = ? and market_type = ?
+                              and trade_status = 'OPEN' and source = 'SIMULATED')""";
+
     private final JdbcClient sql;
 
     @Override
     public boolean anyOpen(UUID pairId, MarketType market) {
-        return sql.sql("""
-                        select exists (select 1 from trading_journal
-                                        where pair_id = ? and market_type = ?
-                                          and trade_status = 'OPEN' and source = 'SIMULATED')""").params(pairId, market.name()).query(Boolean.class).single();
+        return sql.sql(ANY_OPEN)
+                .params(pairId, market.name())
+                .query(Boolean.class)
+                .single();
     }
 }

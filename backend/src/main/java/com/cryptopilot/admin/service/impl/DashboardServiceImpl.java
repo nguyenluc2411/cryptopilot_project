@@ -60,7 +60,7 @@ public class DashboardServiceImpl implements DashboardService {
         Map<String, Object> indicators = new TreeMap<>();
         Instant now = clock.instant();
         for (AdminMetricSource source : sources) {
-            indicators.putAll(source.indicators(start(first), start(last.plusDays(1)), now));
+            merge(indicators, source.indicators(start(first), start(last.plusDays(1)), now));
         }
         return new DashboardResponse(first, last, indicators);
     }
@@ -83,7 +83,7 @@ public class DashboardServiceImpl implements DashboardService {
         }
         Map<String, Map<LocalDate, BigDecimal>> series = new HashMap<>();
         for (AdminMetricSource source : sources) {
-            series.putAll(source.series(start(first), start(last.plusDays(1)), grouping));
+            merge(series, source.series(start(first), start(last.plusDays(1)), grouping));
         }
         List<String> columns = series.keySet().stream()
                 .sorted(Comparator.comparingInt(DashboardServiceImpl::rank).thenComparing(Comparator.naturalOrder()))
@@ -151,5 +151,17 @@ public class DashboardServiceImpl implements DashboardService {
             case WEEK -> bucket.plusWeeks(1);
             case MONTH -> bucket.plusMonths(1);
         };
+    }
+
+    /**
+     * Adds one source's metrics. Each module names its own metrics, so a name two sources share is a defect, reported
+     * rather than letting one source silently replace the other's figure.
+     */
+    private static <V> void merge(Map<String, V> into, Map<String, V> from) {
+        from.forEach((name, value) -> {
+            if (into.putIfAbsent(name, value) != null) {
+                throw new IllegalStateException("two metric sources both report " + name);
+            }
+        });
     }
 }
