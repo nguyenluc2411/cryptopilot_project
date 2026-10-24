@@ -442,7 +442,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     /**
      * BR-69: a plan's own deviation limit within the system's block value; BR-68: the invalidation price on the far
      * side of the current price (a MARKET plan carrying one is the aggregate's error); when the save also activates,
-     * BR-33: a STOP not already triggered. {@code last} is the request's one read of the last price.
+     * BR-33: a STOP not already triggered, and BR-68: no invalidation level already reached. {@code last} is the
+     * request's one read of the last price.
      */
     private void requireValidAtSave(
             TradablePair pair,
@@ -460,6 +461,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 details.entryType(),
                 plan.direction(),
                 plan.entryPrice(),
+                plan.stopLoss(),
+                plan.takeProfit(),
                 details.invalidationPrice(),
                 activating,
                 last));
@@ -477,6 +480,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 plan.getEntryType(),
                 plan.getDirection(),
                 plan.getEntryPrice(),
+                plan.getStopLoss(),
+                plan.getTakeProfit(),
                 plan.getInvalidationPrice(),
                 true,
                 last));
@@ -500,9 +505,12 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * The invalidation price and, at activation, the stop price of a STOP against the request's one read of the last
-     * price, see {@link #lastPriceRead}. Without a current last price these cannot be checked, so the save or
-     * activation is refused (MSG43).
+     * The invalidation price and, at activation, the levels of a waiting plan against the request's one read of the
+     * last price, see {@link #lastPriceRead}: a STOP's stop price and stop loss, a LIMIT's take profit, so no plan
+     * becomes ACTIVE only to be filled at a gap price or invalidated by the next candle (D-112). The invalidation
+     * price and a STOP cannot be checked without a current last price, so the save or activation is refused (MSG43).
+     * A LIMIT without one waits for the matching engine as before (BR-33): its take profit is checked whenever the
+     * price is known, and otherwise the engine invalidates it on the first candle that reaches it.
      */
     private static List<InputViolation> priceViolations(
             UUID pairId,
@@ -510,11 +518,15 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             EntryType entryType,
             Direction direction,
             BigDecimal entryPrice,
+            BigDecimal stopLoss,
+            BigDecimal takeProfit,
             BigDecimal invalidation,
             boolean activating,
             Optional<BigDecimal> lastRead) {
         boolean stopAtActivation = activating && entryType == EntryType.STOP;
-        if (entryType == EntryType.MARKET || (invalidation == null && !stopAtActivation)) {
+        boolean limitAtActivation = activating && entryType == EntryType.LIMIT;
+        boolean needsPrice = entryType != EntryType.MARKET && (invalidation != null || stopAtActivation);
+        if (!needsPrice && (!limitAtActivation || lastRead.isEmpty())) {
             return List.of();
         }
         BigDecimal last = lastRead.orElseThrow(() -> new BusinessException(
@@ -524,6 +536,11 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         List<InputViolation> violations = new ArrayList<>();
         if (stopAtActivation) {
             PlanValidityRule.stopAlreadyTriggered(direction, entryPrice, last).ifPresent(violations::add);
+            PlanValidityRule.stopLossAlreadyReached(direction, stopLoss, last).ifPresent(violations::add);
+        }
+        if (limitAtActivation) {
+            PlanValidityRule.takeProfitAlreadyReached(direction, takeProfit, last)
+                    .ifPresent(violations::add);
         }
         PlanValidityRule.invalidationPrice(entryType, direction, invalidation, last)
                 .ifPresent(violations::add);

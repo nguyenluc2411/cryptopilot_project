@@ -861,6 +861,91 @@ class TradingPlanServiceImplTest {
         verifyNoInteractions(events);
     }
 
+    /**
+     * D-112 (Q-72): a STOP whose stop loss the last price has reached, at the level or past it, is refused on the stop
+     * loss for Save and Activate and for Activate; the draft is unchanged and nothing is published.
+     */
+    @ParameterizedTest(name = "{0} {1} stop 100 at last {2}")
+    @CsvSource({"SPOT, LONG, 95", "SPOT, LONG, 94", "FUTURES, SHORT, 105", "FUTURES, SHORT, 106"})
+    void BR68_aStopWhoseStopLossIsReached_isRefusedOnTheStopLoss_atSaveAndActivateAndAtActivate(
+            MarketType marketType, Direction direction, String last) {
+        currentPrice(marketType, last);
+
+        assertThatThrownBy(() -> service.create(USER, activating(stop(marketType, direction))))
+                .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
+        verify(plans, never()).save(any());
+
+        TradingPlan plan = savedDraft(stop(marketType, direction));
+        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+                .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        verify(events, never()).publishEvent(any(TradingPlanActivated.class));
+    }
+
+    /**
+     * D-112 (Q-72): a LIMIT whose take profit the last price has reached, at the level or past it, is refused on the
+     * take profit for Save and Activate and for Activate; the draft is unchanged and nothing is published.
+     */
+    @ParameterizedTest(name = "{0} {1} limit 100 at last {2}")
+    @CsvSource({"SPOT, LONG, 110", "SPOT, LONG, 111", "FUTURES, SHORT, 90", "FUTURES, SHORT, 89"})
+    void BR68_aLimitWhoseTakeProfitIsReached_isRefusedOnTheTakeProfit_atSaveAndActivateAndAtActivate(
+            MarketType marketType, Direction direction, String last) {
+        currentPrice(marketType, last);
+
+        assertThatThrownBy(() -> service.create(USER, activating(limit(marketType, direction))))
+                .satisfies(e -> assertFields(e, Map.of("takeProfit", "MSG16")));
+        verify(plans, never()).save(any());
+
+        TradingPlan plan = savedDraft(limit(marketType, direction));
+        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+                .satisfies(e -> assertFields(e, Map.of("takeProfit", "MSG16")));
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        verify(events, never()).publishEvent(any(TradingPlanActivated.class));
+    }
+
+    /** D-112: a LIMIT short of its take profit, not reached by the last price, is activated and waits. */
+    @ParameterizedTest(name = "{0} {1} limit 100 at last {2}")
+    @CsvSource({"SPOT, LONG, 109.99", "FUTURES, SHORT, 90.01"})
+    void BR68_aLimitShortOfItsTakeProfit_isActivatedAndWaits(MarketType marketType, Direction direction, String last) {
+        TradingPlan plan = savedDraft(limit(marketType, direction));
+        currentPrice(marketType, last);
+
+        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(plan.getFillPrice()).isNull();
+        verify(events).publishEvent(any(TradingPlanActivated.class));
+    }
+
+    /**
+     * D-112: the activation refusals read the Futures last price, never the mark price. A mark price past the level
+     * does not refuse a plan the last price leaves untouched, and a mark price short of it does not let through one
+     * the last price has reached.
+     */
+    @ParameterizedTest(name = "{0} at mark {1}, last {2} -> refused on {3}")
+    @CsvSource({
+        "STOP,  104.5, 106,   stopLoss",
+        "STOP,  106,   104.5, ''",
+        "LIMIT, 89,    91,    ''",
+        "LIMIT, 91,    89,    takeProfit"
+    })
+    void D112_theActivationRefusals_readTheLastPrice_neverTheMarkPrice(
+            EntryType entryType, String mark, String last, String refusedField) {
+        // A Futures SHORT at 100: STOP with stop loss 105, LIMIT with take profit 90.
+        CreateTradingPlanRequest request = entryType == EntryType.STOP
+                ? stop(MarketType.FUTURES, Direction.SHORT)
+                : limit(MarketType.FUTURES, Direction.SHORT);
+        TradingPlan plan = savedDraft(request, "100");
+        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal(mark)));
+        currentPrice(MarketType.FUTURES, last);
+
+        if (refusedField.isEmpty()) {
+            assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.ACTIVE);
+        } else {
+            assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+                    .satisfies(e -> assertFields(e, Map.of(refusedField, "MSG16")));
+            assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        }
+    }
+
     @Test
     void BR33_anUntriggeredFuturesShortStop_isActivatedAndWaits() {
         TradingPlan plan = savedDraft(stop(MarketType.FUTURES, Direction.SHORT));
@@ -1553,6 +1638,13 @@ class TradingPlanServiceImplTest {
         return direction == Direction.LONG
                 ? create(PAIR, marketType, direction, EntryType.STOP, "100", "95", "110", null, null, null)
                 : create(PAIR, marketType, direction, EntryType.STOP, "100", "105", "90", null, null, 2);
+    }
+
+    /** A LIMIT at 100: LONG on Spot (SL 95, TP 110), SHORT on Futures (SL 105, TP 90, leverage 2). */
+    private static CreateTradingPlanRequest limit(MarketType marketType, Direction direction) {
+        return direction == Direction.LONG
+                ? create(PAIR, marketType, direction, EntryType.LIMIT, "100", "95", "110", null, null, null)
+                : create(PAIR, marketType, direction, EntryType.LIMIT, "100", "105", "90", null, null, 2);
     }
 
     /** A draft saved through the service while the last price of its market is {@code last}. */

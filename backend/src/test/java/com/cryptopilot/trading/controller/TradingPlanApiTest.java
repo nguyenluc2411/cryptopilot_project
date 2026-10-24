@@ -748,7 +748,10 @@ class TradingPlanApiTest {
      * activation are checked against the Futures last price, the close of the latest 1-minute candle update, never
      * against the mark price. Mark 100 and last 103 are cached together: an invalidation price of 102 lies on the
      * entry's side of the last price (MSG16) though above the mark price; a LONG STOP at 101 is already triggered by
-     * the last price (MSG16) though not by the mark price. On the right side of the last price both are accepted.
+     * the last price (MSG16) though not by the mark price. On the right side of the last price both are accepted. The
+     * activation refusals of D-112 read the same price: a LONG LIMIT's take profit of 102 is reached by the last price
+     * (MSG16 on the take profit) though not by the mark price, and a LONG STOP's stop loss of 101, reached by the mark
+     * price only, is accepted.
      */
     @ParameterizedTest(name = "{0}")
     @CsvSource(
@@ -757,7 +760,9 @@ class TradingPlanApiTest {
                 "invalidation 102 below last 103 | LIMIT | \"invalidationPrice\": 102, \"activate\": false | 400 | invalidationPrice",
                 "invalidation 104 above last 103 | LIMIT | \"invalidationPrice\": 104, \"activate\": false | 201 |",
                 "STOP 101 triggered by last 103  | STOP  | \"activate\": true                             | 400 | entryPrice",
-                "STOP 104 not triggered by 103   | STOP  | \"activate\": true, \"entryPrice\": 104        | 201 |"
+                "STOP 104 not triggered by 103   | STOP  | \"activate\": true, \"entryPrice\": 104        | 201 |",
+                "TP 102 reached by last 103      | LIMIT | \"activate\": true, \"takeProfit\": 102        | 400 | takeProfit",
+                "SL 101 reached by mark 100 only | STOP  | \"activate\": true, \"entryPrice\": 104, \"stopLoss\": 101 | 201 |"
             })
     void D111_aFuturesPlan_isCheckedAgainstTheLastPrice_notTheMarkPrice(
             String name, String entryType, String extra, int httpStatus, String refusedField) throws Exception {
@@ -766,13 +771,15 @@ class TradingPlanApiTest {
         markPrice("100");
         lastPrice(MarketType.FUTURES, "103");
         String entryPrice = extra.contains("entryPrice") ? "" : " \"entryPrice\": 101,";
+        String stopLoss = extra.contains("stopLoss") ? "" : " \"stopLoss\": 95,";
+        String takeProfit = extra.contains("takeProfit") ? "" : " \"takeProfit\": 110,";
 
         ResultActions response = as(
                 trader,
                 post(PLANS),
                 "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
-                        + " \"entryType\": \"" + entryType + "\"," + entryPrice + " \"stopLoss\": 95,"
-                        + " \"takeProfit\": 110, \"leverage\": 5, " + extra + "}");
+                        + " \"entryType\": \"" + entryType + "\"," + entryPrice + stopLoss + takeProfit
+                        + " \"leverage\": 5, " + extra + "}");
 
         response.andExpect(status().is(httpStatus));
         if (refusedField != null) {
