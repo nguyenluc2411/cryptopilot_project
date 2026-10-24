@@ -270,7 +270,8 @@ class TradingPlanApiTest {
      * D-112 R6: at 10 bps a MARKET plan answers the same pair of prices in the panel, the create response, the detail
      * and the list: {@code entryPrice} the reference price 100.00 (the planned entry), {@code expectedFillPrice} the
      * price the quantity is sized on, 100.00 × 1.001 = 100.10. Only the mapping differs from the stored row: its
-     * {@code entry_price} is 100.10 and its {@code planned_entry_price} 100.00.
+     * {@code entry_price} is 100.10 and its {@code planned_entry_price} 100.00. The setting is changed through the
+     * admin endpoint, so the setting reader's cache is evicted as it would be in use.
      */
     @Test
     void D112_aMarketPlan_answersTheSamePairOfPrices_inEveryResponse() throws Exception {
@@ -278,8 +279,12 @@ class TradingPlanApiTest {
         lastPrice("100.00");
         String body = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
                 + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110}";
-        sql.sql("update system_setting set setting_value = '10' where setting_key = 'SLIPPAGE_BPS'")
-                .update();
+        UUID admin = account(UserRole.ADMIN);
+        Map<String, Object> audit = sql.sql(
+                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
+                .query()
+                .singleRow();
+        changeSetting(admin, "SLIPPAGE_BPS", "10");
         try {
             String panel = content(as(trader, post(PLANS + "/calculate"), body).andExpect(status().isOk()));
             String created = content(as(trader, post(PLANS), body).andExpect(status().isCreated()));
@@ -304,8 +309,11 @@ class TradingPlanApiTest {
             assertThat((BigDecimal) row.get("entry_price")).isEqualByComparingTo("100.10");
             assertThat((BigDecimal) row.get("planned_entry_price")).isEqualByComparingTo("100.00");
         } finally {
-            sql.sql("update system_setting set setting_value = '0' where setting_key = 'SLIPPAGE_BPS'")
+            changeSetting(admin, "SLIPPAGE_BPS", "0");
+            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
+                    .params(audit.get("updated_by"), audit.get("updated_at"))
                     .update();
+            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
         }
     }
 
@@ -1017,6 +1025,15 @@ class TradingPlanApiTest {
             request.contentType(MediaType.APPLICATION_JSON).content(body);
         }
         return mvc.perform(request);
+    }
+
+    /** Changes a system setting as an administrator does on SCR-43, which evicts the reader's cached value. */
+    private void changeSetting(UUID admin, String key, String value) throws Exception {
+        mvc.perform(put("/api/v1/admin/settings/" + key)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(admin, UserRole.ADMIN))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"value\": \"" + value + "\"}"))
+                .andExpect(status().isOk());
     }
 
     private static String id(ResultActions created) throws Exception {
