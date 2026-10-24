@@ -129,6 +129,10 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
             + " and o.orderStatus in :statuses")
     List<UUID> findAccountIdsWithOrders(UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
 
+    /** The pairs with an order on the market in these statuses: those the pair-stop sweep looks at. */
+    @Query("select distinct o.pairId from PaperOrder o where o.marketType = :marketType and o.orderStatus in :statuses")
+    List<UUID> findPairIdsWithOrders(MarketType marketType, Collection<OrderStatus> statuses);
+
     /** Writes an order. Not transactional here; the unit of work is the calling service's. */
     PaperOrder save(PaperOrder order);
 }

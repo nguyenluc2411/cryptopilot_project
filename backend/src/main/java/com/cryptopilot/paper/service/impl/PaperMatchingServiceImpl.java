@@ -38,8 +38,8 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * A stop limit or a trailing stop the price triggered is triggered the same way, under the lock, and only once.
  *
- * <p>An order of a Spot pair the exchange stopped trading is cancelled instead ({@code PAIR_NOT_TRADING}), by the
- * cancellation the pair's stop runs.
+ * <p>An order of a Spot pair the system no longer trades, stopped by the exchange or disabled by an administrator, is
+ * cancelled instead ({@code PAIR_NOT_TRADING}), by the cancellation the pair's stop runs.
  *
  * <p>Rule: TR-02, TR-09, TR-11; NSF-01, NSF-07; Q-T6.
  */
@@ -139,8 +139,9 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     }
 
     /**
-     * An order of a Spot pair the exchange stopped trading is cancelled instead of executed, as the pair's stop does
-     * (NSF-01): a fill or trigger decided while the stop was being committed would otherwise execute it.
+     * An order of a Spot pair the system no longer trades is cancelled instead of executed, as the pair's stop does
+     * (NSF-01, BR-07): a fill or trigger decided while the stop or the disabling was being committed would otherwise
+     * execute it, or find no tradable pair to execute on.
      *
      * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly, ch. 7 (write skew:
      * the status is checked again under the lock the cancellation takes).
@@ -149,15 +150,11 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         if (order.getMarketType() != MarketType.SPOT) {
             return false;
         }
-        // A pair an administrator disabled is not one the exchange stopped; it keeps executing as before.
-        boolean stopped = market.tradablePair(order.getPairId(), MarketType.SPOT)
-                .map(pair -> !pair.exchangeTrading())
-                .orElse(false);
-        if (!stopped) {
+        if (!pairStops.outOfService(order.getPairId())) {
             return false;
         }
         pairStops.cancel(account, order);
-        log.info("NSF-01 paper order {} cancelled instead of executed: its pair stopped trading", order.getId());
+        log.info("NSF-01 paper order {} cancelled instead of executed: its pair is not traded", order.getId());
         return true;
     }
 
