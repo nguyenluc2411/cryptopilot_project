@@ -117,6 +117,10 @@ public class SystemSettingServiceImpl implements SystemSettingService {
     }
 
     private void requireOrdered(String key, String plain) {
+        // Only a numeric setting has a partner; a BOOLEAN or STRING one has nothing to keep in order.
+        if (partnerOf(key).isEmpty()) {
+            return;
+        }
         BigDecimal value = new BigDecimal(plain);
         SettingRule.atMost(key)
                 .flatMap(settings::findForUpdate)
