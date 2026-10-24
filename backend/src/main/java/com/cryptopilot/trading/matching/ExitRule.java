@@ -5,6 +5,7 @@ import com.cryptopilot.trading.model.OpenPosition;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Optional;
@@ -57,6 +58,23 @@ public final class ExitRule {
         return reached
                 ? Optional.of(new Exit(position.planId(), CloseReason.LIQUIDATION, liquidation, at))
                 : Optional.empty();
+    }
+
+    /**
+     * The liquidity role of an exit: a take profit rested and was then reached, so it is maker; a stop loss and a
+     * manual close executed against the market, so they are taker. A liquidation has no role: it pays the clearance
+     * fee instead.
+     *
+     * <p>Rule: BR-36; D-97; D-111 E1.
+     *
+     * @throws IllegalArgumentException for a liquidation
+     */
+    public static LiquidityRole liquidity(CloseReason reason) {
+        return switch (reason) {
+            case TAKE_PROFIT -> LiquidityRole.MAKER;
+            case STOP_LOSS, MANUAL -> LiquidityRole.TAKER;
+            case LIQUIDATION -> throw new IllegalArgumentException("a liquidation pays the clearance fee, not a rate");
+        };
     }
 
     // The open when it is beyond the level in the direction the level is reached (sign −1: below, +1: above).

@@ -2,22 +2,23 @@ package com.cryptopilot.trading.calculator;
 
 import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.matching.ExitRule;
 import com.cryptopilot.trading.model.FeeSchedule;
 import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.LeverageBracket;
 import com.cryptopilot.trading.model.TradeClose;
 import com.cryptopilot.trading.model.TradeResult;
+import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
-import com.cryptopilot.trading.model.enums.EntryType;
 import java.math.BigDecimal;
 
 /**
  * The realized profit and loss and the fees of a closed position. Realized is the price result only. Each fill pays
- * notional × rate: maker for a LIMIT entry and a take profit, taker for a MARKET entry, a stop loss and a manual
- * close. A liquidation pays the clearance fee instead of the taker fee. Funding is computed by
+ * notional × the rate of its liquidity role: the entry by the role stored with its fill, a take profit maker, a stop
+ * loss and a manual close taker. A liquidation pays the clearance fee instead. Funding is computed by
  * {@link FundingCalculator} and passed in.
  *
- * <p>Rule: BR-35, BR-36, BR-37, BR-38; D-97; Q-54; TECHNICAL_DESIGN 7.8.
+ * <p>Rule: BR-35, BR-36, BR-37, BR-38; D-97; D-111 E1; Q-54; TECHNICAL_DESIGN 7.8.
  */
 public final class TradeResultCalculator {
 
@@ -38,15 +39,11 @@ public final class TradeResultCalculator {
         BigDecimal realized =
                 (in.direction() == Direction.LONG ? priceMove : priceMove.negate()).multiply(in.quantity());
         FeeSchedule fees = in.fees();
-        BigDecimal entryRate = in.entryType() == EntryType.LIMIT ? fees.maker() : fees.taker();
-        BigDecimal entryFee = in.entryPrice().multiply(in.quantity()).multiply(entryRate);
-        BigDecimal exitNotional = in.exitPrice().multiply(in.quantity());
-        BigDecimal exitFee =
-                switch (in.reason()) {
-                    case TAKE_PROFIT -> exitNotional.multiply(fees.maker());
-                    case STOP_LOSS, MANUAL -> exitNotional.multiply(fees.taker());
-                    case LIQUIDATION -> clearanceFee(exitNotional, fees.liquidationClearance(), liquidationBracket(in));
-                };
+        BigDecimal entryFee = fees.fee(in.entryLiquidity(), in.entryPrice(), in.quantity());
+        BigDecimal exitFee = in.reason() == CloseReason.LIQUIDATION
+                ? clearanceFee(
+                        in.exitPrice().multiply(in.quantity()), fees.liquidationClearance(), liquidationBracket(in))
+                : fees.fee(ExitRule.liquidity(in.reason()), in.exitPrice(), in.quantity());
         return new TradeResult(
                 Rounding.toAmount(realized), Rounding.toAmount(entryFee), Rounding.toAmount(exitFee), funding);
     }
