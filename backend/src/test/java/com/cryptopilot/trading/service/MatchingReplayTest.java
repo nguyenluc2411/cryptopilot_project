@@ -8,7 +8,10 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
@@ -33,7 +36,10 @@ import com.cryptopilot.trading.model.enums.InvalidationReason;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
+import com.cryptopilot.user.model.enums.UserRole;
 import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -57,11 +63,19 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.invocation.Invocation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -90,7 +104,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * receives while it runs. Every run must leave every plan with the same status, fill price, liquidity role and
  * {@code executed_at}, or the same invalidation reason and {@code invalidated_at}, act on no plan from a candle that
  * opened before its activation, apply each closed minute once (one watermark advance per minute) and store each outcome
- * once. No network: the exchange is a stub of {@link MarketApi}. One partition, so the order of the engine's work is
+ * once. {@code SLIPPAGE_BPS} is changed through the admin endpoint, so the setting reader's cache is evicted as it
+ * would be in use, and restored after each test. No network: the exchange is a stub of {@link MarketApi}. One partition, so the order of the engine's work is
  * the order of the recording.
  *
  * <p>Rule: NSF-07, BR-33, BR-36, BR-68; A-04; D-77, D-78, D-79; D-111 (M1, M3, E5); D-112 (R6); ADR-011.
@@ -103,6 +118,7 @@ import org.springframework.transaction.support.TransactionTemplate;
             "cryptopilot.trading.matching.replay.catch-up-attempts=0",
             "cryptopilot.trading.matching.replay.catch-up-wait=0s"
         })
+@AutoConfigureMockMvc
 @Import({TestcontainersConfig.class, FixedClockConfig.class})
 class MatchingReplayTest {
 
@@ -184,6 +200,20 @@ class MatchingReplayTest {
     @Autowired
     private PlatformTransactionManager transactions;
 
+    @Autowired
+    private MockMvc mvc;
+
+    @Autowired
+    private JwtEncoder jwtEncoder;
+
+    @Autowired
+    private Clock clock;
+
+    /** The administrator who changes {@code SLIPPAGE_BPS}, and the setting's audit columns before the change. */
+    private UUID admin;
+
+    private Map<String, Object> settingAudit;
+
     /** The closed candles the exchange stub serves, three a page. */
     private final List<MinuteKline> served = new CopyOnWriteArrayList<>();
 
@@ -205,12 +235,15 @@ class MatchingReplayTest {
     private UUID quoteCoin;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         feed.stop();
         worker.stop();
         insertPair();
-        jdbc.sql("update system_setting set setting_value = '10' where setting_key = 'SLIPPAGE_BPS'")
-                .update();
+        admin = insertAdministrator();
+        settingAudit = jdbc.sql("select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
+                .query()
+                .singleRow();
+        changeSlippage("10");
         when(market.tradablePair(any(), eq(MarketType.FUTURES)))
                 .thenAnswer(call -> Optional.of(new TradablePair(
                         call.getArgument(0),
@@ -260,11 +293,15 @@ class MatchingReplayTest {
     }
 
     @AfterEach
-    void tearDown() {
+    void tearDown() throws Exception {
         feed.stop();
         worker.stop();
-        jdbc.sql("update system_setting set setting_value = '0' where setting_key = 'SLIPPAGE_BPS'")
+        changeSlippage("0");
+        jdbc.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
+                .params(settingAudit.get("updated_by"), settingAudit.get("updated_at"))
                 .update();
+        jdbc.sql("delete from audit_log where user_id = ?").param(admin).update();
+        jdbc.sql("delete from user_account where user_id = ?").param(admin).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
         jdbc.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
@@ -723,6 +760,45 @@ class MatchingReplayTest {
 
     private static Instant minute(long n) {
         return M0.plus(Duration.ofMinutes(n));
+    }
+
+    /** An administrator account of its own, so its audit rows can be removed without touching others. */
+    private UUID insertAdministrator() {
+        UUID id = UUID.randomUUID();
+        Timestamp now = Timestamp.from(clock.instant());
+        jdbc.sql("""
+                        insert into user_account (user_id, email, password_hash, role, account_status, created_at,
+                                                  updated_at)
+                        values (?, ?, 'x', ?, 'ACTIVE', ?, ?)""")
+                .params(id, id + "@replay.invalid", UserRole.ADMIN.name(), now, now)
+                .update();
+        return id;
+    }
+
+    /** Changes {@code SLIPPAGE_BPS} as an administrator does on SCR-43, which evicts the reader's cached value. */
+    private void changeSlippage(String basisPoints) throws Exception {
+        mvc.perform(put("/api/v1/admin/settings/SLIPPAGE_BPS")
+                        .header(HttpHeaders.AUTHORIZATION, adminBearer())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"value\": \"" + basisPoints + "\"}"))
+                .andExpect(status().isOk());
+    }
+
+    /** An access token of {@link #admin}, timed by the injected clock that the token validator reads. */
+    private String adminBearer() {
+        Instant now = clock.instant();
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer(JwtConfig.ISSUER)
+                .subject(admin.toString())
+                .issuedAt(now)
+                .expiresAt(now.plusSeconds(900))
+                .claim(JwtConfig.ROLE_CLAIM, UserRole.ADMIN.name())
+                .build();
+        return "Bearer "
+                + jwtEncoder
+                        .encode(JwtEncoderParameters.from(
+                                JwsHeader.with(JwtConfig.ALGORITHM).build(), claims))
+                        .getTokenValue();
     }
 
     private void insertPair() {

@@ -782,7 +782,8 @@ class TradingPlanApiTest {
     /**
      * BR-36, D-112 R6: a STOP the engine triggers is stored in the same compare-and-set as a LIMIT fill, at its stop
      * moved by {@code SLIPPAGE_BPS} against the Trader (10 bps: 100 to 100.10, rounded to the tick), as TAKER, at the
-     * open time of the candle that triggered it; the journal record of T-048a starts from these columns.
+     * open time of the candle that triggered it; the journal record of T-048a starts from these columns. The setting is
+     * changed through the admin endpoint, so the setting reader's cache is evicted as it would be in use.
      */
     @Test
     void BR36_aStopTheEngineTriggers_isStoredAtTheSlippedPrice_asTaker_atItsCandle() throws Exception {
@@ -790,14 +791,21 @@ class TradingPlanApiTest {
         String id = id(as(trader(), post(PLANS), spotStop("{\"activate\": true}"))
                 .andExpect(jsonPath("$.status").value("ACTIVE")));
         Instant candle = Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(60);
-        sql.sql("update system_setting set setting_value = '10' where setting_key = 'SLIPPAGE_BPS'")
-                .update();
+        UUID admin = account(UserRole.ADMIN);
+        Map<String, Object> audit = sql.sql(
+                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
+                .query()
+                .singleRow();
+        changeSetting(admin, "SLIPPAGE_BPS", "10");
         try {
             assertThat(matching.fill(new Fill(waiting(id), LiquidityRole.TAKER, new BigDecimal("100"), candle)))
                     .isTrue();
         } finally {
-            sql.sql("update system_setting set setting_value = '0' where setting_key = 'SLIPPAGE_BPS'")
+            changeSetting(admin, "SLIPPAGE_BPS", "0");
+            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
+                    .params(audit.get("updated_by"), audit.get("updated_at"))
                     .update();
+            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
         }
 
         assertFill(id, "100.10", "TAKER");
