@@ -25,6 +25,7 @@ import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
+import com.cryptopilot.trading.model.TrackedEntries;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.service.MatchingService;
@@ -695,7 +696,7 @@ class MinuteKlineFeedTest {
     @Test
     void A04_anEntryOfAnotherMarket_isReplayedOnItsOwnMarket() {
         when(matching.activeEntries())
-                .thenReturn(List.of(new TrackedEntry(
+                .thenReturn(List.of(TrackedEntries.limit(
                         UUID.randomUUID(), MarketType.FUTURES, PAIR, Direction.SHORT, BigDecimal.TEN, M0)));
         when(matching.watermark(MarketType.FUTURES, PAIR)).thenReturn(Optional.of(M0));
         feed = feed(replay(true, 0, 1440));
@@ -767,7 +768,7 @@ class MinuteKlineFeedTest {
     }
 
     private void activeEntry(UUID pair, Instant activatedAt) {
-        entries.add(new TrackedEntry(
+        entries.add(TrackedEntries.limit(
                 UUID.randomUUID(), MarketType.SPOT, pair, Direction.LONG, new BigDecimal("100"), activatedAt));
         when(matching.activeEntries()).thenReturn(List.copyOf(entries));
     }

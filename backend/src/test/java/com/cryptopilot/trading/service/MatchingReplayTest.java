@@ -12,6 +12,8 @@ import static org.mockito.Mockito.when;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
+import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.support.FixedClockConfig;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -21,10 +23,14 @@ import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.job.MatchingWorker;
 import com.cryptopilot.trading.job.MinuteKlineFeed;
 import com.cryptopilot.trading.model.Fill;
+import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanDetails;
+import com.cryptopilot.trading.model.PlanOutcome;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.InvalidationReason;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import java.math.BigDecimal;
@@ -60,9 +66,9 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * T-043 acceptance: a replay equals live processing. One recorded sequence of {@code kline_1m} updates (four updates
- * inside each minute, then the closed candle) runs against the real schema, once fully live and once per way of
- * losing part of it:
+ * T-043 and TP-B acceptance: a replay equals live processing. One recorded sequence of {@code kline_1m} updates (four
+ * updates inside each minute, then the closed candle, each with the candle's open) runs against the real schema, once
+ * fully live and once per way of losing part of it:
  *
  * <ul>
  *   <li>CRASH: the engine stops in the middle of minute 5 and restarts; the rest of the recording arrives live while
@@ -75,13 +81,19 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       fills it at the candle that reached it.
  * </ul>
  *
- * Two plans are activated during the run, one in the middle of a minute whose low already reached its entry (D-77).
- * Every run must leave every plan with the same status, fill price and {@code executed_at}, fill no plan from a candle
- * that opened before its activation, apply each closed minute once (one watermark advance per minute) and call the
- * fill of each plan once. No network: the exchange is a stub of {@link MarketApi}. One partition, so the order of the
- * engine's work is the order of the recording.
+ * Besides the LIMIT entries, the recording triggers a STOP at its stop (minute 6) and a STOP through a gap at the open
+ * (minute 8), invalidates a LIMIT by its take profit (minute 6), a STOP by its stop loss and a LIMIT by its
+ * invalidation price (minute 8), most of them during the downtime of the crashes. Slippage is 10 bps, so the STOP fills
+ * are stored at the slipped price. The STOP plans, activated before the start, are rebuilt into the books at each
+ * start, as the ACTIVE STOP plans activated before the engine knew STOP entries are. Three plans are activated during
+ * the run, one in the middle of a minute whose low already reached its entry (D-77), one a STOP that a crash's replay
+ * receives while it runs. Every run must leave every plan with the same status, fill price, liquidity role and
+ * {@code executed_at}, or the same invalidation reason and {@code invalidated_at}, act on no plan from a candle that
+ * opened before its activation, apply each closed minute once (one watermark advance per minute) and store each outcome
+ * once. No network: the exchange is a stub of {@link MarketApi}. One partition, so the order of the engine's work is
+ * the order of the recording.
  *
- * <p>Rule: NSF-07, BR-33; A-04; D-77, D-78, D-79; ADR-011.
+ * <p>Rule: NSF-07, BR-33, BR-36, BR-68; A-04; D-77, D-78, D-79; D-111 (M1, M3, E5); D-112 (R6); ADR-011.
  */
 @SpringBootTest(
         properties = {
@@ -112,7 +124,7 @@ class MatchingReplayTest {
         {"101", "103.5", "102", "102"},
         {"102", "101.5", "99", "101"},
         {"101", "105.2", "104", "104"},
-        {"104", "103", "104", "104"},
+        {"104", "103.5", "104", "104"},
         {"103", "97", "98", "98"},
         {"98", "99", "98.5", "98.5"},
         {"98.5", "98.6", "98.7", "98.6"},
@@ -121,13 +133,20 @@ class MatchingReplayTest {
 
     private static final int LAST = PATHS.length - 1;
 
-    private static final Map<String, Outcome> EXPECTED = Map.of(
-            "long98", Outcome.filled("98", minute(1)),
-            "short105", Outcome.filled("105", minute(6)),
-            "long99MidMinute3", Outcome.filled("99", minute(5)),
-            "short103AtMinute4", Outcome.filled("103", minute(4)),
-            "long97", Outcome.filled("97", minute(8)),
-            "long90", Outcome.active());
+    private static final Map<String, Outcome> EXPECTED = Map.ofEntries(
+            Map.entry("long98", Outcome.filled("98", minute(1))),
+            Map.entry("short105", Outcome.filled("105", minute(6))),
+            Map.entry("long99MidMinute3", Outcome.filled("99", minute(5))),
+            Map.entry("short103AtMinute4", Outcome.filled("103", minute(4))),
+            Map.entry("long97", Outcome.filled("97", minute(8))),
+            Map.entry("long90", Outcome.active()),
+            // Triggered at 104.5 by minute 6's high, bought 10 bps higher: 104.6045 rounded up to the tick.
+            Map.entry("stopLong104.5", Outcome.takerFilled("104.61", minute(6))),
+            // Minute 8 opened at 103, past the stop: sold at the open, 10 bps lower, 102.897 rounded down.
+            Map.entry("stopShort103.2AtMinute7", Outcome.takerFilled("102.89", minute(8))),
+            Map.entry("limitLong96", Outcome.invalidated(InvalidationReason.TAKE_PROFIT_REACHED, minute(6))),
+            Map.entry("stopLong106", Outcome.invalidated(InvalidationReason.STOP_LOSS_REACHED, minute(8))),
+            Map.entry("limitShort106", Outcome.invalidated(InvalidationReason.INVALIDATION_PRICE, minute(8))));
 
     /** The ways of losing part of the recording. */
     enum Loss {
@@ -169,6 +188,7 @@ class MatchingReplayTest {
     private final List<MinuteKline> served = new CopyOnWriteArrayList<>();
 
     private final Map<UUID, Fill> fills = new ConcurrentHashMap<>();
+    private final Map<UUID, Invalidation> invalidations = new ConcurrentHashMap<>();
     private final List<Instant> pagesAskedFrom = new CopyOnWriteArrayList<>();
 
     /** While set, the exchange refuses every page. */
@@ -189,6 +209,15 @@ class MatchingReplayTest {
         feed.stop();
         worker.stop();
         insertPair();
+        jdbc.sql("update system_setting set setting_value = '10' where setting_key = 'SLIPPAGE_BPS'")
+                .update();
+        when(market.tradablePair(any(), eq(MarketType.FUTURES)))
+                .thenAnswer(call -> Optional.of(new TradablePair(
+                        call.getArgument(0),
+                        "RPUSDT",
+                        MarketType.FUTURES,
+                        new PairFilters(new BigDecimal("0.01"), new BigDecimal("0.001"), new BigDecimal("5")),
+                        true)));
         when(market.closedMinuteKlines(eq(MarketType.FUTURES), any(), any())).thenAnswer(call -> {
             Instant from = call.getArgument(2);
             pagesAskedFrom.add(from);
@@ -218,12 +247,24 @@ class MatchingReplayTest {
                 })
                 .when(matching)
                 .fill(any());
+        doAnswer(call -> {
+                    boolean invalidated = (boolean) call.callRealMethod();
+                    if (invalidated) {
+                        Invalidation invalidation = call.getArgument(0);
+                        invalidations.put(invalidation.planId(), invalidation);
+                    }
+                    return invalidated;
+                })
+                .when(matching)
+                .invalidate(any());
     }
 
     @AfterEach
     void tearDown() {
         feed.stop();
         worker.stop();
+        jdbc.sql("update system_setting set setting_value = '0' where setting_key = 'SLIPPAGE_BPS'")
+                .update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
         jdbc.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
@@ -244,8 +285,8 @@ class MatchingReplayTest {
                 .containsSubsequence(minute(5), minute(8), minute(10));
         assertEachMinuteAppliedOnce(live);
         assertEachMinuteAppliedOnce(replayed);
-        assertOneFillCallPerPlan(live, null);
-        assertOneFillCallPerPlan(replayed, null);
+        assertOneStoreCallPerPlan(live, null);
+        assertOneStoreCallPerPlan(replayed, null);
     }
 
     @ParameterizedTest
@@ -257,27 +298,40 @@ class MatchingReplayTest {
 
         assertThat(run.outcomes()).isEqualTo(EXPECTED);
         assertEachMinuteAppliedOnce(run);
-        assertOneFillCallPerPlan(
+        assertOneStoreCallPerPlan(
                 run, loss == Loss.GIVE_UP_THEN_CRASH ? run.ids().get("long98") : null);
     }
 
-    /** D-79: a Trader's cancel while the pair replays wins over a fill the replay would make from an older candle. */
+    /**
+     * D-79: a Trader's cancel while the pair replays wins over a fill or an invalidation the replay would make from an
+     * older candle: a LIMIT it would fill, a STOP it would trigger, a LIMIT whose take profit it would reach.
+     */
     @Test
-    void D79_aCancelDuringTheReplay_winsOverTheReplayedCandleThatWouldFillThePlan() {
+    void D79_aCancelDuringTheReplay_winsOverTheReplayedCandleThatWouldFillOrInvalidateThePlan() {
         UUID cancelled = activePlan(Direction.LONG, "98", BEFORE);
+        UUID cancelledStop = activePlan(Direction.LONG, EntryType.STOP, "104.5", "97.5", "115", null, BEFORE);
+        UUID cancelledBeforeItsTakeProfit =
+                activePlan(Direction.LONG, EntryType.LIMIT, "96", "91", "105", null, BEFORE);
         UUID kept = activePlan(Direction.SHORT, "105", BEFORE);
+        UUID keptInvalidated = activePlan(Direction.LONG, EntryType.STOP, "106", "97.5", "116", null, BEFORE);
         served.addAll(closedCandles(LAST));
-        duringReplay = () -> tradingPlans.cancel(SEEDED_ACCOUNT, cancelled);
+        duringReplay = () -> List.of(cancelled, cancelledStop, cancelledBeforeItsTakeProfit)
+                .forEach(id -> tradingPlans.cancel(SEEDED_ACCOUNT, id));
 
         feed.start();
         awaitWatermark(minute(LAST));
 
-        TradingPlan plan = plan(cancelled);
-        assertThat(plan.getStatus()).isEqualTo(PlanStatus.CANCELLED);
-        assertThat(plan.getExecutedAt()).isNull();
-        assertThat(plan.getFillPrice()).isNull();
-        assertThat(fills).doesNotContainKey(cancelled);
+        for (UUID id : List.of(cancelled, cancelledStop, cancelledBeforeItsTakeProfit)) {
+            TradingPlan plan = plan(id);
+            assertThat(plan.getStatus()).isEqualTo(PlanStatus.CANCELLED);
+            assertThat(plan.getExecutedAt()).isNull();
+            assertThat(plan.getFillPrice()).isNull();
+            assertThat(plan.getInvalidatedAt()).isNull();
+            assertThat(fills).doesNotContainKey(id);
+            assertThat(invalidations).doesNotContainKey(id);
+        }
         assertThat(plan(kept).getExecutedAt()).isEqualTo(minute(6));
+        assertThat(plan(keptInvalidated).getInvalidatedAt()).isEqualTo(minute(8));
     }
 
     @Test
@@ -299,7 +353,11 @@ class MatchingReplayTest {
         ids.put("long98", activePlan(Direction.LONG, "98", BEFORE));
         ids.put("short105", activePlan(Direction.SHORT, "105", BEFORE));
         ids.put("long97", activePlan(Direction.LONG, "97", BEFORE));
-        ids.put("long90", activePlan(Direction.LONG, "90", BEFORE));
+        ids.put("long90", activePlan(Direction.LONG, EntryType.LIMIT, "90", "85", "120", null, BEFORE));
+        ids.put("stopLong104.5", activePlan(Direction.LONG, EntryType.STOP, "104.5", "97.5", "115", null, BEFORE));
+        ids.put("limitLong96", activePlan(Direction.LONG, EntryType.LIMIT, "96", "91", "105", null, BEFORE));
+        ids.put("stopLong106", activePlan(Direction.LONG, EntryType.STOP, "106", "97.5", "116", null, BEFORE));
+        ids.put("limitShort106", activePlan(Direction.SHORT, EntryType.LIMIT, "106", "111", "90", "97.5", BEFORE));
         if (loss == Loss.GIVE_UP_THEN_CRASH) {
             failing = ids.get("long98");
         }
@@ -319,6 +377,11 @@ class MatchingReplayTest {
             boolean dropped = (loss == Loss.DROP || loss == Loss.DROP_THEN_CRASH) && (m == 3 || m == 4);
             if (m == 4) {
                 steps.add(() -> ids.put("short103AtMinute4", activate(Direction.SHORT, "103", minute(minute))));
+            }
+            if (m == 7) {
+                steps.add(() -> ids.put(
+                        "stopShort103.2AtMinute7",
+                        activate(Direction.SHORT, EntryType.STOP, "103.2", "108", "93", null, minute(minute))));
             }
             if (m == 5 && loss == Loss.DROP) {
                 steps.add(() -> served.addAll(List.of(closedCandle(3), closedCandle(4))));
@@ -397,6 +460,7 @@ class MatchingReplayTest {
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
         served.clear();
         fills.clear();
+        invalidations.clear();
         pagesAskedFrom.clear();
         clearInvocations(matching);
     }
@@ -420,19 +484,34 @@ class MatchingReplayTest {
                 .containsExactlyInAnyOrderElementsOf(everyMinute);
     }
 
-    /** R5: each filled plan's fill is called once; the plan whose fill failed once more. */
-    private void assertOneFillCallPerPlan(Run run, UUID failedOnce) {
-        Map<UUID, Integer> calls = new HashMap<>();
-        run.invocations().stream()
-                .filter(call -> call.getMethod().getName().equals("fill"))
-                .forEach(call -> calls.merge(((Fill) call.getArgument(0)).planId(), 1, Integer::sum));
+    /**
+     * R5: each filled plan's fill and each invalidated plan's invalidation is called once, and no plan gets the other
+     * call; the plan whose fill failed once more.
+     */
+    private void assertOneStoreCallPerPlan(Run run, UUID failedOnce) {
+        Map<UUID, Integer> fillCalls = calls(run, "fill");
+        Map<UUID, Integer> invalidateCalls = calls(run, "invalidate");
         run.ids().forEach((label, id) -> {
-            int expected = EXPECTED.get(label).status() == PlanStatus.EXECUTED ? 1 : 0;
+            PlanStatus status = EXPECTED.get(label).status();
+            int expected = status == PlanStatus.EXECUTED ? 1 : 0;
             if (id.equals(failedOnce)) {
                 expected = 2;
             }
-            assertThat(calls.getOrDefault(id, 0)).as("fill calls of %s", label).isEqualTo(expected);
+            assertThat(fillCalls.getOrDefault(id, 0))
+                    .as("fill calls of %s", label)
+                    .isEqualTo(expected);
+            assertThat(invalidateCalls.getOrDefault(id, 0))
+                    .as("invalidate calls of %s", label)
+                    .isEqualTo(status == PlanStatus.INVALIDATED ? 1 : 0);
         });
+    }
+
+    private static Map<UUID, Integer> calls(Run run, String method) {
+        Map<UUID, Integer> calls = new HashMap<>();
+        run.invocations().stream()
+                .filter(call -> call.getMethod().getName().equals(method))
+                .forEach(call -> calls.merge(((PlanOutcome) call.getArgument(0)).planId(), 1, Integer::sum));
+        return calls;
     }
 
     private Map<String, Outcome> outcomes(Map<String, UUID> ids) {
@@ -443,9 +522,15 @@ class MatchingReplayTest {
                 assertThat(plan.getExecutedAt())
                         .as("%s is never filled by a candle that opened before its activation", label)
                         .isAfterOrEqualTo(plan.getActivatedAt());
-                assertThat(plan.getFillPrice())
-                        .as("%s keeps the fill price the engine decided", label)
-                        .isEqualByComparingTo(fills.get(id).price());
+                assertThat(plan.getFillLiquidity())
+                        .as("%s keeps the liquidity role the engine decided", label)
+                        .isEqualTo(fills.get(id).liquidity());
+            }
+            if (plan.getInvalidatedAt() != null) {
+                assertThat(plan.getInvalidatedAt())
+                        .as("%s is never invalidated by a candle that opened before its activation", label)
+                        .isAfterOrEqualTo(plan.getActivatedAt())
+                        .isEqualTo(invalidations.get(id).invalidatedAt());
             }
             outcomes.put(
                     label,
@@ -454,28 +539,65 @@ class MatchingReplayTest {
                             plan.getFillPrice() == null
                                     ? null
                                     : plan.getFillPrice().stripTrailingZeros(),
-                            plan.getExecutedAt()));
+                            plan.getExecutedAt(),
+                            plan.getFillLiquidity(),
+                            plan.getInvalidationReason(),
+                            plan.getInvalidatedAt()));
         });
         return outcomes;
     }
 
-    /** A plan ACTIVE in the database before the engine starts. */
+    /** A LIMIT plan ACTIVE in the database before the engine starts, its stop loss 5 and its take profit 10 away. */
     private UUID activePlan(Direction direction, String entry, Instant activatedAt) {
         return inTransaction(() -> plans.save(plan(direction, entry, activatedAt)))
                 .getId();
     }
 
-    /** A plan activated while the engine runs: saved, and its activation published on commit. */
+    /** A LIMIT or STOP plan ACTIVE in the database before the engine starts. */
+    private UUID activePlan(
+            Direction direction,
+            EntryType entryType,
+            String entry,
+            String stopLoss,
+            String takeProfit,
+            String invalidation,
+            Instant activatedAt) {
+        return inTransaction(() ->
+                        plans.save(plan(direction, entryType, entry, stopLoss, takeProfit, invalidation, activatedAt)))
+                .getId();
+    }
+
+    /** A LIMIT plan activated while the engine runs: saved, and its activation published on commit. */
     private UUID activate(Direction direction, String entry, Instant activatedAt) {
+        return activated(plan(direction, entry, activatedAt));
+    }
+
+    /** A LIMIT or STOP plan activated while the engine runs. */
+    private UUID activate(
+            Direction direction,
+            EntryType entryType,
+            String entry,
+            String stopLoss,
+            String takeProfit,
+            String invalidation,
+            Instant activatedAt) {
+        return activated(plan(direction, entryType, entry, stopLoss, takeProfit, invalidation, activatedAt));
+    }
+
+    private UUID activated(TradingPlan unsaved) {
         return inTransaction(() -> {
-                    TradingPlan plan = plans.save(plan(direction, entry, activatedAt));
+                    TradingPlan plan = plans.save(unsaved);
                     events.publishEvent(new TradingPlanActivated(
                             plan.getId(),
+                            plan.getUserId(),
                             plan.getMarket(),
                             pair,
                             plan.getDirection(),
                             plan.getEntryType(),
                             plan.getEntryPrice(),
+                            plan.getStopLoss(),
+                            plan.getTakeProfit(),
+                            plan.getInvalidationPrice(),
                             plan.getActivatedAt()));
                     return plan;
                 })
@@ -484,24 +606,38 @@ class MatchingReplayTest {
 
     private TradingPlan plan(Direction direction, String entry, Instant activatedAt) {
         BigDecimal price = new BigDecimal(entry);
-        PlanFixture fixture = direction == Direction.LONG
-                ? PlanFixture.futuresLong()
-                        .entry(entry)
-                        .stop(price.subtract(BigDecimal.valueOf(5)).toPlainString())
-                        .takeProfit(price.add(BigDecimal.TEN).toPlainString())
-                : PlanFixture.futuresShort()
-                        .entry(entry)
-                        .stop(price.add(BigDecimal.valueOf(5)).toPlainString())
-                        .takeProfit(price.subtract(BigDecimal.TEN).toPlainString());
+        boolean isLong = direction == Direction.LONG;
+        return plan(
+                direction,
+                EntryType.LIMIT,
+                entry,
+                (isLong ? price.subtract(BigDecimal.valueOf(5)) : price.add(BigDecimal.valueOf(5))).toPlainString(),
+                (isLong ? price.add(BigDecimal.TEN) : price.subtract(BigDecimal.TEN)).toPlainString(),
+                null,
+                activatedAt);
+    }
+
+    private TradingPlan plan(
+            Direction direction,
+            EntryType entryType,
+            String entry,
+            String stopLoss,
+            String takeProfit,
+            String invalidation,
+            Instant activatedAt) {
+        PlanFixture fixture = (direction == Direction.LONG ? PlanFixture.futuresLong() : PlanFixture.futuresShort())
+                .entry(entry)
+                .stop(stopLoss)
+                .takeProfit(takeProfit);
         TradingPlan plan = TradingPlan.draft(
                 SEEDED_ACCOUNT,
                 pair,
                 fixture.build(),
                 new PlanDetails(
-                        EntryType.LIMIT,
+                        entryType,
                         activatedAt.plus(Duration.ofDays(7)),
                         null,
-                        null,
+                        invalidation == null ? null : new BigDecimal(invalidation),
                         null,
                         AnalysisTimeframe.ONE_HOUR),
                 List.of());
@@ -558,7 +694,8 @@ class MatchingReplayTest {
                 high,
                 high,
                 false,
-                minute(m).plusSeconds(SECONDS[i]));
+                minute(m).plusSeconds(SECONDS[i]),
+                new BigDecimal(PATHS[m][0]));
     }
 
     private MinuteKline closedCandle(int m) {
@@ -571,7 +708,8 @@ class MatchingReplayTest {
                 last.high(),
                 last.close(),
                 true,
-                minute(m).plusSeconds(60).minusMillis(1));
+                minute(m).plusSeconds(60).minusMillis(1),
+                last.open());
     }
 
     /** The closed candles of minutes 0 to {@code last}. */
@@ -612,14 +750,42 @@ class MatchingReplayTest {
     private record Run(Map<String, UUID> ids, Map<String, Outcome> outcomes, List<Invocation> invocations) {}
 
     /** What a run left a plan with. */
-    private record Outcome(PlanStatus status, BigDecimal fillPrice, Instant executedAt) {
+    private record Outcome(
+            PlanStatus status,
+            BigDecimal fillPrice,
+            Instant executedAt,
+            LiquidityRole fillLiquidity,
+            InvalidationReason invalidationReason,
+            Instant invalidatedAt) {
 
+        /** A resting LIMIT reached by a candle: maker, at its own price. */
         static Outcome filled(String price, Instant at) {
-            return new Outcome(PlanStatus.EXECUTED, new BigDecimal(price).stripTrailingZeros(), at);
+            return new Outcome(
+                    PlanStatus.EXECUTED,
+                    new BigDecimal(price).stripTrailingZeros(),
+                    at,
+                    LiquidityRole.MAKER,
+                    null,
+                    null);
+        }
+
+        /** A triggered STOP: taker, at the slipped price. */
+        static Outcome takerFilled(String price, Instant at) {
+            return new Outcome(
+                    PlanStatus.EXECUTED,
+                    new BigDecimal(price).stripTrailingZeros(),
+                    at,
+                    LiquidityRole.TAKER,
+                    null,
+                    null);
+        }
+
+        static Outcome invalidated(InvalidationReason reason, Instant at) {
+            return new Outcome(PlanStatus.INVALIDATED, null, null, null, reason, at);
         }
 
         static Outcome active() {
-            return new Outcome(PlanStatus.ACTIVE, null, null);
+            return new Outcome(PlanStatus.ACTIVE, null, null, null, null, null);
         }
     }
 }

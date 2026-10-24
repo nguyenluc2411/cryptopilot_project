@@ -171,7 +171,7 @@ public class TradingPlanController {
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller")
     @ApiResponse(
             responseCode = "409",
-            description = "MSG43: the plan is executed, cancelled or expired, or changed concurrently")
+            description = "MSG43: the plan is executed, cancelled, expired or invalidated, or changed concurrently")
     @PostMapping("/{id}/cancel")
     public TradingPlanResponse cancel(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
         return plans.cancel(callerOf(caller), id);

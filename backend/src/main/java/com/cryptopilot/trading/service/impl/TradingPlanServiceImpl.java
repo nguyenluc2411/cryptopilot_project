@@ -562,9 +562,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * activation was calculated with: the last price on both markets (D-111 E2/E3), moved by the slippage. A LIMIT
      * fills at the last price moved by the slippage, but never past its limit (D-112 note). A fill at activation took
      * liquidity, so it is TAKER (D-111 E1, E5).
-     * A STOP waits: its trigger is the matching engine's (TP-B). The journal record of the fill is T-048. The setup
-     * score of the moment is kept beside the plan, see {@link #recordSetupScore}. {@code last} is the request's one read
-     * of the last price, see {@link #lastPriceRead}.
+     * A STOP waits: the matching engine triggers it (one already triggered was refused). The journal record of the
+     * fill is T-048. The setup score of the moment is kept beside the plan, see {@link #recordSetupScore}.
+     * {@code last} is the request's one read of the last price, see {@link #lastPriceRead}.
      */
     private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now, Optional<BigDecimal> last) {
         plan.activate(calculated.calculation(), calculated.warnings(), now);
@@ -661,11 +661,15 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     private void publishActivated(TradingPlan plan) {
         events.publishEvent(new TradingPlanActivated(
                 plan.getId(),
+                plan.getUserId(),
                 plan.getMarket(),
                 plan.getPairId(),
                 plan.getDirection(),
                 plan.getEntryType(),
                 plan.getEntryPrice(),
+                plan.getStopLoss(),
+                plan.getTakeProfit(),
+                plan.getInvalidationPrice(),
                 plan.getActivatedAt()));
     }
 }

@@ -6,6 +6,8 @@ import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.matching.MatchingEngine;
 import com.cryptopilot.trading.model.Fill;
+import com.cryptopilot.trading.model.Invalidation;
+import com.cryptopilot.trading.model.PlanOutcome;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.EntryType;
@@ -46,15 +48,17 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * {@link MatchingEngine}. A pair always lands in the same partition (by market and pair), so its books see the
  * updates in arrival order without locks, while different pairs are matched in parallel.
  *
- * <p>Commands: track an activated entry, untrack a cancelled plan, and a price range. Track and untrack wait for room
+ * <p>Commands: track an activated plan, untrack a cancelled plan, and a price range. Track and untrack wait for room
  * in the channel, because losing one would leave the books wrong. A range never waits and is never lost: when the
- * channel is full it waits as a pending range of its pair (see {@link #submit}). A fill that fails is kept with its
- * price and time and tried again on the pair's next range once its back-off has passed, until a deadline.
+ * channel is full it waits as a pending range of its pair (see {@link #submit}). An outcome the engine decided, a fill
+ * or an invalidation, that fails to be stored is kept as it is and tried again on the pair's next range once its
+ * back-off has passed, until a deadline.
  *
- * <p>Each start builds new partitions from the ACTIVE LIMIT plans, written straight into each engine before its
- * consumer starts, and never while a consumer of the previous run is still alive.
+ * <p>Each start builds new partitions from the waiting plans (ACTIVE LIMIT and STOP, with their invalidation levels),
+ * written straight into each engine before its consumer starts, and never while a consumer of the previous run is
+ * still alive.
  *
- * <p>Rule: NSF-07, BR-33; TECHNICAL_DESIGN 7.7 and 10; D-09, D-77, D-78.
+ * <p>Rule: NSF-07, BR-33, BR-68; TECHNICAL_DESIGN 7.7 and 10; D-09, D-77, D-78; D-111 (M1, M3).
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
  * (producer-consumer with bounded blocking queues) and ch. 7 (cancellation and shutdown).
@@ -105,7 +109,7 @@ public class MatchingWorker {
     }
 
     /**
-     * Builds the books from the ACTIVE LIMIT plans and starts one consumer per partition. A second call does nothing,
+     * Builds the books from the waiting plans and starts one consumer per partition. A second call does nothing,
      * and nothing starts while a consumer of the previous run has not ended.
      */
     @EventListener(ApplicationReadyEvent.class)
@@ -173,16 +177,24 @@ public class MatchingWorker {
         return true;
     }
 
-    /** A LIMIT plan that was not filled at its activation waits in the books (BR-33). */
+    /**
+     * A LIMIT plan not filled at its activation, or a STOP plan, waits in the books with its invalidation levels
+     * (BR-33, BR-68).
+     */
     @TransactionalEventListener
     public void onActivated(TradingPlanActivated event) {
-        if (running && event.entryType() == EntryType.LIMIT) {
+        if (running && event.entryType() != EntryType.MARKET) {
             TrackedEntry entry = new TrackedEntry(
                     event.planId(),
+                    event.userId(),
                     event.market(),
                     event.pairId(),
                     event.direction(),
+                    event.entryType(),
                     event.entryPrice(),
+                    event.stopLoss(),
+                    event.takeProfit(),
+                    event.invalidationPrice(),
                     event.activatedAt());
             PairKey key = new PairKey(event.market(), event.pairId());
             Partition partition = partitionOf(event.market(), event.pairId());
@@ -276,15 +288,16 @@ public class MatchingWorker {
         private final MatchingEngine engine = new MatchingEngine();
 
         /**
-         * Fills that failed, per pair, with their price, time, failures and next try: a retry list, tried on the pair's
-         * next range once due, so a fill is not lost when the price moves away (Hohpe &amp; Woolf 2003). A retry runs
-         * only when the pair's next price update arrives (about every 2 s on {@code kline_1m}); no timer fires it.
+         * Outcomes that failed to be stored, per pair, as the engine decided them, with their failures and next try: a
+         * retry list, tried on the pair's next range once due, so an outcome is not lost when the price moves away
+         * (Hohpe &amp; Woolf 2003). A retry runs only when the pair's next price update arrives (about every 2 s on
+         * {@code kline_1m}); no timer fires it.
          */
-        private final Map<PairKey, List<PendingFill>> retries = new HashMap<>();
+        private final Map<PairKey, List<PendingOutcome>> retries = new HashMap<>();
 
         /**
-         * Pairs with a fill given up since the start: their watermark stays before the candle that reached it, so a
-         * restart replays that candle (Akidau et al. 2015: a watermark must not pass input not fully processed).
+         * Pairs with an outcome given up since the start: their watermark stays before the candle that decided it, so
+         * a restart replays that candle (Akidau et al. 2015: a watermark must not pass input not fully processed).
          */
         private final Set<PairKey> watermarkHeld = new HashSet<>();
 
@@ -406,7 +419,7 @@ public class MatchingWorker {
                     engine.untrack(untrack.planId());
                     retries.values()
                             .forEach(waiting ->
-                                    waiting.removeIf(p -> p.fill().planId().equals(untrack.planId())));
+                                    waiting.removeIf(p -> p.outcome().planId().equals(untrack.planId())));
                 }
                 case Command.Range range -> {
                     onRange(range.range());
@@ -485,20 +498,20 @@ public class MatchingWorker {
         private void onRange(PriceRange range) {
             PairKey key = new PairKey(range.market(), range.pairId());
             retryDue(key);
-            engine.onRange(range).forEach(fill -> fill(key, fill, null));
+            engine.onRange(range).forEach(outcome -> store(key, outcome, null));
             if (range.closed() && !retries.containsKey(key) && !watermarkHeld.contains(key)) {
                 advanceWatermark(range);
             }
         }
 
-        /** Tries again the pair's failed fills whose back-off has passed; the others keep waiting. */
+        /** Tries again the pair's failed outcomes whose back-off has passed; the others keep waiting. */
         private void retryDue(PairKey key) {
-            List<PendingFill> waiting = retries.get(key);
+            List<PendingOutcome> waiting = retries.get(key);
             if (waiting == null) {
                 return;
             }
             Instant now = clock.instant();
-            List<PendingFill> due = new ArrayList<>();
+            List<PendingOutcome> due = new ArrayList<>();
             waiting.removeIf(retry -> {
                 boolean isDue = !retry.nextTryAt().isAfter(now);
                 if (isDue) {
@@ -509,13 +522,13 @@ public class MatchingWorker {
             if (waiting.isEmpty()) {
                 retries.remove(key);
             }
-            due.forEach(retry -> fill(key, retry.fill(), retry));
+            due.forEach(retry -> store(key, retry.outcome(), retry));
         }
 
         /**
-         * The candle is closed and every fill it decided is stored: a restart replays from the next candle. Not
-         * advanced while a fill of the pair waits for a retry or was given up, so a restart replays the candle that
-         * reached it.
+         * The candle is closed and every outcome it decided is stored: a restart replays from the next candle. Not
+         * advanced while an outcome of the pair waits for a retry or was given up, so a restart replays the candle
+         * that decided it.
          */
         private void advanceWatermark(PriceRange range) {
             try {
@@ -531,16 +544,22 @@ public class MatchingWorker {
         }
 
         /**
-         * Stores a fill. A failure of any kind keeps it in the retry list with an exponential back-off; once the
-         * deadline since its first failure has passed it is logged once as an error and dropped, and the plan stays
-         * ACTIVE in the database for a person to handle.
+         * Stores an outcome: a fill or an invalidation, each a compare-and-set on the plan's status. A failure of any
+         * kind keeps it in the retry list with an exponential back-off; once the deadline since its first failure has
+         * passed it is logged once as an error and dropped, and the plan stays ACTIVE in the database for a person to
+         * handle.
          *
          * @param previous the retry this try comes from, or {@code null} for a first try
          */
-        private void fill(PairKey key, Fill fill, PendingFill previous) {
+        private void store(PairKey key, PlanOutcome outcome, PendingOutcome previous) {
             try {
-                if (!matching.fill(fill)) {
-                    log.debug("NSF-07 plan {} was no longer ACTIVE", fill.planId());
+                boolean stored =
+                        switch (outcome) {
+                            case Fill fill -> matching.fill(fill);
+                            case Invalidation invalidation -> matching.invalidate(invalidation);
+                        };
+                if (!stored) {
+                    log.debug("NSF-07 plan {} was no longer ACTIVE", outcome.planId());
                 }
             } catch (Exception failure) {
                 if (failure instanceof InterruptedException) {
@@ -553,10 +572,11 @@ public class MatchingWorker {
                 if (!now.isBefore(firstFailedAt.plus(properties.retry().deadline()))) {
                     watermarkHeld.add(key);
                     log.error(
-                            "NSF-07 plan {} fill failed {} times since {}; no longer retried, the plan stays ACTIVE"
+                            "NSF-07 plan {} {} failed {} times since {}; no longer retried, the plan stays ACTIVE"
                                     + " and the pair's watermark is held. A restart is required within"
-                                    + " replay.max-window ({}) to replay the candle that reached it",
-                            fill.planId(),
+                                    + " replay.max-window ({}) to replay the candle that decided it",
+                            outcome.planId(),
+                            kind(outcome),
                             failures,
                             firstFailedAt,
                             properties.replay().maxWindow(),
@@ -565,14 +585,19 @@ public class MatchingWorker {
                 }
                 Duration wait = backoff(properties.retry(), failures, random.getAsDouble());
                 log.warn(
-                        "NSF-07 plan {} fill failed ({}); retried in {}: {}",
-                        fill.planId(),
+                        "NSF-07 plan {} {} failed ({}); retried in {}: {}",
+                        outcome.planId(),
+                        kind(outcome),
                         failures,
                         wait,
                         failure.toString());
                 retries.computeIfAbsent(key, ignored -> new ArrayList<>())
-                        .add(new PendingFill(fill, failures, firstFailedAt, now.plus(wait)));
+                        .add(new PendingOutcome(outcome, failures, firstFailedAt, now.plus(wait)));
             }
+        }
+
+        private static String kind(PlanOutcome outcome) {
+            return outcome instanceof Fill ? "fill" : "invalidation";
         }
     }
 
@@ -609,8 +634,8 @@ public class MatchingWorker {
 
     private record PairKey(MarketType market, UUID pairId) {}
 
-    /** A fill to try again: its failures so far, when the first one happened, and when to try next. */
-    private record PendingFill(Fill fill, int failures, Instant firstFailedAt, Instant nextTryAt) {}
+    /** An outcome to store again: its failures so far, when the first one happened, and when to try next. */
+    private record PendingOutcome(PlanOutcome outcome, int failures, Instant firstFailedAt, Instant nextTryAt) {}
 
     /** What a partition's consumer is asked to do. */
     private sealed interface Command {

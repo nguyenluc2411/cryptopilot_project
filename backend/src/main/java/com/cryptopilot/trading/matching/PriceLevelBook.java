@@ -27,7 +27,23 @@ public final class PriceLevelBook {
         /** Fires when the price trades at or below the level. */
         BELOW,
         /** Fires when the price trades at or above the level. */
-        ABOVE
+        ABOVE;
+
+        /** The other side. */
+        public Side opposite() {
+            return this == BELOW ? ABOVE : BELOW;
+        }
+
+        /** Whether one price has reached the level from this side: at or below it for BELOW, at or above for ABOVE. */
+        public boolean reachedAt(BigDecimal price, BigDecimal level) {
+            int compared = price.compareTo(level);
+            return this == BELOW ? compared <= 0 : compared >= 0;
+        }
+
+        /** Whether a range {@code [low, high]} reached the level: its low for BELOW, its high for ABOVE; inclusive. */
+        public boolean reachedBy(BigDecimal low, BigDecimal high, BigDecimal level) {
+            return reachedAt(this == BELOW ? low : high, level);
+        }
     }
 
     private final Side side;

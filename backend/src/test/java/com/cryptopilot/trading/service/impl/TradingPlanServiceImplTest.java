@@ -457,11 +457,15 @@ class TradingPlanServiceImplTest {
         verify(events)
                 .publishEvent(new TradingPlanActivated(
                         saved.getId(),
+                        USER,
                         MarketType.SPOT,
                         PAIR,
                         Direction.LONG,
                         EntryType.LIMIT,
                         saved.getEntryPrice(),
+                        saved.getStopLoss(),
+                        saved.getTakeProfit(),
+                        null,
                         NOW));
     }
 
@@ -826,11 +830,15 @@ class TradingPlanServiceImplTest {
         verify(events)
                 .publishEvent(new TradingPlanActivated(
                         saved.getId(),
+                        USER,
                         MarketType.SPOT,
                         PAIR,
                         Direction.LONG,
                         EntryType.STOP,
                         saved.getEntryPrice(),
+                        saved.getStopLoss(),
+                        saved.getTakeProfit(),
+                        null,
                         NOW));
     }
 
