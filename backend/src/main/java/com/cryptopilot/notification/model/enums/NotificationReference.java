@@ -10,5 +10,8 @@ public enum NotificationReference {
     ALERT,
     PLAN,
     POST,
-    SUBSCRIPTION
+    SUBSCRIPTION,
+
+    /** A news source of the administration console (SCR-41), for a source that keeps failing (NSF-10). */
+    NEWS_SOURCE
 }

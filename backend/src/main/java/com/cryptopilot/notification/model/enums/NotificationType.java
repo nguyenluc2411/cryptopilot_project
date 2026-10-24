@@ -21,5 +21,11 @@ public enum NotificationType {
     SUBSCRIPTION,
 
     /** Someone commented on the recipient's post (SRS 3.7.3). */
-    COMMENT
+    COMMENT,
+
+    /**
+     * A fault of the system an administrator has to act on, such as a news source that keeps failing (NSF-10). The
+     * logical model has no kind for a notice to administrators; V36 adds this one.
+     */
+    SYSTEM
 }
