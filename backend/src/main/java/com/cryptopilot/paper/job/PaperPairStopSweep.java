@@ -62,8 +62,8 @@ public class PaperPairStopSweep {
                 if (!cancellation.outOfService(pairId)) {
                     continue;
                 }
-                for (UUID accountId : cancellation.accountsWithOrders(pairId)) {
-                    cancelled += cancelOne(accountId, pairId);
+                for (UUID userId : cancellation.accountsWithOrders(pairId)) {
+                    cancelled += cancelOne(userId, pairId);
                 }
             }
         } catch (RuntimeException failure) {
@@ -75,13 +75,13 @@ public class PaperPairStopSweep {
         return cancelled;
     }
 
-    private int cancelOne(UUID accountId, UUID pairId) {
+    private int cancelOne(UUID userId, UUID pairId) {
         try {
-            return cancellation.cancel(accountId, pairId);
+            return cancellation.cancel(userId, pairId);
         } catch (RuntimeException failure) {
             log.warn(
                     "NSF-01 paper orders of account {} on pair {} not cancelled; tried again next run: {}",
-                    accountId,
+                    userId,
                     pairId,
                     failure.toString());
             return 0;

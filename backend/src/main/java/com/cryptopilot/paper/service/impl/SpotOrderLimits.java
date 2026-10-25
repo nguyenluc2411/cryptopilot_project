@@ -53,11 +53,11 @@ public class SpotOrderLimits {
      * @param addingStops how many of them are stops
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public void requireRoom(UUID accountId, UUID pairId, PairFilters filters, int adding, int addingStops) {
+    public void requireRoom(UUID userId, UUID pairId, PairFilters filters, int adding, int addingStops) {
         Integer maxOrders = filters.rules().maxNumOrders();
         int ordersLimit = maxOrders != null ? maxOrders : properties.spotMaxNumOrders();
-        long open = orders.countByAccountIdAndPairIdAndMarketTypeAndOrderStatusIn(
-                accountId, pairId, MarketType.SPOT, COUNTED);
+        long open =
+                orders.countByUserIdAndPairIdAndMarketTypeAndOrderStatusIn(userId, pairId, MarketType.SPOT, COUNTED);
         if (open + adding > ordersLimit) {
             throw refused(ErrorCode.PAPER_MAX_NUM_ORDERS, "orders", open + adding, ordersLimit);
         }
@@ -66,8 +66,8 @@ public class SpotOrderLimits {
         }
         Integer maxStops = filters.rules().maxNumAlgoOrders();
         int stopsLimit = maxStops != null ? maxStops : properties.spotMaxNumAlgoOrders();
-        long stops = orders.countByAccountIdAndPairIdAndMarketTypeAndOrderStatusInAndOrderTypeIn(
-                accountId, pairId, MarketType.SPOT, COUNTED, STOPS);
+        long stops = orders.countByUserIdAndPairIdAndMarketTypeAndOrderStatusInAndOrderTypeIn(
+                userId, pairId, MarketType.SPOT, COUNTED, STOPS);
         if (stops + addingStops > stopsLimit) {
             throw refused(ErrorCode.PAPER_MAX_NUM_ALGO_ORDERS, "stopOrders", stops + addingStops, stopsLimit);
         }

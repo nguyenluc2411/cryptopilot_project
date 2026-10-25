@@ -39,7 +39,7 @@ import lombok.Getter;
  */
 @Getter
 @Entity
-@Table(name = "paper_order")
+@Table(name = "trade_order")
 @AttributeOverride(name = "id", column = @Column(name = "order_id", nullable = false, updatable = false))
 public class PaperOrder extends BaseEntity {
 
@@ -49,8 +49,8 @@ public class PaperOrder extends BaseEntity {
     /** Why a filled order is flagged: it took more than the depth shown, the rest at the last level's price (Q-T7). */
     public static final String DEPTH_EXHAUSTED = "DEPTH_EXHAUSTED";
 
-    @Column(name = "account_id", nullable = false, updatable = false)
-    private UUID accountId;
+    @Column(name = "user_id", nullable = false, updatable = false)
+    private UUID userId;
 
     @Column(name = "pair_id", nullable = false, updatable = false)
     private UUID pairId;
@@ -66,6 +66,13 @@ public class PaperOrder extends BaseEntity {
     /** The group the order was placed in (TR-10), or {@code null}. */
     @Column(name = "list_id", updatable = false)
     private UUID listId;
+
+    /**
+     * The trading plan the order carries out, or {@code null} for an order placed on the trading screen. Plans do not
+     * place paper orders yet: the plan matching engine fills them itself until the two engines are one (D-117).
+     */
+    @Column(name = "plan_id", updatable = false)
+    private UUID planId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "side", nullable = false, length = 32, updatable = false)
@@ -152,7 +159,7 @@ public class PaperOrder extends BaseEntity {
     protected PaperOrder() {}
 
     private PaperOrder(
-            UUID accountId,
+            UUID userId,
             UUID pairId,
             String clientOrderId,
             OrderSide side,
@@ -161,7 +168,7 @@ public class PaperOrder extends BaseEntity {
             BigDecimal limitPrice,
             BigDecimal origQuantity,
             BigDecimal quoteOrderAmount) {
-        this.accountId = Objects.requireNonNull(accountId, "accountId must not be null");
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
         this.pairId = Objects.requireNonNull(pairId, "pairId must not be null");
         this.marketType = MarketType.SPOT;
         this.clientOrderId = Objects.requireNonNull(clientOrderId, "clientOrderId must not be null");
@@ -184,9 +191,9 @@ public class PaperOrder extends BaseEntity {
      * @param quantity positive, already floored to the pair's step size
      */
     public static PaperOrder spotMarket(
-            UUID accountId, UUID pairId, String clientOrderId, OrderSide side, BigDecimal quantity) {
+            UUID userId, UUID pairId, String clientOrderId, OrderSide side, BigDecimal quantity) {
         return new PaperOrder(
-                accountId, pairId, clientOrderId, side, OrderType.MARKET, null, null, positive(quantity), null);
+                userId, pairId, clientOrderId, side, OrderType.MARKET, null, null, positive(quantity), null);
     }
 
     /**
@@ -196,9 +203,9 @@ public class PaperOrder extends BaseEntity {
      * @param quoteAmount positive, in the quote asset
      */
     public static PaperOrder spotMarketFor(
-            UUID accountId, UUID pairId, String clientOrderId, OrderSide side, BigDecimal quoteAmount) {
+            UUID userId, UUID pairId, String clientOrderId, OrderSide side, BigDecimal quoteAmount) {
         return new PaperOrder(
-                accountId,
+                userId,
                 pairId,
                 clientOrderId,
                 Objects.requireNonNull(side, "side must not be null"),
@@ -216,7 +223,7 @@ public class PaperOrder extends BaseEntity {
      * @param quantity positive, already floored to the pair's step size
      */
     public static PaperOrder spotLimit(
-            UUID accountId,
+            UUID userId,
             UUID pairId,
             String clientOrderId,
             OrderSide side,
@@ -224,7 +231,7 @@ public class PaperOrder extends BaseEntity {
             BigDecimal price,
             BigDecimal quantity) {
         return new PaperOrder(
-                accountId,
+                userId,
                 pairId,
                 clientOrderId,
                 side,
@@ -242,9 +249,9 @@ public class PaperOrder extends BaseEntity {
      * @param quantity positive, already floored to the pair's step size
      */
     public static PaperOrder spotLimitMaker(
-            UUID accountId, UUID pairId, String clientOrderId, OrderSide side, BigDecimal price, BigDecimal quantity) {
+            UUID userId, UUID pairId, String clientOrderId, OrderSide side, BigDecimal price, BigDecimal quantity) {
         return new PaperOrder(
-                accountId,
+                userId,
                 pairId,
                 clientOrderId,
                 side,
@@ -268,7 +275,7 @@ public class PaperOrder extends BaseEntity {
      * @param quantity positive, already floored to the pair's step size
      */
     public static PaperOrder spotStop(
-            UUID accountId,
+            UUID userId,
             UUID pairId,
             String clientOrderId,
             OrderType type,
@@ -289,7 +296,7 @@ public class PaperOrder extends BaseEntity {
             throw new IllegalArgumentException("a stop has a stop price, a trailing delta or both");
         }
         PaperOrder order = new PaperOrder(
-                accountId,
+                userId,
                 pairId,
                 clientOrderId,
                 side,

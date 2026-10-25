@@ -13,18 +13,18 @@ import lombok.Getter;
 
 /**
  * What a paper account was worth at the start of a day, in USDT (TR-13): the base of the day's PnL and a point of the
- * asset chart. One per account and day ({@code uq_paper_equity_snapshot_day}); never changed once taken.
+ * asset chart. One per account and day ({@code uq_equity_snapshot_day}); never changed once taken.
  *
  * <p>Rule: TR-13.
  */
 @Getter
 @Entity
-@Table(name = "paper_equity_snapshot")
+@Table(name = "equity_snapshot")
 @AttributeOverride(name = "id", column = @Column(name = "snapshot_id", nullable = false, updatable = false))
 public class PaperEquitySnapshot extends BaseEntity {
 
-    @Column(name = "account_id", nullable = false, updatable = false)
-    private UUID accountId;
+    @Column(name = "user_id", nullable = false, updatable = false)
+    private UUID userId;
 
     @Column(name = "snapshot_date", nullable = false, updatable = false)
     private LocalDate snapshotDate;
@@ -41,8 +41,8 @@ public class PaperEquitySnapshot extends BaseEntity {
     /** For JPA only. */
     protected PaperEquitySnapshot() {}
 
-    private PaperEquitySnapshot(UUID accountId, LocalDate day, BigDecimal spot, BigDecimal futures) {
-        this.accountId = Objects.requireNonNull(accountId, "accountId must not be null");
+    private PaperEquitySnapshot(UUID userId, LocalDate day, BigDecimal spot, BigDecimal futures) {
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
         this.snapshotDate = Objects.requireNonNull(day, "day must not be null");
         this.spotEquityAmount = Objects.requireNonNull(spot, "spot must not be null");
         this.futuresEquityAmount = Objects.requireNonNull(futures, "futures must not be null");
@@ -50,7 +50,7 @@ public class PaperEquitySnapshot extends BaseEntity {
     }
 
     /** The worth of an account's two wallets at the start of {@code day}. */
-    public static PaperEquitySnapshot of(UUID accountId, LocalDate day, BigDecimal spot, BigDecimal futures) {
-        return new PaperEquitySnapshot(accountId, day, spot, futures);
+    public static PaperEquitySnapshot of(UUID userId, LocalDate day, BigDecimal spot, BigDecimal futures) {
+        return new PaperEquitySnapshot(userId, day, spot, futures);
     }
 }

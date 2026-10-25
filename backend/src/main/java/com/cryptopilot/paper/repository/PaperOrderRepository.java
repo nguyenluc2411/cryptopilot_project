@@ -31,24 +31,24 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
 
     /** The account's order with this key, or empty. */
     @Transactional(readOnly = true)
-    Optional<PaperOrder> findByIdAndAccountId(UUID orderId, UUID accountId);
+    Optional<PaperOrder> findByIdAndUserId(UUID orderId, UUID userId);
 
     /** The account's order with this idempotency key, or empty. */
     @Transactional(readOnly = true)
-    Optional<PaperOrder> findByAccountIdAndClientOrderId(UUID accountId, String clientOrderId);
+    Optional<PaperOrder> findByUserIdAndClientOrderId(UUID userId, String clientOrderId);
 
     /** The account's orders in these statuses, newest first. */
     @Transactional(readOnly = true)
-    List<PaperOrder> findByAccountIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
-            UUID accountId, Collection<OrderStatus> statuses);
+    List<PaperOrder> findByUserIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
+            UUID userId, Collection<OrderStatus> statuses);
 
     /** The account's orders of one pair in these statuses, oldest first. */
-    List<PaperOrder> findByAccountIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(
-            UUID accountId, UUID pairId, Collection<OrderStatus> statuses);
+    List<PaperOrder> findByUserIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(
+            UUID userId, UUID pairId, Collection<OrderStatus> statuses);
 
     /** The account's orders of one pair on one market in these statuses, oldest first. */
-    List<PaperOrder> findByAccountIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
-            UUID accountId, UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
+    List<PaperOrder> findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
+            UUID userId, UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
 
     /**
      * One page of an account's orders in these statuses, placed in {@code [from, to)}, newest first. No parameter is
@@ -56,23 +56,22 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
      */
     @Transactional(readOnly = true)
     @Query(
-            value = "select o from PaperOrder o where o.accountId = :accountId and o.orderStatus in :statuses"
+            value = "select o from PaperOrder o where o.userId = :userId and o.orderStatus in :statuses"
                     + " and o.createdAt >= :from and o.createdAt < :to order by o.createdAt desc, o.id desc",
-            countQuery = "select count(o) from PaperOrder o where o.accountId = :accountId"
+            countQuery = "select count(o) from PaperOrder o where o.userId = :userId"
                     + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to")
-    Page<PaperOrder> search(
-            UUID accountId, Collection<OrderStatus> statuses, Instant from, Instant to, Pageable pageable);
+    Page<PaperOrder> search(UUID userId, Collection<OrderStatus> statuses, Instant from, Instant to, Pageable pageable);
 
     /** As {@link #search}, for one pair. */
     @Transactional(readOnly = true)
     @Query(
-            value = "select o from PaperOrder o where o.accountId = :accountId and o.pairId = :pairId"
+            value = "select o from PaperOrder o where o.userId = :userId and o.pairId = :pairId"
                     + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to"
                     + " order by o.createdAt desc, o.id desc",
-            countQuery = "select count(o) from PaperOrder o where o.accountId = :accountId and o.pairId = :pairId"
+            countQuery = "select count(o) from PaperOrder o where o.userId = :userId and o.pairId = :pairId"
                     + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to")
     Page<PaperOrder> searchPair(
-            UUID accountId, UUID pairId, Collection<OrderStatus> statuses, Instant from, Instant to, Pageable pageable);
+            UUID userId, UUID pairId, Collection<OrderStatus> statuses, Instant from, Instant to, Pageable pageable);
 
     /**
      * Every working order of every account that waits at its limit price, which the matching engine starts its books
@@ -80,7 +79,7 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
      * waiting since then.
      */
     @Transactional(readOnly = true)
-    @Query("select new com.cryptopilot.paper.model.RestingOrder(o.id, o.accountId, o.marketType, o.pairId, o.side,"
+    @Query("select new com.cryptopilot.paper.model.RestingOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
             + " o.limitPrice, coalesce(o.triggeredAt, o.activatedAt, o.createdAt)) from PaperOrder o"
             + " where o.orderStatus in :statuses and (o.orderType in (com.cryptopilot.paper.model.enums.OrderType.LIMIT,"
             + " com.cryptopilot.paper.model.enums.OrderType.LIMIT_MAKER) or (o.orderType in"
@@ -94,7 +93,7 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
      */
     @Transactional(readOnly = true)
     @Query(
-            "select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.accountId, o.marketType, o.pairId, o.side,"
+            "select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
                     + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice,"
                     + " coalesce(o.activatedAt, o.createdAt)) from PaperOrder o"
                     + " where o.orderStatus in :statuses and o.triggeredAt is null and o.orderType in"
@@ -110,12 +109,12 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     List<PaperOrder> findByIdIn(Collection<UUID> ids);
 
     /** How many of the account's orders of one pair on one market are in these statuses. */
-    long countByAccountIdAndPairIdAndMarketTypeAndOrderStatusIn(
-            UUID accountId, UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
+    long countByUserIdAndPairIdAndMarketTypeAndOrderStatusIn(
+            UUID userId, UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
 
     /** How many of the account's orders of one pair on one market, of these types, are in these statuses. */
-    long countByAccountIdAndPairIdAndMarketTypeAndOrderStatusInAndOrderTypeIn(
-            UUID accountId,
+    long countByUserIdAndPairIdAndMarketTypeAndOrderStatusInAndOrderTypeIn(
+            UUID userId,
             UUID pairId,
             MarketType marketType,
             Collection<OrderStatus> statuses,
@@ -125,9 +124,9 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
      * The accounts with an order of the pair on the market in these statuses: those a stop of the pair's trading
      * concerns.
      */
-    @Query("select distinct o.accountId from PaperOrder o where o.pairId = :pairId and o.marketType = :marketType"
+    @Query("select distinct o.userId from PaperOrder o where o.pairId = :pairId and o.marketType = :marketType"
             + " and o.orderStatus in :statuses")
-    List<UUID> findAccountIdsWithOrders(UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
+    List<UUID> findUserIdsWithOrders(UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
 
     /** The pairs with an order on the market in these statuses: those the pair-stop sweep looks at. */
     @Query("select distinct o.pairId from PaperOrder o where o.marketType = :marketType and o.orderStatus in :statuses")

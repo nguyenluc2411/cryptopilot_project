@@ -54,14 +54,14 @@ public class PairStopListener {
 
     private void cancelAll(UUID pairId, String symbol) {
         int failed = 0;
-        for (UUID accountId : cancellation.accountsWithOrders(pairId)) {
+        for (UUID userId : cancellation.accountsWithOrders(pairId)) {
             try {
-                cancellation.cancel(accountId, pairId);
+                cancellation.cancel(userId, pairId);
             } catch (RuntimeException failure) {
                 failed++;
                 log.warn(
                         "TR-02 paper orders of account {} on {} not cancelled; the delivery is tried again: {}",
-                        accountId,
+                        userId,
                         symbol,
                         failure.toString());
             }

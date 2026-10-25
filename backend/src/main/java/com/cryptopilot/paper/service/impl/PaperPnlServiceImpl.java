@@ -9,9 +9,9 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.dto.response.CoinPnlResponse;
 import com.cryptopilot.paper.dto.response.EquityResponse;
 import com.cryptopilot.paper.dto.response.SpotPnlResponse;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperEquitySnapshot;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperBalanceRepository;
@@ -67,7 +67,7 @@ public class PaperPnlServiceImpl implements PaperPnlService {
     @Transactional(readOnly = true)
     public SpotPnlResponse spotPnl(UUID userId) {
         PaperAccount account = accountOf(userId);
-        List<PaperBalance> held = balances.findByAccountIdAndWalletType(account.getId(), WalletType.SPOT).stream()
+        List<PaperBalance> held = balances.findByUserIdAndWalletType(account.userId(), WalletType.SPOT).stream()
                 .filter(balance -> balance.total().signum() > 0)
                 .toList();
         Map<UUID, String> assets =
@@ -113,9 +113,9 @@ public class PaperPnlServiceImpl implements PaperPnlService {
                     "days must be between 1 and " + MAX_DAYS + ", was " + period, Map.of("days", "MSG01"));
         }
         PaperAccount account = accountOf(userId);
-        PaperEquity.Worth now = equity.worth(account.getId());
+        PaperEquity.Worth now = equity.worth(account.userId());
         LocalDate today = equity.today();
-        Optional<PaperEquitySnapshot> start = snapshots.findByAccountIdAndSnapshotDate(account.getId(), today);
+        Optional<PaperEquitySnapshot> start = snapshots.findByUserIdAndSnapshotDate(account.userId(), today);
         BigDecimal todayPnl = start.map(
                         snapshot -> Rounding.toAmount(now.total().subtract(snapshot.getTotalEquityAmount())))
                 .orElse(null);
@@ -125,8 +125,8 @@ public class PaperPnlServiceImpl implements PaperPnlService {
                         todayPnl.multiply(HUNDRED).divide(snapshot.getTotalEquityAmount(), 2, RoundingMode.HALF_EVEN))
                 .orElse(null);
         List<EquityResponse.Point> history = snapshots
-                .findByAccountIdAndSnapshotDateGreaterThanEqualOrderBySnapshotDateAsc(
-                        account.getId(), today.minusDays(period - 1L))
+                .findByUserIdAndSnapshotDateGreaterThanEqualOrderBySnapshotDateAsc(
+                        account.userId(), today.minusDays(period - 1L))
                 .stream()
                 .map(snapshot -> new EquityResponse.Point(
                         snapshot.getSnapshotDate(),
@@ -140,14 +140,14 @@ public class PaperPnlServiceImpl implements PaperPnlService {
     @Override
     public int snapshotAll() {
         int taken = 0;
-        for (UUID accountId : accounts.findIdsWithoutSnapshotOn(equity.today())) {
+        for (UUID userId : accounts.findIdsWithoutSnapshotOn(equity.today())) {
             try {
-                Boolean took = transactions.execute(status -> equity.snapshot(accountId));
+                Boolean took = transactions.execute(status -> equity.snapshot(userId));
                 if (Boolean.TRUE.equals(took)) {
                     taken++;
                 }
             } catch (RuntimeException failure) {
-                log.warn("TR-13 equity snapshot of paper account {} failed: {}", accountId, failure.toString());
+                log.warn("TR-13 equity snapshot of paper account {} failed: {}", userId, failure.toString());
             }
         }
         return taken;

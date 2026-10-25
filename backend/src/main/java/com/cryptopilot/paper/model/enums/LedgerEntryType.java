@@ -1,7 +1,7 @@
 package com.cryptopilot.paper.model.enums;
 
 /**
- * What changed a paper balance. The names are the values {@code paper_ledger_entry.entry_type} accepts.
+ * What changed a paper balance. The names are the values {@code wallet_ledger_entry.entry_type} accepts.
  *
  * <p>Rule: TR-04.
  */

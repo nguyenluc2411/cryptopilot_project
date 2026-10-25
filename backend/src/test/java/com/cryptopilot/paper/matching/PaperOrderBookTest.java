@@ -91,7 +91,7 @@ class PaperOrderBookTest {
         RestingOrder buy = order(OrderSide.BUY, "100");
         book.track(buy);
         RestingOrder moved = new RestingOrder(
-                buy.orderId(), buy.accountId(), MarketType.SPOT, PAIR, OrderSide.BUY, new BigDecimal("80"), PLACED);
+                buy.orderId(), buy.userId(), MarketType.SPOT, PAIR, OrderSide.BUY, new BigDecimal("80"), PLACED);
 
         book.track(moved);
 

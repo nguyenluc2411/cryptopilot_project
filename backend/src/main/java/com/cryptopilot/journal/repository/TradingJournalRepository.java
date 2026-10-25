@@ -2,6 +2,8 @@ package com.cryptopilot.journal.repository;
 
 import com.cryptopilot.journal.entity.TradingJournal;
 import com.cryptopilot.journal.model.PlanPosition;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.model.enums.PositionStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
@@ -9,6 +11,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
@@ -27,6 +31,25 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
      * {@code uq_trading_journal_plan} in the caller and not at its commit.
      */
     TradingJournal saveAndFlush(TradingJournal record);
+
+    /**
+     * A page of the user's records in the statuses and markets, the latest entry first (SCR-20); the pair filter
+     * applies unless {@code anyPair}. No parameter is null, so PostgreSQL can type every one.
+     */
+    @Transactional(readOnly = true)
+    @Query(
+            value = "select j from TradingJournal j where j.userId = :userId and j.status in :statuses"
+                    + " and j.market in :markets and (:anyPair = true or j.pairId = :pairId)"
+                    + " order by j.entryTime desc, j.id desc",
+            countQuery = "select count(j) from TradingJournal j where j.userId = :userId and j.status in :statuses"
+                    + " and j.market in :markets and (:anyPair = true or j.pairId = :pairId)")
+    Page<TradingJournal> search(
+            UUID userId,
+            Collection<PositionStatus> statuses,
+            Collection<MarketType> markets,
+            boolean anyPair,
+            UUID pairId,
+            Pageable page);
 
     /** The record of a plan, if the plan filled. */
     @Transactional(readOnly = true)

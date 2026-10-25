@@ -770,7 +770,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
         Map<UUID, List<Fill>> byAccount = new LinkedHashMap<>();
         fills.forEach(fill -> byAccount
-                .computeIfAbsent(fill.order().accountId(), ignored -> new ArrayList<>())
+                .computeIfAbsent(fill.order().userId(), ignored -> new ArrayList<>())
                 .add(fill));
         List<Failure> failures = new ArrayList<>();
         if (byAccount.size() == 1) {

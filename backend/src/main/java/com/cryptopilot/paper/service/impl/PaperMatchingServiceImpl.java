@@ -4,8 +4,8 @@ import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.model.enums.MarketType;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
@@ -76,10 +76,10 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     @Override
     @Transactional
     public boolean fill(RestingOrder resting, Instant tradedAt, FillSource source, ReplayedCandle candle) {
-        // fk_paper_order_account keeps the account of an order stored.
-        PaperAccount account = accounts.findById(resting.accountId())
-                .orElseThrow(() -> new IllegalStateException("account " + resting.accountId() + " is not stored"));
-        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.getUserId());
+        // fk_trade_order_user keeps the owner of an order stored.
+        PaperAccount account = accounts.findByUserId(resting.userId())
+                .orElseThrow(() -> new IllegalStateException("account " + resting.userId() + " is not stored"));
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.userId());
         // Read only now, under the lock, so a cancel committed while this fill waited for it is seen.
         Optional<PaperOrder> found = orders.findById(resting.orderId());
         if (found.isEmpty() || !found.get().isOpen()) {
@@ -117,9 +117,9 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     @Transactional
     public boolean trigger(
             TriggerOrder watched, Instant at, BigDecimal stopPrice, FillSource source, BigDecimal candleOpen) {
-        PaperAccount account = accounts.findById(watched.accountId())
-                .orElseThrow(() -> new IllegalStateException("account " + watched.accountId() + " is not stored"));
-        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.getUserId());
+        PaperAccount account = accounts.findByUserId(watched.userId())
+                .orElseThrow(() -> new IllegalStateException("account " + watched.userId() + " is not stored"));
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.userId());
         // Read only now, under the lock, so a cancel committed while this trigger waited for it is seen.
         Optional<PaperOrder> found = orders.findById(watched.orderId());
         if (found.isEmpty() || !found.get().awaitsTrigger()) {

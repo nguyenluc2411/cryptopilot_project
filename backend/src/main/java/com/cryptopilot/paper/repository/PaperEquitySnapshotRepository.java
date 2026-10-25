@@ -17,12 +17,12 @@ public interface PaperEquitySnapshotRepository extends Repository<PaperEquitySna
 
     /** The account's snapshot of a day, or empty. */
     @Transactional(readOnly = true)
-    Optional<PaperEquitySnapshot> findByAccountIdAndSnapshotDate(UUID accountId, LocalDate day);
+    Optional<PaperEquitySnapshot> findByUserIdAndSnapshotDate(UUID userId, LocalDate day);
 
     /** The account's snapshots from a day on, oldest first. */
     @Transactional(readOnly = true)
-    List<PaperEquitySnapshot> findByAccountIdAndSnapshotDateGreaterThanEqualOrderBySnapshotDateAsc(
-            UUID accountId, LocalDate from);
+    List<PaperEquitySnapshot> findByUserIdAndSnapshotDateGreaterThanEqualOrderBySnapshotDateAsc(
+            UUID userId, LocalDate from);
 
     /** Writes a snapshot. Not transactional here; the unit of work is the calling service's. */
     PaperEquitySnapshot save(PaperEquitySnapshot snapshot);

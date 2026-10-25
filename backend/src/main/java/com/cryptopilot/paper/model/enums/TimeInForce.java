@@ -1,7 +1,7 @@
 package com.cryptopilot.paper.model.enums;
 
 /**
- * How long a limit order works. The names are the values {@code paper_order.time_in_force} accepts.
+ * How long a limit order works. The names are the values {@code trade_order.time_in_force} accepts.
  *
  * <p>Rule: TR-02.
  */

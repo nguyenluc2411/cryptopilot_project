@@ -114,7 +114,7 @@ class PaperOrderLoadTest {
         } finally {
             ticker.interrupt();
         }
-        assertThat(sql.sql("select count(*) from paper_fill where pair_id = ?")
+        assertThat(sql.sql("select count(*) from order_fill where pair_id = ?")
                         .param(pair)
                         .query(Long.class)
                         .single())

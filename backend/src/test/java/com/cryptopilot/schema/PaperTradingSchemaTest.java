@@ -19,14 +19,15 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * The rules V21 puts on the paper trading tables, each proved by a row the database has to refuse, next to the
- * nearest row it has to accept, so a refusal is known to come from the rule under test and not from a broken
- * fixture.
+ * The rules V21 and V47 put on the paper trading tables, each proved by a row the database has to refuse, next to
+ * the nearest row it has to accept, so a refusal is known to come from the rule under test and not from a broken
+ * fixture. Since V47 every row belongs to the Trader directly, a transfer is its pair of ledger entries and an order
+ * may name the plan it carries out (D-117).
  *
  * <p>Every test runs in a transaction that is rolled back; the statement expected to fail is the last one, because a
  * failed statement leaves a PostgreSQL transaction unusable.
  *
- * <p>Rule: TR-02; Q-T1 to Q-T10; BR-21 (Spot holds no short and no leverage).
+ * <p>Rule: TR-02; Q-T1 to Q-T10; BR-21 (Spot holds no short and no leverage); D-117.
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
@@ -40,7 +41,6 @@ class PaperTradingSchemaTest {
     private JdbcClient jdbc;
 
     private UUID userId;
-    private UUID accountId;
     private UUID pairId;
     private UUID usdtId;
 
@@ -55,22 +55,41 @@ class PaperTradingSchemaTest {
                                                  is_spot_enabled, is_futures_enabled, pair_status,
                                                  created_at, updated_at)
                         values (?, ?, ?, 'PBTCPUSDT', true, true, 'ACTIVE', ?, ?)""").params(pairId, base, usdtId, NOW, NOW).update();
-        accountId = insertAccount(userId);
     }
 
     // ---------------------------------------------------------------- account
 
     @Test
-    void aTrader_hasOneAccount() {
-        assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> insertAccount(userId));
+    void aWalletCoin_isGrantedOnce() {
+        insertLedger(userId, "INITIAL_GRANT", "SPOT", "USER", userId, null, 100);
+        insertLedger(userId, "INITIAL_GRANT", "FUTURES", "USER", userId, null, 100);
+        insertLedger(insertUser("other.grant@cryptopilot.test"), "INITIAL_GRANT", "SPOT", null, null, null, 100);
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertLedger(userId, "INITIAL_GRANT", "SPOT", "USER", userId, null, 100));
     }
 
     @Test
-    void deletingATraderWithAPaperAccount_isRefused() {
+    void deletingATraderWithAPaperWallet_isRefused() {
+        insertBalance("SPOT", usdtId, BigDecimal.TEN, BigDecimal.ZERO);
+
         assertThatExceptionOfType(DataIntegrityViolationException.class)
                 .isThrownBy(() -> jdbc.sql("delete from user_account where user_id = ?")
                         .param(userId)
                         .update());
+    }
+
+    @Test
+    void theFoldedTables_areGone_andTheirRowsKeptAside() {
+        assertThat(jdbc.sql("""
+                        select count(*) from information_schema.tables
+                         where table_schema = 'public' and table_name like 'paper\\_%'""").query(Long.class).single())
+                .as("no paper_ table is left: V47 renamed, folded or dropped each one")
+                .isZero();
+        assertThat(jdbc.sql("""
+                        select count(*) from information_schema.tables
+                         where table_schema = 'public'
+                           and table_name in ('legacy_paper_account', 'legacy_paper_transfer')""").query(Long.class).single()).isEqualTo(2);
     }
 
     // ---------------------------------------------------------------- wallets
@@ -93,29 +112,58 @@ class PaperTradingSchemaTest {
     }
 
     @Test
-    void aTransfer_movesBetweenTwoDifferentWallets() {
-        insertTransfer("SPOT", "FUTURES");
+    void aTransfer_isADebitAndACreditSharingItsIdAndKey() {
+        UUID transfer = UUID.randomUUID();
+        insertLedger(userId, "TRANSFER", "SPOT", "TRANSFER", transfer, "retry-1", -100);
 
-        assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertTransfer("SPOT", "SPOT"));
+        assertThat(insertLedger(userId, "TRANSFER", "FUTURES", "TRANSFER", transfer, "retry-1", 100))
+                .isNotNull();
     }
 
     @Test
-    void aClientTransferId_isOneTransferPerAccount() {
-        insertTransfer(accountId, "retry-1", "SPOT", "FUTURES");
-        insertTransfer(insertAccount(insertUser("other.transfer@cryptopilot.test")), "retry-1", "SPOT", "FUTURES");
+    void aClientTransferId_isOneTransferPerTrader() {
+        insertLedger(userId, "TRANSFER", "SPOT", "TRANSFER", UUID.randomUUID(), "retry-1", -100);
+        UUID other = insertUser("other.transfer@cryptopilot.test");
+        insertLedger(other, "TRANSFER", "SPOT", "TRANSFER", UUID.randomUUID(), "retry-1", -100);
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertTransfer(accountId, "retry-1", "SPOT", "FUTURES"));
+                .isThrownBy(() ->
+                        insertLedger(userId, "TRANSFER", "FUTURES", "TRANSFER", UUID.randomUUID(), "retry-1", -100));
+    }
+
+    @Test
+    void aTransferEntry_carriesItsKey() {
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertLedger(userId, "TRANSFER", "SPOT", "TRANSFER", UUID.randomUUID(), null, -100));
+    }
+
+    @Test
+    void anotherEntry_carriesNoTransferKey() {
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertLedger(userId, "TRADE", "SPOT", "FILL", UUID.randomUUID(), "retry-1", 100));
+    }
+
+    @Test
+    void aTransferEntry_pointsAtItsTransfer() {
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertLedger(userId, "TRANSFER", "SPOT", "FILL", UUID.randomUUID(), "retry-1", -100));
+    }
+
+    @Test
+    void theGrant_pointsAtItsTrader_andNoLongerAtAnAccount() {
+        insertLedger(userId, "INITIAL_GRANT", "SPOT", "USER", userId, null, 100);
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertLedger(userId, "INITIAL_GRANT", "FUTURES", "ACCOUNT", userId, null, 100));
     }
 
     @Test
     void aLedgerEntry_namesBothTheKindAndTheIdOfItsCause_orNeither() {
-        insertLedger("INITIAL_GRANT", null, null);
-        insertLedger("TRANSFER", "TRANSFER", UUID.randomUUID());
+        insertLedger(userId, "INITIAL_GRANT", "SPOT", null, null, null, 100);
+        insertLedger(userId, "TRANSFER", "SPOT", "TRANSFER", UUID.randomUUID(), "retry-1", -100);
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertLedger("TRADE", "FILL", null));
+                .isThrownBy(() -> insertLedger(userId, "TRADE", "SPOT", "FILL", null, null, 100));
     }
 
     // ---------------------------------------------------------------- orders
@@ -179,7 +227,7 @@ class PaperTradingSchemaTest {
         UUID orderId = insertMarketOrder("SPOT", null, false);
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> jdbc.sql("update paper_order set executed_quantity = 2 where order_id = ?")
+                .isThrownBy(() -> jdbc.sql("update trade_order set executed_quantity = 2 where order_id = ?")
                         .param(orderId)
                         .update());
     }
@@ -188,22 +236,38 @@ class PaperTradingSchemaTest {
     void aFinishedOrder_recordsWhenItFinished() {
         UUID orderId = insertMarketOrder("SPOT", null, false);
         jdbc.sql("""
-                        update paper_order set order_status = 'FILLED', executed_quantity = 1, closed_at = ?
+                        update trade_order set order_status = 'FILLED', executed_quantity = 1, closed_at = ?
                          where order_id = ?""").params(NOW, orderId).update();
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> jdbc.sql("update paper_order set closed_at = null where order_id = ?")
+                .isThrownBy(() -> jdbc.sql("update trade_order set closed_at = null where order_id = ?")
                         .param(orderId)
                         .update());
     }
 
     @Test
-    void aClientOrderId_isOneOrderPerAccount() {
-        insertOrderWithClientId(accountId, "web-1");
-        insertOrderWithClientId(insertAccount(insertUser("other@cryptopilot.test")), "web-1");
+    void aClientOrderId_isOneOrderPerTrader() {
+        insertOrderWithClientId(userId, "web-1");
+        insertOrderWithClientId(insertUser("other@cryptopilot.test"), "web-1");
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertOrderWithClientId(accountId, "web-1"));
+                .isThrownBy(() -> insertOrderWithClientId(userId, "web-1"));
+    }
+
+    @Test
+    void anOrder_namesAStoredPlan_orNone() {
+        UUID orderId = insertMarketOrder("SPOT", null, false);
+
+        assertThat(jdbc.sql("select plan_id is null from trade_order where order_id = ?")
+                        .param(orderId)
+                        .query(Boolean.class)
+                        .single())
+                .as("an order placed on the trading screen carries out no plan")
+                .isTrue();
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> jdbc.sql("update trade_order set plan_id = ? where order_id = ?")
+                        .params(UUID.randomUUID(), orderId)
+                        .update());
     }
 
     @Test
@@ -213,58 +277,6 @@ class PaperTradingSchemaTest {
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
                 .isThrownBy(() -> insertFill(orderId, "SPOT", null, BigDecimal.TEN));
-    }
-
-    // ---------------------------------------------------------------- positions
-
-    @Test
-    void onePositionIsOpen_perPairAndSide() {
-        insertOpenPosition("LONG", "LONG", "CROSS", null);
-        insertOpenPosition("SHORT", "SHORT", "CROSS", null);
-
-        assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertOpenPosition("LONG", "LONG", "CROSS", null));
-    }
-
-    @Test
-    void closedPositions_areNotLimited() {
-        UUID first = insertOpenPosition("BOTH", "LONG", "CROSS", null);
-        close(first);
-
-        assertThat(insertOpenPosition("BOTH", "SHORT", "CROSS", null)).isNotNull();
-    }
-
-    @Test
-    void aHedgePosition_isOnItsOwnSide() {
-        assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertOpenPosition("LONG", "SHORT", "CROSS", null));
-    }
-
-    @Test
-    void anIsolatedPosition_carriesItsMargin_andACrossOneDoesNot() {
-        insertOpenPosition("LONG", "LONG", "ISOLATED", new BigDecimal("600"));
-
-        assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertOpenPosition("SHORT", "SHORT", "CROSS", new BigDecimal("600")));
-    }
-
-    @Test
-    void aClosedPosition_holdsNothingAndSaysWhy() {
-        UUID positionId = insertOpenPosition("BOTH", "LONG", "CROSS", null);
-
-        assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> jdbc.sql("""
-                        update paper_position set position_status = 'CLOSED', position_quantity = 0,
-                               exit_price = 61000, closed_at = ?
-                         where position_id = ?""").params(NOW, positionId).update());
-    }
-
-    @Test
-    void aSettlement_isPaidOncePerPosition() {
-        UUID positionId = insertOpenPosition("BOTH", "LONG", "CROSS", null);
-        insertFunding(positionId);
-
-        assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> insertFunding(positionId));
     }
 
     // ---------------------------------------------------------------- helpers
@@ -286,56 +298,37 @@ class PaperTradingSchemaTest {
         return id;
     }
 
-    private UUID insertAccount(UUID owner) {
-        UUID id = UUID.randomUUID();
-        jdbc.sql("""
-                        insert into paper_account (account_id, user_id, position_mode,
-                                                   created_at, updated_at)
-                        values (?, ?, 'ONE_WAY', ?, ?)""").params(id, owner, NOW, NOW).update();
-        return id;
-    }
-
     private void insertBalance(String wallet, UUID coinId, BigDecimal free, BigDecimal locked) {
         jdbc.sql("""
-                        insert into paper_balance (balance_id, account_id, wallet_type, coin_id, free_amount,
-                                                   locked_amount, created_at, updated_at)
+                        insert into wallet_balance (balance_id, user_id, wallet_type, coin_id, free_amount,
+                                                    locked_amount, created_at, updated_at)
                         values (?, ?, ?, ?, ?, ?, ?, ?)""")
-                .params(UUID.randomUUID(), accountId, wallet, coinId, free, locked, NOW, NOW)
+                .params(UUID.randomUUID(), userId, wallet, coinId, free, locked, NOW, NOW)
                 .update();
     }
 
-    private void insertTransfer(String from, String to) {
-        insertTransfer(accountId, UUID.randomUUID().toString(), from, to);
-    }
-
-    private void insertTransfer(UUID account, String clientTransferId, String from, String to) {
+    private UUID insertLedger(
+            UUID owner, String type, String wallet, String refType, UUID refId, String clientTransferId, int amount) {
+        UUID id = UUID.randomUUID();
         jdbc.sql("""
-                        insert into paper_transfer (transfer_id, account_id, client_transfer_id, coin_id, from_wallet,
-                                                    to_wallet, amount, created_at, updated_at)
-                        values (?, ?, ?, ?, ?, ?, 100, ?, ?)""")
-                .params(UUID.randomUUID(), account, clientTransferId, usdtId, from, to, NOW, NOW)
+                        insert into wallet_ledger_entry (entry_id, user_id, wallet_type, coin_id, entry_type, amount,
+                                                         balance_after_amount, ref_type, ref_id, client_transfer_id,
+                                                         created_at, updated_at)
+                        values (?, ?, ?, ?, ?, ?, 100, ?, ?, ?, ?, ?)""")
+                .params(id, owner, wallet, usdtId, type, amount, refType, refId, clientTransferId, NOW, NOW)
                 .update();
-    }
-
-    private void insertLedger(String type, String refType, UUID refId) {
-        jdbc.sql("""
-                        insert into paper_ledger_entry (entry_id, account_id, wallet_type, coin_id, entry_type,
-                                                        amount, balance_after_amount, ref_type, ref_id,
-                                                        created_at, updated_at)
-                        values (?, ?, 'SPOT', ?, ?, 100, 100, ?, ?, ?, ?)""")
-                .params(UUID.randomUUID(), accountId, usdtId, type, refType, refId, NOW, NOW)
-                .update();
+        return id;
     }
 
     private UUID insertMarketOrder(String market, String positionSide, boolean reduceOnly) {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
-                        insert into paper_order (order_id, account_id, pair_id, market_type, client_order_id, side,
+                        insert into trade_order (order_id, user_id, pair_id, market_type, client_order_id, side,
                                                  position_side, order_type, orig_quantity, executed_quantity,
                                                  cum_quote_amount, reduce_only, close_position, order_status,
                                                  created_at, updated_at)
                         values (?, ?, ?, ?, ?, 'BUY', ?, 'MARKET', 1, 0, 0, ?, false, 'NEW', ?, ?)""")
-                .params(id, accountId, pairId, market, id.toString(), positionSide, reduceOnly, NOW, NOW)
+                .params(id, userId, pairId, market, id.toString(), positionSide, reduceOnly, NOW, NOW)
                 .update();
         return id;
     }
@@ -344,7 +337,7 @@ class PaperTradingSchemaTest {
             String type, BigDecimal limitPrice, String timeInForce, BigDecimal stopPrice, String triggerCondition) {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
-                        insert into paper_order (order_id, account_id, pair_id, market_type, client_order_id, side,
+                        insert into trade_order (order_id, user_id, pair_id, market_type, client_order_id, side,
                                                  order_type, time_in_force, limit_price, stop_price,
                                                  trigger_condition, orig_quantity, executed_quantity,
                                                  cum_quote_amount, reduce_only, close_position, order_status,
@@ -352,7 +345,7 @@ class PaperTradingSchemaTest {
                         values (?, ?, ?, 'SPOT', ?, 'SELL', ?, ?, ?, ?, ?, 1, 0, 0, false, false, 'NEW', ?, ?)""")
                 .params(
                         id,
-                        accountId,
+                        userId,
                         pairId,
                         id.toString(),
                         type,
@@ -365,20 +358,20 @@ class PaperTradingSchemaTest {
                 .update();
     }
 
-    private void insertOrderWithClientId(UUID account, String clientOrderId) {
+    private void insertOrderWithClientId(UUID owner, String clientOrderId) {
         jdbc.sql("""
-                        insert into paper_order (order_id, account_id, pair_id, market_type, client_order_id, side,
+                        insert into trade_order (order_id, user_id, pair_id, market_type, client_order_id, side,
                                                  order_type, orig_quantity, executed_quantity, cum_quote_amount,
                                                  reduce_only, close_position, order_status,
                                                  created_at, updated_at)
                         values (?, ?, ?, 'SPOT', ?, 'BUY', 'MARKET', 1, 0, 0, false, false, 'NEW', ?, ?)""")
-                .params(UUID.randomUUID(), account, pairId, clientOrderId, NOW, NOW)
+                .params(UUID.randomUUID(), owner, pairId, clientOrderId, NOW, NOW)
                 .update();
     }
 
     private void insertFill(UUID orderId, String market, String positionSide, BigDecimal realizedPnl) {
         jdbc.sql("""
-                        insert into paper_fill (fill_id, order_id, account_id, pair_id, market_type, side,
+                        insert into order_fill (fill_id, order_id, user_id, pair_id, market_type, side,
                                                 position_side, fill_price, fill_quantity, quote_amount, fee_amount,
                                                 fee_coin_id, liquidity, realized_pnl_amount, fill_source,
                                                 traded_at, created_at, updated_at)
@@ -386,7 +379,7 @@ class PaperTradingSchemaTest {
                 .params(
                         UUID.randomUUID(),
                         orderId,
-                        accountId,
+                        userId,
                         pairId,
                         market,
                         positionSide,
@@ -395,37 +388,6 @@ class PaperTradingSchemaTest {
                         NOW,
                         NOW,
                         NOW)
-                .update();
-    }
-
-    private UUID insertOpenPosition(String side, String direction, String marginMode, BigDecimal isolatedMargin) {
-        UUID id = UUID.randomUUID();
-        jdbc.sql("""
-                        insert into paper_position (position_id, account_id, pair_id, position_side, direction,
-                                                    margin_mode, leverage, position_quantity, max_quantity,
-                                                    entry_price, isolated_margin_amount, realized_pnl_amount,
-                                                    fee_amount, funding_amount, position_status,
-                                                    opened_at, created_at, updated_at)
-                        values (?, ?, ?, ?, ?, ?, 10, 0.1, 0.1, 60000, ?, 0, 3, 0, 'OPEN', ?, ?, ?)""")
-                .params(id, accountId, pairId, side, direction, marginMode, isolatedMargin, NOW, NOW, NOW)
-                .update();
-        return id;
-    }
-
-    private void close(UUID positionId) {
-        jdbc.sql("""
-                        update paper_position set position_status = 'CLOSED', position_quantity = 0,
-                               exit_price = 61000, closed_at = ?, close_reason = 'MANUAL'
-                         where position_id = ?""").params(NOW, positionId).update();
-    }
-
-    private void insertFunding(UUID positionId) {
-        jdbc.sql("""
-                        insert into paper_funding_payment (payment_id, account_id, position_id, pair_id, funding_time,
-                                                           funding_rate, mark_price, position_quantity, amount,
-                                                           created_at, updated_at)
-                        values (?, ?, ?, ?, ?, 0.0001, 61000, 0.1, -0.61, ?, ?)""")
-                .params(UUID.randomUUID(), accountId, positionId, pairId, NOW, NOW, NOW)
                 .update();
     }
 }

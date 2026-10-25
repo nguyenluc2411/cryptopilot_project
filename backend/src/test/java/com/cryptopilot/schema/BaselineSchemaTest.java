@@ -30,9 +30,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 class BaselineSchemaTest {
 
     /**
-     * The business tables of the logical model, in the order the model lists them: 39, the 11 of paper trading
-     * (V21, TR-02) after them, the history of a position's level changes (V37, TP-E), and the 4 of the Academy
-     * (V38, T-114) last.
+     * The business tables of the logical model, in the order the model lists them: 39, the 6 of paper trading
+     * after them (V21, TR-02; owned by the Trader since V47, D-117), the history of a position's level changes
+     * (V37, TP-E), and the 4 of the Academy (V38, T-114) last.
      */
     private static final List<String> BUSINESS_TABLES = List.of(
             "user_account",
@@ -74,17 +74,12 @@ class BaselineSchemaTest {
             "leverage_bracket",
             "system_setting",
             "audit_log",
-            "paper_account",
-            "paper_balance",
-            "paper_transfer",
-            "paper_ledger_entry",
-            "paper_futures_setting",
-            "paper_order_list",
-            "paper_order",
-            "paper_fill",
-            "paper_position",
-            "paper_funding_payment",
-            "paper_equity_snapshot",
+            "wallet_balance",
+            "wallet_ledger_entry",
+            "order_list",
+            "trade_order",
+            "order_fill",
+            "equity_snapshot",
             "trading_journal_level_change",
             "academy_topic",
             "academy_article",
@@ -114,9 +109,9 @@ class BaselineSchemaTest {
     }
 
     @Test
-    void schema_holdsTheFiftyFiveBusinessTables() {
+    void schema_holdsTheFiftyBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(55);
+        assertThat(BUSINESS_TABLES).hasSize(50);
     }
 
     @Test
@@ -124,17 +119,20 @@ class BaselineSchemaTest {
         assertThat(tableNames())
                 .as("event_publication, flyway_schema_history, binance_ban (V7, the exchange IP ban that must"
                         + " survive a restart), matching_watermark (V19, where the matching engine stopped) and"
-                        + " dropped_backfill_gap (V20, the gaps the backfill gave up on) and paper_matching_watermark"
+                        + " dropped_backfill_gap (V20, the gaps the backfill gave up on) and order_matching_watermark"
                         + " (V21, where the paper matching engine stopped) are technical tables, not"
-                        + " business entities")
+                        + " business entities; legacy_paper_account and legacy_paper_transfer keep the rows V47"
+                        + " folded into the Trader and the ledger, untouched, until a later migration drops them")
                 .contains(
                         "event_publication",
                         "flyway_schema_history",
                         "binance_ban",
                         "matching_watermark",
                         "dropped_backfill_gap",
-                        "paper_matching_watermark")
-                .hasSize(BUSINESS_TABLES.size() + 6);
+                        "order_matching_watermark",
+                        "legacy_paper_account",
+                        "legacy_paper_transfer")
+                .hasSize(BUSINESS_TABLES.size() + 8);
     }
 
     @Test

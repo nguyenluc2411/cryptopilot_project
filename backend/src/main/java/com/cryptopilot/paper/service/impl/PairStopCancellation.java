@@ -4,10 +4,10 @@ import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.model.enums.MarketType;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.entity.PaperOrderList;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
@@ -85,7 +85,7 @@ public class PairStopCancellation {
     /** The accounts with a Spot order of the pair that works or waits in a group. */
     @Transactional(readOnly = true)
     public List<UUID> accountsWithOrders(UUID pairId) {
-        return orders.findAccountIdsWithOrders(pairId, MarketType.SPOT, CANCELLED);
+        return orders.findUserIdsWithOrders(pairId, MarketType.SPOT, CANCELLED);
     }
 
     /**
@@ -94,14 +94,14 @@ public class PairStopCancellation {
      * @return how many orders it cancelled; none when it ran before
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public int cancel(UUID accountId, UUID pairId) {
-        // fk_paper_order_account keeps the account of an order stored.
-        PaperAccount account = accounts.findById(accountId)
-                .orElseThrow(() -> new IllegalStateException("account " + accountId + " is not stored"));
-        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.getUserId());
+    public int cancel(UUID userId, UUID pairId) {
+        // fk_trade_order_user keeps the owner of an order stored.
+        PaperAccount account = accounts.findByUserId(userId)
+                .orElseThrow(() -> new IllegalStateException("account " + userId + " is not stored"));
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.userId());
         // Read only now, under the lock, so a fill or a cancel committed meanwhile is seen.
-        List<PaperOrder> open = orders.findByAccountIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
-                accountId, pairId, MarketType.SPOT, CANCELLED);
+        List<PaperOrder> open = orders.findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
+                userId, pairId, MarketType.SPOT, CANCELLED);
         if (open.isEmpty()) {
             return 0;
         }
@@ -113,11 +113,7 @@ public class PairStopCancellation {
                 cancel(account, order, coins, now);
             }
         }
-        log.info(
-                "TR-02 {} paper orders of account {} on pair {} cancelled: not trading",
-                open.size(),
-                accountId,
-                pairId);
+        log.info("TR-02 {} paper orders of account {} on pair {} cancelled: not trading", open.size(), userId, pairId);
         return open.size();
     }
 
@@ -146,7 +142,7 @@ public class PairStopCancellation {
                 .orElseThrow(() -> new IllegalStateException("pair " + pairId + " of a paper order is not stored"));
     }
 
-    // fk_paper_order_list keeps the group of an order stored.
+    // fk_trade_order_list keeps the group of an order stored.
     private PaperOrderList groupOf(UUID listId) {
         return groups.findById(listId)
                 .orElseThrow(() -> new IllegalStateException("group " + listId + " of a paper order is not stored"));

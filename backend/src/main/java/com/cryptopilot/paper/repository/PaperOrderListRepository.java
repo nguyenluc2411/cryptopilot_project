@@ -15,14 +15,14 @@ public interface PaperOrderListRepository extends Repository<PaperOrderList, UUI
 
     /** The account's group with this id, or empty. */
     @Transactional(readOnly = true)
-    Optional<PaperOrderList> findByIdAndAccountId(UUID id, UUID accountId);
+    Optional<PaperOrderList> findByIdAndUserId(UUID id, UUID userId);
 
     /** The group with this id, or empty. */
     @Transactional(readOnly = true)
     Optional<PaperOrderList> findById(UUID id);
 
     /** The account's group with this idempotency key, or empty. */
-    Optional<PaperOrderList> findByAccountIdAndListClientOrderId(UUID accountId, String listClientOrderId);
+    Optional<PaperOrderList> findByUserIdAndListClientOrderId(UUID userId, String listClientOrderId);
 
     /** Writes a group. Not transactional here; the unit of work is the calling service's. */
     PaperOrderList save(PaperOrderList list);

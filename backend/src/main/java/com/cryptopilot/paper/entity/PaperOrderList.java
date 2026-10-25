@@ -16,18 +16,18 @@ import lombok.Getter;
 
 /**
  * A group of paper orders placed together on one pair (TR-10): an OCO, an OTO or an OTOCO. Its orders point at it
- * through {@code paper_order.list_id}; it is EXECUTING while one of them works or waits to be placed, then ALL_DONE.
+ * through {@code trade_order.list_id}; it is EXECUTING while one of them works or waits to be placed, then ALL_DONE.
  *
  * <p>Rule: TR-10.
  */
 @Getter
 @Entity
-@Table(name = "paper_order_list")
+@Table(name = "order_list")
 @AttributeOverride(name = "id", column = @Column(name = "list_id", nullable = false, updatable = false))
 public class PaperOrderList extends BaseEntity {
 
-    @Column(name = "account_id", nullable = false, updatable = false)
-    private UUID accountId;
+    @Column(name = "user_id", nullable = false, updatable = false)
+    private UUID userId;
 
     @Column(name = "pair_id", nullable = false, updatable = false)
     private UUID pairId;
@@ -51,8 +51,8 @@ public class PaperOrderList extends BaseEntity {
     /** For JPA only. */
     protected PaperOrderList() {}
 
-    private PaperOrderList(UUID accountId, UUID pairId, OrderListType listType, String listClientOrderId) {
-        this.accountId = Objects.requireNonNull(accountId, "accountId must not be null");
+    private PaperOrderList(UUID userId, UUID pairId, OrderListType listType, String listClientOrderId) {
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
         this.pairId = Objects.requireNonNull(pairId, "pairId must not be null");
         this.marketType = MarketType.SPOT;
         this.listType = Objects.requireNonNull(listType, "listType must not be null");
@@ -65,8 +65,8 @@ public class PaperOrderList extends BaseEntity {
      *
      * @param listClientOrderId the client's idempotency key; {@code null} for the group's own id
      */
-    public static PaperOrderList spot(UUID accountId, UUID pairId, OrderListType listType, String listClientOrderId) {
-        return new PaperOrderList(accountId, pairId, listType, listClientOrderId);
+    public static PaperOrderList spot(UUID userId, UUID pairId, OrderListType listType, String listClientOrderId) {
+        return new PaperOrderList(userId, pairId, listType, listClientOrderId);
     }
 
     /** Whether one of its orders still works or waits to be placed. */

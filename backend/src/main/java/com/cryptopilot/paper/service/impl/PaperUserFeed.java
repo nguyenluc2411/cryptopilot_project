@@ -5,10 +5,10 @@ import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.paper.dto.response.BalanceUpdateResponse;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.WalletType;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -73,7 +73,7 @@ public class PaperUserFeed {
     void order(PaperAccount account, PaperOrder order) {
         Pending pending = pending();
         if (pending != null) {
-            pending.orders.put(order.getId(), new Owned<>(account.getUserId(), order));
+            pending.orders.put(order.getId(), new Owned<>(account.userId(), order));
         }
     }
 
@@ -81,7 +81,7 @@ public class PaperUserFeed {
     void fill(PaperAccount account, PaperFill fill) {
         Pending pending = pending();
         if (pending != null) {
-            pending.fills.put(fill.getId(), new Owned<>(account.getUserId(), fill));
+            pending.fills.put(fill.getId(), new Owned<>(account.userId(), fill));
         }
     }
 
@@ -89,8 +89,8 @@ public class PaperUserFeed {
     void balance(PaperAccount account, PaperBalance balance, String asset) {
         Pending pending = pending();
         if (pending != null) {
-            BalanceKey key = new BalanceKey(balance.getAccountId(), balance.getWalletType(), balance.getCoinId());
-            pending.balances.put(key, new Owned<>(account.getUserId(), new Moved(balance, asset)));
+            BalanceKey key = new BalanceKey(balance.getUserId(), balance.getWalletType(), balance.getCoinId());
+            pending.balances.put(key, new Owned<>(account.userId(), new Moved(balance, asset)));
         }
     }
 
@@ -203,7 +203,7 @@ public class PaperUserFeed {
 
     private record Moved(PaperBalance balance, String asset) {}
 
-    private record BalanceKey(UUID accountId, WalletType wallet, UUID coinId) {}
+    private record BalanceKey(UUID userId, WalletType wallet, UUID coinId) {}
 
     private record Message(UUID userId, String queue, Object body) {}
 }

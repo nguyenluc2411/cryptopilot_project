@@ -29,15 +29,15 @@ import lombok.Getter;
  */
 @Getter
 @Entity
-@Table(name = "paper_fill")
+@Table(name = "order_fill")
 @AttributeOverride(name = "id", column = @Column(name = "fill_id", nullable = false, updatable = false))
 public class PaperFill extends BaseEntity {
 
     @Column(name = "order_id", nullable = false, updatable = false)
     private UUID orderId;
 
-    @Column(name = "account_id", nullable = false, updatable = false)
-    private UUID accountId;
+    @Column(name = "user_id", nullable = false, updatable = false)
+    private UUID userId;
 
     @Column(name = "pair_id", nullable = false, updatable = false)
     private UUID pairId;
@@ -92,7 +92,7 @@ public class PaperFill extends BaseEntity {
 
     private PaperFill(PaperOrder order, Execution execution, UsdtRate quoteUsdt) {
         this.orderId = order.getId();
-        this.accountId = order.getAccountId();
+        this.userId = order.getUserId();
         this.pairId = order.getPairId();
         this.marketType = order.getMarketType();
         this.side = order.getSide();
@@ -122,7 +122,7 @@ public class PaperFill extends BaseEntity {
     }
 
     /**
-     * The figures of one execution, checked as {@code ck_paper_fill_amounts} checks them.
+     * The figures of one execution, checked as {@code ck_order_fill_amounts} checks them.
      *
      * @param price the price it executed at
      * @param quantity the base quantity

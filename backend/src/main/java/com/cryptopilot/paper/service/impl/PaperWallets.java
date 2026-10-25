@@ -1,10 +1,10 @@
 package com.cryptopilot.paper.service.impl;
 
 import com.cryptopilot.market.CoinListing;
-import com.cryptopilot.paper.entity.PaperAccount;
 import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperLedgerEntry;
 import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.PaperBalanceRepository;
@@ -52,7 +52,7 @@ public class PaperWallets {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public PaperBalance grant(PaperAccount account, WalletType wallet, CoinListing coin, BigDecimal amount, Ref ref) {
-        PaperBalance balance = remember(balances.save(PaperBalance.empty(account.getId(), wallet, coin.coinId())));
+        PaperBalance balance = remember(balances.save(PaperBalance.empty(account.userId(), wallet, coin.coinId())));
         balance.credit(amount);
         record(balance, LedgerEntryType.INITIAL_GRANT, amount, ref);
         feed.balance(account, balance, coin.symbol());
@@ -69,7 +69,7 @@ public class PaperWallets {
             LedgerEntryType type,
             Ref ref) {
         PaperBalance balance = find(account, wallet, coin)
-                .orElseGet(() -> remember(balances.save(PaperBalance.empty(account.getId(), wallet, coin.coinId()))));
+                .orElseGet(() -> remember(balances.save(PaperBalance.empty(account.userId(), wallet, coin.coinId()))));
         balance.credit(amount);
         record(balance, type, amount, ref);
         feed.balance(account, balance, coin.symbol());
@@ -92,8 +92,8 @@ public class PaperWallets {
             Ref ref) {
         // A wallet that never held the coin has nothing free: the refusal comes from an empty balance that is never
         // stored, so a refused debit leaves no row behind.
-        PaperBalance balance =
-                find(account, wallet, coin).orElseGet(() -> PaperBalance.empty(account.getId(), wallet, coin.coinId()));
+        PaperBalance balance = find(account, wallet, coin)
+                .orElseGet(() -> PaperBalance.empty(account.userId(), wallet, coin.coinId()));
         balance.debit(amount, coin.symbol());
         record(balance, type, amount.negate(), ref);
         feed.balance(account, balance, coin.symbol());
@@ -109,8 +109,8 @@ public class PaperWallets {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public PaperBalance lock(PaperAccount account, WalletType wallet, CoinListing coin, BigDecimal amount) {
-        PaperBalance balance =
-                find(account, wallet, coin).orElseGet(() -> PaperBalance.empty(account.getId(), wallet, coin.coinId()));
+        PaperBalance balance = find(account, wallet, coin)
+                .orElseGet(() -> PaperBalance.empty(account.userId(), wallet, coin.coinId()));
         balance.lock(amount, coin.symbol());
         feed.balance(account, balance, coin.symbol());
         return balance;
@@ -151,7 +151,7 @@ public class PaperWallets {
     private PaperBalance held(PaperAccount account, WalletType wallet, CoinListing coin) {
         return find(account, wallet, coin)
                 .orElseThrow(() -> new IllegalStateException(
-                        wallet + " " + coin.symbol() + " of account " + account.getId() + " holds nothing locked"));
+                        wallet + " " + coin.symbol() + " of account " + account.userId() + " holds nothing locked"));
     }
 
     /**
@@ -165,14 +165,14 @@ public class PaperWallets {
         List<UUID> unread = Arrays.stream(coins)
                 .map(CoinListing::coinId)
                 .distinct()
-                .filter(coinId -> !held.containsKey(new Key(account.getId(), wallet, coinId)))
+                .filter(coinId -> !held.containsKey(new Key(account.userId(), wallet, coinId)))
                 .toList();
         if (unread.isEmpty()) {
             return;
         }
         // A coin the wallet has never held is remembered as absent, so it is not looked for again.
-        unread.forEach(coinId -> held.put(new Key(account.getId(), wallet, coinId), Optional.empty()));
-        balances.findByAccountIdAndWalletTypeAndCoinIdIn(account.getId(), wallet, unread)
+        unread.forEach(coinId -> held.put(new Key(account.userId(), wallet, coinId), Optional.empty()));
+        balances.findByUserIdAndWalletTypeAndCoinIdIn(account.userId(), wallet, unread)
                 .forEach(this::remember);
     }
 
@@ -181,20 +181,18 @@ public class PaperWallets {
      * for a refusal never is.
      */
     private Optional<PaperBalance> find(PaperAccount account, WalletType wallet, CoinListing coin) {
-        Optional<PaperBalance> kept = loaded().get(new Key(account.getId(), wallet, coin.coinId()));
+        Optional<PaperBalance> kept = loaded().get(new Key(account.userId(), wallet, coin.coinId()));
         if (kept != null) {
             return kept;
         }
         Optional<PaperBalance> found =
-                balances.findByAccountIdAndWalletTypeAndCoinId(account.getId(), wallet, coin.coinId());
+                balances.findByUserIdAndWalletTypeAndCoinId(account.userId(), wallet, coin.coinId());
         found.ifPresent(this::remember);
         return found;
     }
 
     private PaperBalance remember(PaperBalance balance) {
-        loaded().put(
-                        new Key(balance.getAccountId(), balance.getWalletType(), balance.getCoinId()),
-                        Optional.of(balance));
+        loaded().put(new Key(balance.getUserId(), balance.getWalletType(), balance.getCoinId()), Optional.of(balance));
         return balance;
     }
 
@@ -217,7 +215,7 @@ public class PaperWallets {
         return held;
     }
 
-    private record Key(UUID accountId, WalletType wallet, UUID coinId) {}
+    private record Key(UUID userId, WalletType wallet, UUID coinId) {}
 
     private void record(PaperBalance balance, LedgerEntryType type, BigDecimal amount, Ref ref) {
         ledger.save(PaperLedgerEntry.of(balance, type, amount, ref));

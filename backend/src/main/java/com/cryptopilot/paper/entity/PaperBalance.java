@@ -29,12 +29,12 @@ import lombok.Getter;
  */
 @Getter
 @Entity
-@Table(name = "paper_balance")
+@Table(name = "wallet_balance")
 @AttributeOverride(name = "id", column = @Column(name = "balance_id", nullable = false, updatable = false))
 public class PaperBalance extends BaseEntity {
 
-    @Column(name = "account_id", nullable = false, updatable = false)
-    private UUID accountId;
+    @Column(name = "user_id", nullable = false, updatable = false)
+    private UUID userId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "wallet_type", nullable = false, length = 32, updatable = false)
@@ -52,8 +52,8 @@ public class PaperBalance extends BaseEntity {
     /** For JPA only. */
     protected PaperBalance() {}
 
-    private PaperBalance(UUID accountId, WalletType walletType, UUID coinId) {
-        this.accountId = Objects.requireNonNull(accountId, "accountId must not be null");
+    private PaperBalance(UUID userId, WalletType walletType, UUID coinId) {
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
         this.walletType = Objects.requireNonNull(walletType, "walletType must not be null");
         this.coinId = Objects.requireNonNull(coinId, "coinId must not be null");
         this.freeAmount = BigDecimal.ZERO;
@@ -68,8 +68,8 @@ public class PaperBalance extends BaseEntity {
     private BigDecimal costBasisAmount;
 
     /** An empty balance of a coin the wallet has not held before. */
-    public static PaperBalance empty(UUID accountId, WalletType walletType, UUID coinId) {
-        return new PaperBalance(accountId, walletType, coinId);
+    public static PaperBalance empty(UUID userId, WalletType walletType, UUID coinId) {
+        return new PaperBalance(userId, walletType, coinId);
     }
 
     /** Free plus locked. */

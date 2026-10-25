@@ -155,20 +155,17 @@ class PaperUserQueueTest {
 
     private void deleteRows() {
         for (UUID trader : traders) {
-            String account = "(select account_id from paper_account where user_id = ?)";
             for (String table : List.of(
-                    "paper_fill",
-                    "paper_order",
-                    "paper_order_list",
-                    "paper_ledger_entry",
-                    "paper_transfer",
-                    "paper_balance",
-                    "paper_equity_snapshot")) {
-                sql.sql("delete from " + table + " where account_id = " + account)
+                    "order_fill",
+                    "trade_order",
+                    "order_list",
+                    "wallet_ledger_entry",
+                    "wallet_balance",
+                    "equity_snapshot")) {
+                sql.sql("delete from " + table + " where user_id = ?")
                         .param(trader)
                         .update();
             }
-            sql.sql("delete from paper_account where user_id = ?").param(trader).update();
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         UUID base = sql.sql("select base_coin_id from crypto_pair where pair_id = ?")

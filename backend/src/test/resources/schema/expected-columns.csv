@@ -174,6 +174,15 @@ engagement,post_id,uuid,,,YES
 engagement,updated_at,timestamp with time zone,,,NO
 engagement,user_id,uuid,,,NO
 engagement,version,bigint,64,0,NO
+equity_snapshot,created_at,timestamp with time zone,,,NO
+equity_snapshot,futures_equity_amount,numeric,28,8,NO
+equity_snapshot,snapshot_date,date,,,NO
+equity_snapshot,snapshot_id,uuid,,,NO
+equity_snapshot,spot_equity_amount,numeric,28,8,NO
+equity_snapshot,total_equity_amount,numeric,28,8,NO
+equity_snapshot,updated_at,timestamp with time zone,,,NO
+equity_snapshot,user_id,uuid,,,NO
+equity_snapshot,version,bigint,64,0,NO
 event_publication,completion_attempts,integer,32,0,YES
 event_publication,completion_date,timestamp with time zone,,,YES
 event_publication,event_type,text,,,NO
@@ -219,6 +228,22 @@ futures_market_data,open_interest_value,numeric,28,8,YES
 futures_market_data,pair_id,uuid,,,NO
 futures_market_data,short_account_ratio,numeric,12,8,YES
 futures_market_data,snapshot_time,timestamp with time zone,,,NO
+legacy_paper_account,account_id,uuid,,,NO
+legacy_paper_account,created_at,timestamp with time zone,,,NO
+legacy_paper_account,position_mode,character varying,,,NO
+legacy_paper_account,updated_at,timestamp with time zone,,,NO
+legacy_paper_account,user_id,uuid,,,NO
+legacy_paper_account,version,bigint,64,0,NO
+legacy_paper_transfer,account_id,uuid,,,NO
+legacy_paper_transfer,amount,numeric,28,8,NO
+legacy_paper_transfer,client_transfer_id,character varying,,,NO
+legacy_paper_transfer,coin_id,uuid,,,NO
+legacy_paper_transfer,created_at,timestamp with time zone,,,NO
+legacy_paper_transfer,from_wallet,character varying,,,NO
+legacy_paper_transfer,to_wallet,character varying,,,NO
+legacy_paper_transfer,transfer_id,uuid,,,NO
+legacy_paper_transfer,updated_at,timestamp with time zone,,,NO
+legacy_paper_transfer,version,bigint,64,0,NO
 leverage_bracket,bracket_no,integer,32,0,NO
 leverage_bracket,maintenance_amount,numeric,28,8,NO
 leverage_bracket,maintenance_margin_rate,numeric,12,8,NO
@@ -318,162 +343,41 @@ ohlcv,pair_id,uuid,,,NO
 ohlcv,quote_volume,numeric,28,12,NO
 ohlcv,timeframe,character varying,,,NO
 ohlcv,trade_count,integer,32,0,YES
-paper_account,account_id,uuid,,,NO
-paper_account,created_at,timestamp with time zone,,,NO
-paper_account,position_mode,character varying,,,NO
-paper_account,updated_at,timestamp with time zone,,,NO
-paper_account,user_id,uuid,,,NO
-paper_account,version,bigint,64,0,NO
-paper_balance,account_id,uuid,,,NO
-paper_balance,balance_id,uuid,,,NO
-paper_balance,coin_id,uuid,,,NO
-paper_balance,cost_basis_amount,numeric,28,8,YES
-paper_balance,created_at,timestamp with time zone,,,NO
-paper_balance,free_amount,numeric,28,8,NO
-paper_balance,locked_amount,numeric,28,8,NO
-paper_balance,updated_at,timestamp with time zone,,,NO
-paper_balance,version,bigint,64,0,NO
-paper_balance,wallet_type,character varying,,,NO
-paper_equity_snapshot,account_id,uuid,,,NO
-paper_equity_snapshot,created_at,timestamp with time zone,,,NO
-paper_equity_snapshot,futures_equity_amount,numeric,28,8,NO
-paper_equity_snapshot,snapshot_date,date,,,NO
-paper_equity_snapshot,snapshot_id,uuid,,,NO
-paper_equity_snapshot,spot_equity_amount,numeric,28,8,NO
-paper_equity_snapshot,total_equity_amount,numeric,28,8,NO
-paper_equity_snapshot,updated_at,timestamp with time zone,,,NO
-paper_equity_snapshot,version,bigint,64,0,NO
-paper_fill,account_id,uuid,,,NO
-paper_fill,created_at,timestamp with time zone,,,NO
-paper_fill,fee_amount,numeric,28,8,NO
-paper_fill,fee_coin_id,uuid,,,NO
-paper_fill,fill_id,uuid,,,NO
-paper_fill,fill_price,numeric,28,12,NO
-paper_fill,fill_quantity,numeric,28,12,NO
-paper_fill,fill_source,character varying,,,NO
-paper_fill,liquidity,character varying,,,NO
-paper_fill,market_type,character varying,,,NO
-paper_fill,order_id,uuid,,,NO
-paper_fill,pair_id,uuid,,,NO
-paper_fill,position_side,character varying,,,YES
-paper_fill,quote_amount,numeric,28,8,NO
-paper_fill,quote_usdt_price,numeric,28,12,YES
-paper_fill,quote_usdt_price_source,character varying,,,YES
-paper_fill,realized_pnl_amount,numeric,28,8,YES
-paper_fill,side,character varying,,,NO
-paper_fill,traded_at,timestamp with time zone,,,NO
-paper_fill,updated_at,timestamp with time zone,,,NO
-paper_fill,version,bigint,64,0,NO
-paper_funding_payment,account_id,uuid,,,NO
-paper_funding_payment,amount,numeric,28,8,NO
-paper_funding_payment,created_at,timestamp with time zone,,,NO
-paper_funding_payment,funding_rate,numeric,12,8,NO
-paper_funding_payment,funding_time,timestamp with time zone,,,NO
-paper_funding_payment,mark_price,numeric,28,12,NO
-paper_funding_payment,pair_id,uuid,,,NO
-paper_funding_payment,payment_id,uuid,,,NO
-paper_funding_payment,position_id,uuid,,,NO
-paper_funding_payment,position_quantity,numeric,28,12,NO
-paper_funding_payment,updated_at,timestamp with time zone,,,NO
-paper_funding_payment,version,bigint,64,0,NO
-paper_futures_setting,account_id,uuid,,,NO
-paper_futures_setting,created_at,timestamp with time zone,,,NO
-paper_futures_setting,leverage,integer,32,0,NO
-paper_futures_setting,margin_mode,character varying,,,NO
-paper_futures_setting,pair_id,uuid,,,NO
-paper_futures_setting,setting_id,uuid,,,NO
-paper_futures_setting,updated_at,timestamp with time zone,,,NO
-paper_futures_setting,version,bigint,64,0,NO
-paper_ledger_entry,account_id,uuid,,,NO
-paper_ledger_entry,amount,numeric,28,8,NO
-paper_ledger_entry,balance_after_amount,numeric,28,8,NO
-paper_ledger_entry,coin_id,uuid,,,NO
-paper_ledger_entry,created_at,timestamp with time zone,,,NO
-paper_ledger_entry,entry_id,uuid,,,NO
-paper_ledger_entry,entry_type,character varying,,,NO
-paper_ledger_entry,ref_id,uuid,,,YES
-paper_ledger_entry,ref_type,character varying,,,YES
-paper_ledger_entry,updated_at,timestamp with time zone,,,NO
-paper_ledger_entry,version,bigint,64,0,NO
-paper_ledger_entry,wallet_type,character varying,,,NO
-paper_matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
-paper_matching_watermark,market_type,character varying,,,NO
-paper_matching_watermark,pair_id,uuid,,,NO
-paper_matching_watermark,updated_at,timestamp with time zone,,,NO
-paper_order,account_id,uuid,,,NO
-paper_order,activated_at,timestamp with time zone,,,YES
-paper_order,activation_price,numeric,28,12,YES
-paper_order,avg_price,numeric,28,12,YES
-paper_order,callback_rate,numeric,12,8,YES
-paper_order,client_order_id,character varying,,,NO
-paper_order,close_position,boolean,,,NO
-paper_order,closed_at,timestamp with time zone,,,YES
-paper_order,created_at,timestamp with time zone,,,NO
-paper_order,cum_quote_amount,numeric,28,8,NO
-paper_order,executed_quantity,numeric,28,12,NO
-paper_order,limit_price,numeric,28,12,YES
-paper_order,list_id,uuid,,,YES
-paper_order,market_type,character varying,,,NO
-paper_order,order_id,uuid,,,NO
-paper_order,order_status,character varying,,,NO
-paper_order,order_type,character varying,,,NO
-paper_order,orig_quantity,numeric,28,12,YES
-paper_order,pair_id,uuid,,,NO
-paper_order,position_side,character varying,,,YES
-paper_order,quote_order_amount,numeric,28,8,YES
-paper_order,reduce_only,boolean,,,NO
-paper_order,side,character varying,,,NO
-paper_order,status_reason,character varying,,,YES
-paper_order,stop_price,numeric,28,12,YES
-paper_order,time_in_force,character varying,,,YES
-paper_order,trailing_extreme_price,numeric,28,12,YES
-paper_order,trigger_condition,character varying,,,YES
-paper_order,triggered_at,timestamp with time zone,,,YES
-paper_order,updated_at,timestamp with time zone,,,NO
-paper_order,version,bigint,64,0,NO
-paper_order,working_type,character varying,,,YES
-paper_order_list,account_id,uuid,,,NO
-paper_order_list,created_at,timestamp with time zone,,,NO
-paper_order_list,list_client_order_id,character varying,,,NO
-paper_order_list,list_id,uuid,,,NO
-paper_order_list,list_status,character varying,,,NO
-paper_order_list,list_type,character varying,,,NO
-paper_order_list,market_type,character varying,,,NO
-paper_order_list,pair_id,uuid,,,NO
-paper_order_list,updated_at,timestamp with time zone,,,NO
-paper_order_list,version,bigint,64,0,NO
-paper_position,account_id,uuid,,,NO
-paper_position,close_reason,character varying,,,YES
-paper_position,closed_at,timestamp with time zone,,,YES
-paper_position,created_at,timestamp with time zone,,,NO
-paper_position,direction,character varying,,,NO
-paper_position,entry_price,numeric,28,12,NO
-paper_position,exit_price,numeric,28,12,YES
-paper_position,fee_amount,numeric,28,8,NO
-paper_position,funding_amount,numeric,28,8,NO
-paper_position,isolated_margin_amount,numeric,28,8,YES
-paper_position,leverage,integer,32,0,NO
-paper_position,margin_mode,character varying,,,NO
-paper_position,max_quantity,numeric,28,12,NO
-paper_position,opened_at,timestamp with time zone,,,NO
-paper_position,pair_id,uuid,,,NO
-paper_position,position_id,uuid,,,NO
-paper_position,position_quantity,numeric,28,12,NO
-paper_position,position_side,character varying,,,NO
-paper_position,position_status,character varying,,,NO
-paper_position,realized_pnl_amount,numeric,28,8,NO
-paper_position,updated_at,timestamp with time zone,,,NO
-paper_position,version,bigint,64,0,NO
-paper_transfer,account_id,uuid,,,NO
-paper_transfer,amount,numeric,28,8,NO
-paper_transfer,client_transfer_id,character varying,,,NO
-paper_transfer,coin_id,uuid,,,NO
-paper_transfer,created_at,timestamp with time zone,,,NO
-paper_transfer,from_wallet,character varying,,,NO
-paper_transfer,to_wallet,character varying,,,NO
-paper_transfer,transfer_id,uuid,,,NO
-paper_transfer,updated_at,timestamp with time zone,,,NO
-paper_transfer,version,bigint,64,0,NO
+order_fill,created_at,timestamp with time zone,,,NO
+order_fill,fee_amount,numeric,28,8,NO
+order_fill,fee_coin_id,uuid,,,NO
+order_fill,fill_id,uuid,,,NO
+order_fill,fill_price,numeric,28,12,NO
+order_fill,fill_quantity,numeric,28,12,NO
+order_fill,fill_source,character varying,,,NO
+order_fill,liquidity,character varying,,,NO
+order_fill,market_type,character varying,,,NO
+order_fill,order_id,uuid,,,NO
+order_fill,pair_id,uuid,,,NO
+order_fill,position_side,character varying,,,YES
+order_fill,quote_amount,numeric,28,8,NO
+order_fill,quote_usdt_price,numeric,28,12,YES
+order_fill,quote_usdt_price_source,character varying,,,YES
+order_fill,realized_pnl_amount,numeric,28,8,YES
+order_fill,side,character varying,,,NO
+order_fill,traded_at,timestamp with time zone,,,NO
+order_fill,updated_at,timestamp with time zone,,,NO
+order_fill,user_id,uuid,,,NO
+order_fill,version,bigint,64,0,NO
+order_list,created_at,timestamp with time zone,,,NO
+order_list,list_client_order_id,character varying,,,NO
+order_list,list_id,uuid,,,NO
+order_list,list_status,character varying,,,NO
+order_list,list_type,character varying,,,NO
+order_list,market_type,character varying,,,NO
+order_list,pair_id,uuid,,,NO
+order_list,updated_at,timestamp with time zone,,,NO
+order_list,user_id,uuid,,,NO
+order_list,version,bigint,64,0,NO
+order_matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
+order_matching_watermark,market_type,character varying,,,NO
+order_matching_watermark,pair_id,uuid,,,NO
+order_matching_watermark,updated_at,timestamp with time zone,,,NO
 post_coin,coin_id,uuid,,,NO
 post_coin,post_id,uuid,,,NO
 post_media,created_at,timestamp with time zone,,,NO
@@ -585,6 +489,39 @@ technical_indicator,timeframe,character varying,,,NO
 technical_indicator,trend_score,numeric,5,2,YES
 technical_indicator,volume_score,numeric,5,2,YES
 technical_indicator,volume_sma_20,numeric,28,10,YES
+trade_order,activated_at,timestamp with time zone,,,YES
+trade_order,activation_price,numeric,28,12,YES
+trade_order,avg_price,numeric,28,12,YES
+trade_order,callback_rate,numeric,12,8,YES
+trade_order,client_order_id,character varying,,,NO
+trade_order,close_position,boolean,,,NO
+trade_order,closed_at,timestamp with time zone,,,YES
+trade_order,created_at,timestamp with time zone,,,NO
+trade_order,cum_quote_amount,numeric,28,8,NO
+trade_order,executed_quantity,numeric,28,12,NO
+trade_order,limit_price,numeric,28,12,YES
+trade_order,list_id,uuid,,,YES
+trade_order,market_type,character varying,,,NO
+trade_order,order_id,uuid,,,NO
+trade_order,order_status,character varying,,,NO
+trade_order,order_type,character varying,,,NO
+trade_order,orig_quantity,numeric,28,12,YES
+trade_order,pair_id,uuid,,,NO
+trade_order,plan_id,uuid,,,YES
+trade_order,position_side,character varying,,,YES
+trade_order,quote_order_amount,numeric,28,8,YES
+trade_order,reduce_only,boolean,,,NO
+trade_order,side,character varying,,,NO
+trade_order,status_reason,character varying,,,YES
+trade_order,stop_price,numeric,28,12,YES
+trade_order,time_in_force,character varying,,,YES
+trade_order,trailing_extreme_price,numeric,28,12,YES
+trade_order,trigger_condition,character varying,,,YES
+trade_order,triggered_at,timestamp with time zone,,,YES
+trade_order,updated_at,timestamp with time zone,,,NO
+trade_order,user_id,uuid,,,NO
+trade_order,version,bigint,64,0,NO
+trade_order,working_type,character varying,,,YES
 trading_journal,analysis_timeframe,character varying,,,YES
 trading_journal,chart_image_url,character varying,,,YES
 trading_journal,close_reason,character varying,,,YES
@@ -756,6 +693,29 @@ user_token,updated_at,timestamp with time zone,,,NO
 user_token,used_at,timestamp with time zone,,,YES
 user_token,user_id,uuid,,,NO
 user_token,version,bigint,64,0,NO
+wallet_balance,balance_id,uuid,,,NO
+wallet_balance,coin_id,uuid,,,NO
+wallet_balance,cost_basis_amount,numeric,28,8,YES
+wallet_balance,created_at,timestamp with time zone,,,NO
+wallet_balance,free_amount,numeric,28,8,NO
+wallet_balance,locked_amount,numeric,28,8,NO
+wallet_balance,updated_at,timestamp with time zone,,,NO
+wallet_balance,user_id,uuid,,,NO
+wallet_balance,version,bigint,64,0,NO
+wallet_balance,wallet_type,character varying,,,NO
+wallet_ledger_entry,amount,numeric,28,8,NO
+wallet_ledger_entry,balance_after_amount,numeric,28,8,NO
+wallet_ledger_entry,client_transfer_id,character varying,,,YES
+wallet_ledger_entry,coin_id,uuid,,,NO
+wallet_ledger_entry,created_at,timestamp with time zone,,,NO
+wallet_ledger_entry,entry_id,uuid,,,NO
+wallet_ledger_entry,entry_type,character varying,,,NO
+wallet_ledger_entry,ref_id,uuid,,,YES
+wallet_ledger_entry,ref_type,character varying,,,YES
+wallet_ledger_entry,updated_at,timestamp with time zone,,,NO
+wallet_ledger_entry,user_id,uuid,,,NO
+wallet_ledger_entry,version,bigint,64,0,NO
+wallet_ledger_entry,wallet_type,character varying,,,NO
 watchlist,added_at,timestamp with time zone,,,NO
 watchlist,created_at,timestamp with time zone,,,NO
 watchlist,label,character varying,,,YES

@@ -2,7 +2,7 @@ package com.cryptopilot.paper.model.enums;
 
 /**
  * Whether a fill added liquidity or took it, which decides its fee rate. The names are the values
- * {@code paper_fill.liquidity} accepts.
+ * {@code order_fill.liquidity} accepts.
  *
  * <p>Rule: TR-02.
  */
