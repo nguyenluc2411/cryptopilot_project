@@ -3,10 +3,13 @@ package com.cryptopilot.schema;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.client.Kline;
+import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.dto.request.LeverageBracketRequest;
 import com.cryptopilot.market.dto.request.LeverageBracketsRequest;
 import com.cryptopilot.market.dto.request.UpdatePairRequest;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.PairStatus;
 import com.cryptopilot.market.service.PairAdminService;
@@ -16,6 +19,10 @@ import com.cryptopilot.trading.service.TradingPlanService;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +32,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +55,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -60,7 +69,10 @@ import tools.jackson.databind.node.ObjectNode;
  * must never reach the database the rest of the suite shares. The script needs PowerShell, {@code pwsh} (the CI runner
  * has it) or Windows PowerShell.
  *
- * <p>Rule: DEMO-01; BR-26, BR-27, BR-62 (ACTIVE_PLAN_MAX), UC-16, UC-18, UC-45, UC-46.
+ * <p>It also drives demo scenario DS-01c through the API on the brackets the script loaded: a 50x Futures plan whose
+ * stop loss lies beyond its liquidation price is blocked and its activation refused with MSG18.
+ *
+ * <p>Rule: DEMO-01; BR-26, BR-27, BR-28, BR-62 (ACTIVE_PLAN_MAX), UC-16, UC-18, UC-45, UC-46; MSG18.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("demo")
@@ -179,6 +191,8 @@ class DemoLoaderTest {
         assertThat(sql.sql("select current_database()").query(String.class).single())
                 .as("the backend runs on its own database, never the one the suite shares")
                 .isEqualTo(LOADER_DATABASE);
+        // A plan filled at activation opens its journal row (D-118), which points at the plan.
+        sql.sql("delete from trading_journal").update();
         sql.sql("delete from trading_plan").update();
         sql.sql("delete from leverage_bracket").update();
         sql.sql("delete from audit_log").update();
@@ -314,6 +328,12 @@ class DemoLoaderTest {
         assertThat(run.exitCode()).isNotZero();
         assertThat(run.output()).contains("was saved as EXECUTED, not ACTIVE");
         assertThat(activePlansOfDemoFree()).isEmpty();
+        assertThat(sql.sql("""
+                        select count(*) from trading_plan t
+                         where t.user_id = ? and t.plan_status = 'EXECUTED'
+                           and exists (select 1 from trading_journal j where j.plan_id = t.plan_id)""").param(DEMO_FREE).query(Integer.class).single())
+                .as("the plan the backend filled has its journal row, as every EXECUTED plan (D-118)")
+                .isOne();
     }
 
     @Test
@@ -356,6 +376,50 @@ class DemoLoaderTest {
         assertThat(run.exitCode()).isNotZero();
         assertThat(run.output()).contains("freePlans names SOLUSDT");
         assertThat(activePlansOfDemoFree()).hasSize(1);
+    }
+
+    /**
+     * DS-01c on the brackets the loader put in place: demo.pro (PRO, BALANCED, 10,000 at 1 %) plans a BTCUSDT Futures
+     * LIMIT LONG at 50x with the stop loss 5 % under the entry. The risk of 100 over a stop of 4,950 is a notional of
+     * about 2,000, in tier 1 (MMR 0.4 %), so the position is liquidated about 1.6 % under the entry, well before the
+     * stop: BLOCKING SL_BEYOND_LIQUIDATION. The draft is saved with it, and Activate answers MSG18.
+     */
+    @Test
+    void MSG18_DS01c_aStopLossBeyondLiquidation_onTheSeededBrackets_blocksTheActivation() throws Exception {
+        assertThat(load().exitCode()).isZero();
+        futuresLastPrice("BTCUSDT", BTC_PRICE);
+        String token = accessToken("demo.pro@cryptopilot.invalid");
+
+        HttpResponse<String> saved = call("POST", "/api/v1/plans", token, """
+                {"pairId": "%s", "market": "FUTURES", "direction": "LONG", "entryType": "LIMIT",
+                 "entryPrice": 99000, "stopLoss": 94050, "takeProfit": 110000, "leverage": 50}""".formatted(btc));
+
+        assertThat(saved.statusCode()).as(saved.body()).isEqualTo(201);
+        JsonNode plan = json(saved);
+        assertThat(plan.get("status").asString()).isEqualTo("DRAFT");
+        assertThat(plan.get("blocksActivation").asBoolean()).isTrue();
+        List<String> warnings = new ArrayList<>();
+        plan.get("warnings")
+                .forEach(warning -> warnings.add(warning.get("type").asString() + " "
+                        + warning.get("severity").asString()));
+        assertThat(warnings).contains("SL_BEYOND_LIQUIDATION BLOCKING");
+        BigDecimal liquidation = new BigDecimal(
+                plan.get("snapshot").get("estimatedLiquidationPrice").asString());
+        assertThat(liquidation)
+                .as("tier 1 of the seeded brackets at 50x: liquidated about 1.6 % under the entry, above the stop")
+                .isBetween(new BigDecimal("97000"), new BigDecimal("98000"));
+
+        String id = plan.get("id").asString();
+        HttpResponse<String> activation = call("POST", "/api/v1/plans/" + id + "/activate", token, null);
+
+        assertThat(activation.statusCode()).as(activation.body()).isEqualTo(409);
+        assertThat(json(activation).get("code").asString()).isEqualTo("TRADING_BLOCKING_WARNING");
+        assertThat(json(activation).get("messageCode").asString()).isEqualTo("MSG18");
+        assertThat(sql.sql("select plan_status from trading_plan where plan_id = ?")
+                        .param(UUID.fromString(id))
+                        .query(String.class)
+                        .single())
+                .isEqualTo("DRAFT");
     }
 
     private void assertPairsAsInTheDataFile() {
@@ -441,6 +505,57 @@ class DemoLoaderTest {
                         BigDecimal.ONE,
                         at));
         prices.flush();
+    }
+
+    /** The Futures last price as NSF-03 leaves it: the close of the forming 1-minute candle (D-111). */
+    private void futuresLastPrice(String symbol, BigDecimal value) {
+        Instant at = Instant.now();
+        Instant open = at.truncatedTo(ChronoUnit.MINUTES);
+        prices.record(
+                MarketType.FUTURES,
+                new KlineMessage(
+                        symbol,
+                        MarketInterval.ONE_MINUTE,
+                        new Kline(
+                                open,
+                                open.plusSeconds(60).minusMillis(1),
+                                value,
+                                value,
+                                value,
+                                value,
+                                BigDecimal.ONE,
+                                BigDecimal.ONE,
+                                1),
+                        false,
+                        at));
+        prices.flush();
+    }
+
+    private String accessToken(String email) throws Exception {
+        HttpResponse<String> session = call("POST", "/api/v1/auth/login", null, """
+                {"email": "%s", "password": "%s", "rememberMe": false}""".formatted(email, DEMO_PASSWORD));
+        assertThat(session.statusCode()).as(session.body()).isEqualTo(200);
+        return json(session).get("accessToken").asString();
+    }
+
+    private HttpResponse<String> call(String method, String path, String token, String body) throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                .header("Content-Type", "application/json")
+                .method(
+                        method,
+                        body == null
+                                ? HttpRequest.BodyPublishers.noBody()
+                                : HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+        if (token != null) {
+            request.header("Authorization", "Bearer " + token);
+        }
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            return client.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        }
+    }
+
+    private static JsonNode json(HttpResponse<String> response) {
+        return JsonMapper.builder().build().readTree(response.body());
     }
 
     private static BigDecimal decimal(Map<String, Object> row, String column) {
