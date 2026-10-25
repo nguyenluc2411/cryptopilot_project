@@ -90,6 +90,10 @@ spring:
       demo_password_hash: ${DEMO_PASSWORD_HASH:!DEMO_PASSWORD_HASH_NOT_SET}
 
 cryptopilot:
+  # The deployment this instance runs on: development, staging or production. The prod profile defaults it to
+  # production, so staging sets CRYPTOPILOT_ENVIRONMENT=staging. DemoEnvironmentGuard refuses the demo profile
+  # anywhere but development and staging (D-120).
+  environment: ${CRYPTOPILOT_ENVIRONMENT:development}
   outbox:
     # T-056, ADR-010: resubmits the event publications whose listener failed. Off here, on in the dev and prod
     # profiles, so a test context schedules nothing.
