@@ -1,10 +1,12 @@
 package com.cryptopilot.news.service.impl;
 
 import com.cryptopilot.common.exception.FieldValidationException;
+import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.news.dto.response.NewsArticleDetailResponse;
 import com.cryptopilot.news.dto.response.NewsArticleResponse;
 import com.cryptopilot.news.dto.response.NewsCoinResponse;
 import com.cryptopilot.news.dto.response.NewsSentimentSummaryResponse;
@@ -32,14 +34,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * The news feed (UC-34). Every Trader reads the same items (D-126): the translated headline and the AI summary once
+ * The news feed (UC-34). Every Trader reads the same items (D-130): the translated headline and the AI summary once
  * NSF-11 has run (D-127), the collected headline and the feed's excerpt until then, and the sentiment. A page costs a
  * fixed number of statements: the page, its count, its coin tags and the symbols of those coins.
  *
  * <p>A coin symbol no coin has matches nothing rather than failing, as a post feed does: a link to the news of a coin
  * that is not listed shows an empty feed.
  *
- * <p>Rule: UC-34; SRS 3.8.1; CR-04; D-126, D-127.
+ * <p>An article is also read on its own page (D-129), with the article written again and the outlet's cover image; a
+ * hidden article has no page.
+ *
+ * <p>Rule: UC-34; SRS 3.8.1; CR-04; D-126, D-127, D-129.
  */
 @Service
 @RequiredArgsConstructor
@@ -76,6 +81,29 @@ public class NewsFeedServiceImpl implements NewsFeedService {
                 .map(article -> response(article, tags.getOrDefault(article.articleId(), List.of()), symbols))
                 .toList();
         return new PageResponse<>(items, request.getPageNumber() + 1, request.getPageSize(), found.total());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public NewsArticleDetailResponse article(UUID articleId) {
+        FeedArticle article =
+                feeds.article(articleId).orElseThrow(() -> new ResourceNotFoundException("News article", articleId));
+        Map<UUID, List<CoinTag>> tags = feeds.coinTags(List.of(articleId));
+        List<NewsCoinResponse> coins = coins(tags.getOrDefault(articleId, List.of()), symbols(tags));
+        boolean summarized = article.aiSummary() != null;
+        return new NewsArticleDetailResponse(
+                article.articleId(),
+                Optional.ofNullable(article.aiTitle()).orElse(article.title()),
+                article.title(),
+                article.sourceName(),
+                article.originalUrl(),
+                article.publishedAt(),
+                summarized ? article.aiSummary() : article.excerpt(),
+                summarized ? article.aiBody() : null,
+                summarized,
+                article.sentiment(),
+                coins,
+                article.imageUrl());
     }
 
     @Override
@@ -132,10 +160,6 @@ public class NewsFeedServiceImpl implements NewsFeedService {
 
     private static NewsArticleResponse response(FeedArticle article, List<CoinTag> tags, Map<UUID, String> symbols) {
         boolean summarized = article.aiSummary() != null;
-        List<NewsCoinResponse> coins = tags.stream()
-                .filter(tag -> symbols.containsKey(tag.coinId()))
-                .map(tag -> new NewsCoinResponse(symbols.get(tag.coinId()), tag.primary()))
-                .toList();
         return new NewsArticleResponse(
                 article.articleId(),
                 Optional.ofNullable(article.aiTitle()).orElse(article.title()),
@@ -146,6 +170,14 @@ public class NewsFeedServiceImpl implements NewsFeedService {
                 summarized ? article.aiSummary() : article.excerpt(),
                 summarized,
                 article.sentiment(),
-                coins);
+                coins(tags, symbols),
+                article.imageUrl());
+    }
+
+    private static List<NewsCoinResponse> coins(List<CoinTag> tags, Map<UUID, String> symbols) {
+        return tags.stream()
+                .filter(tag -> symbols.containsKey(tag.coinId()))
+                .map(tag -> new NewsCoinResponse(symbols.get(tag.coinId()), tag.primary()))
+                .toList();
     }
 }

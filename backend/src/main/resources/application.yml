@@ -496,14 +496,18 @@ cryptopilot:
       # The provider's model, per environment. A lite model is enough to shorten an article and label its tone.
       model: ${NEWS_SUMMARY_MODEL:gemini-3.5-flash-lite}
       temperature: 0.2
-      max-output-tokens: 512
+      # D-129: the answer carries the article written again, at most max-article-words; Vietnamese costs more tokens
+      # per word than English.
+      max-output-tokens: 8192
       # The prompt names the language; NSF-11: at most 60 words.
       language: ${NEWS_SUMMARY_LANGUAGE:Vietnamese}
       max-words: 60
       # D-127: the headline is translated too, in at most this many words.
       max-title-words: 30
-      max-input-words: 1200
+      max-input-words: 2000
       min-body-words: 80
+      # D-129: the article written again in the app's words, about 50-70% of the original, counted in Vietnamese syllables.
+      max-article-words: 2000
       prompt: classpath:prompts/news-summary.txt
 
 springdoc:

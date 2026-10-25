@@ -69,7 +69,8 @@ public class AiServiceClient implements AutoCloseable {
                 text(answer, "sentiment"),
                 answer.path("model").asString(request.model()),
                 answer.path("inputTokens").asInt(0),
-                answer.path("outputTokens").asInt(0));
+                answer.path("outputTokens").asInt(0),
+                blankToNull(answer.path("body").asString(null)));
     }
 
     @Override
@@ -116,6 +117,10 @@ public class AiServiceClient implements AutoCloseable {
             throw new AiServiceException(
                     "BAD_ANSWER", true, "the AI Service answered with something that is not JSON", e);
         }
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     private static String text(JsonNode answer, String field) {

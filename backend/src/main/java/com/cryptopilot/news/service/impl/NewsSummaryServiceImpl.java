@@ -7,6 +7,7 @@ import com.cryptopilot.ai.NewsSummaryResult;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.news.calculator.ArticleImage;
 import com.cryptopilot.news.calculator.ArticleText;
 import com.cryptopilot.news.calculator.SummaryCheck;
 import com.cryptopilot.news.client.RssClient;
@@ -52,7 +53,12 @@ import org.springframework.transaction.support.TransactionTemplate;
  * that rate limits, a service that is down or not configured ends the run without counting an attempt: the other
  * articles would fail the same way, and each would cost a request.
  *
- * <p>Rule: NSF-11; BR-48; D-127; the hard scope boundary (no investment advice).
+ * <p>The same answer carries the article written again in the app's words, shorter than the original, for its page in
+ * the app (D-129). It is checked like the summary but never cut; one that still fails after the second request is
+ * dropped and the summary is stored alone. The page read for the text also gives the cover image where the feed gave
+ * none, by its address only.
+ *
+ * <p>Rule: NSF-11; BR-48; D-127; D-129; the hard scope boundary (no investment advice).
  */
 @Service
 public class NewsSummaryServiceImpl implements NewsSummaryService {
@@ -157,7 +163,8 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
      * only where it has none. Why the answer was refused, or empty when it was stored.
      */
     private Optional<String> summarize(NewsArticle article, NewsSource source, String prompt, boolean replace) {
-        String text = articleText(article, source);
+        Material read = material(article, source);
+        String text = read.text();
         String material = article.getTitle() + "\n\n" + text;
         NewsSummaryRequest request = new NewsSummaryRequest(
                 properties.model(),
@@ -169,7 +176,8 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
                 text,
                 null);
         NewsSummaryResult answer = ai.summarize(request);
-        Optional<String> problem = problem(answer, material);
+        NewsSummaryResult first = answer;
+        Optional<String> problem = problem(first, material).or(() -> articleProblem(first, material));
         if (problem.isPresent()) {
             log.info("NSF-11 article {}: asking again because {}", article.getId(), problem.get());
             answer = ai.summarize(request.withFeedback(problem.get()));
@@ -189,16 +197,36 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
         SentimentLabel sentiment = sentiment(answer).orElseThrow();
         String title = answer.title().strip();
         String stored = summary;
+        String body = body(article, answer, material);
+        String image = read.imageUrl();
         Instant now = clock.instant();
         // Without replace, no row written means another run stored a summary meanwhile, which is as good as this one.
         transactions.executeWithoutResult(status -> {
-            if (replace) {
-                articles.replaceSummary(article.getId(), title, stored, sentiment.name(), now);
-            } else {
-                articles.saveSummary(article.getId(), title, stored, sentiment.name(), now);
+            int written = replace
+                    ? articles.replaceSummary(article.getId(), title, stored, sentiment.name(), now)
+                    : articles.saveSummary(article.getId(), title, stored, sentiment.name(), now);
+            if (written > 0) {
+                articles.saveArticle(article.getId(), body, image);
             }
         });
         return Optional.empty();
+    }
+
+    private Optional<String> articleProblem(NewsSummaryResult answer, String material) {
+        return SummaryCheck.articleProblem(answer.body(), material, properties.maxArticleWords());
+    }
+
+    /** The article written again as it is stored: stripped, or {@code null} when there is none or it fails its check. */
+    private String body(NewsArticle article, NewsSummaryResult answer, String material) {
+        if (answer.body() == null || answer.body().isBlank()) {
+            return null;
+        }
+        Optional<String> problem = articleProblem(answer, material);
+        if (problem.isPresent()) {
+            log.info("NSF-11 article {} keeps its summary without a body: {}", article.getId(), problem.get());
+            return null;
+        }
+        return answer.body().strip();
     }
 
     /** Why an answer cannot be stored, or empty when it can. */
@@ -222,16 +250,21 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
     }
 
     /**
-     * The text the model reads: the article's own body when the source names where it is and the page gives it, else
-     * the feed's excerpt. Neither is stored.
+     * What the model reads, the article's own body when the source names where it is and the page gives it, else the
+     * feed's excerpt, neither of them stored; and the page's cover image when the article has none yet (D-129).
      */
-    private String articleText(NewsArticle article, NewsSource source) {
+    private Material material(NewsArticle article, NewsSource source) {
         String excerpt = article.getExcerpt() == null ? "" : article.getExcerpt();
+        String fallback = excerpt.isBlank() ? article.getTitle() : excerpt;
         if (source == null || source.getBodySelector() == null) {
-            return excerpt.isBlank() ? article.getTitle() : excerpt;
+            return new Material(fallback, null);
         }
+        String image = null;
         try {
             WebPage page = rss.readPage(article.getOriginalUrl(), source.getUserAgent());
+            if (article.getImageUrl() == null) {
+                image = ArticleImage.fromPage(page.body(), page.url()).orElse(null);
+            }
             Optional<String> body = ArticleText.extract(
                     page.body(),
                     page.url(),
@@ -239,7 +272,7 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
                     source.getExcludedSelectors(),
                     properties.maxInputWords());
             if (body.isPresent() && ArticleText.words(body.get()) >= properties.minBodyWords()) {
-                return body.get();
+                return new Material(body.get(), image);
             }
             log.debug(
                     "NSF-11 article {}: the page has no body under the selectors; the excerpt is used",
@@ -250,8 +283,14 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
                     article.getId(),
                     e.getMessage());
         }
-        return excerpt.isBlank() ? article.getTitle() : excerpt;
+        return new Material(fallback, image);
     }
+
+    /**
+     * @param text what the model reads
+     * @param imageUrl the page's cover image, or {@code null} when the article has one or the page names none
+     */
+    private record Material(String text, String imageUrl) {}
 
     /** The instructions with the configured language and length, read once from the configured resource. */
     private String systemPrompt() {
@@ -263,7 +302,8 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
                         .getContentAsString(StandardCharsets.UTF_8)
                         .replace("{language}", properties.language())
                         .replace("{maxWords}", String.valueOf(properties.maxWords()))
-                        .replace("{maxTitleWords}", String.valueOf(properties.maxTitleWords()));
+                        .replace("{maxTitleWords}", String.valueOf(properties.maxTitleWords()))
+                        .replace("{maxArticleWords}", String.valueOf(properties.maxArticleWords()));
             } catch (IOException e) {
                 throw new UncheckedIOException("the news summary prompt cannot be read: " + properties.prompt(), e);
             }

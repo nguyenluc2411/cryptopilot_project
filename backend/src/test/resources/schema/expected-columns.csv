@@ -232,6 +232,7 @@ matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
 matching_watermark,market_type,character varying,,,NO
 matching_watermark,pair_id,uuid,,,NO
 matching_watermark,updated_at,timestamp with time zone,,,NO
+news_article,ai_body,text,,,YES
 news_article,ai_summary,text,,,YES
 news_article,ai_title,character varying,,,YES
 news_article,article_id,uuid,,,NO
@@ -240,6 +241,7 @@ news_article,created_at,timestamp with time zone,,,NO
 news_article,excerpt,text,,,YES
 news_article,hidden_at,timestamp with time zone,,,YES
 news_article,hidden_by,uuid,,,YES
+news_article,image_url,character varying,,,YES
 news_article,original_url,character varying,,,NO
 news_article,published_at,timestamp with time zone,,,NO
 news_article,sentiment_label,character varying,,,YES

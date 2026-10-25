@@ -2,6 +2,7 @@ package com.cryptopilot.news.controller;
 
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
+import com.cryptopilot.news.dto.response.NewsArticleDetailResponse;
 import com.cryptopilot.news.dto.response.NewsArticleResponse;
 import com.cryptopilot.news.dto.response.NewsSentimentSummaryResponse;
 import com.cryptopilot.news.service.NewsFeedService;
@@ -10,18 +11,20 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
  * SCR-28 News Feed and the news blocks of SCR-08, SCR-10 and SCR-11 (UC-34). Traders only, by the
- * {@code /api/v1/news/**} rule of the security chain; every plan reads the same (D-126).
+ * {@code /api/v1/news/**} rule of the security chain; every plan reads the same (D-130).
  *
- * <p>Rule: UC-34; SRS 3.8.1; D-126.
+ * <p>Rule: UC-34; SRS 3.8.1; D-126, D-129.
  */
 @Tag(name = "News", description = "Aggregated crypto news with AI summary and sentiment, SCR-28 (UC-34).")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
@@ -53,6 +56,18 @@ public class NewsController {
             @Parameter(description = "From 1") @RequestParam(required = false) Integer page,
             @Parameter(description = "1 to 100, 20 by default") @RequestParam(required = false) Integer pageSize) {
         return service.feed(coin, sentiment, range, page, pageSize);
+    }
+
+    @Operation(
+            summary = "One article for its page in the app: the article written again, cover image and source (D-129)")
+    @ApiResponse(
+            responseCode = "200",
+            description = "Title, source, original link, publish time, summary, body (AI, else null), sentiment,"
+                    + " coin tags and cover image")
+    @ApiResponse(responseCode = "404", description = "No such article, or an administrator hid it")
+    @GetMapping("/{articleId}")
+    public NewsArticleDetailResponse article(@PathVariable UUID articleId) {
+        return service.article(articleId);
     }
 
     @Operation(summary = "How many articles of the last 24 hours are bullish, neutral and bearish (SRS 3.8.1)")

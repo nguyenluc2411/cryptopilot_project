@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -90,7 +91,7 @@ class CrawlServiceImplTest {
         when(market.listedCoins())
                 .thenReturn(List.of(new CoinListing(BTC, "BTC", "BTC"), new CoinListing(USDT, "USDT", "Tether")));
         when(sources.markCrawled(any(), any())).thenReturn(1);
-        when(articles.insert(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(articles.insert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(1);
         when(crawlLogs.save(any())).thenAnswer(call -> call.getArgument(0));
     }
@@ -126,6 +127,7 @@ class CrawlServiceImplTest {
                         any(),
                         any(),
                         eq("Tether minted more USDT."),
+                        isNull(),
                         eq(NOW.minusSeconds(60)),
                         eq(NOW));
         verify(articles).tagCoin(article.getValue(), BTC, true);
@@ -147,7 +149,7 @@ class CrawlServiceImplTest {
                         item("Stored before", "https://e.com/2", null),
                         item("New", "https://e.com/3", null)));
         when(articles.existsTitleBetween(any(), any(), any())).thenReturn(true, false, false);
-        when(articles.insert(any(), any(), eq("Stored before"), any(), any(), any(), any(), any(), any()))
+        when(articles.insert(any(), any(), eq("Stored before"), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(0);
 
         assertThat(service.crawlDue().inserted()).isEqualTo(1);
@@ -155,7 +157,7 @@ class CrawlServiceImplTest {
         verify(articles, times(3))
                 .existsTitleBetween(
                         any(), eq(published.minus(Duration.ofHours(48))), eq(published.plus(Duration.ofHours(48))));
-        verify(articles, times(2)).insert(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(articles, times(2)).insert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         assertThat(logged().getArticlesInserted()).isEqualTo(1);
     }
 
@@ -171,8 +173,8 @@ class CrawlServiceImplTest {
 
         service.crawlDue();
 
-        verify(articles).insert(any(), any(), eq("Kept"), any(), any(), any(), any(), any(), any());
-        verify(articles, times(1)).insert(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(articles).insert(any(), any(), eq("Kept"), any(), any(), any(), any(), any(), any(), any());
+        verify(articles, times(1)).insert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         NewsCrawlLog entry = logged();
         assertThat(entry.getStatus()).isEqualTo(CrawlStatus.PARTIAL);
         assertThat(entry.getArticlesFound()).isEqualTo(3);
@@ -187,7 +189,7 @@ class CrawlServiceImplTest {
         when(sources.markCrawled(any(), any())).thenReturn(0);
 
         assertThat(service.crawlDue()).isEqualTo(new CrawlRun(1, 0, 0));
-        verify(articles, never()).insert(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(articles, never()).insert(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(crawlLogs, never()).save(any());
     }
 

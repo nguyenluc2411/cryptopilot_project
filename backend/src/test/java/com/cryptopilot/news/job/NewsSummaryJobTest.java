@@ -81,6 +81,7 @@ class NewsSummaryJobTest {
                         30,
                         1200,
                         80,
+                        2000,
                         new ByteArrayResource(new byte[0])),
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }

@@ -45,6 +45,23 @@ public final class ArticleCandidates {
             String description,
             Instant collectedAt,
             CoinTagger tagger) {
+        return from(title, link, publishedAt, description, null, collectedAt, tagger);
+    }
+
+    /**
+     * The article this item would be, with the feed's image for it when that is a usable address (D-129), or empty
+     * when it has no headline or no usable address.
+     *
+     * @param imageUrl the feed's image for the item, or {@code null}
+     */
+    public static Optional<ArticleCandidate> from(
+            String title,
+            String link,
+            Instant publishedAt,
+            String description,
+            String imageUrl,
+            Instant collectedAt,
+            CoinTagger tagger) {
         Objects.requireNonNull(collectedAt, "collectedAt must not be null");
         Objects.requireNonNull(tagger, "tagger must not be null");
         String headline = title == null ? "" : Jsoup.parse(title).text().strip();
@@ -74,7 +91,8 @@ public final class ArticleCandidates {
                 ContentHash.sha256(TitleNormalizer.normalize(headline)),
                 excerpt,
                 published,
-                tagger.tag(headline, excerpt)));
+                tagger.tag(headline, excerpt),
+                ArticleImage.of(imageUrl, original).orElse(null)));
     }
 
     /**

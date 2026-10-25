@@ -68,7 +68,20 @@ describe("POST /v1/news/summary", () => {
     expect(sent?.maxOutputTokens).toBe(256);
     expect(sent?.userPrompt).toContain("TITLE: Bitcoin holds $81K");
     expect(sent?.userPrompt).toContain("SOURCE: CoinDesk Markets");
-    expect(sent?.responseSchema).toMatchObject({ required: ["title", "summary", "sentiment"] });
+    expect(sent?.responseSchema).toMatchObject({ required: ["title", "summary", "body", "sentiment"] });
+  });
+
+  it("D125 passes on the article written again when the model wrote one", async () => {
+    const provider = new FakeProvider(() => ({
+      text: '{"title":"t","summary":"x","body":"  Đoạn một.\\n\\nĐoạn hai.  ","sentiment":"BULLISH"}',
+      inputTokens: 1,
+      outputTokens: 1,
+    }));
+
+    const response = await post(provider, BODY);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ summary: "x", body: "Đoạn một.\n\nĐoạn hai." });
   });
 
   it("NSF11 passes the backend's reason for a retry to the model", async () => {

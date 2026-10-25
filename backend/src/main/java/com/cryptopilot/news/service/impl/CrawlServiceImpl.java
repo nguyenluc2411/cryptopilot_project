@@ -146,7 +146,13 @@ public class CrawlServiceImpl implements CrawlService {
                 continue;
             }
             Optional<ArticleCandidate> candidate = ArticleCandidates.from(
-                    item.title(), item.link(), item.publishedAt(), item.description(), started, tagger);
+                    item.title(),
+                    item.link(),
+                    item.publishedAt(),
+                    item.description(),
+                    item.imageUrl(),
+                    started,
+                    tagger);
             if (candidate.isPresent()) {
                 candidates.add(candidate.get());
             } else {
@@ -192,6 +198,7 @@ public class CrawlServiceImpl implements CrawlService {
                     candidate.urlHash(),
                     candidate.titleHash(),
                     candidate.excerpt(),
+                    candidate.imageUrl(),
                     candidate.publishedAt(),
                     collectedAt);
             if (written == 0) {

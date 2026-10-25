@@ -115,6 +115,55 @@ class NewsSummaryServiceImplTest {
     }
 
     @Test
+    void D125_theBodyAndThePagesCoverImage_areStoredWithTheSummary() {
+        NewsArticle article = article("Bitcoin holds $81K", "Excerpt only.");
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
+        when(rss.readPage(any(), any())).thenReturn(page("/covers/btc.jpg"));
+        when(articles.saveSummary(any(), any(), any(), any(), any())).thenReturn(1);
+        when(ai.summarize(any()))
+                .thenReturn(answerWithBody("  Bitcoin đi ngang quanh $81,700.\n\nETF bị rút $635 million.  "));
+
+        assertThat(service(properties(30)).summarizeDue()).isEqualTo(new SummaryRun(1, 1, 0));
+
+        verify(articles)
+                .saveArticle(
+                        article.getId(),
+                        "Bitcoin đi ngang quanh $81,700.\n\nETF bị rút $635 million.",
+                        "https://e.com/covers/btc.jpg");
+    }
+
+    @Test
+    void D125_aBodyThatStillFailsAfterTheRetry_isDropped_andTheSummaryKept() {
+        NewsArticle article = article("Bitcoin holds $81K", "Excerpt only.");
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
+        when(articles.saveSummary(any(), any(), any(), any(), any())).thenReturn(1);
+        when(ai.summarize(any())).thenReturn(answerWithBody("Bitcoin có thể lên $95,000."));
+
+        assertThat(service(properties(30)).summarizeDue()).isEqualTo(new SummaryRun(1, 1, 0));
+
+        assertThat(sent(2).get(1).feedback()).isEqualTo("these figures of the body are not in the article: 95,000");
+        verify(articles).saveSummary(eq(article.getId()), any(), eq("Bitcoin đi ngang."), eq("NEUTRAL"), eq(NOW));
+        verify(articles).saveArticle(article.getId(), null, null);
+    }
+
+    @Test
+    void D125_anArticleWithACoverImage_keepsIt_andNothingIsWrittenWhenAnotherRunStoredFirst() throws Exception {
+        NewsArticle article = article("Bitcoin holds $81K", "Excerpt only.");
+        set(article, "imageUrl", "https://img.example.com/feed.jpg");
+        NewsArticle raced = article("Ether steady", "Excerpt.");
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article, raced));
+        when(rss.readPage(any(), any())).thenReturn(page("https://e.com/og.jpg"));
+        when(articles.saveSummary(eq(article.getId()), any(), any(), any(), any()))
+                .thenReturn(1);
+        when(ai.summarize(any())).thenReturn(answerWithBody("Bitcoin đi ngang."));
+
+        service(properties(30)).summarizeDue();
+
+        verify(articles).saveArticle(article.getId(), "Bitcoin đi ngang.", null);
+        verify(articles, never()).saveArticle(eq(raced.getId()), any(), any());
+    }
+
+    @Test
     void NSF11_withoutABody_theExcerptIsSummarized() {
         NewsArticle unreadable = article("Page down", "Bitcoin rose 2% today.");
         NewsArticle tooShort = article("Paywalled", "Ether fell 4%.");
@@ -373,6 +422,7 @@ class NewsSummaryServiceImplTest {
                 20,
                 1200,
                 minBodyWords,
+                2000,
                 prompt);
     }
 
@@ -380,6 +430,17 @@ class NewsSummaryServiceImplTest {
         ArgumentCaptor<NewsSummaryRequest> requests = ArgumentCaptor.forClass(NewsSummaryRequest.class);
         verify(ai, times(times)).summarize(requests.capture());
         return requests.getAllValues();
+    }
+
+    private static NewsSummaryResult answerWithBody(String body) {
+        return new NewsSummaryResult("Tiêu đề.", "Bitcoin đi ngang.", "NEUTRAL", "test-model", 100, 20, body);
+    }
+
+    /** The article page of {@link #BODY} with a preview image. */
+    private static WebPage page(String ogImage) {
+        String html = BODY.replace(
+                "<html><body>", "<html><head><meta property=\"og:image\" content=\"" + ogImage + "\"></head><body>");
+        return new WebPage("https://e.com/a", html.getBytes(StandardCharsets.UTF_8), "text/html");
     }
 
     private static NewsSummaryResult answer(String summary, String sentiment) {

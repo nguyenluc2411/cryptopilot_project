@@ -97,6 +97,56 @@ class NewsApiTest {
         UUID admin = account(UserRole.ADMIN);
         as(admin, NEWS).andExpect(status().isForbidden());
         as(admin, NEWS + "/sentiment-summary").andExpect(status().isForbidden());
+        mvc.perform(get(NEWS + "/" + UUID.randomUUID())).andExpect(status().isUnauthorized());
+        as(admin, NEWS + "/" + UUID.randomUUID()).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void D125_anArticleIsReadOnItsOwnPage_withItsBodyCoverAndSource_butAHiddenOneIsNot() throws Exception {
+        String coin = coin();
+        UUID summarized = article(
+                "Bitcoin ETFs see $635M outflows",
+                "ETF outflows reached $635 million.",
+                now.minusSeconds(600),
+                "ETF Bitcoin bị rút $635 triệu",
+                "Quỹ ETF Bitcoin bị rút ròng $635 triệu.",
+                "BEARISH");
+        tag(summarized, coin, true);
+        sql.sql("update news_article set ai_body = ?, image_url = ? where article_id = ?")
+                .params("Đoạn một.\n\nĐoạn hai.", "https://img.example.com/cover.jpg", summarized)
+                .update();
+        UUID collected = article("Ether staking grows", "Staking deposits rose.", now, null, null, null);
+
+        as(trader, NEWS + "?coin=" + coin)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].imageUrl").value("https://img.example.com/cover.jpg"))
+                .andExpect(jsonPath("$.items[0].body").doesNotExist());
+        as(trader, NEWS + "/" + summarized)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.articleId").value(summarized.toString()))
+                .andExpect(jsonPath("$.title").value("ETF Bitcoin bị rút $635 triệu"))
+                .andExpect(jsonPath("$.originalTitle").value("Bitcoin ETFs see $635M outflows"))
+                .andExpect(jsonPath("$.summary").value("Quỹ ETF Bitcoin bị rút ròng $635 triệu."))
+                .andExpect(jsonPath("$.body").value("Đoạn một.\n\nĐoạn hai."))
+                .andExpect(jsonPath("$.aiSummarized").value(true))
+                .andExpect(jsonPath("$.sentiment").value("BEARISH"))
+                .andExpect(jsonPath("$.source").value("Feed Test Desk"))
+                .andExpect(jsonPath("$.originalUrl").value("https://e.com/" + summarized))
+                .andExpect(jsonPath("$.imageUrl").value("https://img.example.com/cover.jpg"))
+                .andExpect(jsonPath("$.coins[0].symbol").value(coin));
+        as(trader, NEWS + "/" + collected)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("Ether staking grows"))
+                .andExpect(jsonPath("$.summary").value("Staking deposits rose."))
+                .andExpect(jsonPath("$.body").doesNotExist())
+                .andExpect(jsonPath("$.imageUrl").doesNotExist())
+                .andExpect(jsonPath("$.coins").isEmpty());
+
+        sql.sql("update news_article set hidden_at = now(), hidden_by = ? where article_id = ?")
+                .params(account(UserRole.ADMIN), summarized)
+                .update();
+        as(trader, NEWS + "/" + summarized).andExpect(status().isNotFound());
+        as(trader, NEWS + "/" + UUID.randomUUID()).andExpect(status().isNotFound());
     }
 
     @Test

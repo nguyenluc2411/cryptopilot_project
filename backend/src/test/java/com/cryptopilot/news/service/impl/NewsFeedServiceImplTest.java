@@ -39,7 +39,7 @@ import org.springframework.data.domain.Pageable;
  * The feed without a database: what is asked of the repository, which text an item shows, and that a page costs the
  * same few reads whatever its size.
  *
- * <p>Rule: UC-34; SRS 3.8.1; CR-04; D-126, D-127.
+ * <p>Rule: UC-34; SRS 3.8.1; CR-04; D-130, D-127.
  */
 class NewsFeedServiceImplTest {
 
@@ -165,7 +165,9 @@ class NewsFeedServiceImplTest {
                 excerpt,
                 aiSummary,
                 sentiment,
-                NOW.minusSeconds(60));
+                NOW.minusSeconds(60),
+                null,
+                null);
     }
 
     private static CoinListing coin(UUID id, String symbol) {

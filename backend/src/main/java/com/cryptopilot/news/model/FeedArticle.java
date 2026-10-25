@@ -17,6 +17,9 @@ import java.util.UUID;
  * @param aiSummary the AI summary (NSF-11), or {@code null} until NSF-11 has run
  * @param sentiment the tone of the article, or {@code null} until NSF-11 has run
  * @param publishedAt when the outlet published it
+ * @param imageUrl the address of the outlet's cover image (D-129), or {@code null}
+ * @param aiBody the article written again (D-129), or {@code null}; read for the article's page only, never for a page
+ *     of the feed
  */
 public record FeedArticle(
         UUID articleId,
@@ -27,7 +30,9 @@ public record FeedArticle(
         String excerpt,
         String aiSummary,
         SentimentLabel sentiment,
-        Instant publishedAt) {
+        Instant publishedAt,
+        String imageUrl,
+        String aiBody) {
 
     public FeedArticle {
         Objects.requireNonNull(articleId, "articleId must not be null");

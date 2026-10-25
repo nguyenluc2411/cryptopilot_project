@@ -2,6 +2,7 @@ package com.cryptopilot.news.client;
 
 import com.rometools.rome.feed.synd.SyndCategory;
 import com.rometools.rome.feed.synd.SyndContent;
+import com.rometools.rome.feed.synd.SyndEnclosure;
 import com.rometools.rome.feed.synd.SyndEntry;
 import com.rometools.rome.feed.synd.SyndFeed;
 import com.rometools.rome.io.FeedException;
@@ -33,7 +34,9 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
+import org.jdom2.Element;
 
 /**
  * Reads one RSS or Atom feed over HTTP and returns its items as the outlet wrote them (NSF-10). Used by the crawl and by
@@ -60,6 +63,13 @@ public class RssClient implements AutoCloseable {
             "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.1";
 
     private static final String PAGE_ACCEPT = "text/html, application/xhtml+xml;q=0.9, */*;q=0.1";
+
+    /** The namespace of Media RSS, where most outlets put an item's cover image. */
+    private static final String MEDIA_RSS = "http://search.yahoo.com/mrss/";
+
+    /** An address whose path ends in an image extension, before any query. */
+    private static final Pattern IMAGE_PATH =
+            Pattern.compile("\\.(?:jpe?g|png|gif|webp|avif)(?:[?#]|$)", Pattern.CASE_INSENSITIVE);
 
     private final RssClientProperties properties;
     private final HttpClient http;
@@ -277,7 +287,63 @@ public class RssClient implements AutoCloseable {
             addIfPresent(categories, category.getTaxonomyUri());
         }
         String link = entry.getLink() != null ? entry.getLink() : webLink(entry.getUri());
-        return new RssItem(entry.getTitle(), link, instant(entry), description(entry), categories);
+        return new RssItem(entry.getTitle(), link, instant(entry), description(entry), categories, image(entry));
+    }
+
+    /**
+     * The item's image (D-129): the first image enclosure, else the first Media RSS {@code content} or
+     * {@code thumbnail} that is an image, directly under the item or in a {@code media:group}. Only the address is
+     * taken; the image is never read.
+     */
+    private static String image(SyndEntry entry) {
+        for (SyndEnclosure enclosure : entry.getEnclosures()) {
+            if (isImage(enclosure.getType(), null, enclosure.getUrl())) {
+                return enclosure.getUrl();
+            }
+        }
+        for (Element element : entry.getForeignMarkup()) {
+            String found = mediaImage(element);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private static String mediaImage(Element element) {
+        if (!MEDIA_RSS.equals(element.getNamespaceURI())) {
+            return null;
+        }
+        if ("group".equals(element.getName())) {
+            for (Element child : element.getChildren()) {
+                String found = mediaImage(child);
+                if (found != null) {
+                    return found;
+                }
+            }
+            return null;
+        }
+        if (!"content".equals(element.getName()) && !"thumbnail".equals(element.getName())) {
+            return null;
+        }
+        String url = element.getAttributeValue("url");
+        boolean image = "thumbnail".equals(element.getName())
+                || isImage(element.getAttributeValue("type"), element.getAttributeValue("medium"), url);
+        return image ? url : null;
+    }
+
+    /** Whether a media item is an image: by its MIME type or medium when given, else by the extension of its address. */
+    private static boolean isImage(String type, String medium, String url) {
+        if (url == null || url.isBlank()) {
+            return false;
+        }
+        if (type != null && !type.isBlank()) {
+            return type.strip().toLowerCase(Locale.ROOT).startsWith("image/");
+        }
+        if (medium != null && !medium.isBlank()) {
+            return "image".equalsIgnoreCase(medium.strip());
+        }
+        return IMAGE_PATH.matcher(url).find();
     }
 
     private static Instant instant(SyndEntry entry) {

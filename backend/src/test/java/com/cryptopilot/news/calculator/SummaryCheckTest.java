@@ -41,6 +41,25 @@ class SummaryCheckTest {
     }
 
     @Test
+    void D125_aSoundBody_passes_andNoBodyIsNoProblem() {
+        String body = "Bitcoin giảm 3.5% về $82,000.\n\nDòng tiền rút khỏi ETF đạt $120 million.";
+
+        assertThat(SummaryCheck.articleProblem(body, ARTICLE, 2000)).isEmpty();
+        assertThat(SummaryCheck.articleProblem(null, ARTICLE, 2000)).isEmpty();
+        assertThat(SummaryCheck.articleProblem("  ", ARTICLE, 2000)).isEmpty();
+    }
+
+    @Test
+    void D125_aBodyTooLongThatAdvisesOrInventsAFigure_isRefused() {
+        assertThat(SummaryCheck.articleProblem("từ ".repeat(51).strip(), ARTICLE, 50))
+                .contains("the body has 51 words, more than 50");
+        assertThat(SummaryCheck.articleProblem("Bitcoin giảm. Nhà đầu tư nên mua thêm.", ARTICLE, 2000))
+                .hasValueSatisfying(reason -> assertThat(reason).startsWith("the body tells the reader to trade"));
+        assertThat(SummaryCheck.articleProblem("Bitcoin có thể về $70,000.", ARTICLE, 2000))
+                .contains("these figures of the body are not in the article: 70,000");
+    }
+
+    @Test
     void NSF11_anEmptySummary_isRefused() {
         assertThat(SummaryCheck.problem("  ", ARTICLE, 60)).contains("the summary is empty");
         assertThat(SummaryCheck.problem(null, ARTICLE, 60)).contains("the summary is empty");

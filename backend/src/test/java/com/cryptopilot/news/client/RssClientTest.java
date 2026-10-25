@@ -63,6 +63,20 @@ class RssClientTest {
                 <updated>2026-10-24T09:00:00Z</updated></entry>
             </feed>""";
 
+    private static final String MEDIA = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>Media</title>
+              <item><title>Enclosure</title><link>https://m.example.com/1</link>
+                <enclosure url="https://img.example.com/1.jpg" type="image/jpeg" length="1"/></item>
+              <item><title>Media content</title><link>https://m.example.com/2</link>
+                <media:content url="https://cdn.example.com/2?w=800" medium="image"/></item>
+              <item><title>Group thumbnail</title><link>https://m.example.com/3</link>
+                <media:group><media:content url="https://cdn.example.com/3.mp4" type="video/mp4"/>
+                  <media:thumbnail url="https://cdn.example.com/3.png"/></media:group></item>
+              <item><title>Audio only</title><link>https://m.example.com/4</link>
+                <enclosure url="https://cdn.example.com/4.mp3" type="audio/mpeg" length="1"/></item>
+            </channel></rss>""";
+
     private HttpServer server;
     private ExecutorService executor;
     private final CountDownLatch release = new CountDownLatch(1);
@@ -80,6 +94,7 @@ class RssClientTest {
             send(exchange, 200, "application/rss+xml; charset=UTF-8", RSS);
         });
         server.createContext("/atom", exchange -> send(exchange, 200, "application/atom+xml", ATOM));
+        server.createContext("/media", exchange -> send(exchange, 200, "application/rss+xml", MEDIA));
         server.createContext("/article", exchange -> {
             agentSeen.set(exchange.getRequestHeaders().getFirst("User-Agent"));
             acceptSeen.set(exchange.getRequestHeaders().getFirst("Accept"));
@@ -137,11 +152,25 @@ class RssClientTest {
         assertThat(first.publishedAt()).isEqualTo(Instant.parse("2026-10-24T13:08:06Z"));
         assertThat(first.description()).isEqualTo("<p>Bitcoin traded <b>flat</b>.</p>");
         assertThat(first.categories()).containsExactly("Markets", "https://example.com/markets", "Bitcoin");
+        assertThat(first.imageUrl()).isNull();
         RssItem second = feed.items().get(1);
         assertThat(second.link()).isNull();
         assertThat(second.publishedAt()).isNull();
         assertThat(second.description()).isNull();
         assertThat(second.categories()).isEmpty();
+    }
+
+    @Test
+    void D125_theItemsImage_isTakenFromAnImageEnclosure_orMediaRss_neverFromOtherMedia() {
+        RssFeed feed = client.read(url("/media"), null);
+
+        assertThat(feed.items())
+                .extracting(RssItem::imageUrl)
+                .containsExactly(
+                        "https://img.example.com/1.jpg",
+                        "https://cdn.example.com/2?w=800",
+                        "https://cdn.example.com/3.png",
+                        null);
     }
 
     @Test

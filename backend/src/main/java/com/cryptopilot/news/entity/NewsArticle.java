@@ -51,6 +51,14 @@ public class NewsArticle extends BaseEntity {
     @Column(name = "ai_summary")
     private String aiSummary;
 
+    /** The article written again in its own words, shorter than the original (D-129); {@code null} until NSF-11 has run. */
+    @Column(name = "ai_body")
+    private String aiBody;
+
+    /** The address of the outlet's cover image (D-129), shown from the outlet; {@code null} when none was found. */
+    @Column(name = "image_url", length = 2048)
+    private String imageUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "sentiment_label", length = 32)
     private SentimentLabel sentimentLabel;

@@ -15,6 +15,7 @@ import java.util.Objects;
  * @param excerpt the text of the feed's description, at most 500 characters, or {@code null}
  * @param publishedAt when the outlet published it, never later than when it was collected
  * @param coins the coins it mentions, the primary one first
+ * @param imageUrl the address of the feed's image for it (D-129), or {@code null}
  */
 public record ArticleCandidate(
         String title,
@@ -23,7 +24,8 @@ public record ArticleCandidate(
         String titleHash,
         String excerpt,
         Instant publishedAt,
-        List<CoinTag> coins) {
+        List<CoinTag> coins,
+        String imageUrl) {
 
     public ArticleCandidate {
         Objects.requireNonNull(title, "title must not be null");

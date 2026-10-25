@@ -1,13 +1,15 @@
 package com.cryptopilot.news.service;
 
 import com.cryptopilot.common.web.PageResponse;
+import com.cryptopilot.news.dto.response.NewsArticleDetailResponse;
 import com.cryptopilot.news.dto.response.NewsArticleResponse;
 import com.cryptopilot.news.dto.response.NewsSentimentSummaryResponse;
+import java.util.UUID;
 
 /**
- * The news feed of SCR-28 (UC-34), the same for every Trader whatever the plan (D-126).
+ * The news feed of SCR-28 (UC-34), the same for every Trader whatever the plan (D-130).
  *
- * <p>Rule: UC-34; SRS 3.8.1; D-126.
+ * <p>Rule: UC-34; SRS 3.8.1; D-130.
  */
 public interface NewsFeedService {
 
@@ -24,6 +26,14 @@ public interface NewsFeedService {
      *     {@code pageSize} with MSG15, or {@code sentiment} with MSG15
      */
     PageResponse<NewsArticleResponse> feed(String coin, String sentiment, String range, Integer page, Integer pageSize);
+
+    /**
+     * One article for its page in the app (D-129).
+     *
+     * @throws com.cryptopilot.common.exception.ResourceNotFoundException when there is no such article or an
+     *     administrator hid it
+     */
+    NewsArticleDetailResponse article(UUID articleId);
 
     /** How many articles of the last 24 hours carry each sentiment. */
     NewsSentimentSummaryResponse sentimentSummary();

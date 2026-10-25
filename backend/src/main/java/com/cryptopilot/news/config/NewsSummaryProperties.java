@@ -15,7 +15,8 @@ import org.springframework.validation.annotation.Validated;
 /**
  * How NSF-11 summarizes articles, under {@code cryptopilot.news.summary}. The model, the instructions and the limits
  * are configuration, not code: the model is chosen per environment ({@code NEWS_SUMMARY_MODEL}), the instructions are a
- * text file with {@code {language}}, {@code {maxWords}} and {@code {maxTitleWords}} placeholders, and the AI Service receives them with every
+ * text file with {@code {language}}, {@code {maxWords}}, {@code {maxTitleWords}} and {@code {maxArticleWords}}
+ * placeholders, and the AI Service receives them with every
  * request.
  *
  * <p>Rule: NSF-11 (articles without a summary, a summary of at most 60 words and a sentiment label, failures retried at
@@ -37,6 +38,7 @@ import org.springframework.validation.annotation.Validated;
  * @param maxInputWords the most words of an article sent to the model
  * @param minBodyWords below this many words a page's text is not the article (a paywall, a cookie wall) and the
  *     feed's excerpt is used instead
+ * @param maxArticleWords the longest article written again in the app's words that is stored (D-129)
  * @param prompt the instructions, a text resource
  */
 @Validated
@@ -59,6 +61,7 @@ public record NewsSummaryProperties(
         @Min(5) @Max(100) @DefaultValue("30") int maxTitleWords,
         @Min(50) @Max(5000) @DefaultValue("1200") int maxInputWords,
         @Min(0) @DefaultValue("80") int minBodyWords,
+        @Min(50) @Max(5000) @DefaultValue("2000") int maxArticleWords,
 
         @NotNull @DefaultValue("classpath:prompts/news-summary.txt")
         Resource prompt) {}

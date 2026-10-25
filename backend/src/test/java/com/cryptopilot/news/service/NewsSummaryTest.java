@@ -105,9 +105,11 @@ class NewsSummaryTest {
         assertThat(request.model()).as("from application.yml").isEqualTo("gemini-3.5-flash-lite");
         assertThat(request.systemPrompt())
                 .as("the prompt file, with its placeholders filled")
-                .contains("summary: at most 60 words")
+                .contains("at most 60 words, that tell the reader what the story is about")
                 .contains("translated into Vietnamese, in at most 30 words")
-                .doesNotContain("{language}", "{maxWords}", "{maxTitleWords}");
+                .contains("body: the whole story written again in your own words")
+                .contains("in at most 2000 words")
+                .doesNotContain("{language}", "{maxWords}", "{maxTitleWords}", "{maxArticleWords}");
         assertThat(request.text()).isEqualTo("Bitcoin traded near $81,700.");
         verifyNoInteractions(rss);
 

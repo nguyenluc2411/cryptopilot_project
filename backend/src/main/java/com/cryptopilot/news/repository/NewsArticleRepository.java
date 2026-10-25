@@ -25,9 +25,9 @@ public interface NewsArticleRepository extends Repository<NewsArticle, UUID> {
     @Modifying
     @Query(value = """
                     insert into news_article (article_id, source_id, title, original_url, url_hash, title_hash, excerpt,
-                                              published_at, collected_at, created_at, updated_at)
-                    values (:id, :source, :title, :url, :urlHash, :titleHash, :excerpt, :publishedAt, :collectedAt,
-                            :collectedAt, :collectedAt)
+                                              image_url, published_at, collected_at, created_at, updated_at)
+                    values (:id, :source, :title, :url, :urlHash, :titleHash, :excerpt, :imageUrl, :publishedAt,
+                            :collectedAt, :collectedAt, :collectedAt)
                     on conflict (url_hash) do nothing""", nativeQuery = true)
     int insert(
             @Param("id") UUID id,
@@ -37,6 +37,7 @@ public interface NewsArticleRepository extends Repository<NewsArticle, UUID> {
             @Param("urlHash") String urlHash,
             @Param("titleHash") String titleHash,
             @Param("excerpt") String excerpt,
+            @Param("imageUrl") String imageUrl,
             @Param("publishedAt") Instant publishedAt,
             @Param("collectedAt") Instant collectedAt);
 
@@ -103,6 +104,17 @@ public interface NewsArticleRepository extends Repository<NewsArticle, UUID> {
             @Param("summary") String summary,
             @Param("sentiment") String sentiment,
             @Param("now") Instant now);
+
+    /**
+     * Stores the article written again (D-129), {@code null} when the answer had none that passed, and the page's
+     * cover image where the feed gave none; run with the summary it belongs to.
+     */
+    @Modifying
+    @Query(value = """
+                    update news_article
+                       set ai_body = :body, image_url = coalesce(image_url, :imageUrl)
+                     where article_id = :id""", nativeQuery = true)
+    int saveArticle(@Param("id") UUID id, @Param("body") String body, @Param("imageUrl") String imageUrl);
 
     /** Hides a shown article; 0 when it is hidden already. */
     @Modifying

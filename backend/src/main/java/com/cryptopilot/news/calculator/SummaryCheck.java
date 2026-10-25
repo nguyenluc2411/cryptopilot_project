@@ -79,6 +79,30 @@ public final class SummaryCheck {
         return Optional.empty();
     }
 
+    /**
+     * Why {@code body}, the article written again (D-129), cannot be stored for {@code article}, or empty when it can or
+     * there is none. The same rules as a summary with a limit of its own; it is never cut, as it would end mid-story.
+     */
+    public static Optional<String> articleProblem(String body, String article, int maxWords) {
+        if (body == null || body.isBlank()) {
+            return Optional.empty();
+        }
+        int words = words(body);
+        if (words > maxWords) {
+            return Optional.of("the body has " + words + " words, more than " + maxWords);
+        }
+        Matcher advice = ADVICE.matcher(body);
+        if (advice.find()) {
+            return Optional.of(
+                    "the body tells the reader to trade (\"" + advice.group() + "\"); report, do not advise");
+        }
+        List<String> invented = NumericGuard.unsupported(body, article);
+        if (!invented.isEmpty()) {
+            return Optional.of("these figures of the body are not in the article: " + String.join(", ", invented));
+        }
+        return Optional.empty();
+    }
+
     /** Whether the only problem of a summary is its length, which cutting it fixes. */
     public static boolean onlyTooLong(String summary, String article, int maxWords) {
         return summary != null

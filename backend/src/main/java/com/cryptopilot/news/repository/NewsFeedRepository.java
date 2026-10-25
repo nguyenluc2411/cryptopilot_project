@@ -15,6 +15,7 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -56,7 +57,7 @@ public class NewsFeedRepository {
         List<FeedArticle> articles = sql.sql(
                         """
                         select a.article_id, a.title, a.ai_title, s.source_name, a.original_url, a.excerpt,
-                               a.ai_summary, a.sentiment_label, a.published_at
+                               a.ai_summary, a.sentiment_label, a.published_at, a.image_url, null as ai_body
                           from news_article a
                           join news_source s on s.source_id = a.source_id""" + where + " order by a.published_at desc, a.article_id desc limit :limit offset :offset")
                 .params(paged)
@@ -67,6 +68,19 @@ public class NewsFeedRepository {
                 .query(Long.class)
                 .single();
         return new FeedArticlePage(articles, total);
+    }
+
+    /** One shown article with the article written again (D-129), or empty when there is none or it is hidden. */
+    public Optional<FeedArticle> article(UUID articleId) {
+        return sql.sql("""
+                        select a.article_id, a.title, a.ai_title, s.source_name, a.original_url, a.excerpt,
+                               a.ai_summary, a.sentiment_label, a.published_at, a.image_url, a.ai_body
+                          from news_article a
+                          join news_source s on s.source_id = a.source_id
+                         where a.article_id = :id and a.hidden_at is null""")
+                .param("id", articleId)
+                .query((row, index) -> article(row))
+                .optional();
     }
 
     /** The coins each of these articles is tagged with, the primary one first; an article without tags is left out. */
@@ -115,6 +129,8 @@ public class NewsFeedRepository {
                 row.getString("excerpt"),
                 row.getString("ai_summary"),
                 sentiment == null ? null : SentimentLabel.valueOf(sentiment),
-                row.getTimestamp("published_at").toInstant());
+                row.getTimestamp("published_at").toInstant(),
+                row.getString("image_url"),
+                row.getString("ai_body"));
     }
 }

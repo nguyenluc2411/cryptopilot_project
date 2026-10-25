@@ -94,6 +94,21 @@ class ArticleCandidatesTest {
     }
 
     @Test
+    void D125_theFeedsImage_isKeptWhenItIsAWebAddress_madeAbsoluteAgainstTheArticle() {
+        assertThat(withImage("https://img.example.com/a.jpg").imageUrl()).isEqualTo("https://img.example.com/a.jpg");
+        assertThat(withImage("/covers/a.jpg").imageUrl()).isEqualTo("https://example.com/covers/a.jpg");
+        assertThat(withImage("javascript:alert(1)").imageUrl()).isNull();
+        assertThat(withImage("data:image/png;base64,AAAA").imageUrl()).isNull();
+        assertThat(withImage("https://img.example.com/" + "a".repeat(2048)).imageUrl())
+                .isNull();
+        assertThat(withImage(null).imageUrl()).isNull();
+        assertThat(candidate("Bitcoin holds", "https://example.com/a", null, null)
+                        .orElseThrow()
+                        .imageUrl())
+                .isNull();
+    }
+
+    @Test
     void NSF10_theCategoryFilter_keepsOnlyItemsThatCarryOneOfItsValues() {
         List<String> markets = List.of("Markets", "https://www.coindesk.com/markets");
 
@@ -105,6 +120,12 @@ class ArticleCandidatesTest {
         assertThat(ArticleCandidates.passes("policy, MARKETS", markets)).isTrue();
         assertThat(ArticleCandidates.passes("policy", markets)).isFalse();
         assertThat(ArticleCandidates.passes("markets", List.of())).isFalse();
+    }
+
+    private static ArticleCandidate withImage(String imageUrl) {
+        return ArticleCandidates.from(
+                        "Bitcoin holds", "https://example.com/news/a", null, null, imageUrl, COLLECTED, TAGGER)
+                .orElseThrow();
     }
 
     private static Optional<ArticleCandidate> candidate(

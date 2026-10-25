@@ -29,11 +29,13 @@ export type NewsSummaryRequest = z.infer<typeof NewsSummaryRequestSchema>;
 
 /**
  * What the model must return: the headline in the summary's language, the summary and the sentiment; anything else is
- * a bad answer, never passed on.
+ * a bad answer, never passed on. The body, the article written again for its page in the app (D-129), is passed on
+ * when the model wrote one: an answer without it still carries a sound summary.
  */
 export const NewsSummaryAnswerSchema = z.object({
   title: z.string().trim().min(1),
   summary: z.string().trim().min(1),
+  body: z.string().trim().min(1).optional(),
   sentiment: z.enum(SENTIMENTS),
 });
 
@@ -45,10 +47,11 @@ export const NEWS_SUMMARY_RESPONSE_SCHEMA: Record<string, unknown> = {
   properties: {
     title: { type: "STRING" },
     summary: { type: "STRING" },
+    body: { type: "STRING" },
     sentiment: { type: "STRING", enum: [...SENTIMENTS] },
   },
-  required: ["title", "summary", "sentiment"],
-  propertyOrdering: ["title", "summary", "sentiment"],
+  required: ["title", "summary", "body", "sentiment"],
+  propertyOrdering: ["title", "summary", "body", "sentiment"],
 };
 
 export interface NewsSummaryResponse extends NewsSummaryAnswer {
