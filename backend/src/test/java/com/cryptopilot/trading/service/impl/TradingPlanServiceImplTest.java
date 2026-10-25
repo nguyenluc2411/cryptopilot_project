@@ -58,6 +58,7 @@ import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.exception.EntryDeviationException;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.exception.PlanActivationBlockedException;
+import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.PlanListQuery;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.CloseReason;
@@ -70,6 +71,7 @@ import com.cryptopilot.trading.model.enums.PositionStatus;
 import com.cryptopilot.trading.model.enums.WarningSeverity;
 import com.cryptopilot.trading.model.enums.WarningType;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
+import com.cryptopilot.trading.service.FundingService;
 import com.cryptopilot.user.PlanDefaults;
 import com.cryptopilot.user.RiskProfileApi;
 import com.cryptopilot.user.RiskProfileParameters;
@@ -84,7 +86,6 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -139,6 +140,8 @@ class TradingPlanServiceImplTest {
 
     private TradingPlanServiceImpl service;
 
+    private final FundingService funding = mock(FundingService.class);
+
     /** The last plan the service saved. */
     private TradingPlan saved;
 
@@ -156,7 +159,8 @@ class TradingPlanServiceImplTest {
                 settings,
                 styleProvider,
                 journal,
-                new PositionOpener(journal, new FeeRates(settings), market));
+                new PositionOpener(journal, new FeeRates(settings), market),
+                new PositionViews(journal, market, new FeeRates(settings), funding, settings));
         when(journal.openSimulatedTrade(any())).thenAnswer(call -> recorded(call.getArgument(0)));
         when(styleProvider.getIfAvailable()).thenReturn(styles);
         when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_BLOCK_R)).thenReturn(new BigDecimal("0.75"));
@@ -1012,32 +1016,57 @@ class TradingPlanServiceImplTest {
     @Test
     void BR62_openPositions_countAgainstActivePlanMax_afterTheActivePlans() {
         when(plans.countActive(USER)).thenReturn(1L);
-        when(journal.openPositionPlans(USER)).thenReturn(Set.of(UUID.randomUUID(), UUID.randomUUID()));
-        when(plans.riskOf(any())).thenReturn(BigDecimal.ZERO);
+        when(journal.openSimulatedTrades(USER))
+                .thenReturn(List.of(openTrade("100", "100", "1"), openTrade("100", "100", "1")));
 
         service.create(USER, activating(spotLimit("100", "95", "110")));
 
         InOrder order = inOrder(lock, plans, journal, entitlements);
         order.verify(lock).lock(USER);
         order.verify(plans).countActive(USER);
-        order.verify(journal).openPositionPlans(USER);
+        order.verify(journal).openSimulatedTrades(USER);
         order.verify(entitlements).requireWithinLimit(USER, Feature.ACTIVE_PLAN_MAX, 3L);
     }
 
     /**
-     * BR-29: the risk of the open positions adds to TOTAL_OPEN_RISK as the ACTIVE plans' does. The plan risks 10; with
-     * 20 in ACTIVE plans and 15 in an open position the total is 4.5 % of 1,000, above BALANCED's 4 %.
+     * BR-29, D-124: an open position adds its CURRENT risk to TOTAL_OPEN_RISK, quantity × (entry − current stop loss).
+     * The plan risks 10; with 20 in ACTIVE plans and an open LONG of 1 at 100 stopped at 85 (15) the total is 4.5 % of
+     * 1,000, above BALANCED's 4 %.
      */
     @Test
-    void BR29_theRiskOfOpenPositions_raisesTotalOpenRisk() {
-        UUID openPlan = UUID.randomUUID();
+    void BR29_theCurrentRiskOfOpenPositions_raisesTotalOpenRisk() {
         when(plans.activeRiskExcluding(eq(USER), any())).thenReturn(new BigDecimal("20"));
-        when(journal.openPositionPlans(USER)).thenReturn(Set.of(openPlan));
-        when(plans.riskOf(Set.of(openPlan))).thenReturn(new BigDecimal("15"));
+        when(journal.openSimulatedTrades(USER)).thenReturn(List.of(openTrade("100", "85", "1")));
 
         assertThat(service.calculate(USER, spotLimit("100", "95", "110")).warnings())
                 .extracting(PlanWarningResponse::type, PlanWarningResponse::severity)
                 .contains(org.assertj.core.groups.Tuple.tuple(WarningType.TOTAL_OPEN_RISK, WarningSeverity.WARNING));
+    }
+
+    /**
+     * BR-29, D-124: an open position whose stop loss was moved to its entry carries no risk: 20 in ACTIVE plans and the
+     * plan's 10 stay at 3 % of 1,000, under the 4 % maximum, whatever the plan's own risk at its fill was.
+     */
+    @Test
+    void BR29_anOpenPositionStoppedAtItsEntry_addsNoOpenRisk() {
+        when(plans.activeRiskExcluding(eq(USER), any())).thenReturn(new BigDecimal("20"));
+        when(journal.openSimulatedTrades(USER)).thenReturn(List.of(openTrade("100", "100", "1")));
+
+        assertThat(service.calculate(USER, spotLimit("100", "95", "110")).warnings())
+                .extracting(PlanWarningResponse::type)
+                .doesNotContain(WarningType.TOTAL_OPEN_RISK);
+    }
+
+    /** BR-29, D-124: TOTAL_OPEN_RISK sums the current risk of every open position, LONG below, SHORT above the entry. */
+    @Test
+    void BR29_currentRisk_sumsTheLosingSideOfEveryStop() {
+        assertThat(TradingPlanServiceImpl.currentRisk(List.of(
+                        openTrade("100", "90", "2"),
+                        openTrade("100", "105", "2"),
+                        openTrade(Direction.SHORT, "100", "104", "3"),
+                        openTrade(Direction.SHORT, "100", "95", "3"))))
+                .as("LONG (100 − 90) × 2 = 20, a LONG stop above the entry 0, SHORT (104 − 100) × 3 = 12, 0")
+                .isEqualByComparingTo("32");
     }
 
     /** BR-29: without an open position no plan risk is read, and 20 in ACTIVE plans stays under the 4 % maximum. */
@@ -1061,11 +1090,9 @@ class TradingPlanServiceImplTest {
     void BR62_anActivation_readsTheOpenPositionsOnceForBothChecks(String path) {
         TradingPlan plan = draft();
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
-        UUID openPlan = UUID.randomUUID();
         when(plans.countActive(USER)).thenReturn(1L);
         when(plans.activeRiskExcluding(eq(USER), any())).thenReturn(new BigDecimal("20"));
-        when(journal.openPositionPlans(USER)).thenReturn(Set.of(openPlan));
-        when(plans.riskOf(Set.of(openPlan))).thenReturn(new BigDecimal("15"));
+        when(journal.openSimulatedTrades(USER)).thenReturn(List.of(openTrade("100", "85", "1")));
         Mockito.clearInvocations(plans, journal);
 
         TradingPlanResponse active =
@@ -1077,12 +1104,12 @@ class TradingPlanServiceImplTest {
 
         assertThat(active.status()).isEqualTo(PlanStatus.ACTIVE);
         assertThat(active.warnings()).extracting(PlanWarningResponse::type).contains(WarningType.TOTAL_OPEN_RISK);
-        verify(journal, Mockito.times(1)).openPositionPlans(USER);
+        verify(journal, Mockito.times(1)).openSimulatedTrades(USER);
         InOrder order = inOrder(lock, plans, journal, entitlements);
         order.verify(lock).lock(USER);
         order.verify(plans).countActive(USER);
         order.verify(plans).activeRiskExcluding(eq(USER), any());
-        order.verify(journal).openPositionPlans(USER);
+        order.verify(journal).openSimulatedTrades(USER);
         order.verify(entitlements).requireWithinLimit(USER, Feature.ACTIVE_PLAN_MAX, 2L);
     }
 
@@ -1097,10 +1124,10 @@ class TradingPlanServiceImplTest {
 
         verify(plans, never()).countActive(any());
         verify(entitlements, never()).requireWithinLimit(any(), eq(Feature.ACTIVE_PLAN_MAX), anyLong());
-        verify(journal, Mockito.times(2)).openPositionPlans(USER);
+        verify(journal, Mockito.times(2)).openSimulatedTrades(USER);
         InOrder order = inOrder(plans, journal);
         order.verify(plans).activeRiskExcluding(eq(USER), any());
-        order.verify(journal).openPositionPlans(USER);
+        order.verify(journal).openSimulatedTrades(USER);
     }
 
     /**
@@ -1139,6 +1166,7 @@ class TradingPlanServiceImplTest {
         position(plan, PositionStatus.OPEN);
         when(market.pairListings(List.of(PAIR))).thenReturn(List.of(new PairListing(PAIR, "BTCUSDT", true, true)));
         when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("99")));
+        when(funding.fundingSoFar(eq(PAIR), any(), any(), any())).thenReturn(FundingFee.complete(BigDecimal.ZERO));
 
         PositionResponse position = service.get(USER, plan.getId()).position();
 
@@ -2811,5 +2839,29 @@ class TradingPlanServiceImplTest {
 
     private static BigDecimal decimal(String value) {
         return value == null ? null : new BigDecimal(value);
+    }
+
+    /** An OPEN LONG position of the Trader at {@code entry} with its current stop loss and quantity. */
+    private static OpenTrade openTrade(String entry, String stopLoss, String quantity) {
+        return openTrade(Direction.LONG, entry, stopLoss, quantity);
+    }
+
+    private static OpenTrade openTrade(Direction direction, String entry, String stopLoss, String quantity) {
+        return new OpenTrade(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                USER,
+                PAIR,
+                direction == Direction.LONG ? MarketType.SPOT : MarketType.FUTURES,
+                direction,
+                new BigDecimal(entry),
+                NOW,
+                new BigDecimal(quantity),
+                LiquidityRole.TAKER,
+                BigDecimal.ZERO,
+                new BigDecimal(stopLoss),
+                null,
+                null,
+                0L);
     }
 }

@@ -929,10 +929,11 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.status").value("DRAFT")));
         sql.sql("""
                         insert into trading_journal (journal_id, user_id, pair_id, plan_id, market_type, direction,
-                                                     entry_price, entry_time, quantity, entry_liquidity, source,
-                                                     trade_status, created_at, updated_at, version)
-                        values (gen_random_uuid(), ?, ?, ?, 'SPOT', 'LONG', 100, ?, 1, 'TAKER', 'SIMULATED', 'OPEN',
-                                ?, ?, 0)""")
+                                                     entry_price, entry_time, quantity, entry_liquidity,
+                                                     entry_fee_amount, source, trade_status, created_at, updated_at,
+                                                     version)
+                        values (gen_random_uuid(), ?, ?, ?, 'SPOT', 'LONG', 100, ?, 1, 'TAKER', 0.1, 'SIMULATED',
+                                'OPEN', ?, ?, 0)""")
                 .params(trader, pair, UUID.fromString(id), now(), now(), now())
                 .update();
 

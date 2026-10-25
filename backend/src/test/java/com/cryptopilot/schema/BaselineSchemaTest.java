@@ -30,8 +30,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 class BaselineSchemaTest {
 
     /**
-     * The business tables of the logical model, in the order the model lists them: 39, and the 11 of paper
-     * trading (V21, TR-02) after them.
+     * The business tables of the logical model, in the order the model lists them: 39, the 11 of paper trading
+     * (V21, TR-02) after them, and the history of a position's level changes (V37, TP-E).
      */
     private static final List<String> BUSINESS_TABLES = List.of(
             "user_account",
@@ -83,7 +83,8 @@ class BaselineSchemaTest {
             "paper_fill",
             "paper_position",
             "paper_funding_payment",
-            "paper_equity_snapshot");
+            "paper_equity_snapshot",
+            "trading_journal_level_change");
 
     @Autowired
     private JdbcClient jdbc;
@@ -108,9 +109,9 @@ class BaselineSchemaTest {
     }
 
     @Test
-    void schema_holdsTheFiftyBusinessTables() {
+    void schema_holdsTheFiftyOneBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(50);
+        assertThat(BUSINESS_TABLES).hasSize(51);
     }
 
     @Test

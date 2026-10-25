@@ -1,8 +1,10 @@
 package com.cryptopilot.trading.job;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.event.PositionClosed;
+import com.cryptopilot.trading.event.PositionLevelsChanged;
 import com.cryptopilot.trading.event.PositionOpened;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
@@ -140,11 +142,16 @@ public class MatchingWorker {
         running = true;
         List<TrackedEntry> entries = matching.activeEntries();
         List<TrackedPosition> open = matching.openPositions();
+        Map<UUID, List<PositionLevelChange>> levelChanges = matching.openLevelChanges();
         // Straight into the engines, never through the bounded channels: no consumer runs yet to empty them.
         entries.forEach(
                 entry -> partitionOf(entry.market(), entry.pairId()).engine.track(entry));
-        open.forEach(position ->
-                partitionOf(position.market(), position.pairId()).engine.open(position));
+        open.forEach(position -> {
+            MatchingEngine engine = partitionOf(position.market(), position.pairId()).engine;
+            engine.open(position);
+            // The levels a replayed candle older than a change is decided by (D-124).
+            levelChanges.getOrDefault(position.positionId(), List.of()).forEach(engine::recordLevelChange);
+        });
         for (int i = 0; i < fresh.size(); i++) {
             Thread consumer = threads.newThread(fresh.get(i)::drain);
             consumer.setName("trading-matching-" + i);
@@ -240,6 +247,20 @@ public class MatchingWorker {
             PairKey key = new PairKey(event.market(), event.pairId());
             Partition partition = partitionOf(event.market(), event.pairId());
             partition.put(new Command.Open(key, partition.seal(key), position));
+        }
+    }
+
+    /**
+     * A change of an open position's levels replaces them in the exit books of its pair's partition, in the order of
+     * the pair's ranges, and keeps the earlier levels for the candles that opened before it (D-124).
+     */
+    @TransactionalEventListener
+    public void onLevelsChanged(PositionLevelsChanged event) {
+        if (running) {
+            TrackedPosition position = event.position();
+            PairKey key = new PairKey(position.market(), position.pairId());
+            Partition partition = partitionOf(position.market(), position.pairId());
+            partition.put(new Command.ChangeLevels(key, partition.seal(key), position, event.change()));
         }
     }
 
@@ -515,6 +536,10 @@ public class MatchingWorker {
                             .forEach(waiting -> waiting.removeIf(p -> p.outcome() instanceof PositionExit exit
                                     && exit.position().positionId().equals(close.positionId())));
                 }
+                case Command.ChangeLevels change -> {
+                    dueRanges(change).forEach(this::onRange);
+                    engine.changeLevels(change.position(), change.change());
+                }
                 case Command.Range range -> {
                     onRange(range.range());
                     update(range.key(), state -> state.queued--);
@@ -772,9 +797,15 @@ public class MatchingWorker {
         record Open(PairKey key, long number, TrackedPosition position) implements PairCommand {}
 
         record Close(PairKey key, long number, UUID positionId) implements PairCommand {}
+
+        record ChangeLevels(PairKey key, long number, TrackedPosition position, PositionLevelChange change)
+                implements PairCommand {}
     }
 
-    /** An activation, a cancel or expiry, or a position opened at activation or closed, of one pair, with its number. */
+    /**
+     * An activation, a cancel or expiry, a position opened at activation or closed, or a change of its levels, of
+     * one pair, with its number.
+     */
     private sealed interface PairCommand extends Command {
 
         PairKey key();

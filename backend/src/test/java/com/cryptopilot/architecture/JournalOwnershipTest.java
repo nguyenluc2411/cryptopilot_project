@@ -21,7 +21,8 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
- * The journal module alone writes {@code trading_journal}: the plans' module records a fill through its port
+ * The journal module alone writes {@code trading_journal} and the history of level changes
+ * {@code trading_journal_level_change} (TP-E): the plans' module records a fill or a change through its port
  * {@code trading.TradeJournal}, which the journal implements, and never reaches the journal's entity, repository or
  * table itself. The dependency points from {@code journal} to {@code trading}, never back.
  *
@@ -41,9 +42,12 @@ class JournalOwnershipTest {
 
     private static final Path SOURCE_ROOT = Path.of("src", "main", "java", "com", "cryptopilot");
 
-    /** A write statement on the journal table, over any whitespace or line break of a text block, in any case. */
+    /**
+     * A write statement on the journal table or its history of level changes, over any whitespace or line break of a
+     * text block, in any case.
+     */
     private static final Pattern WRITE = Pattern.compile(
-            "(insert\\s+into|update|delete\\s+from|merge\\s+into)\\s+" + JOURNAL_TABLE + "\\b",
+            "(insert\\s+into|update|delete\\s+from|merge\\s+into)\\s+" + JOURNAL_TABLE + "(_level_change)?\\b",
             Pattern.CASE_INSENSITIVE);
 
     /** The plans' module records fills through its own port and knows nothing of the module that keeps them. */
@@ -93,7 +97,9 @@ class JournalOwnershipTest {
                                 "insert into trading_journal (journal_id)",
                                 "UPDATE trading_journal SET trade_status = 'CLOSED'",
                                 "delete\n   from   trading_journal where plan_id = ?",
-                                "merge into trading_journal using")
+                                "merge into trading_journal using",
+                                "insert into trading_journal_level_change (level_change_id)",
+                                "UPDATE trading_journal_level_change set changed_at = now()")
                         .allMatch(sql -> WRITE.matcher(sql).find()))
                 .isTrue();
         assertThat(WRITE.matcher("select exists (select 1 from trading_journal where pair_id = ?)")

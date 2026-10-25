@@ -4,12 +4,14 @@ import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.PositionStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * The position an executed plan opened (UC-20, SCR-18), from its journal record. The exit, its amounts and the net
  * P/L are set once it is CLOSED.
  *
- * <p>Rule: BR-34, BR-35, BR-36, BR-37, BR-38; UC-20; Q-55; D-78, D-97 and its note of 2026-10-24, D-119.
+ * <p>Rule: BR-34, BR-35, BR-36, BR-37, BR-38, BR-42; UC-20, UC-21; Q-55; D-78, D-97 and its note of 2026-10-24,
+ * D-119, D-124.
  *
  * @param status OPEN or CLOSED
  * @param fillPrice the actual fill price of the entry
@@ -33,6 +35,19 @@ import java.time.Instant;
  * @param netPnl CLOSED only: {@code realizedPnl − feeAmount + fundingFeeAmount} (BR-38)
  * @param provisional CLOSED only: whether a funding settlement may still be missing, so {@code fundingFeeAmount} and
  *     {@code netPnl} can still change; {@code false} while OPEN
+ * @param stopLoss the current stop loss, the one the exits read; the last one once CLOSED (D-124)
+ * @param takeProfit the current take profit; the last one once CLOSED
+ * @param originalStopLoss the stop loss at the fill, never changed
+ * @param originalTakeProfit the take profit at the fill, never changed
+ * @param stopWidened whether a stop loss was ever moved further from the entry than the original one
+ * @param levelChangeCount how many changes of the levels were made
+ * @param levelChanges every change, oldest first; empty when none
+ * @param breakevenPrice OPEN only: the stop price on the tick at which a stop-out nets zero after the entry fee, the
+ *     taker exit fee with slippage and the funding so far; {@code null} once CLOSED or when it cannot be computed
+ * @param breakevenProvisional whether a funding settlement may be missing from {@code breakevenPrice}
+ * @param levelWarnings the non-blocking warnings of the change just made, in its response only; empty on every read
+ * @param levelsEffectiveFrom the open time of the first 1-minute candle the current levels act on, after the last
+ *     change; {@code null} when the levels were never changed (D-124, Q-80)
  */
 public record PositionResponse(
         PositionStatus status,
@@ -50,4 +65,15 @@ public record PositionResponse(
         BigDecimal feeAmount,
         BigDecimal fundingFeeAmount,
         BigDecimal netPnl,
-        boolean provisional) {}
+        boolean provisional,
+        BigDecimal stopLoss,
+        BigDecimal takeProfit,
+        BigDecimal originalStopLoss,
+        BigDecimal originalTakeProfit,
+        boolean stopWidened,
+        int levelChangeCount,
+        List<PositionLevelChangeResponse> levelChanges,
+        BigDecimal breakevenPrice,
+        boolean breakevenProvisional,
+        List<PlanWarningResponse> levelWarnings,
+        Instant levelsEffectiveFrom) {}

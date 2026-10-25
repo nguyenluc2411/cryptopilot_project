@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.matching;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.matching.PriceLevelBook.Side;
 import com.cryptopilot.trading.matching.WaitingPlanRule.Level;
 import com.cryptopilot.trading.model.Excursion;
@@ -14,6 +15,7 @@ import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.PriceSource;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -41,13 +43,19 @@ import java.util.UUID;
  * Whether an outcome is stored is decided by a compare-and-set, on the plan's status or the journal row's, not here.
  * Each last price range also widens the excursions of every open position of its pair (D-112 R5).
  *
+ * <p>A change of a position's levels (TP-E) acts from its instant: a range whose candle opened before the change is
+ * decided by the levels in force when that candle opened, kept in the position's history, as a plan activated in the
+ * middle of a minute is not filled by that minute (D-77). So a live update and the same candle replayed after a crash
+ * give the same exit, whenever the change was made.
+ *
  * <p>Not thread-safe on purpose: one consumer thread owns an engine, so its books need no locks and see the updates
  * of a pair in arrival order.
  *
  * <p>Only LIMIT and STOP entries wait here: a MARKET entry, or a LIMIT the last price already reached, is filled at
  * activation, and its position is opened here after the commit.
  *
- * <p>Rule: NSF-07, BR-33, BR-35, BR-68; TECHNICAL_DESIGN 7.7; D-09, D-77, D-78; D-111 (M1, M3); D-112 R5; ADR-011.
+ * <p>Rule: NSF-07, BR-33, BR-35, BR-68; TECHNICAL_DESIGN 7.7; D-09, D-77, D-78; D-111 (M1, M3); D-112 R5; D-124;
+ * ADR-011.
  *
  * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges: Market Microstructure for Practitioners</i>. Oxford
  * University Press, ch. 4 (a buy limit executes at or below its price, a sell limit at or above it).
@@ -67,6 +75,9 @@ public final class MatchingEngine {
 
     /** The open positions of each pair, in the order they were opened, whose excursions each range widens. */
     private final Map<BookKey, Set<UUID>> positionsByPair = new HashMap<>();
+
+    /** The level changes of each open position that has any, oldest first (TP-E). */
+    private final Map<UUID, List<PositionLevelChange>> levelChanges = new HashMap<>();
 
     /** Starts tracking a plan's entry and invalidation levels, replacing any earlier entry of the same plan. */
     public void track(TrackedEntry entry) {
@@ -97,7 +108,7 @@ public final class MatchingEngine {
     public void open(TrackedPosition position) {
         OpenState earlier = positions.get(position.positionId());
         Excursion excursion = earlier == null ? Excursion.at(position.entryPrice()) : earlier.excursion;
-        close(position.positionId());
+        drop(position.positionId());
         OpenState state = new OpenState(position, excursion);
         positions.put(position.positionId(), state);
         positionsByPair
@@ -117,8 +128,40 @@ public final class MatchingEngine {
         return exits(range, Set.of(position.positionId()));
     }
 
-    /** Stops tracking an open position; unknown positions are ignored. */
+    /**
+     * Replaces a tracked position's levels with the ones a change committed, at the row's new version, and keeps the
+     * levels it replaces for the ranges of candles that opened before the change.
+     *
+     * <p>Rule: BR-35; D-77, D-124.
+     */
+    public void changeLevels(TrackedPosition position, PositionLevelChange change) {
+        recordLevelChange(change);
+        open(position);
+    }
+
+    /**
+     * Adds a change to the history of a position, keeping it oldest first, without touching its current levels: the
+     * engine rebuilt from the journal at start-up knows the current levels already.
+     *
+     * <p>Rule: D-124.
+     */
+    public void recordLevelChange(PositionLevelChange change) {
+        List<PositionLevelChange> history =
+                levelChanges.computeIfAbsent(change.positionId(), ignored -> new ArrayList<>());
+        int at = history.size();
+        while (at > 0 && history.get(at - 1).changedAt().isAfter(change.changedAt())) {
+            at--;
+        }
+        history.add(at, change);
+    }
+
+    /** Stops tracking an open position and forgets its level changes; unknown positions are ignored. */
     public void close(UUID positionId) {
+        drop(positionId);
+        levelChanges.remove(positionId);
+    }
+
+    private void drop(UUID positionId) {
         OpenState state = positions.get(positionId);
         if (state != null) {
             forget(state);
@@ -196,6 +239,15 @@ public final class MatchingEngine {
             return List.of();
         }
         Books pair = exitBooks.computeIfAbsent(key, ignored -> new Books());
+        // A position changed after the range's candle opened is decided by its earlier levels, outside the books.
+        List<OpenState> changedSince = new ArrayList<>();
+        for (UUID id : positionsByPair.get(key)) {
+            if ((only == null || only.contains(id)) && changedAfter(id, range.from())) {
+                OpenState state = positions.get(id);
+                removeLevels(pair, state);
+                changedSince.add(state);
+            }
+        }
         Set<UUID> fired = new LinkedHashSet<>(pair.below.fire(range.low(), range.high()));
         fired.addAll(pair.above.fire(range.low(), range.high()));
         List<PlanOutcome> outcomes = new ArrayList<>();
@@ -205,25 +257,67 @@ public final class MatchingEngine {
                 placeLevels(pair, state);
                 continue;
             }
-            OpenPosition levels = state.position.levels();
-            Optional<Exit> exit = ExitRule.byRange(levels, range);
-            if (exit.isPresent()) {
-                Excursion excursion = state.excursion.withExit(
-                        state.position.direction(),
-                        range,
-                        ExitRule.isEntryCandle(levels, range),
-                        exit.get().reason(),
-                        exit.get().price());
-                forget(state);
-                outcomes.add(new PositionExit(state.position, exit.get(), excursion));
-            } else {
-                // The entry candle cannot take profit, and a candle before the entry acts on nothing: back in.
-                placeLevels(pair, state);
-            }
+            decide(pair, state, state.position.levels(), range).ifPresent(outcomes::add);
+        }
+        for (OpenState state : changedSince) {
+            decide(pair, state, levelsAt(state, range.from()), range).ifPresent(outcomes::add);
         }
         widenExcursions(key, range, only);
         dropIfEmpty(exitBooks, key);
         return outcomes;
+    }
+
+    /**
+     * The exit the range decides for one position by {@code levels}; the position then leaves the engine, with its
+     * excursions clamped at the exit price. Otherwise its current levels go back into the books: the entry candle
+     * cannot take profit, and a candle before the entry acts on nothing.
+     */
+    private Optional<PositionExit> decide(Books pair, OpenState state, OpenPosition levels, PriceRange range) {
+        Optional<Exit> exit = ExitRule.byRange(levels, range);
+        if (exit.isEmpty()) {
+            placeLevels(pair, state);
+            return Optional.empty();
+        }
+        Excursion excursion = state.excursion.withExit(
+                state.position.direction(),
+                range,
+                ExitRule.isEntryCandle(levels, range),
+                exit.get().reason(),
+                exit.get().price());
+        forget(state);
+        levelChanges.remove(state.position.positionId());
+        return Optional.of(new PositionExit(state.position, exit.get(), excursion));
+    }
+
+    /** Whether a change of the position's levels was made after the candle that opened at {@code candleOpen}. */
+    private boolean changedAfter(UUID positionId, Instant candleOpen) {
+        List<PositionLevelChange> history = levelChanges.get(positionId);
+        return history != null && history.getLast().changedAt().isAfter(candleOpen);
+    }
+
+    /**
+     * The levels in force when the candle opened at {@code candleOpen}: the current ones, unwound through every change
+     * made after that instant. A change made exactly at the candle's open acts on it.
+     *
+     * <p>Rule: D-77, D-124.
+     */
+    private OpenPosition levelsAt(OpenState state, Instant candleOpen) {
+        TrackedPosition position = state.position;
+        BigDecimal stopLoss = position.stopLoss();
+        BigDecimal takeProfit = position.takeProfit();
+        List<PositionLevelChange> history = levelChanges.getOrDefault(position.positionId(), List.of());
+        for (int i = history.size() - 1; i >= 0 && history.get(i).changedAt().isAfter(candleOpen); i--) {
+            stopLoss = history.get(i).oldStopLoss();
+            takeProfit = history.get(i).oldTakeProfit();
+        }
+        return new OpenPosition(
+                position.planId(),
+                position.direction(),
+                position.entryPrice(),
+                position.entryTime(),
+                takeProfit,
+                stopLoss,
+                position.liquidationPrice());
     }
 
     /** The excursions of the pair's positions still open, or of {@code only}, widen by the last price range. */
@@ -252,6 +346,7 @@ public final class MatchingEngine {
             Optional<Exit> exit = ExitRule.byMark(state.position.levels(), marks);
             if (exit.isPresent()) {
                 forget(state);
+                levelChanges.remove(id);
                 outcomes.add(new PositionExit(state.position, exit.get(), state.excursion));
             } else {
                 // A mark price candle that ended before the entry: back in.
@@ -312,6 +407,13 @@ public final class MatchingEngine {
         boolean isLong = position.direction() == Direction.LONG;
         addLevel(pair, isLong ? Side.BELOW : Side.ABOVE, position.stopLoss(), position.positionId());
         addLevel(pair, isLong ? Side.ABOVE : Side.BELOW, position.takeProfit(), position.positionId());
+    }
+
+    private static void removeLevels(Books pair, OpenState state) {
+        TrackedPosition position = state.position;
+        boolean isLong = position.direction() == Direction.LONG;
+        removeLevel(pair, isLong ? Side.BELOW : Side.ABOVE, position.stopLoss(), position.positionId());
+        removeLevel(pair, isLong ? Side.ABOVE : Side.BELOW, position.takeProfit(), position.positionId());
     }
 
     private static void placeLiquidation(Books pair, OpenState state) {

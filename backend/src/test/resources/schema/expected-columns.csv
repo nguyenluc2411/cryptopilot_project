@@ -550,11 +550,14 @@ trading_journal,funding_incomplete,boolean,,,NO
 trading_journal,journal_id,uuid,,,NO
 trading_journal,lessons_learned,text,,,YES
 trading_journal,leverage,integer,32,0,YES
+trading_journal,level_change_count,integer,32,0,NO
 trading_journal,liquidation_price,numeric,28,12,YES
 trading_journal,market_type,character varying,,,NO
 trading_journal,max_adverse_price,numeric,28,12,YES
 trading_journal,max_favorable_price,numeric,28,12,YES
 trading_journal,mistakes,text,,,YES
+trading_journal,original_stop_loss_price,numeric,28,12,YES
+trading_journal,original_take_profit_price,numeric,28,12,YES
 trading_journal,missing_funding_times,ARRAY,,,YES
 trading_journal,pair_id,uuid,,,NO
 trading_journal,plan_id,uuid,,,YES
@@ -569,12 +572,21 @@ trading_journal,setup_score_drop_warned,boolean,,,YES
 trading_journal,setup_score_preset,character varying,,,YES
 trading_journal,source,character varying,,,NO
 trading_journal,stop_loss_price,numeric,28,12,YES
+trading_journal,stop_widened,boolean,,,NO
 trading_journal,strategy_id,uuid,,,YES
 trading_journal,take_profit_price,numeric,28,12,YES
 trading_journal,trade_status,character varying,,,NO
 trading_journal,updated_at,timestamp with time zone,,,NO
 trading_journal,user_id,uuid,,,NO
 trading_journal,version,bigint,64,0,NO
+trading_journal_level_change,changed_at,timestamp with time zone,,,NO
+trading_journal_level_change,created_at,timestamp with time zone,,,NO
+trading_journal_level_change,journal_id,uuid,,,NO
+trading_journal_level_change,level_change_id,uuid,,,NO
+trading_journal_level_change,new_stop_loss_price,numeric,28,12,YES
+trading_journal_level_change,new_take_profit_price,numeric,28,12,YES
+trading_journal_level_change,old_stop_loss_price,numeric,28,12,YES
+trading_journal_level_change,old_take_profit_price,numeric,28,12,YES
 trading_plan,activated_at,timestamp with time zone,,,YES
 trading_plan,analysis_timeframe,character varying,,,NO
 trading_plan,cancelled_at,timestamp with time zone,,,YES

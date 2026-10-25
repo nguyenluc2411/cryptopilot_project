@@ -17,10 +17,11 @@ import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
-import com.cryptopilot.trading.RecordedPosition;
+import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.EntryDeviationCalculator;
 import com.cryptopilot.trading.calculator.PlanValidityRule;
+import com.cryptopilot.trading.calculator.PositionLevelRule;
 import com.cryptopilot.trading.calculator.SlippageCalculator;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.dto.request.PlanInputs;
@@ -134,6 +135,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     private final TradeJournal journal;
 
     private final PositionOpener positions;
+
+    private final PositionViews positionViews;
 
     @Override
     @Transactional(readOnly = true)
@@ -317,30 +320,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return stored;
     }
 
-    /** The plan in full and, once it is EXECUTED, the position it opened (UC-20). */
+    /** The plan in full and, once it is EXECUTED, the position it opened (UC-20), see {@link PositionViews}. */
     private TradingPlanResponse detail(TradingPlan plan) {
-        PositionResponse position = plan.getStatus() != PlanStatus.EXECUTED
-                ? null
-                : journal.positionOf(plan.getId())
-                        .map(recorded -> PlanResponses.position(plan, recorded, currentPrice(plan, recorded)))
-                        .orElse(null);
+        PositionResponse position = plan.getStatus() != PlanStatus.EXECUTED ? null : positionViews.of(plan);
         return PlanResponses.detail(plan, position);
-    }
-
-    /**
-     * The price an open position's unrealized P/L is read at: the Futures mark price, the Spot last price (Q-55; D-111
-     * E2/E3 keeps the mark price for unrealized P/L). Empty when the position is closed, or when the pair or a current
-     * price is not found.
-     */
-    private Optional<BigDecimal> currentPrice(TradingPlan plan, RecordedPosition position) {
-        if (position.status() != PositionStatus.OPEN) {
-            return Optional.empty();
-        }
-        return market.pairListings(List.of(plan.getPairId())).stream()
-                .findFirst()
-                .flatMap(pair -> plan.getMarket() == MarketType.FUTURES
-                        ? market.currentMarkPrice(pair.symbol())
-                        : market.currentLastPrice(MarketType.SPOT, pair.symbol()));
     }
 
     /**
@@ -462,7 +445,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return pair.filters().roundPrice(price);
     }
 
-    private static RiskProfileLimits limits(RiskProfileParameters profile) {
+    static RiskProfileLimits limits(RiskProfileParameters profile) {
         return new RiskProfileLimits(
                 profile.riskPerTradePercent(), profile.maxFuturesLeverage(), profile.maxTotalOpenRiskPercent());
     }
@@ -472,14 +455,26 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * is read first and the journal second: a fill committing between the reads moves its plan from the first to the
      * second, so it is counted twice (a spurious MSG27 or TOTAL_OPEN_RISK), never zero times. When {@code activating},
      * the caller holds the D-63 lock and the ACTIVE plans are counted for {@code ACTIVE_PLAN_MAX}; otherwise they are
-     * not counted.
+     * not counted. An ACTIVE plan counts its planned risk, an open position its risk at its current stop loss (D-124).
      */
     private OpenExposure exposure(UUID userId, UUID excludedPlan, boolean activating) {
         long activePlans = activating ? plans.countActive(userId) : 0L;
         BigDecimal activeRisk = plans.activeRiskExcluding(userId, excludedPlan);
-        Set<UUID> open = journal.openPositionPlans(userId);
-        BigDecimal openRisk = open.isEmpty() ? BigDecimal.ZERO : plans.riskOf(open);
-        return new OpenExposure(activating ? activePlans + open.size() : 0L, activeRisk.add(openRisk));
+        List<OpenTrade> open = journal.openSimulatedTrades(userId);
+        return new OpenExposure(activating ? activePlans + open.size() : 0L, activeRisk.add(currentRisk(open)));
+    }
+
+    /**
+     * The risk the open positions still carry at their current stop losses, the open half of TOTAL_OPEN_RISK: a
+     * position whose stop was moved to or past its entry carries none.
+     *
+     * <p>Rule: BR-29; D-124.
+     */
+    static BigDecimal currentRisk(List<OpenTrade> open) {
+        return open.stream()
+                .map(trade -> PositionLevelRule.currentRisk(
+                        trade.direction(), trade.entryPrice(), trade.stopLoss(), trade.quantity()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /** {@code ACTIVE_PLAN_MAX} counts ACTIVE plans and open positions together (BR-62); MSG27 when it is reached. */

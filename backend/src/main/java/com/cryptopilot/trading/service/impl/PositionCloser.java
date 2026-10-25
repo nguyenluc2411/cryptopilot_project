@@ -4,6 +4,8 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PositionLevelChange;
+import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.SimulatedTradeClosing;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.SlippageCalculator;
@@ -46,7 +48,8 @@ import org.springframework.stereotype.Component;
  *   <li>The net profit and loss is {@link TradeAmounts#netPnl} of the stored amounts, never another formula.
  * </ul>
  *
- * <p>Rule: BR-35, BR-36, BR-37, BR-38, BR-39; D-97 and its note of 2026-10-24; D-111 E1, E5; Q-56, Q-57, Q-58.
+ * <p>Rule: BR-35, BR-36, BR-37, BR-38, BR-39; D-97 and its note of 2026-10-24; D-111 E1, E5; D-124; Q-56, Q-57,
+ * Q-58.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -62,13 +65,15 @@ public class PositionCloser {
     private final ApplicationEventPublisher events;
 
     /**
-     * Closes the position if it is still OPEN at the version the engine tracked.
+     * Closes the position if it is still OPEN and the exit still holds at its current version, see
+     * {@link #stillDecides}.
      *
-     * @return whether this call closed it; {@code false} when it was closed first, or its levels changed since
+     * @return whether this call closed it; {@code false} when it was closed first, or its levels changed before the
+     *     exit's candle opened
      */
     public boolean close(PositionExit decided) {
         Optional<OpenTrade> open = journal.openTrade(decided.position().positionId());
-        if (open.isEmpty() || open.get().version() != decided.position().version()) {
+        if (open.isEmpty() || !stillDecides(decided, open.get())) {
             return false;
         }
         OpenTrade trade = open.get();
@@ -160,6 +165,37 @@ public class PositionCloser {
                 result.fundingFeeAmount(),
                 result.fundingIncomplete());
         return new ClosingAmounts(exitPrice, at, result.exitFee(), amounts, result.missingFundingTimes());
+    }
+
+    /**
+     * Whether the exit the engine decided at the version it tracked still holds at the row's current version. Only a
+     * change of the levels moves the version of an OPEN row, one per change (D-119 (5)). The exit holds at the same
+     * version; a liquidation holds whatever the changes, which never move the liquidation price; a stop loss, take
+     * profit or manual close holds when every change since was made after the exit's candle opened (for a manual
+     * close, after its instant), because such a change does not act on that candle (D-124). A change made before it
+     * means the exit was decided by levels no longer in force, and the change's own update of the books follows.
+     *
+     * <p>Rule: BR-35; D-77, D-119 (5), D-124.
+     */
+    private boolean stillDecides(PositionExit decided, OpenTrade trade) {
+        long changesSince = trade.version() - decided.position().version();
+        if (changesSince == 0) {
+            return true;
+        }
+        if (changesSince < 0) {
+            return false;
+        }
+        if (decided.exit().reason() == CloseReason.LIQUIDATION) {
+            return true;
+        }
+        List<PositionLevelChange> changes =
+                journal.levelsOf(trade.planId()).map(PositionLevels::changes).orElse(List.of());
+        if (changes.size() < changesSince) {
+            return false;
+        }
+        Instant candleOpen = decided.exit().exitedAt();
+        return changes.subList(changes.size() - (int) changesSince, changes.size()).stream()
+                .allMatch(change -> change.changedAt().isAfter(candleOpen));
     }
 
     private List<LeverageBracket> brackets(OpenTrade trade) {
