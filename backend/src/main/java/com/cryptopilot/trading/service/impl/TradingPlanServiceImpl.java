@@ -445,7 +445,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return pair.filters().roundPrice(price);
     }
 
-    private static RiskProfileLimits limits(RiskProfileParameters profile) {
+    static RiskProfileLimits limits(RiskProfileParameters profile) {
         return new RiskProfileLimits(
                 profile.riskPerTradePercent(), profile.maxFuturesLeverage(), profile.maxTotalOpenRiskPercent());
     }
