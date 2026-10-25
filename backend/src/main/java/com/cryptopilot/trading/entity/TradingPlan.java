@@ -336,10 +336,11 @@ public class TradingPlan extends BaseEntity {
     }
 
     /**
-     * Activates a DRAFT plan with the calculation re-run at this moment (UC-18, BR-31). Nothing changes when it is
-     * refused.
+     * Activates a DRAFT plan with the calculation re-run at this moment (UC-18, BR-31): the capital is the profile's of
+     * now and replaces the one of the last save, so the snapshot, BR-25 and BR-26 are recalculated on it (D-121).
+     * Nothing changes when it is refused.
      *
-     * @param calculation the stored plan calculated again; only a MARKET entry price may differ
+     * @param calculation the stored plan calculated again; only a MARKET entry price and the capital may differ
      * @param warnings the warnings of that calculation
      * @param now the activation instant
      * @throws IllegalPlanStateException when the plan is not a DRAFT
@@ -351,6 +352,7 @@ public class TradingPlan extends BaseEntity {
     public void activate(PlanCalculation calculation, List<PlanWarning> warnings, Instant now) {
         requireActivatable(calculation, warnings, now);
         entryPrice = calculation.plan().entryPrice();
+        capital = calculation.plan().capital();
         replaceSnapshot(PlanSnapshot.of(calculation));
         replaceWarnings(warnings);
         status = PlanStatus.ACTIVE;
@@ -549,13 +551,15 @@ public class TradingPlan extends BaseEntity {
         }
     }
 
-    /** Activation re-calculates this plan, not another one: only a MARKET entry may move to the last price. */
+    /**
+     * Activation re-calculates this plan, not another one: only a MARKET entry may move to the last price, and the
+     * capital to the profile's of now (D-121).
+     */
     private void requireSameTerms(RiskInput in) {
         boolean same = in.market() == market
                 && in.direction() == direction
                 && in.stopLoss().compareTo(stopLoss) == 0
                 && in.takeProfit().compareTo(takeProfit) == 0
-                && in.capital().compareTo(capital) == 0
                 && in.riskPercent().compareTo(riskPercent) == 0
                 && (leverage == null || in.leverage() == leverage)
                 && (entryType == EntryType.MARKET || in.entryPrice().compareTo(entryPrice) == 0);

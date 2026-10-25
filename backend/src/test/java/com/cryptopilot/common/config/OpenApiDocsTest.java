@@ -260,6 +260,35 @@ class OpenApiDocsTest {
                 .contains("HIGH_FEE_SHARE");
     }
 
+    /**
+     * D-121: the plan requests carry no capital, the plan and the panel still answer the one they were sized on, and
+     * each plan write documents MSG01 on {@code capital} for a profile without a default capital.
+     */
+    @Test
+    @SuppressWarnings("unchecked") // TP-D: JsonPath reads untyped maps
+    void D121_thePlanRequestsHaveNoCapital_theResponsesKeepIt() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        for (String request : java.util.List.of("CreateTradingPlanRequest", "UpdateTradingPlanRequest")) {
+            assertThat((Map<String, Object>) JsonPath.read(body, "$.components.schemas." + request + ".properties"))
+                    .containsKey("riskPercent")
+                    .doesNotContainKey("capital");
+        }
+        for (String response : java.util.List.of("PlanCalculationResponse", "TradingPlanResponse")) {
+            assertThat((Map<String, Object>) JsonPath.read(body, "$.components.schemas." + response + ".properties"))
+                    .containsKey("capital");
+        }
+        for (String path : java.util.List.of(
+                "$.paths['/api/v1/plans/calculate'].post",
+                "$.paths['/api/v1/plans'].post",
+                "$.paths['/api/v1/plans/{id}'].put",
+                "$.paths['/api/v1/plans/{id}/activate'].post")) {
+            assertThat((String) JsonPath.read(body, path + ".responses.400.description"))
+                    .as(path)
+                    .contains("MSG01 on `capital`");
+        }
+    }
+
     /** D-65: the unconfirmed switch to AGGRESSIVE is documented as the 400 of MSG48, like every validation error. */
     @Test
     void D65_theRiskProfileChoice_documentsMsg48UnderBadRequest() throws Exception {

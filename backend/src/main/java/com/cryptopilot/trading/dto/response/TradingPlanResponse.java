@@ -30,7 +30,8 @@ import java.util.UUID;
  *     the reference price of the last save for MARKET (BR-69)
  * @param stopLoss the stop loss
  * @param takeProfit the take profit
- * @param capital the capital
+ * @param capital the capital the snapshot was calculated with: the profile's default capital at the last save, or at
+ *     the activation once ACTIVE (BR-31, D-121)
  * @param riskPercent the risk %
  * @param leverage the leverage; {@code null} on Spot
  * @param marginMode ISOLATED on Futures; {@code null} on Spot

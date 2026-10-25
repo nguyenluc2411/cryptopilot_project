@@ -27,7 +27,8 @@ import java.util.List;
  * <p>Margin, the leverage bracket and the liquidation price (BR-26, BR-27) and the warnings (BR-28, BR-29) are
  * separate calculations; this one exposes the three comparisons with the risk profile they report.
  *
- * <p>Rule: BR-21, BR-22, BR-23, BR-24, BR-25, BR-30; SRS 3.5.1; CR-03; TECHNICAL_DESIGN 5.4 and 7.5; ADR-008; D-53.
+ * <p>Rule: BR-21, BR-22, BR-23, BR-24, BR-25, BR-29, BR-30; SRS 3.5.1; CR-03; TECHNICAL_DESIGN 5.4 and 7.5; ADR-008;
+ * D-53, D-121.
  * <p>Reference: Vince, R. (1990). <i>Portfolio Management Formulas: Mathematical Trading Methods for the Futures,
  * Options, and Stock Markets</i>. Wiley (fixed fractional position sizing).
  * <p>Reference: Tharp, V. K. (1998). <i>Trade Your Way to Financial Freedom</i>. McGraw-Hill (position sizing by the
@@ -69,8 +70,8 @@ public final class PositionSizeCalculator {
         BigDecimal rewardAmount =
                 quantity.multiply(in.takeProfit().subtract(in.entryPrice()).abs());
         RiskProfileLimits profile = in.profile();
-        // TODO(TP-D): divide by the profile's capital instead of the plan's; the other open risk includes the open
-        // positions since T-048a.
+        // The capital is the Trader's account size of now (D-121), so the risk of every ACTIVE plan and open position,
+        // each sized on the capital of its own save, is a share of the current account and not of an old snapshot.
         BigDecimal totalOpenRiskPercent =
                 Rounding.divide(riskAmount.add(in.otherOpenRisk()).multiply(HUNDRED), in.capital());
         return new RiskCalculation(

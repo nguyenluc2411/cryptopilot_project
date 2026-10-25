@@ -89,7 +89,7 @@ import org.springframework.transaction.annotation.Transactional;
  * interleave with another one.
  *
  * <p>Rule: UC-16 to UC-20; BR-21 to BR-34, BR-62, BR-66, BR-68, BR-69, BR-70; CR-04; D-63, D-70, D-71, D-72, D-111,
- * D-112, D-119.
+ * D-112, D-119, D-121.
  *
  * <p>Reference: Fowler, M. (2002). <i>Patterns of Enterprise Application Architecture</i>. Addison-Wesley, "Service
  * Layer".
@@ -346,11 +346,12 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * price, decides whether a LIMIT is expected to take or to supply liquidity). With {@code roundPrices} the prices
      * are rounded to the pair's tick, as for values just entered (BR-30); without it they are passed as stored, so a
      * price that is no longer a multiple of the current tick is refused by the calculation on its field (MSG15)
-     * instead of being moved to a price the Trader never entered. An activation passes its {@code gate}, which sees a
-     * MARKET entry's expected fill before it is sized, so a fill at or past the take profit answers MSG52 rather than
-     * the sizing's MSG16; {@code null} otherwise.
+     * instead of being moved to a price the Trader never entered. The capital is the profile's default capital read
+     * now, see {@link #accountCapital}: the snapshot of a save, the recalculated value of an activation. An activation
+     * passes its {@code gate}, which sees a MARKET entry's expected fill before it is sized, so a fill at or past the
+     * take profit answers MSG52 rather than the sizing's MSG16; {@code null} otherwise.
      *
-     * <p>Rule: BR-23, BR-29, BR-30, BR-31, BR-36, BR-69; D-111 E1, E5; D-112 R6; D-116.
+     * <p>Rule: BR-23, BR-25, BR-26, BR-29, BR-30, BR-31, BR-36, BR-69; D-111 E1, E5; D-112 R6; D-116, D-121.
      */
     private CalculatedPlan calculate(
             UUID userId,
@@ -361,10 +362,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             OpenExposure exposure,
             MarketEntryGate gate) {
         PlanDefaults defaults = riskProfiles.planDefaultsOf(userId);
-        BigDecimal capital = terms.capital() != null ? terms.capital() : defaults.defaultCapital();
-        if (capital == null) {
-            throw new FieldValidationException("no capital entered and no default capital", Map.of("capital", "MSG01"));
-        }
+        BigDecimal capital = accountCapital(defaults);
         int slippageBps = settings.integer(SLIPPAGE_BPS);
         BigDecimal reference = terms.entryType() == EntryType.MARKET
                 ? currentReferencePrice(pair).orElseThrow(() -> priceUnavailable(pair))
@@ -410,6 +408,23 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                     "a " + terms.entryType() + " plan needs an entry price", Map.of("entryPrice", "MSG01"));
         }
         return roundPrice ? tick(pair, terms.entryPrice()) : terms.entryPrice();
+    }
+
+    /**
+     * The Trader's account size: the default capital of the profile, the one capital every plan of the Trader is
+     * sized on, its total open risk divided by and its notional or margin compared with. A profile without one (unset,
+     * or not above 0) refuses the plan on the field {@code capital} (MSG01), so the client can send the Trader to the
+     * profile screen.
+     *
+     * <p>Rule: BR-23, BR-25, BR-26, BR-29, BR-30; SRS 3.2.5; D-121.
+     */
+    private static BigDecimal accountCapital(PlanDefaults defaults) {
+        BigDecimal capital = defaults.defaultCapital();
+        if (capital == null || capital.signum() <= 0) {
+            throw new FieldValidationException(
+                    "the profile has no default capital above 0: " + capital, Map.of("capital", "MSG01"));
+        }
+        return capital;
     }
 
     /** The risk % entered, else the profile screen's default, else the risk per trade of the risk profile. */
@@ -464,12 +479,14 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 request.entryPrice(),
                 request.stopLoss(),
                 request.takeProfit(),
-                request.capital(),
                 request.riskPercent(),
                 request.leverage());
     }
 
-    /** The stored plan's values, calculated again at activation (BR-31); a MARKET entry takes the price of now. */
+    /**
+     * The stored plan's values, calculated again at activation (BR-31); a MARKET entry takes the price of now and every
+     * plan the profile's capital of now (D-121).
+     */
     private static PlanTerms terms(TradingPlan plan) {
         return new PlanTerms(
                 plan.getMarket(),
@@ -478,7 +495,6 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 plan.getEntryPrice(),
                 plan.getStopLoss(),
                 plan.getTakeProfit(),
-                plan.getCapital(),
                 plan.getRiskPercent(),
                 plan.getLeverage());
     }

@@ -6,10 +6,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -86,6 +88,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
@@ -239,22 +242,154 @@ class TradingPlanServiceImplTest {
     }
 
     @Test
-    void theValuesEntered_winOverTheDefaults() {
+    void D121_theRiskPercentEntered_winsOverTheDefault_theCapitalIsAlwaysTheProfiles() {
         CreateTradingPlanRequest request =
-                create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.LIMIT, "100", "95", "110", "2000", "2", null);
+                create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.LIMIT, "100", "95", "110", "2", null);
 
         PlanCalculationResponse panel = service.calculate(USER, request);
 
-        assertThat(panel.capital()).isEqualByComparingTo("2000");
+        assertThat(panel.capital()).isEqualByComparingTo("1000");
         assertThat(panel.riskPercent()).isEqualByComparingTo("2");
+        assertThat(panel.snapshot().positionQuantity())
+                .as("2 % of the profile's 1,000 over a stop of 5")
+                .isEqualByComparingTo("4");
     }
 
-    @Test
-    void MSG01_withoutACapitalAndWithoutADefault_theCapitalIsRequired() {
-        when(riskProfiles.planDefaultsOf(USER)).thenReturn(new PlanDefaults(BALANCED, null, null));
+    /** D-121: a profile without a default capital above 0 refuses the panel on {@code capital} (MSG01). */
+    @ParameterizedTest(name = "default capital {0}")
+    @NullSource
+    @ValueSource(strings = {"0", "-1"})
+    void MSG01_withoutADefaultCapitalAbove0_thePanelIsRefusedOnTheCapital(String capital) {
+        profileCapital(capital);
 
         assertThatThrownBy(() -> service.calculate(USER, spotLimit("100", "95", "110")))
                 .satisfies(e -> assertFields(e, Map.of("capital", "MSG01")));
+    }
+
+    /** D-121: the smallest default capital above 0 is a capital, not a missing one. */
+    @Test
+    void D121_aDefaultCapitalJustAbove0_isUsedAsTheCapital() {
+        profileCapital("0.00000001");
+
+        assertThatThrownBy(() -> service.calculate(USER, spotLimit("100", "95", "110")))
+                .as("accepted as the capital, then too small to buy one step (MSG15), not refused as missing")
+                .satisfies(e -> assertFields(e, Map.of("quantity", "MSG15")));
+    }
+
+    /** D-121: create, update and activate are refused the same way, and nothing is saved. */
+    @Test
+    void MSG01_withoutADefaultCapital_createUpdateAndActivateAreRefusedOnTheCapital() {
+        TradingPlan plan = draft();
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        saved = null;
+        profileCapital(null);
+
+        assertThatThrownBy(() -> service.create(USER, spotLimit("100", "95", "110")))
+                .satisfies(e -> assertFields(e, Map.of("capital", "MSG01")));
+        assertThatThrownBy(() -> service.update(USER, plan.getId(), update("100", "96", "120", false)))
+                .satisfies(e -> assertFields(e, Map.of("capital", "MSG01")));
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .satisfies(e -> assertFields(e, Map.of("capital", "MSG01")));
+        assertThat(saved).isNull();
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        assertThat(plan.getCapital()).isEqualByComparingTo("1000");
+    }
+
+    /**
+     * D-121, BR-31: a draft keeps the capital of its save while the profile changes; its activation recalculates the
+     * plan on the profile's capital of now and stores it with the new size.
+     */
+    @Test
+    void BR31_activation_recalculatesOnTheProfileCapitalOfNow_andStoresIt() {
+        TradingPlan plan = draft();
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        profileCapital("3000");
+
+        assertThat(service.get(USER, plan.getId()).capital())
+                .as("the stored snapshot does not follow the profile")
+                .isEqualByComparingTo("1000");
+        TradingPlanResponse active = service.activate(USER, plan.getId(), false);
+
+        assertThat(active.status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(active.capital()).isEqualByComparingTo("3000");
+        assertThat(active.snapshot().positionQuantity()).isEqualByComparingTo("6");
+        assertThat(active.snapshot().riskAmount()).isEqualByComparingTo("30");
+        assertThat(plan.getCapital()).isEqualByComparingTo("3000");
+    }
+
+    /**
+     * D-121, BR-25 and BR-26 at activation (BR-31): 10 % risk over a stop of 9.99 is a notional just above the capital
+     * unless the step floors it back. On 50 the quantity 0.5005 floors to 0.500, a notional (Futures at 1x: a margin)
+     * of 50, equal to the capital: no warning. On 1,000 the quantity 10.01001 floors to 10.010, a notional of 1,001,
+     * above the capital: BLOCKING INSUFFICIENT_CAPITAL. A draft saved under one profile capital is checked again
+     * under the other one.
+     */
+    @ParameterizedTest(name = "{0}: saved on {1}, activated on {2}")
+    @CsvSource({
+        "SPOT,    50,   1000, true",
+        "SPOT,    1000, 50,   false",
+        "FUTURES, 50,   1000, true",
+        "FUTURES, 1000, 50,   false"
+    })
+    void BR25_BR26_activation_checksTheCapitalAgainstTheProfileCapitalOfNow(
+            MarketType marketType, String savedOn, String activatedOn, boolean blockedAtActivation) {
+        profileCapital(savedOn);
+        CreateTradingPlanRequest request = create(
+                PAIR,
+                marketType,
+                Direction.LONG,
+                EntryType.LIMIT,
+                "100",
+                "90.01",
+                "130",
+                "10",
+                marketType == MarketType.FUTURES ? 1 : null);
+        TradingPlanResponse draft = service.create(USER, request);
+        TradingPlan plan = saved;
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        assertThat(draft.blocksActivation()).isEqualTo(!blockedAtActivation);
+        profileCapital(activatedOn);
+
+        if (blockedAtActivation) {
+            assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                    .isInstanceOf(PlanActivationBlockedException.class);
+            assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+            assertThat(plan.getCapital()).isEqualByComparingTo(savedOn);
+        } else {
+            TradingPlanResponse active = service.activate(USER, plan.getId(), false);
+            assertThat(active.status()).isEqualTo(PlanStatus.ACTIVE);
+            assertThat(active.capital()).isEqualByComparingTo(activatedOn);
+            assertThat(active.warnings())
+                    .extracting(PlanWarningResponse::type)
+                    .doesNotContain(WarningType.INSUFFICIENT_CAPITAL);
+        }
+    }
+
+    /**
+     * D-121, BR-29: the other open risk, in USDT, is a share of the profile's capital of now. 30 of other risk plus
+     * this plan's 10 is 4 % of 1,000, not above BALANCED's 4 %; plus 20 on 2,000 it is 2.5 %; on 500, where this plan
+     * risks 5, 7 %.
+     */
+    @ParameterizedTest(name = "capital {0}: {1} %")
+    @CsvSource({"1000, 4, false", "2000, 2.5, false", "500, 7, true"})
+    void BR29_theTotalOpenRisk_isAShareOfTheProfileCapitalOfNow(String capital, String percent, boolean warned) {
+        profileCapital(capital);
+        when(plans.activeRiskExcluding(eq(USER), any())).thenReturn(new BigDecimal("30"));
+
+        PlanCalculationResponse panel = service.calculate(USER, spotLimit("100", "95", "110"));
+
+        List<PlanWarningResponse> totalOpenRisk = panel.warnings().stream()
+                .filter(w -> w.type() == WarningType.TOTAL_OPEN_RISK)
+                .toList();
+        if (warned) {
+            assertThat(totalOpenRisk)
+                    .singleElement()
+                    .extracting(PlanWarningResponse::message)
+                    .asString()
+                    .startsWith("the total open risk of " + percent + "% of capital");
+        } else {
+            assertThat(totalOpenRisk).isEmpty();
+        }
     }
 
     @Test
@@ -355,7 +490,7 @@ class TradingPlanServiceImplTest {
     @Test
     void BR21_aSpotPlanWithLeverage_isReportedOnTheLeverage() {
         CreateTradingPlanRequest request =
-                create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.LIMIT, "100", "95", "110", null, null, 3);
+                create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.LIMIT, "100", "95", "110", null, 3);
 
         assertThatThrownBy(() -> service.calculate(USER, request))
                 .satisfies(e -> assertFields(e, Map.of("leverage", "MSG01")));
@@ -452,7 +587,6 @@ class TradingPlanServiceImplTest {
                 new BigDecimal("100"),
                 new BigDecimal("95"),
                 new BigDecimal("110"),
-                null,
                 null,
                 null,
                 expiry,
@@ -566,8 +700,9 @@ class TradingPlanServiceImplTest {
     @Test
     void MSG18_saveAndActivate_withABlockingWarning_isRefused() {
         // Risk 10 % of 100 over a stop of 5 buys 2 units: a notional of 200 above the capital of 100 (BR-25).
+        profileCapital("100");
         CreateTradingPlanRequest blocked = activating(
-                create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.LIMIT, "100", "95", "110", "100", "10", null));
+                create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.LIMIT, "100", "95", "110", "10", null));
 
         assertThatThrownBy(() -> service.create(USER, blocked)).isInstanceOf(PlanActivationBlockedException.class);
         verify(plans, never()).save(any());
@@ -668,8 +803,7 @@ class TradingPlanServiceImplTest {
             Direction direction, String lastPrice, String stop, String takeProfit) {
         when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
         service.create(
-                USER,
-                create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, stop, takeProfit, null, null, 5));
+                USER, create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, stop, takeProfit, null, 5));
         TradingPlan plan = saved;
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
         when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal(lastPrice)));
@@ -1366,7 +1500,7 @@ class TradingPlanServiceImplTest {
             EntryType entryType) {
         TradingPlan plan = savedDraft(
                 withValidity(
-                        create(PAIR, MarketType.FUTURES, Direction.LONG, entryType, "100", "95", "110", null, null, 2),
+                        create(PAIR, MarketType.FUTURES, Direction.LONG, entryType, "100", "95", "110", null, 2),
                         entryType == EntryType.LIMIT ? "102" : "98",
                         null,
                         null),
@@ -1487,7 +1621,7 @@ class TradingPlanServiceImplTest {
             boolean accepted) {
         currentPrice(marketType, current);
         CreateTradingPlanRequest request = withValidity(
-                create(PAIR, marketType, direction, entryType, entry, stop, takeProfit, null, null, null),
+                create(PAIR, marketType, direction, entryType, entry, stop, takeProfit, null, null),
                 invalidation,
                 null,
                 null);
@@ -1536,7 +1670,7 @@ class TradingPlanServiceImplTest {
         when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("101")));
         when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.empty());
         CreateTradingPlanRequest request = withValidity(
-                create(PAIR, MarketType.FUTURES, Direction.LONG, EntryType.LIMIT, "100", "95", "110", null, null, 2),
+                create(PAIR, MarketType.FUTURES, Direction.LONG, EntryType.LIMIT, "100", "95", "110", null, 2),
                 "102",
                 null,
                 null);
@@ -1823,7 +1957,7 @@ class TradingPlanServiceImplTest {
         when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
         CreateTradingPlanRequest request = direction == Direction.LONG
                 ? spotLimit("100", "95", "110")
-                : create(PAIR, MarketType.FUTURES, direction, EntryType.LIMIT, "100", "105", "90", null, null, 2);
+                : create(PAIR, MarketType.FUTURES, direction, EntryType.LIMIT, "100", "105", "90", null, 2);
         currentPrice(request.market(), last);
 
         assertThat(service.create(USER, activating(request)).status()).isEqualTo(PlanStatus.EXECUTED);
@@ -1866,8 +2000,8 @@ class TradingPlanServiceImplTest {
         when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(bps);
         currentPrice(MarketType.FUTURES, "100.00");
         CreateTradingPlanRequest request = direction == Direction.LONG
-                ? create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, "95", "110", null, null, 5)
-                : create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, "105", "90", null, null, 5);
+                ? create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, "95", "110", null, 5)
+                : create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, "105", "90", null, 5);
 
         PlanCalculationResponse panel = service.calculate(USER, request);
 
@@ -1909,21 +2043,12 @@ class TradingPlanServiceImplTest {
      */
     @Test
     void D116_thePanel_answersTheFeeFiguresAtTheStoredScale() {
+        profileCapital("10000");
         when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.empty());
 
         PlanSnapshotResponse snapshot = service.calculate(
                         USER,
-                        create(
-                                PAIR,
-                                MarketType.SPOT,
-                                Direction.LONG,
-                                EntryType.LIMIT,
-                                "100",
-                                "98",
-                                "106",
-                                "10000",
-                                "1",
-                                null))
+                        create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.LIMIT, "100", "98", "106", "1", null))
                 .snapshot();
 
         assertThat(snapshot.positionQuantity()).isEqualByComparingTo("50");
@@ -1943,9 +2068,10 @@ class TradingPlanServiceImplTest {
      */
     @Test
     void D116_aHighFeeShare_warnsFromTheSettingOfEachCalculation_andNeverBlocks() {
+        profileCapital("10000");
         currentPrice(MarketType.FUTURES, "100250");
-        CreateTradingPlanRequest request = create(
-                PAIR, MarketType.FUTURES, Direction.LONG, EntryType.MARKET, null, "99750", "101750", "10000", "1", 5);
+        CreateTradingPlanRequest request =
+                create(PAIR, MarketType.FUTURES, Direction.LONG, EntryType.MARKET, null, "99750", "101750", "1", 5);
 
         PlanCalculationResponse panel = service.calculate(USER, request);
         assertThat(panel.warnings()).extracting(PlanWarningResponse::type).contains(WarningType.HIGH_FEE_SHARE);
@@ -2013,6 +2139,24 @@ class TradingPlanServiceImplTest {
         assertThat(active.snapshot().positionQuantity()).isEqualByComparingTo("0.0333");
         assertThat(plan.getFillPrice()).isEqualByComparingTo(fill);
         assertThat(plan.getPlannedEntryPrice()).isEqualByComparingTo("100000");
+    }
+
+    /**
+     * D-121: the MSG51 recalculation is sized on the profile capital of the activation, read once for the request, not
+     * on the capital of the draft's save: 20,000 at 1 % over the 3,000 stop distance of a 101,000 fill is 0.0666.
+     */
+    @Test
+    void BR69_theMsg51Recalculation_isSizedOnTheProfileCapitalReadOnce() {
+        TradingPlan plan = btcDraft(Direction.LONG, null);
+        profileCapital("20000");
+        clearInvocations(riskProfiles);
+        currentPrice(MarketType.SPOT, "101000");
+
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .isInstanceOfSatisfying(EntryDeviationException.class, e -> assertThat(e.problemProperties())
+                        .containsEntry(EntryDeviationException.POSITION_QUANTITY, "0.066600000000"));
+        verify(riskProfiles, times(1)).planDefaultsOf(USER);
+        assertThat(plan.getCapital()).isEqualByComparingTo("10000");
     }
 
     /**
@@ -2188,18 +2332,10 @@ class TradingPlanServiceImplTest {
     @Test
     void BR69_saveAndActivate_asksForConfirmation_andActivatesWithTheFlag() {
         when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(3);
+        profileCapital("100000");
         currentPrice(MarketType.SPOT, "100000");
-        CreateTradingPlanRequest request = activating(create(
-                BTC,
-                MarketType.SPOT,
-                Direction.LONG,
-                EntryType.MARKET,
-                null,
-                "99900",
-                "100500",
-                "100000",
-                "0.1",
-                null));
+        CreateTradingPlanRequest request = activating(
+                create(BTC, MarketType.SPOT, Direction.LONG, EntryType.MARKET, null, "99900", "100500", "0.1", null));
 
         assertThatThrownBy(() -> service.create(USER, request))
                 .isInstanceOfSatisfying(EntryDeviationException.class, e -> assertThat(e.problemProperties())
@@ -2218,18 +2354,9 @@ class TradingPlanServiceImplTest {
     @Test
     void BR69_editAndActivate_asksForConfirmation_andActivatesWithTheFlag() {
         when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(3);
+        profileCapital("100000");
         TradingPlan plan = savedDraft(
-                create(
-                        BTC,
-                        MarketType.SPOT,
-                        Direction.LONG,
-                        EntryType.MARKET,
-                        null,
-                        "99900",
-                        "100500",
-                        "100000",
-                        "0.1",
-                        null),
+                create(BTC, MarketType.SPOT, Direction.LONG, EntryType.MARKET, null, "99900", "100500", "0.1", null),
                 "100000");
 
         assertThatThrownBy(() -> service.update(USER, plan.getId(), btcEdit(false)))
@@ -2244,6 +2371,7 @@ class TradingPlanServiceImplTest {
     @Test
     void BR69_saveAndActivate_pastTheTakeProfit_isMsg52() {
         when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
+        profileCapital("10000");
         currentPrice(MarketType.SPOT, "100000");
 
         assertThatThrownBy(() -> service.create(
@@ -2256,7 +2384,6 @@ class TradingPlanServiceImplTest {
                                 null,
                                 "98000",
                                 "100050",
-                                "10000",
                                 "1",
                                 null))))
                 .isInstanceOfSatisfying(EntryDeviationException.class, e -> assertThat(e.problemProperties())
@@ -2267,9 +2394,10 @@ class TradingPlanServiceImplTest {
     @Test
     void BR69_aBlockingWarning_answersMsg18_beforeMsg51() {
         when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(3);
+        profileCapital("10000");
         currentPrice(MarketType.SPOT, "100000");
-        CreateTradingPlanRequest request = activating(create(
-                BTC, MarketType.SPOT, Direction.LONG, EntryType.MARKET, null, "99900", "100500", "10000", "1", null));
+        CreateTradingPlanRequest request = activating(
+                create(BTC, MarketType.SPOT, Direction.LONG, EntryType.MARKET, null, "99900", "100500", "1", null));
 
         assertThatThrownBy(() -> service.create(USER, request)).isInstanceOf(PlanActivationBlockedException.class);
     }
@@ -2279,7 +2407,7 @@ class TradingPlanServiceImplTest {
     @ValueSource(strings = {"LIMIT", "STOP"})
     void BR69_limitAndStopEntries_haveNoActivationDeviation(EntryType entryType) {
         TradingPlan plan = savedDraft(
-                create(PAIR, MarketType.SPOT, Direction.LONG, entryType, "100", "95", "110", null, null, null),
+                create(PAIR, MarketType.SPOT, Direction.LONG, entryType, "100", "95", "110", null, null),
                 entryType == EntryType.LIMIT ? "100.4" : "99");
 
         assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.ACTIVE);
@@ -2291,11 +2419,12 @@ class TradingPlanServiceImplTest {
         return savedDraft(btc(direction, maxDeviation), "100000");
     }
 
-    private static CreateTradingPlanRequest btc(Direction direction, BigDecimal maxDeviation) {
+    /** The BTC request of the BR-69 tests, on a profile capital of 10,000 (D-121). */
+    private CreateTradingPlanRequest btc(Direction direction, BigDecimal maxDeviation) {
+        profileCapital("10000");
         CreateTradingPlanRequest request = direction == Direction.LONG
-                ? create(BTC, MarketType.SPOT, direction, EntryType.MARKET, null, "98000", "106000", "10000", "1", null)
-                : create(
-                        BTC, MarketType.FUTURES, direction, EntryType.MARKET, null, "102000", "94000", "10000", "1", 2);
+                ? create(BTC, MarketType.SPOT, direction, EntryType.MARKET, null, "98000", "106000", "1", null)
+                : create(BTC, MarketType.FUTURES, direction, EntryType.MARKET, null, "102000", "94000", "1", 2);
         return withValidity(request, null, maxDeviation == null ? null : maxDeviation.toPlainString(), null);
     }
 
@@ -2311,7 +2440,6 @@ class TradingPlanServiceImplTest {
                 null,
                 decimal("99900"),
                 decimal("100500"),
-                decimal("100000"),
                 decimal("0.1"),
                 null,
                 null,
@@ -2332,7 +2460,6 @@ class TradingPlanServiceImplTest {
                 r.entryPrice(),
                 r.stopLoss(),
                 r.takeProfit(),
-                r.capital(),
                 r.riskPercent(),
                 r.leverage(),
                 r.expiresAt(),
@@ -2351,15 +2478,15 @@ class TradingPlanServiceImplTest {
     /** A STOP at 100: LONG on Spot (SL 95, TP 110), SHORT on Futures (SL 105, TP 90, leverage 2). */
     private static CreateTradingPlanRequest stop(MarketType marketType, Direction direction) {
         return direction == Direction.LONG
-                ? create(PAIR, marketType, direction, EntryType.STOP, "100", "95", "110", null, null, null)
-                : create(PAIR, marketType, direction, EntryType.STOP, "100", "105", "90", null, null, 2);
+                ? create(PAIR, marketType, direction, EntryType.STOP, "100", "95", "110", null, null)
+                : create(PAIR, marketType, direction, EntryType.STOP, "100", "105", "90", null, 2);
     }
 
     /** A LIMIT at 100: LONG on Spot (SL 95, TP 110), SHORT on Futures (SL 105, TP 90, leverage 2). */
     private static CreateTradingPlanRequest limit(MarketType marketType, Direction direction) {
         return direction == Direction.LONG
-                ? create(PAIR, marketType, direction, EntryType.LIMIT, "100", "95", "110", null, null, null)
-                : create(PAIR, marketType, direction, EntryType.LIMIT, "100", "105", "90", null, null, 2);
+                ? create(PAIR, marketType, direction, EntryType.LIMIT, "100", "95", "110", null, null)
+                : create(PAIR, marketType, direction, EntryType.LIMIT, "100", "105", "90", null, 2);
     }
 
     /** A draft saved through the service while the last price of its market is {@code last}. */
@@ -2387,7 +2514,6 @@ class TradingPlanServiceImplTest {
                 null,
                 null,
                 null,
-                null,
                 decimal(invalidation),
                 null,
                 null,
@@ -2396,7 +2522,7 @@ class TradingPlanServiceImplTest {
     }
 
     private static CreateTradingPlanRequest spotStop(String entry, String stop, String takeProfit) {
-        return create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.STOP, entry, stop, takeProfit, null, null, null);
+        return create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.STOP, entry, stop, takeProfit, null, null);
     }
 
     private static CreateTradingPlanRequest withExpiry(CreateTradingPlanRequest r, Instant expiresAt) {
@@ -2408,7 +2534,6 @@ class TradingPlanServiceImplTest {
                 r.entryPrice(),
                 r.stopLoss(),
                 r.takeProfit(),
-                r.capital(),
                 r.riskPercent(),
                 r.leverage(),
                 expiresAt,
@@ -2430,7 +2555,6 @@ class TradingPlanServiceImplTest {
                 r.entryPrice(),
                 r.stopLoss(),
                 r.takeProfit(),
-                r.capital(),
                 r.riskPercent(),
                 r.leverage(),
                 r.expiresAt(),
@@ -2457,9 +2581,13 @@ class TradingPlanServiceImplTest {
                 null,
                 null,
                 null,
-                null,
                 false,
                 null);
+    }
+
+    /** The default capital of the Trader's profile from now on (D-121); {@code null} for none. */
+    private void profileCapital(String capital) {
+        when(riskProfiles.planDefaultsOf(USER)).thenReturn(new PlanDefaults(BALANCED, decimal(capital), null));
     }
 
     private TradingPlan draft() {
@@ -2473,22 +2601,19 @@ class TradingPlanServiceImplTest {
     }
 
     private static CreateTradingPlanRequest spotLimit(String entry, String stop, String takeProfit) {
-        return create(
-                PAIR, MarketType.SPOT, Direction.LONG, EntryType.LIMIT, entry, stop, takeProfit, null, null, null);
+        return create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.LIMIT, entry, stop, takeProfit, null, null);
     }
 
     private static CreateTradingPlanRequest spotMarket(String stop, String takeProfit) {
-        return create(
-                PAIR, MarketType.SPOT, Direction.LONG, EntryType.MARKET, null, stop, takeProfit, null, null, null);
+        return create(PAIR, MarketType.SPOT, Direction.LONG, EntryType.MARKET, null, stop, takeProfit, null, null);
     }
 
     private static CreateTradingPlanRequest futuresMarket() {
-        return create(PAIR, MarketType.FUTURES, Direction.LONG, EntryType.MARKET, null, "95", "110", null, null, 5);
+        return create(PAIR, MarketType.FUTURES, Direction.LONG, EntryType.MARKET, null, "95", "110", null, 5);
     }
 
     private static CreateTradingPlanRequest futuresLimit(int leverage) {
-        return create(
-                PAIR, MarketType.FUTURES, Direction.LONG, EntryType.LIMIT, "100", "95", "110", null, null, leverage);
+        return create(PAIR, MarketType.FUTURES, Direction.LONG, EntryType.LIMIT, "100", "95", "110", null, leverage);
     }
 
     private static CreateTradingPlanRequest create(
@@ -2499,7 +2624,6 @@ class TradingPlanServiceImplTest {
             String entry,
             String stop,
             String takeProfit,
-            String capital,
             String riskPercent,
             Integer leverage) {
         return new CreateTradingPlanRequest(
@@ -2510,7 +2634,6 @@ class TradingPlanServiceImplTest {
                 decimal(entry),
                 decimal(stop),
                 decimal(takeProfit),
-                decimal(capital),
                 decimal(riskPercent),
                 leverage,
                 null,
@@ -2531,7 +2654,6 @@ class TradingPlanServiceImplTest {
                 r.entryPrice(),
                 r.stopLoss(),
                 r.takeProfit(),
-                r.capital(),
                 r.riskPercent(),
                 r.leverage(),
                 r.expiresAt(),
@@ -2551,7 +2673,6 @@ class TradingPlanServiceImplTest {
                 decimal(entry),
                 decimal(stop),
                 decimal(takeProfit),
-                null,
                 null,
                 null,
                 null,
