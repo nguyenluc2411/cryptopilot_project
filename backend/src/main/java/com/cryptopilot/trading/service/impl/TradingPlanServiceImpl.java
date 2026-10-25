@@ -18,7 +18,6 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.trading.OpenTrade;
-import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.EntryDeviationCalculator;
 import com.cryptopilot.trading.calculator.PlanValidityRule;
@@ -136,6 +135,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     private final TradeJournal journal;
 
     private final PositionOpener positions;
+
+    private final PositionViews positionViews;
 
     @Override
     @Transactional(readOnly = true)
@@ -319,30 +320,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return stored;
     }
 
-    /** The plan in full and, once it is EXECUTED, the position it opened (UC-20). */
+    /** The plan in full and, once it is EXECUTED, the position it opened (UC-20), see {@link PositionViews}. */
     private TradingPlanResponse detail(TradingPlan plan) {
-        PositionResponse position = plan.getStatus() != PlanStatus.EXECUTED
-                ? null
-                : journal.positionOf(plan.getId())
-                        .map(recorded -> PlanResponses.position(plan, recorded, currentPrice(plan, recorded)))
-                        .orElse(null);
+        PositionResponse position = plan.getStatus() != PlanStatus.EXECUTED ? null : positionViews.of(plan);
         return PlanResponses.detail(plan, position);
-    }
-
-    /**
-     * The price an open position's unrealized P/L is read at: the Futures mark price, the Spot last price (Q-55; D-111
-     * E2/E3 keeps the mark price for unrealized P/L). Empty when the position is closed, or when the pair or a current
-     * price is not found.
-     */
-    private Optional<BigDecimal> currentPrice(TradingPlan plan, RecordedPosition position) {
-        if (position.status() != PositionStatus.OPEN) {
-            return Optional.empty();
-        }
-        return market.pairListings(List.of(plan.getPairId())).stream()
-                .findFirst()
-                .flatMap(pair -> plan.getMarket() == MarketType.FUTURES
-                        ? market.currentMarkPrice(pair.symbol())
-                        : market.currentLastPrice(MarketType.SPOT, pair.symbol()));
     }
 
     /**

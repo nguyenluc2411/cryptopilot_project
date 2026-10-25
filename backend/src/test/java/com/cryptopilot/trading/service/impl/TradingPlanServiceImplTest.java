@@ -58,6 +58,7 @@ import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.exception.EntryDeviationException;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.exception.PlanActivationBlockedException;
+import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.PlanListQuery;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.CloseReason;
@@ -70,6 +71,7 @@ import com.cryptopilot.trading.model.enums.PositionStatus;
 import com.cryptopilot.trading.model.enums.WarningSeverity;
 import com.cryptopilot.trading.model.enums.WarningType;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
+import com.cryptopilot.trading.service.FundingService;
 import com.cryptopilot.user.PlanDefaults;
 import com.cryptopilot.user.RiskProfileApi;
 import com.cryptopilot.user.RiskProfileParameters;
@@ -138,6 +140,8 @@ class TradingPlanServiceImplTest {
 
     private TradingPlanServiceImpl service;
 
+    private final FundingService funding = mock(FundingService.class);
+
     /** The last plan the service saved. */
     private TradingPlan saved;
 
@@ -155,7 +159,8 @@ class TradingPlanServiceImplTest {
                 settings,
                 styleProvider,
                 journal,
-                new PositionOpener(journal, new FeeRates(settings), market));
+                new PositionOpener(journal, new FeeRates(settings), market),
+                new PositionViews(journal, market, new FeeRates(settings), funding, settings));
         when(journal.openSimulatedTrade(any())).thenAnswer(call -> recorded(call.getArgument(0)));
         when(styleProvider.getIfAvailable()).thenReturn(styles);
         when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_BLOCK_R)).thenReturn(new BigDecimal("0.75"));
@@ -1161,6 +1166,7 @@ class TradingPlanServiceImplTest {
         position(plan, PositionStatus.OPEN);
         when(market.pairListings(List.of(PAIR))).thenReturn(List.of(new PairListing(PAIR, "BTCUSDT", true, true)));
         when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("99")));
+        when(funding.fundingSoFar(eq(PAIR), any(), any(), any())).thenReturn(FundingFee.complete(BigDecimal.ZERO));
 
         PositionResponse position = service.get(USER, plan.getId()).position();
 

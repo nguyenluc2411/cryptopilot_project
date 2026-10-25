@@ -1,16 +1,19 @@
 package com.cryptopilot.trading.service.impl;
 
+import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.calculator.TradeResultCalculator;
 import com.cryptopilot.trading.calculator.warning.WarningEvaluator;
 import com.cryptopilot.trading.dto.response.PlanCalculationResponse;
 import com.cryptopilot.trading.dto.response.PlanSnapshotResponse;
 import com.cryptopilot.trading.dto.response.PlanWarningResponse;
+import com.cryptopilot.trading.dto.response.PositionLevelChangeResponse;
 import com.cryptopilot.trading.dto.response.PositionResponse;
 import com.cryptopilot.trading.dto.response.StatusChangeResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
+import com.cryptopilot.trading.model.Breakeven;
 import com.cryptopilot.trading.model.CalculatedPlan;
 import com.cryptopilot.trading.model.NetPnl;
 import com.cryptopilot.trading.model.PlanCosts;
@@ -74,9 +77,30 @@ final class PlanResponses {
      * @param currentPrice the Futures mark price or the Spot last price; empty when closed or not cached
      */
     static PositionResponse position(TradingPlan plan, RecordedPosition position, Optional<BigDecimal> currentPrice) {
+        return position(plan, position, currentPrice, null, Optional.empty(), List.of());
+    }
+
+    /**
+     * The position with its levels (TP-E): the current and original stop loss and take profit, the history of their
+     * changes, the true breakeven stop while OPEN, and the warnings of a change just made.
+     *
+     * <p>Rule: BR-35, BR-38, BR-42; D-124.
+     *
+     * @param levels the levels the journal holds; {@code null} shows the plan's own levels and no change
+     * @param breakeven the breakeven stop of an OPEN position; empty when CLOSED or not computed
+     * @param levelWarnings the warnings of the change this response answers; empty on a read
+     */
+    static PositionResponse position(
+            TradingPlan plan,
+            RecordedPosition position,
+            Optional<BigDecimal> currentPrice,
+            PositionLevels levels,
+            Optional<Breakeven> breakeven,
+            List<PlanWarning> levelWarnings) {
         BigDecimal current = position.status() == PositionStatus.OPEN ? currentPrice.orElse(null) : null;
         TradeAmounts amounts = position.amounts();
         NetPnl net = amounts == null ? null : amounts.netPnl();
+        Optional<Breakeven> open = position.status() == PositionStatus.OPEN ? breakeven : Optional.empty();
         return new PositionResponse(
                 position.status(),
                 position.entryPrice(),
@@ -96,7 +120,26 @@ final class PlanResponses {
                 position.feeAmount(),
                 position.fundingFeeAmount(),
                 net == null ? null : net.amount(),
-                net != null && net.provisional());
+                net != null && net.provisional(),
+                levels == null ? plan.getStopLoss() : levels.stopLoss(),
+                levels == null ? plan.getTakeProfit() : levels.takeProfit(),
+                levels == null ? plan.getStopLoss() : levels.originalStopLoss(),
+                levels == null ? plan.getTakeProfit() : levels.originalTakeProfit(),
+                levels != null && levels.stopWidened(),
+                levels == null ? 0 : levels.changeCount(),
+                levels == null
+                        ? List.of()
+                        : levels.changes().stream()
+                                .map(change -> new PositionLevelChangeResponse(
+                                        change.changedAt(),
+                                        change.oldStopLoss(),
+                                        change.oldTakeProfit(),
+                                        change.newStopLoss(),
+                                        change.newTakeProfit()))
+                                .toList(),
+                open.map(Breakeven::price).orElse(null),
+                open.map(Breakeven::provisional).orElse(false),
+                warnings(levelWarnings));
     }
 
     /** A row of the list; the warnings are not read. {@code positionStatus} is its position's, or {@code null}. */
