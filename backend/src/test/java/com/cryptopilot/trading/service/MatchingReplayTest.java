@@ -454,7 +454,8 @@ class MatchingReplayTest {
         } else {
             steps.subList(0, crashAt).forEach(Runnable::run);
             if (loss == Loss.GIVE_UP_THEN_CRASH) {
-                awaitFill(ids.get("short105"));
+                // The given-up fill holds the watermark, so wait for every outcome stored before the crash instead.
+                awaitStoredUpTo(ids, lastClosedBeforeCrash, ids.get("long98"));
             } else {
                 awaitWatermark(lastClosedBeforeCrash);
             }
@@ -692,8 +693,28 @@ class MatchingReplayTest {
                 "watermark " + openTime);
     }
 
-    private void awaitFill(UUID planId) {
-        awaitUntil(() -> fills.containsKey(planId), "fill of " + planId);
+    /**
+     * Waits until every plan that the candles up to {@code minute} decide, except {@code skipped}, is no longer ACTIVE
+     * in the database. One candle can decide several plans, stored one after another in an order the books do not
+     * fix, so waiting for one of them would let a stop interrupt the store of another. It reads the committed rows,
+     * not {@link #fills} or {@link #invalidations}: the spy records an outcome before its transaction commits.
+     */
+    private void awaitStoredUpTo(Map<String, UUID> ids, Instant minute, UUID skipped) {
+        List<UUID> decided = ids.entrySet().stream()
+                .filter(entry -> !entry.getValue().equals(skipped))
+                .filter(entry -> {
+                    Instant at = EXPECTED.get(entry.getKey()).decidedAt();
+                    return at != null && !at.isAfter(minute);
+                })
+                .map(Map.Entry::getValue)
+                .toList();
+        awaitUntil(
+                () -> jdbc.sql("select count(*) from trading_plan where plan_id in (:ids) and plan_status = 'ACTIVE'")
+                                .param("ids", decided)
+                                .query(Long.class)
+                                .single()
+                        == 0,
+                "outcomes up to " + minute + " committed");
     }
 
     private void awaitIdle() {
@@ -862,6 +883,11 @@ class MatchingReplayTest {
 
         static Outcome active() {
             return new Outcome(PlanStatus.ACTIVE, null, null, null, null, null);
+        }
+
+        /** The open time of the candle that filled or invalidated the plan, or {@code null} when none did. */
+        Instant decidedAt() {
+            return executedAt != null ? executedAt : invalidatedAt;
         }
     }
 }
