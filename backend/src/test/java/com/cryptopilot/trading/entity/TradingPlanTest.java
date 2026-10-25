@@ -404,7 +404,6 @@ class TradingPlanTest {
                 Arguments.of("direction", PlanFixture.futuresShort()),
                 Arguments.of("stop loss", PlanFixture.futuresLong().stop("94")),
                 Arguments.of("take profit", PlanFixture.futuresLong().takeProfit("111")),
-                Arguments.of("capital", PlanFixture.futuresLong().capital("2000")),
                 Arguments.of("risk %", PlanFixture.futuresLong().riskPercent("0.5")),
                 Arguments.of("leverage", PlanFixture.futuresLong().leverage(4)),
                 Arguments.of("LIMIT entry", PlanFixture.futuresLong().entry("101")));
@@ -420,6 +419,21 @@ class TradingPlanTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("not for plan");
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+    }
+
+    /** D-121: the capital is the profile's of the activation, so it may differ from the save's and is stored. */
+    @Test
+    void BR31_activation_storesTheCapitalItWasRecalculatedOn() {
+        TradingPlan plan =
+                TradingPlan.draft(USER, PAIR, PlanFixture.futuresLong().build(), LIMIT, List.of());
+        PlanCalculation onTheProfileOfNow =
+                PlanFixture.futuresLong().capital("2000").build();
+
+        plan.activate(onTheProfileOfNow, List.of(), NOW);
+
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(plan.getCapital()).isEqualByComparingTo("2000");
+        assertThat(plan.getSnapshot()).isEqualTo(PlanSnapshot.of(onTheProfileOfNow));
     }
 
     @Test
@@ -806,6 +820,7 @@ class TradingPlanTest {
                 in.filters(),
                 in.profile(),
                 in.otherOpenRisk());
-        return new PlanCalculation(changed, base.sized(), base.liquidation(), base.fundingRate(), base.thresholds());
+        return new PlanCalculation(
+                changed, base.sized(), base.liquidation(), base.fundingRate(), base.costs(), base.thresholds());
     }
 }

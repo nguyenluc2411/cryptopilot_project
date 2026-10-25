@@ -30,8 +30,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 class BaselineSchemaTest {
 
     /**
-     * The business tables of the logical model, in the order the model lists them: 39, and the 6 of paper
-     * trading after them (V21, TR-02; owned by the Trader since V35, D-117).
+     * The business tables of the logical model, in the order the model lists them: 39, the 6 of paper trading
+     * after them (V21, TR-02; owned by the Trader since V47, D-117), the history of a position's level changes
+     * (V37, TP-E), and the 4 of the Academy (V38, T-114) last.
      */
     private static final List<String> BUSINESS_TABLES = List.of(
             "user_account",
@@ -78,7 +79,12 @@ class BaselineSchemaTest {
             "order_list",
             "trade_order",
             "order_fill",
-            "equity_snapshot");
+            "equity_snapshot",
+            "trading_journal_level_change",
+            "academy_topic",
+            "academy_article",
+            "academy_term",
+            "academy_progress");
 
     @Autowired
     private JdbcClient jdbc;
@@ -103,9 +109,9 @@ class BaselineSchemaTest {
     }
 
     @Test
-    void schema_holdsTheFortyFiveBusinessTables() {
+    void schema_holdsTheFiftyBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(45);
+        assertThat(BUSINESS_TABLES).hasSize(50);
     }
 
     @Test
@@ -115,7 +121,7 @@ class BaselineSchemaTest {
                         + " survive a restart), matching_watermark (V19, where the matching engine stopped) and"
                         + " dropped_backfill_gap (V20, the gaps the backfill gave up on) and order_matching_watermark"
                         + " (V21, where the paper matching engine stopped) are technical tables, not"
-                        + " business entities; legacy_paper_account and legacy_paper_transfer keep the rows V35"
+                        + " business entities; legacy_paper_account and legacy_paper_transfer keep the rows V47"
                         + " folded into the Trader and the ledger, untouched, until a later migration drops them")
                 .contains(
                         "event_publication",

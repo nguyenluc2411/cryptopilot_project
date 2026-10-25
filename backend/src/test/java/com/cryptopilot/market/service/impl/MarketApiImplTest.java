@@ -238,6 +238,7 @@ class MarketApiImplTest {
     @Test
     void BR33_aCurrentEntryWithoutTheValue_givesNothing() {
         when(prices.latest(MarketType.FUTURES, "BTCUSDT")).thenReturn(found(price(null, null)));
+        when(prices.latestLast(MarketType.FUTURES, "BTCUSDT")).thenReturn(found(price(null, null)));
 
         assertThat(api.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).isEmpty();
         assertThat(api.currentMarkPrice("BTCUSDT")).isEmpty();
@@ -251,7 +252,8 @@ class MarketApiImplTest {
     void NSF03_aPriceThatIsNotCurrent_isNeverReturnedAsOne(PriceLookup.Status status) {
         PriceLookup lookup = new PriceLookup(
                 status, status == PriceLookup.Status.EXPIRED ? Optional.of(price("101", "0.0001")) : Optional.empty());
-        when(prices.latest(MarketType.SPOT, "BTCUSDT")).thenReturn(lookup);
+        // The last price has its own read, with its own instant on Futures (D-111 E2/E3).
+        when(prices.latestLast(MarketType.SPOT, "BTCUSDT")).thenReturn(lookup);
 
         assertThat(api.currentLastPrice(MarketType.SPOT, "BTCUSDT")).isEmpty();
     }

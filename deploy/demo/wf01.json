@@ -1,0 +1,213 @@
+{
+  "about": "WF-01 demo data (DEMO-01) read by deploy/demo/load-wf01.ps1; see deploy/README.md.",
+  "bracketSource": {
+    "publisher": "Binance USD-M Futures, public leverage bracket table",
+    "url": "https://www.binance.com/en/futures/trading-rules/perpetual/leverage-margin",
+    "dataUrl": "https://www.binance.com/bapi/futures/v1/friendly/future/common/brackets",
+    "retrievedOn": "2026-10-25",
+    "copied": "notional floor and cap, maintenance margin rate, maintenance amount (cumFastMaintenanceAmount) and max leverage (maxOpenPosLeverage) of each tier, unchanged",
+    "deviation": "tier 1 allows 150x on Binance; it is stored as 125x, the highest leverage the system accepts for a pair or a bracket (UC-45, UC-46). bracketsUpdatedAtSource is Binance's updateTime of the table, in epoch milliseconds (2025-08-19)."
+  },
+  "pairs": [
+    {
+      "symbol": "BTCUSDT",
+      "spotEnabled": true,
+      "futuresEnabled": true,
+      "maxLeverage": 125,
+      "bracketsUpdatedAtSource": 1755585384254,
+      "brackets": [
+        {
+          "notionalFloor": "0",
+          "notionalCap": "300000",
+          "maxLeverage": 125,
+          "maintenanceMarginRate": "0.004",
+          "maintenanceAmount": "0"
+        },
+        {
+          "notionalFloor": "300000",
+          "notionalCap": "800000",
+          "maxLeverage": 100,
+          "maintenanceMarginRate": "0.005",
+          "maintenanceAmount": "300"
+        },
+        {
+          "notionalFloor": "800000",
+          "notionalCap": "3000000",
+          "maxLeverage": 75,
+          "maintenanceMarginRate": "0.0065",
+          "maintenanceAmount": "1500"
+        },
+        {
+          "notionalFloor": "3000000",
+          "notionalCap": "12000000",
+          "maxLeverage": 50,
+          "maintenanceMarginRate": "0.01",
+          "maintenanceAmount": "12000"
+        },
+        {
+          "notionalFloor": "12000000",
+          "notionalCap": "70000000",
+          "maxLeverage": 25,
+          "maintenanceMarginRate": "0.02",
+          "maintenanceAmount": "132000"
+        },
+        {
+          "notionalFloor": "70000000",
+          "notionalCap": "100000000",
+          "maxLeverage": 20,
+          "maintenanceMarginRate": "0.025",
+          "maintenanceAmount": "482000"
+        },
+        {
+          "notionalFloor": "100000000",
+          "notionalCap": "230000000",
+          "maxLeverage": 10,
+          "maintenanceMarginRate": "0.05",
+          "maintenanceAmount": "2982000"
+        },
+        {
+          "notionalFloor": "230000000",
+          "notionalCap": "480000000",
+          "maxLeverage": 5,
+          "maintenanceMarginRate": "0.1",
+          "maintenanceAmount": "14482000"
+        },
+        {
+          "notionalFloor": "480000000",
+          "notionalCap": "600000000",
+          "maxLeverage": 4,
+          "maintenanceMarginRate": "0.125",
+          "maintenanceAmount": "26482000"
+        },
+        {
+          "notionalFloor": "600000000",
+          "notionalCap": "800000000",
+          "maxLeverage": 3,
+          "maintenanceMarginRate": "0.15",
+          "maintenanceAmount": "41482000"
+        },
+        {
+          "notionalFloor": "800000000",
+          "notionalCap": "1200000000",
+          "maxLeverage": 2,
+          "maintenanceMarginRate": "0.25",
+          "maintenanceAmount": "121482000"
+        },
+        {
+          "notionalFloor": "1200000000",
+          "notionalCap": "1800000000",
+          "maxLeverage": 1,
+          "maintenanceMarginRate": "0.5",
+          "maintenanceAmount": "421482000"
+        }
+      ]
+    },
+    {
+      "symbol": "ETHUSDT",
+      "spotEnabled": true,
+      "futuresEnabled": true,
+      "maxLeverage": 125,
+      "bracketsUpdatedAtSource": 1755585987074,
+      "brackets": [
+        {
+          "notionalFloor": "0",
+          "notionalCap": "300000",
+          "maxLeverage": 125,
+          "maintenanceMarginRate": "0.004",
+          "maintenanceAmount": "0"
+        },
+        {
+          "notionalFloor": "300000",
+          "notionalCap": "800000",
+          "maxLeverage": 100,
+          "maintenanceMarginRate": "0.005",
+          "maintenanceAmount": "300"
+        },
+        {
+          "notionalFloor": "800000",
+          "notionalCap": "3000000",
+          "maxLeverage": 75,
+          "maintenanceMarginRate": "0.0065",
+          "maintenanceAmount": "1500"
+        },
+        {
+          "notionalFloor": "3000000",
+          "notionalCap": "12000000",
+          "maxLeverage": 50,
+          "maintenanceMarginRate": "0.01",
+          "maintenanceAmount": "12000"
+        },
+        {
+          "notionalFloor": "12000000",
+          "notionalCap": "50000000",
+          "maxLeverage": 25,
+          "maintenanceMarginRate": "0.02",
+          "maintenanceAmount": "132000"
+        },
+        {
+          "notionalFloor": "50000000",
+          "notionalCap": "65000000",
+          "maxLeverage": 20,
+          "maintenanceMarginRate": "0.025",
+          "maintenanceAmount": "382000"
+        },
+        {
+          "notionalFloor": "65000000",
+          "notionalCap": "150000000",
+          "maxLeverage": 10,
+          "maintenanceMarginRate": "0.05",
+          "maintenanceAmount": "2007000"
+        },
+        {
+          "notionalFloor": "150000000",
+          "notionalCap": "320000000",
+          "maxLeverage": 5,
+          "maintenanceMarginRate": "0.1",
+          "maintenanceAmount": "9507000"
+        },
+        {
+          "notionalFloor": "320000000",
+          "notionalCap": "400000000",
+          "maxLeverage": 4,
+          "maintenanceMarginRate": "0.125",
+          "maintenanceAmount": "17507000"
+        },
+        {
+          "notionalFloor": "400000000",
+          "notionalCap": "530000000",
+          "maxLeverage": 3,
+          "maintenanceMarginRate": "0.15",
+          "maintenanceAmount": "27507000"
+        },
+        {
+          "notionalFloor": "530000000",
+          "notionalCap": "800000000",
+          "maxLeverage": 2,
+          "maintenanceMarginRate": "0.25",
+          "maintenanceAmount": "80507000"
+        },
+        {
+          "notionalFloor": "800000000",
+          "notionalCap": "1200000000",
+          "maxLeverage": 1,
+          "maintenanceMarginRate": "0.5",
+          "maintenanceAmount": "280507000"
+        }
+      ]
+    }
+  ],
+  "freePlans": {
+    "account": "demo.free@cryptopilot.invalid",
+    "count": 3,
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BTCUSDT"
+    ],
+    "entryFactor": "0.50",
+    "stopLossFactor": "0.45",
+    "takeProfitFactor": "1.50",
+    "expiresAt": "2027-04-01T00:00:00Z",
+    "note": "DEMO-01 WF-01: waiting LIMIT plan far below the price (DS-01g)"
+  }
+}

@@ -40,14 +40,14 @@ BEGIN
          + (SELECT count(*) FROM paper_futures_setting)
       INTO found;
     IF found > 0 THEN
-        RAISE EXCEPTION 'V35: % Futures paper rows exist; this migration drops their tables and expects none', found;
+        RAISE EXCEPTION 'V47: % Futures paper rows exist; this migration drops their tables and expects none', found;
     END IF;
 
     SELECT count(*) INTO found
       FROM paper_ledger_entry
      WHERE ref_type IN ('POSITION', 'FUNDING');
     IF found > 0 THEN
-        RAISE EXCEPTION 'V35: % ledger entries point at a position or a funding payment; expected none', found;
+        RAISE EXCEPTION 'V47: % ledger entries point at a position or a funding payment; expected none', found;
     END IF;
 
     -- A transfer is carried over in its two entries: one debit in from_wallet, one credit in to_wallet.
@@ -59,7 +59,7 @@ BEGIN
                AND ((e.wallet_type = t.from_wallet AND e.amount = -t.amount)
                     OR (e.wallet_type = t.to_wallet AND e.amount = t.amount))) <> 2;
     IF found > 0 THEN
-        RAISE EXCEPTION 'V35: % transfers do not have exactly their debit and credit entry', found;
+        RAISE EXCEPTION 'V47: % transfers do not have exactly their debit and credit entry', found;
     END IF;
 
     SELECT count(*) INTO found
@@ -67,14 +67,14 @@ BEGIN
      WHERE e.entry_type = 'TRANSFER'
        AND NOT EXISTS (SELECT 1 FROM paper_transfer t WHERE t.transfer_id = e.ref_id);
     IF found > 0 THEN
-        RAISE EXCEPTION 'V35: % TRANSFER entries point at no transfer', found;
+        RAISE EXCEPTION 'V47: % TRANSFER entries point at no transfer', found;
     END IF;
 
     SELECT count(*) INTO found
       FROM (SELECT account_id, wallet_type, coin_id FROM paper_ledger_entry
              WHERE entry_type = 'INITIAL_GRANT' GROUP BY 1, 2, 3 HAVING count(*) > 1) duplicated;
     IF found > 0 THEN
-        RAISE EXCEPTION 'V35: % wallet coins were granted more than once', found;
+        RAISE EXCEPTION 'V47: % wallet coins were granted more than once', found;
     END IF;
 END $$;
 
@@ -284,7 +284,7 @@ BEGIN
             WHEN 'ledger_total' THEN (SELECT coalesce(sum(amount), 0) FROM wallet_ledger_entry)
         END;
         IF actual IS DISTINCT FROM expected.value THEN
-            RAISE EXCEPTION 'V35: % is % after the migration, % before', expected.figure, actual, expected.value;
+            RAISE EXCEPTION 'V47: % is % after the migration, % before', expected.figure, actual, expected.value;
         END IF;
     END LOOP;
 
@@ -300,13 +300,13 @@ BEGIN
      WHERE w.user_id IS NULL OR n.user_id IS NULL
         OR n.free_amount <> w.free_amount OR n.locked_amount <> w.locked_amount OR n.ledger_sum <> w.ledger_sum;
     IF found > 0 THEN
-        RAISE EXCEPTION 'V35: % wallet coins differ from before the migration', found;
+        RAISE EXCEPTION 'V47: % wallet coins differ from before the migration', found;
     END IF;
 
     SELECT count(*) INTO found
       FROM wallet_ledger_entry
      WHERE entry_type = 'TRANSFER' AND client_transfer_id IS NULL;
     IF found > 0 THEN
-        RAISE EXCEPTION 'V35: % transfer entries lost their key', found;
+        RAISE EXCEPTION 'V47: % transfer entries lost their key', found;
     END IF;
 END $$;

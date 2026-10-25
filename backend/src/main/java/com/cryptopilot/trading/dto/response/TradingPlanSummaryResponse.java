@@ -5,6 +5,7 @@ import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
 import com.cryptopilot.trading.model.enums.PlanStatus;
+import com.cryptopilot.trading.model.enums.PositionStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -12,14 +13,16 @@ import java.util.UUID;
 /**
  * A row of the plan list (SCR-16): the key figures, without the warnings.
  *
- * <p>Rule: SRS 3.5.2; CR-04; BR-68 (the reason shown in the Cancelled/Expired tab).
+ * <p>Rule: SRS 3.5.2; CR-04; BR-68 (the reason shown in the Cancelled/Expired tab); BR-34 (the position status shown in
+ * the Executed tab).
  *
  * @param id the plan
  * @param pairId the pair
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT
  * @param entryType LIMIT, MARKET or STOP
- * @param entryPrice the entry price
+ * @param entryPrice the entry price, as in the plan detail: for MARKET the reference price
+ * @param expectedFillPrice MARKET only: the price the quantity was sized on; {@code null} for LIMIT and STOP
  * @param stopLoss the stop loss
  * @param takeProfit the take profit
  * @param leverage the leverage; {@code null} on Spot
@@ -31,6 +34,8 @@ import java.util.UUID;
  * @param expiresAt when an unfilled ACTIVE plan expires, or {@code null}
  * @param invalidatedAt when it became INVALIDATED, or {@code null}
  * @param invalidationReason why it became INVALIDATED, or {@code null}
+ * @param positionStatus EXECUTED only: whether its position is OPEN or CLOSED (the Executed tab); {@code null} for the
+ *     other statuses
  */
 public record TradingPlanSummaryResponse(
         UUID id,
@@ -39,6 +44,7 @@ public record TradingPlanSummaryResponse(
         Direction direction,
         EntryType entryType,
         BigDecimal entryPrice,
+        BigDecimal expectedFillPrice,
         BigDecimal stopLoss,
         BigDecimal takeProfit,
         Integer leverage,
@@ -49,4 +55,5 @@ public record TradingPlanSummaryResponse(
         Instant activatedAt,
         Instant expiresAt,
         Instant invalidatedAt,
-        InvalidationReason invalidationReason) {}
+        InvalidationReason invalidationReason,
+        PositionStatus positionStatus) {}

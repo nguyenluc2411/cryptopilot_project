@@ -45,13 +45,22 @@ public interface MarketApi {
     List<CoinListing> listedCoinsBySymbol(Collection<String> symbols);
 
     /**
+     * Every coin a listed pair trades, as {@link #listedCoinsBySymbol} defines it, by symbol: the coins a news article
+     * is tagged with (NSF-10).
+     */
+    List<CoinListing> listedCoins();
+
+    /**
      * The coins with these symbols, storing any not stored yet, so a caller that must hold a balance in a coin (the
      * virtual funds of a paper account, TR-04) never depends on the symbol synchronisation having run. Every symbol
      * asked for is in the result. Joins the caller's transaction, or runs in its own.
      */
     List<CoinListing> ensureCoins(Collection<String> symbols);
 
-    /** The last traded price, when the cache holds a current one; empty when it is missing, old or unreadable. */
+    /**
+     * The last traded price, when the cache holds a current one; empty when it is missing, old or unreadable. On Spot
+     * it is the ticker's; on Futures the close of the latest 1-minute candle update (D-111 E2/E3).
+     */
     Optional<BigDecimal> currentLastPrice(MarketType market, String symbol);
 
     /**
@@ -73,14 +82,14 @@ public interface MarketApi {
     Optional<OrderBookDepth> currentDepth(MarketType market, UUID pairId);
 
     /**
-     * The current last prices of several pairs of one market, read in one round trip; a pair without a current price
-     * is left out.
+     * The current last prices of several pairs of one market, read in one round trip on Spot and one per pair on
+     * Futures; a pair without a current price is left out.
      */
     Map<String, BigDecimal> currentLastPrices(MarketType market, Collection<String> symbols);
 
     /**
-     * The Futures mark price, when the cache holds a current one; empty when it is missing, old or unreadable. The
-     * Futures streams carry the mark price and no last trade price, so this is the current price of a Futures pair.
+     * The Futures mark price, when the cache holds a current one; empty when it is missing, old or unreadable. It is
+     * the price of liquidation and unrealized P/L; fills and price checks use {@link #currentLastPrice} (D-111 E2/E3).
      */
     Optional<BigDecimal> currentMarkPrice(String symbol);
 
@@ -125,6 +134,13 @@ public interface MarketApi {
      * market. A refusal of the exchange is returned with the instant to ask again, never thrown.
      */
     MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from);
+
+    /**
+     * One page of the futures pair's closed 1-minute mark price candles that opened at or after {@code from}, oldest
+     * first, fetched from the exchange as {@link #closedMinuteKlines} fetches the last price ones: what liquidation is
+     * replayed from after downtime (TECHNICAL_DESIGN 7.7). Their low and high are mark prices.
+     */
+    MinuteKlineBatch closedMarkPriceKlines(UUID pairId, Instant from);
 
     /**
      * The pair's funding settlements with an instant in {@code (after, upTo]}, read from {@code funding_rate_history},

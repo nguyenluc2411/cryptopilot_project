@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.cryptopilot.support.TestcontainersConfig;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -263,6 +264,35 @@ class SchemaConstraintTest {
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
                 .isThrownBy(() -> insertJournal("MANUAL", planId));
+    }
+
+    /** V35: the entry fee of a trade is never negative; zero (no fee) and unknown (a manual trade) are kept. */
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "0.04"})
+    void BR36_theEntryFee_mayBeZeroOrPositive(String fee) {
+        UUID id = insertJournal("MANUAL", null);
+
+        jdbc.sql("update trading_journal set entry_fee_amount = cast(? as numeric) where journal_id = ?")
+                .params(fee, id)
+                .update();
+
+        assertThat(jdbc.sql("select entry_fee_amount from trading_journal where journal_id = ?")
+                        .param(id)
+                        .query(BigDecimal.class)
+                        .single())
+                .isEqualByComparingTo(fee);
+    }
+
+    @Test
+    void BR36_aNegativeEntryFee_isRefused() {
+        UUID id = insertJournal("MANUAL", null);
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(
+                        () -> jdbc.sql("update trading_journal set entry_fee_amount = -0.00000001 where journal_id = ?")
+                                .param(id)
+                                .update())
+                .withMessageContaining("ck_trading_journal_entry_fee_amount");
     }
 
     @Test

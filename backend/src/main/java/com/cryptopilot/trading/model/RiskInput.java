@@ -11,14 +11,14 @@ import java.util.Objects;
  * and the Trader's risk profile. Values outside BR-21, BR-22 or BR-30 are not refused here but reported by the
  * calculation, so every field can show its message at once; only a missing value is a programming error.
  *
- * <p>Rule: BR-21, BR-22, BR-23, BR-30; D-53.
+ * <p>Rule: BR-21, BR-22, BR-23, BR-30; D-53, D-121.
  *
  * @param market Spot or Futures
  * @param direction LONG or SHORT
  * @param entryPrice the entry price (the current last price for a MARKET entry)
  * @param stopLoss the stop loss
  * @param takeProfit the take profit
- * @param capital the capital committed to the plan, in USDT
+ * @param capital the Trader's account size, the profile's default capital at this calculation, in USDT (D-121)
  * @param riskPercent the risk % of capital
  * @param leverage the leverage; 1 on Spot
  * @param filters the pair's tick size, step size and minimum notional on this market

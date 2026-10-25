@@ -27,12 +27,12 @@ import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
- * V35 run over paper trading rows written at V34: two Traders with an account each, their grants, a transfer, an OCO
+ * V47 run over paper trading rows written at V46: two Traders with an account each, their grants, a transfer, an OCO
  * with its two orders, a market order with its fill, an equity snapshot and a watermark. Every row is carried over to
  * its Trader, the transfer survives as its two keyed entries, the grant points at the Trader, and the rows of the
- * folded tables are kept aside untouched. Data V35 does not expect stops it before anything changes.
+ * folded tables are kept aside untouched. Data V47 does not expect stops it before anything changes.
  *
- * <p>Runs in a database of its own on the shared container, migrated to V34 first, so the rows exist before V35 sees
+ * <p>Runs in a database of its own on the shared container, migrated to V46 first, so the rows exist before V47 sees
  * them.
  *
  * <p>Rule: TR-02, TR-04, TR-13; D-117.
@@ -59,7 +59,7 @@ class PaperCoreMigrationTest {
     private UUID btc;
 
     @BeforeEach
-    void migrateToV34() throws SQLException {
+    void migrateToV46() throws SQLException {
         String adminUrl = container.getJdbcUrl();
         try (Connection connection =
                         DriverManager.getConnection(adminUrl, container.getUsername(), container.getPassword());
@@ -68,7 +68,7 @@ class PaperCoreMigrationTest {
             statement.execute("CREATE DATABASE " + DATABASE);
         }
         url = adminUrl.substring(0, adminUrl.lastIndexOf('/') + 1) + DATABASE;
-        flyway("34").migrate();
+        flyway("46").migrate();
 
         dataSource = new SingleConnectionDataSource(url, container.getUsername(), container.getPassword(), true);
         jdbc = JdbcClient.create(dataSource);
@@ -210,10 +210,10 @@ class PaperCoreMigrationTest {
     }
 
     private void assertUntouched() {
-        assertThat(jdbc.sql("select count(*) from flyway_schema_history where version = '35' and success")
+        assertThat(jdbc.sql("select count(*) from flyway_schema_history where version = '47' and success")
                         .query(Long.class)
                         .single())
-                .as("V35 is not recorded as applied")
+                .as("V47 is not recorded as applied")
                 .isZero();
         assertThat(jdbc.sql("""
                         select count(*) from information_schema.tables
@@ -223,7 +223,7 @@ class PaperCoreMigrationTest {
                          where table_schema = 'public' and table_name in ('wallet_balance', 'trade_order')""").query(Long.class).single()).isZero();
     }
 
-    // ---------------------------------------------------------------- the rows before V35
+    // ---------------------------------------------------------------- the rows before V47
 
     /** A Trader, an account and its grant: 1000 USDT and 1 BTC in Spot, 500 USDT in Futures. */
     private Trader trader(String name) {

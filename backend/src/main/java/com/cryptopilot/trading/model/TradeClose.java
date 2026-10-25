@@ -3,7 +3,7 @@ package com.cryptopilot.trading.model;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
-import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Objects;
@@ -15,7 +15,8 @@ import java.util.Objects;
  *
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT
- * @param entryType how the position was entered, which sets the entry fee rate
+ * @param entryLiquidity the liquidity role of the entry fill (the plan's {@code fill_liquidity}), which sets the entry
+ *     fee rate (D-111 E1)
  * @param entryPrice the entry fill price
  * @param quantity the filled quantity, above 0
  * @param reason why the position closed
@@ -27,7 +28,7 @@ import java.util.Objects;
 public record TradeClose(
         MarketType market,
         Direction direction,
-        EntryType entryType,
+        LiquidityRole entryLiquidity,
         BigDecimal entryPrice,
         BigDecimal quantity,
         CloseReason reason,
@@ -38,7 +39,7 @@ public record TradeClose(
     public TradeClose {
         Objects.requireNonNull(market, "market");
         Objects.requireNonNull(direction, "direction");
-        Objects.requireNonNull(entryType, "entryType");
+        Objects.requireNonNull(entryLiquidity, "entryLiquidity");
         Objects.requireNonNull(entryPrice, "entryPrice");
         Objects.requireNonNull(quantity, "quantity");
         Objects.requireNonNull(reason, "reason");

@@ -105,6 +105,8 @@ class DashboardApiTest {
                 .andExpect(jsonPath("$.columns[3]").value("revenue:PREMIUM_MONTHLY"))
                 .andExpect(jsonPath("$.columns[4]").value("revenue:PRO_MONTHLY"))
                 .andExpect(jsonPath("$.rows[0].period").value("2031-03-01"))
+                .andExpect(jsonPath("$.rows[0].coveredFrom").value("2031-03-01"))
+                .andExpect(jsonPath("$.rows[0].coveredTo").value("2031-03-01"))
                 .andExpect(jsonPath("$.rows[0].values.newUsers").value(1))
                 .andExpect(jsonPath("$.rows[1].values.newUsers").value(2))
                 .andExpect(jsonPath("$.rows[1].values.paidOrders").value(1))
@@ -149,9 +151,9 @@ class DashboardApiTest {
 
         assertThat(csv.split("\r\n"))
                 .containsExactly(
-                        "period,newUsers,paidOrders,revenue,revenue:PREMIUM_MONTHLY,revenue:PRO_MONTHLY,newPosts,"
-                                + "newComments,aiQuestions",
-                        "2031-03-01,4,2,298000,199000,99000,2,1,0");
+                        "period,coveredFrom,coveredTo,newUsers,paidOrders,revenue,revenue:PREMIUM_MONTHLY,"
+                                + "revenue:PRO_MONTHLY,newPosts,newComments,aiQuestions",
+                        "2031-03-01,2031-03-01,2031-03-31,4,2,298000,199000,99000,2,1,0");
     }
 
     @Test

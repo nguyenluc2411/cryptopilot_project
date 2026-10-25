@@ -1,11 +1,13 @@
 package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.client.StreamMessage;
+import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.config.PriceCacheProperties;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
 import io.micrometer.core.instrument.Counter;
@@ -35,6 +37,15 @@ import org.springframework.stereotype.Service;
  * The latest prices in Redis (TECHNICAL_DESIGN 5.6): one hash {@code px:{market}:{symbol}} per pair and market, with
  * the fields {@code last}, {@code bid}, {@code ask}, {@code mark}, {@code index}, {@code funding},
  * {@code nextFundingTime} and {@code updatedAt} — the exchange's own instant for the values, in epoch milliseconds.
+ *
+ * <h2>The futures last price has its own instant</h2>
+ *
+ * <p>No futures stream carries a ticker, so the futures last price is the close of each {@code kline_1m} update: the
+ * last trade of the minute so far (D-111 E2/E3). It is written to {@code last} with its own instant
+ * {@code lastUpdatedAt}, because the mark price stream and the candle stream are two sources whose instants interleave:
+ * one shared {@code updatedAt} would let a candle update refuse a mark price, or keep a mark price current that stopped
+ * arriving. {@link #latest} therefore answers the mark price group of a futures entry with {@code last} left out, and
+ * {@link #latestLast} the last price with its own instant and state.
  *
  * <h2>The stream never waits for Redis</h2>
  *
@@ -84,7 +95,21 @@ public class PriceCacheServiceImpl implements PriceCacheService {
             return 1
             """, Long.class);
 
+    /** As {@link #WRITE_IF_NEWER} for the futures last price, which keeps its own instant in {@code lastUpdatedAt}. */
+    private static final RedisScript<Long> WRITE_LAST_IF_NEWER = RedisScript.of("""
+            local cached = redis.call('HGET', KEYS[1], 'lastUpdatedAt')
+            if cached and tonumber(cached) > tonumber(ARGV[1]) then
+                return 0
+            end
+            redis.call('HSET', KEYS[1], 'lastUpdatedAt', ARGV[1], 'last', ARGV[3])
+            redis.call('PEXPIRE', KEYS[1], ARGV[2])
+            return 1
+            """, Long.class);
+
     private final Map<String, CachedPrice> waiting = new ConcurrentHashMap<>();
+    /** The futures last prices waiting, apart from the mark prices, whose instants they do not share. */
+    private final Map<String, CachedPrice> waitingLast = new ConcurrentHashMap<>();
+
     private final StringRedisTemplate redis;
     private final PriceCacheProperties properties;
     private final Clock clock;
@@ -102,6 +127,23 @@ public class PriceCacheServiceImpl implements PriceCacheService {
 
     @Override
     public void record(MarketType market, StreamMessage message) {
+        if (message instanceof KlineMessage kline
+                && market == MarketType.FUTURES
+                && kline.interval() == MarketInterval.ONE_MINUTE) {
+            CachedPrice last = new CachedPrice(
+                    market,
+                    kline.symbol(),
+                    kline.kline().close(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    kline.eventTime());
+            waitingLast.merge(key(market, kline.symbol()), last, PriceCacheServiceImpl::newer);
+            return;
+        }
         CachedPrice price =
                 switch (message) {
                     case TickerMessage ticker ->
@@ -138,25 +180,59 @@ public class PriceCacheServiceImpl implements PriceCacheService {
     @Override
     public int flush() {
         int written = 0;
-        for (String key : List.copyOf(waiting.keySet())) {
-            CachedPrice price = waiting.remove(key);
-            if (price == null) {
-                continue;
-            }
-            try {
-                Long result = redis.execute(WRITE_IF_NEWER, List.of(key), arguments(price));
-                written += result != null && result == 1L ? 1 : 0;
-            } catch (RuntimeException failure) {
-                failures.increment();
-                waiting.merge(key, price, PriceCacheServiceImpl::newer);
-                log.warn(
-                        "Latest-price cache write failed; {} values wait for the next flush: {}",
-                        waiting.size(),
-                        failure.toString());
-                return written;
+        for (Map<String, CachedPrice> values : List.of(waiting, waitingLast)) {
+            boolean last = values == waitingLast;
+            for (String key : List.copyOf(values.keySet())) {
+                CachedPrice price = values.remove(key);
+                if (price == null) {
+                    continue;
+                }
+                try {
+                    Long result = last
+                            ? redis.execute(WRITE_LAST_IF_NEWER, List.of(key), lastArguments(price))
+                            : redis.execute(WRITE_IF_NEWER, List.of(key), arguments(price));
+                    written += result != null && result == 1L ? 1 : 0;
+                } catch (RuntimeException failure) {
+                    failures.increment();
+                    values.merge(key, price, PriceCacheServiceImpl::newer);
+                    log.warn(
+                            "Latest-price cache write failed; {} values wait for the next flush: {}",
+                            waiting.size() + waitingLast.size(),
+                            failure.toString());
+                    return written;
+                }
             }
         }
         return written;
+    }
+
+    @Override
+    public PriceLookup latestLast(MarketType market, String symbol) {
+        if (market != MarketType.FUTURES) {
+            return latest(market, symbol);
+        }
+        Map<Object, Object> fields;
+        try {
+            fields = redis.opsForHash().entries(key(market, symbol));
+        } catch (RuntimeException failure) {
+            failures.increment();
+            log.warn("Latest-price cache read failed: {}", failure.toString());
+            return PriceLookup.unavailable();
+        }
+        if (fields == null || fields.get("lastUpdatedAt") == null || fields.get("last") == null) {
+            return PriceLookup.missing();
+        }
+        return state(new CachedPrice(
+                market,
+                symbol,
+                decimal(fields.get("last")),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                instant(fields.get("lastUpdatedAt"))));
     }
 
     @Override
@@ -211,10 +287,11 @@ public class PriceCacheServiceImpl implements PriceCacheService {
         if (fields == null || fields.get("updatedAt") == null) {
             return PriceLookup.missing();
         }
+        // The futures last price has its own instant (lastUpdatedAt), so it is read by latestLast only.
         CachedPrice price = new CachedPrice(
                 market,
                 symbol,
-                decimal(fields.get("last")),
+                market == MarketType.FUTURES ? null : decimal(fields.get("last")),
                 decimal(fields.get("bid")),
                 decimal(fields.get("ask")),
                 decimal(fields.get("mark")),
@@ -222,6 +299,11 @@ public class PriceCacheServiceImpl implements PriceCacheService {
                 decimal(fields.get("funding")),
                 instant(fields.get("nextFundingTime")),
                 instant(fields.get("updatedAt")));
+        return state(price);
+    }
+
+    /** FOUND, or EXPIRED when the exchange's instant is older than the time to live. */
+    private PriceLookup state(CachedPrice price) {
         boolean expired = Duration.between(price.sourceTime(), clock.instant()).compareTo(properties.ttl()) > 0;
         return new PriceLookup(expired ? PriceLookup.Status.EXPIRED : PriceLookup.Status.FOUND, Optional.of(price));
     }
@@ -246,6 +328,14 @@ public class PriceCacheServiceImpl implements PriceCacheService {
             arguments.add(String.valueOf(price.nextFundingTime().toEpochMilli()));
         }
         return arguments.toArray();
+    }
+
+    private Object[] lastArguments(CachedPrice price) {
+        return new Object[] {
+            String.valueOf(price.sourceTime().toEpochMilli()),
+            String.valueOf(properties.ttl().toMillis()),
+            price.lastPrice().toPlainString()
+        };
     }
 
     private static void field(List<String> arguments, String name, BigDecimal value) {

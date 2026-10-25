@@ -139,6 +139,30 @@ class SystemSettingApiTest {
     }
 
     /**
+     * A BOOLEAN or STRING setting has no numeric partner to keep in order: changing one answers 200, not a server
+     * error. No migration seeds one yet; the rows are written here for the test only.
+     */
+    @Test
+    void UC51_aBooleanOrStringSetting_isChanged_withoutANumericCheck() throws Exception {
+        sql.sql("""
+                        insert into system_setting (setting_key, setting_value, value_type, description, updated_at)
+                        values ('TEST_FLAG_SETTING', 'false', 'BOOLEAN', 'test', now()),
+                               ('TEST_TEXT_SETTING', 'one', 'STRING', 'test', now())""").update();
+        try {
+            change("TEST_FLAG_SETTING", "TRUE")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.value").value("true"));
+            change("TEST_FLAG_SETTING", "maybe").andExpect(status().isBadRequest());
+            change("TEST_TEXT_SETTING", "two words")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.value").value("two words"));
+        } finally {
+            sql.sql("delete from system_setting where setting_key in ('TEST_FLAG_SETTING', 'TEST_TEXT_SETTING')")
+                    .update();
+        }
+    }
+
+    /**
      * BR-29: the share of the risk amount at which a plan's fees warn lies in (0, 1]. The row is TP-0's; it is written
      * here so the rule is proved before that lands.
      */

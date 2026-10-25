@@ -13,6 +13,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Lock;
@@ -25,12 +26,18 @@ import org.springframework.transaction.annotation.Transactional;
  * The trading plans. {@link TradingPlan} is the aggregate root, so its warnings are saved and deleted through it and
  * have no repository of their own.
  *
- * <p>Rule: BR-31, BR-32; NSF-07; TECHNICAL_DESIGN 5.5; D-23.
+ * <p>Rule: BR-31, BR-32, BR-68; NSF-07; TECHNICAL_DESIGN 5.5; D-23.
  */
 public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
 
     /** Inserts a new plan or updates a loaded one, with its warnings. */
     TradingPlan save(TradingPlan plan);
+
+    /**
+     * As {@link #save}, and writes the plan at once: a plan that filled at activation must be stored before the journal
+     * inserts the record that refers to it (BR-34).
+     */
+    TradingPlan saveAndFlush(TradingPlan plan);
 
     @Transactional(readOnly = true)
     Optional<TradingPlan> findById(UUID id);
@@ -66,6 +73,14 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
     @Query("select coalesce(sum(p.riskAmount), 0) from TradingPlan p where p.userId = :userId"
             + " and p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE and p.id <> :excluded")
     BigDecimal activeRiskExcluding(UUID userId, UUID excluded);
+
+    /**
+     * The risk amount of these plans, in USDT: the open positions' part of BR-29 TOTAL_OPEN_RISK, read from the snapshot
+     * of each executed plan, which never changes once executed (D-119). Not called with an empty collection.
+     */
+    @Transactional(readOnly = true)
+    @Query("select coalesce(sum(p.riskAmount), 0) from TradingPlan p where p.id in :ids")
+    BigDecimal riskOf(Collection<UUID> ids);
 
     /**
      * A page of the user's plans in the statuses and markets, created in {@code [from, to)}, newest first; the pair
@@ -116,11 +131,34 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
             + " where p.id = :id and p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE")
     int invalidateIfActive(UUID id, Instant at, InvalidationReason reason, Instant now);
 
-    /** The entries of every ACTIVE LIMIT plan, for the matching books. */
+    /**
+     * Compare-and-set ACTIVE to EXPIRED for a plan whose expiry has come, as {@link #executeIfActive}: a plan filled,
+     * cancelled or invalidated first, or one whose expiry was moved past {@code now}, is left unchanged (NSF-09).
+     *
+     * @return 1 when the plan was ACTIVE and expired at {@code now}, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update TradingPlan p set p.status = com.cryptopilot.trading.model.enums.PlanStatus.EXPIRED,"
+            + " p.expiredAt = :now, p.updatedAt = :now, p.version = p.version + 1"
+            + " where p.id = :id and p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE"
+            + " and p.expiresAt <= :now")
+    int expireIfActive(UUID id, Instant now);
+
+    /** The ACTIVE plans whose expiry is at or before {@code now}, the oldest expiry first (NSF-09). */
+    @Query("select p from TradingPlan p where p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE"
+            + " and p.expiresAt <= :now order by p.expiresAt, p.id")
+    List<TradingPlan> findExpiring(Instant now, Limit limit);
+
+    /**
+     * Every waiting plan, for the matching books: the ACTIVE LIMIT and STOP plans with their entry and invalidation
+     * levels. A STOP plan activated before the engine knew STOP entries is among them, so it is picked up at the next
+     * start (BR-33, BR-68).
+     */
     @Transactional(readOnly = true)
-    @Query("select new com.cryptopilot.trading.model.TrackedEntry(p.id, p.market, p.pairId, p.direction, p.entryPrice,"
-            + " p.activatedAt)"
+    @Query("select new com.cryptopilot.trading.model.TrackedEntry(p.id, p.userId, p.market, p.pairId, p.direction,"
+            + " p.entryType, p.entryPrice, p.stopLoss, p.takeProfit, p.invalidationPrice, p.activatedAt)"
             + " from TradingPlan p where p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE"
-            + " and p.entryType = com.cryptopilot.trading.model.enums.EntryType.LIMIT")
-    List<TrackedEntry> findActiveLimitEntries();
+            + " and p.entryType in (com.cryptopilot.trading.model.enums.EntryType.LIMIT,"
+            + " com.cryptopilot.trading.model.enums.EntryType.STOP)")
+    List<TrackedEntry> findActiveWaitingEntries();
 }

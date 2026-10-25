@@ -12,14 +12,19 @@ import java.util.Objects;
  * @param minRiskRewardRatio LOW_RR below this ratio ({@code WARN_LOW_RR_RATIO})
  * @param wideStopLossPercent WIDE_STOP_LOSS above this % of the entry ({@code WARN_WIDE_STOP_LOSS_PERCENT})
  * @param highFundingRate HIGH_FUNDING_RATE at or above this absolute rate ({@code WARN_HIGH_FUNDING_RATE})
+ * @param feeRiskWarnRatio HIGH_FEE_SHARE at or above this share of the risk amount ({@code FEE_RISK_WARN_RATIO}, D-116)
  */
 public record WarningThresholds(
-        BigDecimal minRiskRewardRatio, BigDecimal wideStopLossPercent, BigDecimal highFundingRate) {
+        BigDecimal minRiskRewardRatio,
+        BigDecimal wideStopLossPercent,
+        BigDecimal highFundingRate,
+        BigDecimal feeRiskWarnRatio) {
 
     public WarningThresholds {
         requirePositive(minRiskRewardRatio, "minRiskRewardRatio");
         requirePositive(wideStopLossPercent, "wideStopLossPercent");
         requirePositive(highFundingRate, "highFundingRate");
+        requirePositive(feeRiskWarnRatio, "feeRiskWarnRatio");
     }
 
     private static void requirePositive(BigDecimal value, String name) {

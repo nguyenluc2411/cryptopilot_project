@@ -241,6 +241,23 @@ public enum ErrorCode {
     TRADING_BLOCKING_WARNING(HttpStatus.CONFLICT, "MSG18"),
 
     /**
+     * The expected fill of a MARKET plan has moved from the plan by at least {@code ENTRY_DEVIATION_CONFIRM_R} and at
+     * most the plan's limit (BR-69). The body carries the deviation and the recalculated quantity and risk/reward, so
+     * the client shows MSG51 and repeats the request with {@code confirmDeviation=true}.
+     *
+     * <p>400, as {@link #RISK_PROFILE_CONFIRMATION_REQUIRED}: a confirmation the request did not carry (D-65).
+     */
+    ENTRY_DEVIATION_CONFIRMATION_REQUIRED(HttpStatus.BAD_REQUEST, "MSG51"),
+
+    /**
+     * The expected fill of a MARKET plan has moved from the plan by more than its limit, or is at or past its take
+     * profit (BR-69). No confirmation lifts it; the plan stays a draft.
+     *
+     * <p>409, as {@link #TRADING_BLOCKING_WARNING}: the request is valid and the current price is what refuses it.
+     */
+    ENTRY_DEVIATION_REFUSED(HttpStatus.CONFLICT, "MSG52"),
+
+    /**
      * The action does not exist from the plan's current status: an edit outside DRAFT, or a transition BR-32 does not
      * list. SRS section 5.3 has no text for this, so it borrows MSG43 like {@link #DATA_CONFLICT} until A-38 is
      * answered (D-66).
@@ -395,7 +412,60 @@ public enum ErrorCode {
     PAIR_NOT_TRADING(HttpStatus.CONFLICT, "MSG43"),
 
     /** The symbol to add is already a pair of the system (UC-45). Borrows MSG43 (A-38). 409: the pair exists. */
-    PAIR_ALREADY_REGISTERED(HttpStatus.CONFLICT, "MSG43");
+    PAIR_ALREADY_REGISTERED(HttpStatus.CONFLICT, "MSG43"),
+
+    /** Another Academy lesson or term already has this slug (T-114). Borrows MSG43. 409: the slug is taken. */
+    ACADEMY_SLUG_TAKEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /** Another Academy lesson already holds this place on the beginner path (T-114). Borrows MSG43. 409. */
+    ACADEMY_PATH_ORDER_TAKEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A published Academy lesson is hidden before it is deleted, so that no reader loses it by surprise (T-114).
+     * Borrows MSG43. 409: the lesson's status refuses it.
+     */
+    ACADEMY_ARTICLE_PUBLISHED(HttpStatus.CONFLICT, "MSG43"),
+
+    /** An Academy topic that still holds lessons cannot be deleted (T-114). Borrows MSG43. 409: move them first. */
+    ACADEMY_TOPIC_IN_USE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * Another administrator changed this Academy lesson, term or topic since the editor opened it (T-114); nothing is
+     * changed. Borrows MSG43. 409: the editor reloads and applies the change again.
+     */
+    ACADEMY_EDIT_CONFLICT(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The feed address is already the address of another news source (UC-49: the feed URL is unique), compared in its
+     * normalized form; nothing is saved. Borrows MSG43 (A-38). 409: the source exists.
+     */
+    NEWS_SOURCE_ALREADY_REGISTERED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A news source articles came from cannot be deleted, because the articles name it; it can be switched off
+     * instead. Borrows MSG43 (A-38). 409: the articles refuse it.
+     */
+    NEWS_SOURCE_IN_USE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The test read of a feed, done before a news source is saved (UC-49), failed: the address cannot be reached, is
+     * on the server's own network, answers with an error, or does not return an RSS or Atom feed. MSG15 under
+     * {@code feedUrl}, the text of a field whose value is not allowed; its own code so the console can say the feed
+     * was tried. 400: the request names it.
+     */
+    NEWS_FEED_UNREADABLE(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /**
+     * An administrator asked to crawl a news source again within the cooldown of its last crawl (T-080b). MSG50 takes
+     * the seconds left: a click repeated by mistake must not make the outlet see the crawler twice in a row.
+     */
+    NEWS_SOURCE_CRAWLED_RECENTLY(HttpStatus.TOO_MANY_REQUESTS, "MSG50"),
+
+    /**
+     * An administrator asked for a summary while the AI Service is not configured, cannot be reached or is rate
+     * limited (T-080b). MSG31: the AI request failed; the same request may succeed later.
+     */
+    NEWS_SUMMARY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG31");
 
     private final HttpStatus status;
     private final String messageCode;

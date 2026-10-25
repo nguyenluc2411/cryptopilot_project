@@ -92,6 +92,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         if (!exception.messageArgs().isEmpty()) {
             body.setProperty(MESSAGE_ARGS, exception.messageArgs());
         }
+        exception.problemProperties().forEach(body::setProperty);
         if (exception instanceof FieldValidationException invalid) {
             body.setProperty(ERRORS, invalid.errors());
         }

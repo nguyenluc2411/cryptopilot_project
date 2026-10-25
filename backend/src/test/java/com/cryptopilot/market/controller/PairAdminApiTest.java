@@ -10,11 +10,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.ExchangeSymbol;
+import com.cryptopilot.market.service.PairAdminService;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -25,6 +27,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +40,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -69,11 +78,15 @@ class PairAdminApiTest {
     @Autowired
     private MarketApi marketApi;
 
+    @Autowired
+    private PairAdminService pairAdmin;
+
     @MockitoBean
     private BinanceRestClient exchange;
 
     private final List<UUID> accounts = new ArrayList<>();
     private final List<UUID> pairs = new ArrayList<>();
+    private final List<String> removeAfter = new ArrayList<>();
     private MarketTestData market;
     private String base;
     private UUID admin;
@@ -102,10 +115,13 @@ class PairAdminApiTest {
             market.remove(pair);
         }
         sql.sql("delete from crypto_pair where symbol like ?").param(base + "%").update();
-        sql.sql("delete from coin where symbol = ? and not exists (select 1 from crypto_pair p"
-                        + " where p.base_coin_id = coin.coin_id or p.quote_coin_id = coin.coin_id)")
-                .param(base)
-                .update();
+        removeAfter.add(base);
+        for (String coin : removeAfter) {
+            sql.sql("delete from coin where symbol = ? and not exists (select 1 from crypto_pair p"
+                            + " where p.base_coin_id = coin.coin_id or p.quote_coin_id = coin.coin_id)")
+                    .param(coin)
+                    .update();
+        }
         for (UUID account : accounts) {
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
@@ -313,12 +329,176 @@ class PairAdminApiTest {
                 .andExpect(jsonPath("$.code").value("PAIR_NOT_TRADING"));
     }
 
+    /**
+     * Two administrators adding the same symbol at once: one pair, placed, with one CREATED audit row; the other is
+     * told it is already a pair. The pair, its place and its audit row are written in one transaction (BR-57).
+     */
+    @Test
+    void UC45_twoAdministratorsAddingOneSymbol_makeOnePair_auditedOnce() throws Exception {
+        String symbol = base + "USDT";
+        when(exchange.spotExchangeInfo()).thenReturn(List.of(listed(symbol, null)));
+        when(exchange.futuresExchangeInfo()).thenReturn(List.of());
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<String>> calls = new ArrayList<>();
+        try {
+            for (int i = 0; i < 2; i++) {
+                calls.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        pairAdmin.register(admin, symbol);
+                        return "CREATED";
+                    } catch (BusinessException refused) {
+                        return refused.errorCode().name();
+                    }
+                }));
+            }
+            start.countDown();
+            List<String> outcomes = new ArrayList<>();
+            for (Future<String> call : calls) {
+                outcomes.add(call.get(60, TimeUnit.SECONDS));
+            }
+            assertThat(outcomes).containsExactlyInAnyOrder("CREATED", "PAIR_ALREADY_REGISTERED");
+        } finally {
+            pool.shutdownNow();
+        }
+        UUID pair = sql.sql("select pair_id from crypto_pair where symbol = ?")
+                .param(symbol)
+                .query(UUID.class)
+                .single();
+        pairs.add(pair);
+        assertThat(sql.sql("select display_order from crypto_pair where pair_id = ?")
+                        .param(pair)
+                        .query(Integer.class)
+                        .single())
+                .isPositive();
+        assertThat(sql.sql("""
+                        select count(*) from audit_log
+                         where entity_id = ? and action_code = 'CONFIGURATION_CREATED'""").param(pair).query(Long.class).single()).isEqualTo(1);
+    }
+
+    /**
+     * Two administrators adding two pairs of one new coin at once ({@code <base>USDT} and {@code <base>USDC}): if the
+     * coin's uniqueness refuses one, it is told of a conflict to retry, never that its pair already exists.
+     */
+    @Test
+    void UC45_twoPairsOfOneNewCoinAtOnce_neverAnswerAlreadyRegistered() throws Exception {
+        String usdt = base + "USDT";
+        String usdc = base + "USDC";
+        boolean usdcStored = sql.sql("select count(*) from coin where symbol = 'USDC'")
+                        .query(Long.class)
+                        .single()
+                > 0;
+        when(exchange.spotExchangeInfo()).thenReturn(List.of(listed(usdt, null), quotedIn(usdc, "USDC")));
+        when(exchange.futuresExchangeInfo()).thenReturn(List.of());
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<String>> calls = new ArrayList<>();
+        try {
+            for (String symbol : List.of(usdt, usdc)) {
+                calls.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        pairAdmin.register(admin, symbol);
+                        return "CREATED";
+                    } catch (BusinessException refused) {
+                        return refused.errorCode().name();
+                    } catch (DataIntegrityViolationException conflict) {
+                        return "DATA_CONFLICT";
+                    }
+                }));
+            }
+            start.countDown();
+            List<String> outcomes = new ArrayList<>();
+            for (Future<String> call : calls) {
+                outcomes.add(call.get(60, TimeUnit.SECONDS));
+            }
+            assertThat(outcomes).doesNotContain("PAIR_ALREADY_REGISTERED").contains("CREATED");
+            assertThat(outcomes).allMatch(outcome -> outcome.equals("CREATED") || outcome.equals("DATA_CONFLICT"));
+        } finally {
+            pool.shutdownNow();
+            sql.sql("select pair_id from crypto_pair where symbol in (?, ?)")
+                    .params(usdt, usdc)
+                    .query(UUID.class)
+                    .list()
+                    .forEach(pairs::add);
+            if (!usdcStored) {
+                removeAfter.add("USDC");
+            }
+        }
+    }
+
+    /**
+     * BR-26 under two administrators at once: one raises the pair's leverage ceiling to bracket 1's 50 while the other
+     * lowers bracket 1 to the ceiling's 20. Each is valid against what it read; without the pair's row lock both
+     * would commit and leave a ceiling of 50 above a first bracket of 20. With it the second waits, reads the first's
+     * value and is refused, so the ceiling never ends above bracket 1.
+     */
+    @Test
+    void BR26_aCeilingRaiseAndABracketCutAtOnce_neverLeaveTheCeilingAboveBracketOne() throws Exception {
+        UUID pair = pair(false, true, null, "TRADING");
+        filters(pair);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 20; round++) {
+                brackets(pair, 50).andExpect(status().isOk());
+                update(pair, "ACTIVE", false, true, 20, 1).andExpect(status().isOk());
+                CyclicBarrier start = new CyclicBarrier(2);
+                Future<Integer> raise = pool.submit(() -> {
+                    start.await();
+                    return update(pair, "ACTIVE", false, true, 50, 1)
+                            .andReturn()
+                            .getResponse()
+                            .getStatus();
+                });
+                Future<Integer> cut = pool.submit(() -> {
+                    start.await();
+                    return brackets(pair, 20).andReturn().getResponse().getStatus();
+                });
+
+                assertThat(List.of(raise.get(60, TimeUnit.SECONDS), cut.get(60, TimeUnit.SECONDS)))
+                        .containsExactlyInAnyOrder(200, 400);
+                assertThat(sql.sql("""
+                                select p.max_leverage <= b.max_leverage from crypto_pair p
+                                  join leverage_bracket b on b.pair_id = p.pair_id and b.bracket_no = 1
+                                 where p.pair_id = ?""").param(pair).query(Boolean.class).single())
+                        .as("round %d: the ceiling stays at or below bracket 1", round)
+                        .isTrue();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
 
     private ResultActions update(UUID pair, String status, boolean spot, boolean futures, Integer leverage, int order)
             throws Exception {
         return as(admin, put(PAIRS + "/" + pair), """
                 {"status": "%s", "spotEnabled": %s, "futuresEnabled": %s, "maxLeverage": %s, "displayOrder": %d}""".formatted(status, spot, futures, leverage, order));
+    }
+
+    /** Replaces the pair's brackets with two, the first at {@code firstLeverage}, the second at 10. */
+    private ResultActions brackets(UUID pair, int firstLeverage) throws Exception {
+        return as(admin, put(PAIRS + "/" + pair + "/brackets"), """
+                {"brackets": [
+                  {"notionalFloor": 0, "notionalCap": 50000, "maxLeverage": %d, "maintenanceMarginRate": 0.004},
+                  {"notionalFloor": 50000, "notionalCap": 500000, "maxLeverage": 10, "maintenanceMarginRate": 0.005}
+                ]}""".formatted(firstLeverage));
+    }
+
+    /** A Spot symbol of the exchange quoted in {@code quote}, e.g. USDC. */
+    private static ExchangeSymbol quotedIn(String symbol, String quote) {
+        return new ExchangeSymbol(
+                symbol,
+                ExchangeSymbol.TRADING,
+                symbol.substring(0, symbol.length() - quote.length()),
+                quote,
+                null,
+                new BigDecimal("0.01"),
+                new BigDecimal("0.001"),
+                new BigDecimal("0.001"),
+                new BigDecimal("5"));
     }
 
     private static ExchangeSymbol listed(String symbol, String contractType) {

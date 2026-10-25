@@ -24,10 +24,15 @@ import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.model.Fill;
+import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PriceRange;
+import com.cryptopilot.trading.model.TrackedEntries;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.InvalidationReason;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.service.MatchingService;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -36,6 +41,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -195,6 +201,83 @@ class MatchingWorkerTest {
         verify(matching, never()).fill(filled(market, AT));
     }
 
+    /** BR-33, D-111 M1: an activated STOP waits for its trigger and fills as taker at its stop. */
+    @Test
+    void BR33_aStopPlanActivated_isTracked_andFillsAsTakerOnceARangeTriggersIt() {
+        UUID stop = UUID.randomUUID();
+        Instant later = AT.plusSeconds(60);
+        worker = started(1, 100);
+
+        worker.onActivated(activated(stop, EntryType.STOP, "100"));
+        worker.submit(range("98", "99.99", AT));
+        worker.submit(range("99", "101", later));
+
+        verify(matching, timeout(WAIT))
+                .fill(argThat(fill -> fill != null
+                        && fill.planId().equals(stop)
+                        && fill.liquidity() == LiquidityRole.TAKER
+                        && fill.price().compareTo(new BigDecimal("100")) == 0
+                        && fill.executedAt().equals(later)));
+        verify(matching, never()).fill(filled(stop, AT));
+    }
+
+    /**
+     * BR-33: a STOP plan activated while the engine did not know STOP entries never entered the books; the start loads
+     * it with the other waiting plans, and its trigger fills it.
+     */
+    @Test
+    void BR33_aStopPlanLoadedAtStart_isTriggeredByARange() {
+        TrackedEntry stop = TrackedEntries.of(
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                Direction.LONG,
+                EntryType.STOP,
+                new BigDecimal("100"),
+                new BigDecimal("95"),
+                new BigDecimal("110"),
+                null,
+                ACTIVATED);
+        when(matching.activeEntries()).thenReturn(List.of(stop));
+        worker = started(1, 100);
+
+        worker.submit(range("100", "100.5", AT));
+
+        verify(matching, timeout(WAIT)).fill(filled(stop.planId(), AT));
+    }
+
+    /** BR-68: a range that reaches a LIMIT plan's take profit and not its entry invalidates it, and never fills it. */
+    @Test
+    void BR68_aRangeReachingTheTakeProfitFirst_invalidatesTheLimitPlan() {
+        TrackedEntry limit = waitingLimit();
+        when(matching.activeEntries()).thenReturn(List.of(limit));
+        when(matching.invalidate(any())).thenReturn(true);
+        worker = started(1, 100);
+
+        worker.submit(range("105", "110", AT));
+
+        verify(matching, timeout(WAIT)).invalidate(new Invalidation(limit, InvalidationReason.TAKE_PROFIT_REACHED, AT));
+        verify(matching, never()).fill(any());
+    }
+
+    /** An invalidation that fails to be stored is kept as decided and tried again on the pair's next range. */
+    @Test
+    void BR68_aFailedInvalidation_isRetriedOnThePairsNextRange_atItsOriginalTime() {
+        TrackedEntry limit = waitingLimit();
+        Invalidation decided = new Invalidation(limit, InvalidationReason.TAKE_PROFIT_REACHED, AT);
+        when(matching.activeEntries()).thenReturn(List.of(limit));
+        when(matching.invalidate(decided))
+                .thenThrow(new IllegalStateException("database down"))
+                .thenReturn(true);
+        worker = started(1, 100);
+
+        worker.submit(range("105", "110", AT));
+        worker.submit(range("150", "160", AT.plusSeconds(60)));
+
+        verify(matching, timeout(WAIT).times(2)).invalidate(decided);
+        verify(matching, never()).fill(any());
+    }
+
     @Test
     void NSF07_aCancelledPlan_leavesTheBooks() {
         UUID cancelled = UUID.randomUUID();
@@ -229,7 +312,7 @@ class MatchingWorkerTest {
     void NSF07_anEntryThatLostTheRace_isNotTriedAgain() {
         UUID lost = UUID.randomUUID();
         UUID marker = UUID.randomUUID();
-        when(matching.fill(filled(lost, AT))).thenReturn(false);
+        when(matching.fill(filled(lost, AT))).thenReturn(Optional.empty());
         worker = started(1, 100);
         worker.onActivated(activated(lost, EntryType.LIMIT, "100"));
         worker.submit(range("99", "101", AT));
@@ -247,7 +330,7 @@ class MatchingWorkerTest {
         Instant later = AT.plusSeconds(60);
         when(matching.fill(filled(plan, AT)))
                 .thenThrow(new IllegalStateException("database down"))
-                .thenReturn(true);
+                .thenReturn(opened(plan));
         worker = started(1, 100);
         worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
 
@@ -268,8 +351,7 @@ class MatchingWorkerTest {
         worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
         worker.submit(range("99", "101", AT));
 
-        worker.onActivated(new TradingPlanActivated(
-                marker, MarketType.SPOT, otherPair, Direction.LONG, EntryType.LIMIT, new BigDecimal("100"), ACTIVATED));
+        worker.onActivated(activated(marker, otherPair, EntryType.LIMIT, "100"));
         worker.submit(new PriceRange(MarketType.SPOT, otherPair, new BigDecimal("99"), new BigDecimal("101"), AT));
 
         verify(matching, timeout(WAIT)).fill(filled(marker, AT));
@@ -363,9 +445,9 @@ class MatchingWorkerTest {
     @Test
     void NSF07_aPendingRange_doesNotWaitBehindAnotherPairsTraffic() throws InterruptedException {
         UUID otherPair = UUID.randomUUID();
-        TrackedEntry holder = new TrackedEntry(
+        TrackedEntry holder = TrackedEntries.limit(
                 UUID.randomUUID(), MarketType.SPOT, otherPair, Direction.LONG, new BigDecimal("100"), ACTIVATED);
-        TrackedEntry later = new TrackedEntry(
+        TrackedEntry later = TrackedEntries.limit(
                 UUID.randomUUID(), MarketType.SPOT, otherPair, Direction.SHORT, new BigDecimal("200"), ACTIVATED);
         TrackedEntry pending = entry(UUID.randomUUID(), Direction.LONG, "50");
         when(matching.activeEntries()).thenReturn(List.of(holder, later, pending));
@@ -430,14 +512,7 @@ class MatchingWorkerTest {
         UUID otherPlan = UUID.randomUUID();
         assertTimeoutPreemptively(
                 Duration.ofSeconds(2),
-                () -> worker.onActivated(new TradingPlanActivated(
-                        otherPlan,
-                        MarketType.SPOT,
-                        otherPair,
-                        Direction.LONG,
-                        EntryType.LIMIT,
-                        new BigDecimal("10"),
-                        ACTIVATED)));
+                () -> worker.onActivated(activated(otherPlan, otherPair, EntryType.LIMIT, "10")));
         worker.submit(update("89", "101", AT, 50));
         inSecond.release();
         worker.submit(new PriceRange(MarketType.SPOT, otherPair, new BigDecimal("9"), new BigDecimal("11"), AT));
@@ -567,7 +642,7 @@ class MatchingWorkerTest {
         doAnswer(call -> {
                     throw new IOException("connection reset");
                 })
-                .doReturn(true)
+                .doReturn(opened(failing))
                 .when(matching)
                 .fill(filled(failing, AT));
         worker = started(1, 100);
@@ -588,7 +663,7 @@ class MatchingWorkerTest {
         UUID plan = UUID.randomUUID();
         when(matching.fill(filled(plan, AT)))
                 .thenThrow(new IllegalStateException("database down"))
-                .thenReturn(true);
+                .thenReturn(opened(plan));
         worker = new MatchingWorker(matching, retrying(Duration.ofMinutes(10)), clock, recording, () -> 0.0);
         worker.start();
         worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
@@ -708,7 +783,7 @@ class MatchingWorkerTest {
         doAnswer(call -> {
                     filling.get().countDown();
                     new CountDownLatch(1).await();
-                    return true;
+                    return Optional.empty();
                 })
                 .when(matching)
                 .fill(any());
@@ -743,7 +818,7 @@ class MatchingWorkerTest {
                     while (true) {
                         try {
                             letGo.await();
-                            return true;
+                            return Optional.empty();
                         } catch (InterruptedException ignored) {
                             // keeps waiting
                         }
@@ -799,7 +874,7 @@ class MatchingWorkerTest {
         UUID plan = UUID.randomUUID();
         when(matching.fill(filled(plan, AT)))
                 .thenThrow(new IllegalStateException("database down"))
-                .thenReturn(true);
+                .thenReturn(opened(plan));
         worker = started(1, 100);
         worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
 
@@ -948,8 +1023,7 @@ class MatchingWorkerTest {
     /** Returns once every command queued so far is handled: a marker of another pair is filled after them. */
     private void awaitProcessed() {
         UUID marker = UUID.randomUUID();
-        worker.onActivated(new TradingPlanActivated(
-                marker, MarketType.SPOT, MARKER_PAIR, Direction.LONG, EntryType.LIMIT, BigDecimal.ONE, ACTIVATED));
+        worker.onActivated(activated(marker, MARKER_PAIR, EntryType.LIMIT, "1"));
         worker.submit(new PriceRange(MarketType.SPOT, MARKER_PAIR, new BigDecimal("0.5"), new BigDecimal("1.5"), AT));
         verify(matching, timeout(WAIT)).fill(filledPlan(marker));
     }
@@ -966,18 +1040,66 @@ class MatchingWorkerTest {
     }
 
     private static TrackedEntry entry(UUID planId, Direction direction, String price) {
-        return new TrackedEntry(planId, MarketType.SPOT, PAIR, direction, new BigDecimal(price), ACTIVATED);
+        return TrackedEntries.limit(planId, MarketType.SPOT, PAIR, direction, new BigDecimal(price), ACTIVATED);
+    }
+
+    /** A Spot LONG LIMIT at 100 with its take profit at 110, loaded at start. */
+    private static TrackedEntry waitingLimit() {
+        return TrackedEntries.of(
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                PAIR,
+                Direction.LONG,
+                EntryType.LIMIT,
+                new BigDecimal("100"),
+                new BigDecimal("95"),
+                new BigDecimal("110"),
+                null,
+                ACTIVATED);
     }
 
     private static TradingPlanActivated activated(UUID planId, EntryType type, String price) {
+        return activated(planId, PAIR, type, price);
+    }
+
+    /** A LONG plan of the pair activated at {@link #ACTIVATED}, whose take profit no test price reaches. */
+    private static TradingPlanActivated activated(UUID planId, UUID pair, EntryType type, String price) {
+        BigDecimal entry = new BigDecimal(price);
         return new TradingPlanActivated(
-                planId, MarketType.SPOT, PAIR, Direction.LONG, type, new BigDecimal(price), ACTIVATED);
+                planId,
+                TrackedEntries.OWNER,
+                MarketType.SPOT,
+                pair,
+                Direction.LONG,
+                type,
+                entry,
+                entry.movePointLeft(3),
+                entry.movePointRight(3),
+                null,
+                ACTIVATED);
     }
 
     /** An update of the candle that opened at {@code minute}, produced {@code seconds} into it. */
     private static PriceRange update(String low, String high, Instant minute, long seconds) {
         return new PriceRange(
                 MarketType.SPOT, PAIR, new BigDecimal(low), new BigDecimal(high), minute, minute.plusSeconds(seconds));
+    }
+
+    /** The position a stored fill of the plan opens: Spot LONG at 100, levels no test price reaches. */
+    private static Optional<TrackedPosition> opened(UUID planId) {
+        return Optional.of(new TrackedPosition(
+                UUID.randomUUID(),
+                planId,
+                TrackedEntries.OWNER,
+                MarketType.SPOT,
+                PAIR,
+                Direction.LONG,
+                new BigDecimal("100"),
+                AT,
+                new BigDecimal("0.001"),
+                new BigDecimal("100000"),
+                null,
+                0));
     }
 
     /** A fill of the plan recorded at {@code executedAt}. */
@@ -1024,7 +1146,7 @@ class MatchingWorkerTest {
         Object pass(org.mockito.invocation.InvocationOnMock call) throws InterruptedException {
             entered.countDown();
             released.await(WAIT, TimeUnit.MILLISECONDS);
-            return true;
+            return opened(call.<Fill>getArgument(0).planId());
         }
 
         void awaitEntered() throws InterruptedException {

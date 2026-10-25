@@ -3,12 +3,14 @@ package com.cryptopilot.market.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+import com.cryptopilot.market.client.Kline;
 import com.cryptopilot.market.client.StreamMessage.KlineMessage;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.config.PriceCacheProperties;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.impl.PriceCacheServiceImpl;
 import com.cryptopilot.support.MutableTestClock;
@@ -17,6 +19,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -181,6 +184,54 @@ class PriceCacheServiceTest {
     }
 
     /**
+     * D-111 E2/E3: a futures 1-minute candle update writes its close to {@code last} with its own instant
+     * {@code lastUpdatedAt} and the same time to live; an older update is refused on that instant, and the mark price
+     * group and its {@code updatedAt} are left as they are.
+     */
+    @Test
+    void D111_aFuturesMinuteCandle_writesItsCloseToLast_withItsOwnInstantAndTheTtl() {
+        cache.record(MarketType.FUTURES, markPrice("63000", AT.plusSeconds(5)));
+        cache.record(MarketType.FUTURES, futuresMinute("63010.5", AT.plusSeconds(4)));
+        assertThat(cache.flush()).isEqualTo(2);
+
+        assertThat(redis.<String, String>opsForHash().entries("px:FUTURES:BTCUSDT"))
+                .containsEntry("last", "63010.5")
+                .containsEntry("lastUpdatedAt", String.valueOf(AT.plusSeconds(4).toEpochMilli()))
+                .containsEntry("mark", "63000")
+                .containsEntry("updatedAt", String.valueOf(AT.plusSeconds(5).toEpochMilli()));
+        assertThat(redis.getExpire("px:FUTURES:BTCUSDT")).isBetween(290L, 300L);
+        PriceLookup last = cache.latestLast(MarketType.FUTURES, "BTCUSDT");
+        assertThat(last.status()).isEqualTo(PriceLookup.Status.FOUND);
+        assertThat(last.price().orElseThrow().lastPrice()).isEqualByComparingTo("63010.5");
+        assertThat(last.price().orElseThrow().sourceTime()).isEqualTo(AT.plusSeconds(4));
+        assertThat(cache.latest(MarketType.FUTURES, "BTCUSDT")
+                        .price()
+                        .orElseThrow()
+                        .lastPrice())
+                .as("the mark price group leaves out a last price of another instant")
+                .isNull();
+
+        cache.record(MarketType.FUTURES, futuresMinute("62000", AT.plusSeconds(3)));
+        assertThat(cache.flush()).as("refused as older").isZero();
+        cache.record(MarketType.FUTURES, futuresMinute("63020", AT.plusSeconds(6)));
+        assertThat(cache.flush()).isOne();
+        assertThat(cache.latestLast(MarketType.FUTURES, "BTCUSDT")
+                        .price()
+                        .orElseThrow()
+                        .lastPrice())
+                .isEqualByComparingTo("63020");
+        assertThat(cache.latest(MarketType.FUTURES, "BTCUSDT")
+                        .price()
+                        .orElseThrow()
+                        .markPrice())
+                .isEqualByComparingTo("63000");
+
+        clock.set(AT.plusSeconds(6).plus(Duration.ofMinutes(5)).plusMillis(1));
+        assertThat(cache.latestLast(MarketType.FUTURES, "BTCUSDT").status()).isEqualTo(PriceLookup.Status.EXPIRED);
+        assertThat(cache.latestLast(MarketType.FUTURES, "ETHUSDT").status()).isEqualTo(PriceLookup.Status.MISSING);
+    }
+
+    /**
      * ADR-005: with Redis unreachable, recording never throws, a flush counts its failure and keeps the values waiting,
      * and a read answers UNAVAILABLE.
      */
@@ -225,6 +276,26 @@ class PriceCacheServiceTest {
                 BigDecimal.ONE,
                 BigDecimal.TEN,
                 BigDecimal.TEN,
+                at);
+    }
+
+    private static KlineMessage futuresMinute(String close, Instant at) {
+        BigDecimal price = new BigDecimal(close);
+        Instant open = at.truncatedTo(ChronoUnit.MINUTES);
+        return new KlineMessage(
+                "BTCUSDT",
+                MarketInterval.ONE_MINUTE,
+                new Kline(
+                        open,
+                        open.plusSeconds(60).minusMillis(1),
+                        price,
+                        price,
+                        price,
+                        price,
+                        BigDecimal.ONE,
+                        BigDecimal.ONE,
+                        1),
+                false,
                 at);
     }
 

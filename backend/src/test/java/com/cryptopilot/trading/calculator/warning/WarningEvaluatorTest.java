@@ -67,13 +67,19 @@ class WarningEvaluatorTest {
         assertThat(WarningEvaluator.blocksActivation(warnings)).isTrue();
     }
 
-    /** Spot, stop 0.99 below E 100 with risk 1 % of 1,000: notional 1,010.1 and a ratio of 2 / 0.99. */
+    /**
+     * Spot, stop 0.99 below E 100 with risk 1 % of 1,000: notional 1,010.1 and a ratio of 2 / 0.99. So tight a stop
+     * also makes the 0.1 % fees of entry and stop loss (1.0101 + 1.00010...) about 20.1 % of the risk of 9.99999, so
+     * HIGH_FEE_SHARE (D-116) comes with it, after the blocking warning.
+     */
     @Test
     void BR25_aSpotPlanAboveItsCapital_blocksActivation() {
         List<PlanWarning> warnings = WarningEvaluator.evaluate(
                 PlanFixture.spot().stop("99.01").takeProfit("102").build());
 
-        assertThat(warnings).extracting(PlanWarning::type).containsExactly(WarningType.INSUFFICIENT_CAPITAL);
+        assertThat(warnings)
+                .extracting(PlanWarning::type)
+                .containsExactly(WarningType.INSUFFICIENT_CAPITAL, WarningType.HIGH_FEE_SHARE);
         assertThat(WarningEvaluator.blocksActivation(warnings)).isTrue();
     }
 
@@ -97,7 +103,8 @@ class WarningEvaluatorTest {
         "HIGH_LEVERAGE, WARNING",
         "TOTAL_OPEN_RISK, WARNING",
         "WIDE_STOP_LOSS, INFO",
-        "HIGH_FUNDING_RATE, WARNING"
+        "HIGH_FUNDING_RATE, WARNING",
+        "HIGH_FEE_SHARE, WARNING"
     })
     void BR29_eachType_hasTheSeverityTheRuleGivesIt(WarningType type, WarningSeverity severity) {
         assertThat(type.severity()).isEqualTo(severity);
@@ -118,14 +125,14 @@ class WarningEvaluatorTest {
         PlanCalculation spot = PlanFixture.spot().build();
 
         assertThatIllegalArgumentException()
-                .isThrownBy(() ->
-                        new PlanCalculation(spot.plan(), spot.sized(), futures.liquidation(), null, spot.thresholds()));
+                .isThrownBy(() -> new PlanCalculation(
+                        spot.plan(), spot.sized(), futures.liquidation(), null, spot.costs(), spot.thresholds()));
         assertThatIllegalArgumentException()
-                .isThrownBy(
-                        () -> new PlanCalculation(futures.plan(), futures.sized(), null, null, futures.thresholds()));
+                .isThrownBy(() -> new PlanCalculation(
+                        futures.plan(), futures.sized(), null, null, futures.costs(), futures.thresholds()));
         assertThatIllegalArgumentException()
-                .isThrownBy(
-                        () -> new PlanCalculation(spot.plan(), spot.sized(), null, BigDecimal.ONE, spot.thresholds()));
+                .isThrownBy(() -> new PlanCalculation(
+                        spot.plan(), spot.sized(), null, BigDecimal.ONE, spot.costs(), spot.thresholds()));
     }
 
     private static List<String> schemaValues(String constraint) throws IOException {

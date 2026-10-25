@@ -64,7 +64,7 @@ class EnumCheckConstraintTest {
      * package has its tier's rank, a price and a duration (BR-62), a feed
      * is polled at most every fifteen minutes (BR-49), an indicator alert names an indicator, and every
      * alert but a line cross has a threshold (D-76), a paper transfer moves between two different wallets
-     * (the legacy table V35 keeps) and a paper order has a size (TR-02).
+     * (the legacy table V47 keeps) and a paper order has a size (TR-02).
      * A new cross-column rule that this map does not know about does not pass silently: the row is
      * refused by the wrong constraint and the test says so.
      */

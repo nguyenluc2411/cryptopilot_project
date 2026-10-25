@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -72,12 +73,12 @@ public class AccountSearchRepository {
             if (only.isEmpty()) {
                 return new Page(List.of(), 0);
             }
-            where.append(" and a.user_id in (:only)");
-            params.put("only", only);
+            where.append(" and a.user_id = any(cast(:only as uuid[]))");
+            params.put("only", uuidArray(only));
         }
         if (!except.isEmpty()) {
-            where.append(" and a.user_id not in (:except)");
-            params.put("except", except);
+            where.append(" and a.user_id <> all(cast(:except as uuid[]))");
+            params.put("except", uuidArray(except));
         }
         String from = " from user_account a left join user_profile p on p.user_id = a.user_id";
         Map<String, Object> paged = new HashMap<>(params);
@@ -103,6 +104,16 @@ public class AccountSearchRepository {
                 .param(userId)
                 .query(Long.class)
                 .single();
+    }
+
+    /**
+     * The ids as one PostgreSQL array literal, bound as a single parameter: an IN list binds one parameter per id and
+     * the driver refuses more than 65 535, which every paid subscriber of a large plan would count against.
+     */
+    private static String uuidArray(Collection<UUID> ids) {
+        StringJoiner literal = new StringJoiner(",", "{", "}");
+        ids.forEach(id -> literal.add(id.toString()));
+        return literal.toString();
     }
 
     private static Instant instant(Timestamp at) {

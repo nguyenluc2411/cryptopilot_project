@@ -12,21 +12,26 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * A plan in full (SCR-18): its values, the stored snapshot, its warnings and its status history.
+ * A plan in full (SCR-18): its values, the stored snapshot, its warnings, its status history and, once executed, its
+ * position.
  *
- * <p>Rule: BR-31, BR-32, BR-68, BR-69, BR-70; SRS 3.5.2; D-111, D-112.
+ * <p>Rule: BR-31, BR-32, BR-34, BR-68, BR-69, BR-70; SRS 3.5.2; UC-20; D-111, D-112, D-119.
  *
  * @param id the plan
  * @param pairId the pair
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT
  * @param entryType LIMIT, MARKET or STOP
- * @param entryPrice the entry price the snapshot was calculated with; the stop price of a STOP
+ * @param entryPrice the entry price: the entered price of LIMIT, the stop price of STOP; for MARKET the reference
+ *     price, the planned entry (as {@code POST /plans/calculate} answers it)
+ * @param expectedFillPrice MARKET only: the price the quantity was sized on, the reference price moved by
+ *     {@code SLIPPAGE_BPS} (D-112 R6); {@code null} for LIMIT and STOP
  * @param plannedEntryPrice the planned entry the deviation is measured from: the entered price for LIMIT and STOP,
  *     the reference price of the last save for MARKET (BR-69)
  * @param stopLoss the stop loss
  * @param takeProfit the take profit
- * @param capital the capital
+ * @param capital the capital the snapshot was calculated with: the profile's default capital at the last save, or at
+ *     the activation once ACTIVE (BR-31, D-121)
  * @param riskPercent the risk %
  * @param leverage the leverage; {@code null} on Spot
  * @param marginMode ISOLATED on Futures; {@code null} on Spot
@@ -47,6 +52,7 @@ import java.util.UUID;
  * @param warnings the stored warnings, most severe first
  * @param blocksActivation whether a stored warning would refuse activation (MSG18)
  * @param statusHistory the statuses reached, oldest first
+ * @param position the position the plan opened, once it is EXECUTED; {@code null} before (UC-20)
  */
 public record TradingPlanResponse(
         UUID id,
@@ -55,6 +61,7 @@ public record TradingPlanResponse(
         Direction direction,
         EntryType entryType,
         BigDecimal entryPrice,
+        BigDecimal expectedFillPrice,
         BigDecimal plannedEntryPrice,
         BigDecimal stopLoss,
         BigDecimal takeProfit,
@@ -75,4 +82,5 @@ public record TradingPlanResponse(
         PlanSnapshotResponse snapshot,
         List<PlanWarningResponse> warnings,
         boolean blocksActivation,
-        List<StatusChangeResponse> statusHistory) {}
+        List<StatusChangeResponse> statusHistory,
+        PositionResponse position) {}

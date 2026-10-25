@@ -45,6 +45,8 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.RATE_LIMITED, "MSG50 429"),
             Map.entry(ErrorCode.RISK_PROFILE_CONFIRMATION_REQUIRED, "MSG48 400"),
             Map.entry(ErrorCode.TRADING_BLOCKING_WARNING, "MSG18 409"),
+            Map.entry(ErrorCode.ENTRY_DEVIATION_CONFIRMATION_REQUIRED, "MSG51 400"),
+            Map.entry(ErrorCode.ENTRY_DEVIATION_REFUSED, "MSG52 409"),
             Map.entry(ErrorCode.TRADING_PLAN_STATUS_TRANSITION_INVALID, "MSG43 409"),
             Map.entry(ErrorCode.MARKET_PRICE_UNAVAILABLE, "MSG43 503"),
             Map.entry(ErrorCode.WATCHLIST_PAIR_ALREADY_WATCHED, "MSG45 409"),
@@ -71,7 +73,17 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.POST_NOT_HIDDEN, "MSG43 409"),
             Map.entry(ErrorCode.PAIR_HAS_OPEN_POSITIONS, "MSG40 409"),
             Map.entry(ErrorCode.PAIR_NOT_TRADING, "MSG43 409"),
-            Map.entry(ErrorCode.PAIR_ALREADY_REGISTERED, "MSG43 409"));
+            Map.entry(ErrorCode.PAIR_ALREADY_REGISTERED, "MSG43 409"),
+            Map.entry(ErrorCode.ACADEMY_SLUG_TAKEN, "MSG43 409"),
+            Map.entry(ErrorCode.ACADEMY_PATH_ORDER_TAKEN, "MSG43 409"),
+            Map.entry(ErrorCode.ACADEMY_ARTICLE_PUBLISHED, "MSG43 409"),
+            Map.entry(ErrorCode.ACADEMY_TOPIC_IN_USE, "MSG43 409"),
+            Map.entry(ErrorCode.ACADEMY_EDIT_CONFLICT, "MSG43 409"),
+            Map.entry(ErrorCode.NEWS_SOURCE_ALREADY_REGISTERED, "MSG43 409"),
+            Map.entry(ErrorCode.NEWS_SOURCE_IN_USE, "MSG43 409"),
+            Map.entry(ErrorCode.NEWS_FEED_UNREADABLE, "MSG15 400"),
+            Map.entry(ErrorCode.NEWS_SOURCE_CRAWLED_RECENTLY, "MSG50 429"),
+            Map.entry(ErrorCode.NEWS_SUMMARY_UNAVAILABLE, "MSG31 503"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

@@ -1,4 +1,6 @@
 table,column,constraint,values
+academy_article,article_level,ck_academy_article_level,BEGINNER|INTERMEDIATE|ADVANCED
+academy_article,article_status,ck_academy_article_status,DRAFT|PUBLISHED|HIDDEN
 ai_message,message_status,ck_ai_message_status,PENDING|COMPLETED|FAILED
 ai_message,sender_role,ck_ai_message_sender_role,USER|ASSISTANT
 alert,alert_status,ck_alert_status,ACTIVE|PAUSED|TRIGGERED|EXPIRED
@@ -23,7 +25,7 @@ matching_watermark,market_type,ck_matching_watermark_market_type,SPOT|FUTURES
 news_article,sentiment_label,ck_news_article_sentiment,BULLISH|NEUTRAL|BEARISH
 news_crawl_log,crawl_status,ck_news_crawl_log_status,SUCCESS|PARTIAL|FAILED
 news_source,source_type,ck_news_source_type,RSS
-notification,notification_type,ck_notification_type,ALERT|PLAN|MODERATION|SUBSCRIPTION|COMMENT
+notification,notification_type,ck_notification_type,ALERT|PLAN|MODERATION|SUBSCRIPTION|COMMENT|SYSTEM
 ohlcv,market_type,ck_ohlcv_market_type,SPOT|FUTURES
 ohlcv,timeframe,ck_ohlcv_timeframe,15m|1h|4h|1d
 legacy_paper_account,position_mode,ck_paper_account_position_mode,ONE_WAY|HEDGE
@@ -80,7 +82,7 @@ trading_plan,margin_mode,ck_trading_plan_margin_mode,ISOLATED
 trading_plan,market_type,ck_trading_plan_market_type,SPOT|FUTURES
 trading_plan,plan_status,ck_trading_plan_status,DRAFT|ACTIVE|EXECUTED|CANCELLED|EXPIRED|INVALIDATED
 trading_plan_warning,severity,ck_trading_plan_warning_severity,INFO|WARNING|BLOCKING
-trading_plan_warning,warning_type,ck_trading_plan_warning_type,LOW_RR|HIGH_LEVERAGE|SL_BEYOND_LIQUIDATION|OVERSIZED_POSITION|INSUFFICIENT_CAPITAL|HIGH_FUNDING_RATE|WIDE_STOP_LOSS|TOTAL_OPEN_RISK
+trading_plan_warning,warning_type,ck_trading_plan_warning_type,LOW_RR|HIGH_LEVERAGE|SL_BEYOND_LIQUIDATION|OVERSIZED_POSITION|INSUFFICIENT_CAPITAL|HIGH_FUNDING_RATE|WIDE_STOP_LOSS|TOTAL_OPEN_RISK|HIGH_FEE_SHARE
 user_account,account_status,ck_user_account_status,ACTIVE|LOCKED|BANNED
 user_account,role,ck_user_account_role,TRADER|ADMIN
 user_device,platform,ck_user_device_platform,ANDROID|IOS

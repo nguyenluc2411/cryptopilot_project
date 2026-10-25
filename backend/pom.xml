@@ -31,6 +31,11 @@
 		<!-- TD 1.3 names springdoc-openapi on the line compatible with Spring Boot 4: 3.x. 3.1.1 is the latest release
 		     (2026-09-25) and is itself built on spring-boot-starter-parent 4.1.0. Not part of the Spring Boot BOM. -->
 		<springdoc-openapi.version>3.1.1</springdoc-openapi.version>
+		<!-- The news module (T-077, T-078): Rome parses RSS and Atom feeds, jsoup parses article HTML and the CSS
+		     selectors an administrator sets on a source. Neither is part of the Spring Boot BOM. Both lines were run
+		     against the real feeds of the seeded sources before they were added. -->
+		<rome.version>2.1.0</rome.version>
+		<jsoup.version>1.18.3</jsoup.version>
 		<!-- The JUnit tags the default test run leaves out; see the Surefire configuration. -->
 		<surefire.excludedGroups>live,load</surefire.excludedGroups>
 	</properties>
@@ -154,6 +159,18 @@
 			<groupId>org.springdoc</groupId>
 			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
 			<version>${springdoc-openapi.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>com.rometools</groupId>
+			<artifactId>rome</artifactId>
+			<version>${rome.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.jsoup</groupId>
+			<artifactId>jsoup</artifactId>
+			<version>${jsoup.version}</version>
 		</dependency>
 
 		<dependency>

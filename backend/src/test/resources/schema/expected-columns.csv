@@ -1,4 +1,46 @@
 table,column,data_type,numeric_precision,numeric_scale,is_nullable
+academy_article,app_link,character varying,,,YES
+academy_article,article_id,uuid,,,NO
+academy_article,article_level,character varying,,,NO
+academy_article,article_status,character varying,,,NO
+academy_article,body,text,,,NO
+academy_article,cover_credit,character varying,,,YES
+academy_article,cover_image_url,character varying,,,YES
+academy_article,created_at,timestamp with time zone,,,NO
+academy_article,created_by,uuid,,,YES
+academy_article,path_order,integer,32,0,YES
+academy_article,published_at,timestamp with time zone,,,YES
+academy_article,reading_minutes,integer,32,0,NO
+academy_article,slug,character varying,,,NO
+academy_article,sort_order,integer,32,0,NO
+academy_article,summary,character varying,,,NO
+academy_article,title,character varying,,,NO
+academy_article,topic_id,uuid,,,NO
+academy_article,updated_at,timestamp with time zone,,,NO
+academy_article,updated_by,uuid,,,YES
+academy_article,version,bigint,64,0,NO
+academy_progress,article_id,uuid,,,NO
+academy_progress,created_at,timestamp with time zone,,,NO
+academy_progress,progress_id,uuid,,,NO
+academy_progress,updated_at,timestamp with time zone,,,NO
+academy_progress,user_id,uuid,,,NO
+academy_progress,version,bigint,64,0,NO
+academy_term,article_id,uuid,,,YES
+academy_term,created_at,timestamp with time zone,,,NO
+academy_term,definition,character varying,,,NO
+academy_term,slug,character varying,,,NO
+academy_term,term,character varying,,,NO
+academy_term,term_id,uuid,,,NO
+academy_term,updated_at,timestamp with time zone,,,NO
+academy_term,version,bigint,64,0,NO
+academy_topic,created_at,timestamp with time zone,,,NO
+academy_topic,description,character varying,,,NO
+academy_topic,name,character varying,,,NO
+academy_topic,slug,character varying,,,NO
+academy_topic,sort_order,integer,32,0,NO
+academy_topic,topic_id,uuid,,,NO
+academy_topic,updated_at,timestamp with time zone,,,NO
+academy_topic,version,bigint,64,0,NO
 ai_configuration,config_id,uuid,,,NO
 ai_configuration,created_at,timestamp with time zone,,,NO
 ai_configuration,is_active,boolean,,,NO
@@ -215,15 +257,23 @@ matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
 matching_watermark,market_type,character varying,,,NO
 matching_watermark,pair_id,uuid,,,NO
 matching_watermark,updated_at,timestamp with time zone,,,NO
+news_article,ai_body,text,,,YES
 news_article,ai_summary,text,,,YES
+news_article,ai_title,character varying,,,YES
 news_article,article_id,uuid,,,NO
 news_article,collected_at,timestamp with time zone,,,NO
 news_article,created_at,timestamp with time zone,,,NO
 news_article,excerpt,text,,,YES
+news_article,hidden_at,timestamp with time zone,,,YES
+news_article,hidden_by,uuid,,,YES
+news_article,image_url,character varying,,,YES
 news_article,original_url,character varying,,,NO
 news_article,published_at,timestamp with time zone,,,NO
 news_article,sentiment_label,character varying,,,YES
 news_article,source_id,uuid,,,NO
+news_article,summary_attempted_at,timestamp with time zone,,,YES
+news_article,summary_attempts,integer,32,0,NO
+news_article,summary_error,character varying,,,YES
 news_article,title,character varying,,,NO
 news_article,title_hash,character varying,,,NO
 news_article,updated_at,timestamp with time zone,,,NO
@@ -245,8 +295,11 @@ news_crawl_log,source_id,uuid,,,NO
 news_crawl_log,started_at,timestamp with time zone,,,NO
 news_crawl_log,updated_at,timestamp with time zone,,,NO
 news_crawl_log,version,bigint,64,0,NO
+news_source,body_selector,character varying,,,YES
+news_source,category_filter,character varying,,,YES
 news_source,crawl_interval_minutes,integer,32,0,NO
 news_source,created_at,timestamp with time zone,,,NO
+news_source,excluded_selectors,character varying,,,YES
 news_source,feed_url,character varying,,,NO
 news_source,is_active,boolean,,,NO
 news_source,last_crawled_at,timestamp with time zone,,,YES
@@ -255,6 +308,7 @@ news_source,source_id,uuid,,,NO
 news_source,source_name,character varying,,,NO
 news_source,source_type,character varying,,,NO
 news_source,updated_at,timestamp with time zone,,,NO
+news_source,user_agent,character varying,,,YES
 news_source,version,bigint,64,0,NO
 news_tag,created_at,timestamp with time zone,,,NO
 news_tag,tag_id,uuid,,,NO
@@ -474,6 +528,7 @@ trading_journal,close_reason,character varying,,,YES
 trading_journal,created_at,timestamp with time zone,,,NO
 trading_journal,direction,character varying,,,NO
 trading_journal,entry_deviation_r,numeric,20,8,YES
+trading_journal,entry_fee_amount,numeric,28,8,YES
 trading_journal,entry_liquidity,character varying,,,YES
 trading_journal,entry_price,numeric,28,12,NO
 trading_journal,entry_time,timestamp with time zone,,,NO
@@ -482,13 +537,19 @@ trading_journal,exit_time,timestamp with time zone,,,YES
 trading_journal,fee_amount,numeric,28,8,YES
 trading_journal,fill_indicators,jsonb,,,YES
 trading_journal,funding_fee_amount,numeric,28,8,YES
+trading_journal,funding_incomplete,boolean,,,NO
 trading_journal,journal_id,uuid,,,NO
 trading_journal,lessons_learned,text,,,YES
 trading_journal,leverage,integer,32,0,YES
+trading_journal,level_change_count,integer,32,0,NO
+trading_journal,liquidation_price,numeric,28,12,YES
 trading_journal,market_type,character varying,,,NO
 trading_journal,max_adverse_price,numeric,28,12,YES
 trading_journal,max_favorable_price,numeric,28,12,YES
 trading_journal,mistakes,text,,,YES
+trading_journal,original_stop_loss_price,numeric,28,12,YES
+trading_journal,original_take_profit_price,numeric,28,12,YES
+trading_journal,missing_funding_times,ARRAY,,,YES
 trading_journal,pair_id,uuid,,,NO
 trading_journal,plan_id,uuid,,,YES
 trading_journal,planned_entry_price,numeric,28,12,YES
@@ -502,12 +563,21 @@ trading_journal,setup_score_drop_warned,boolean,,,YES
 trading_journal,setup_score_preset,character varying,,,YES
 trading_journal,source,character varying,,,NO
 trading_journal,stop_loss_price,numeric,28,12,YES
+trading_journal,stop_widened,boolean,,,NO
 trading_journal,strategy_id,uuid,,,YES
 trading_journal,take_profit_price,numeric,28,12,YES
 trading_journal,trade_status,character varying,,,NO
 trading_journal,updated_at,timestamp with time zone,,,NO
 trading_journal,user_id,uuid,,,NO
 trading_journal,version,bigint,64,0,NO
+trading_journal_level_change,changed_at,timestamp with time zone,,,NO
+trading_journal_level_change,created_at,timestamp with time zone,,,NO
+trading_journal_level_change,journal_id,uuid,,,NO
+trading_journal_level_change,level_change_id,uuid,,,NO
+trading_journal_level_change,new_stop_loss_price,numeric,28,12,YES
+trading_journal_level_change,new_take_profit_price,numeric,28,12,YES
+trading_journal_level_change,old_stop_loss_price,numeric,28,12,YES
+trading_journal_level_change,old_take_profit_price,numeric,28,12,YES
 trading_plan,activated_at,timestamp with time zone,,,YES
 trading_plan,analysis_timeframe,character varying,,,NO
 trading_plan,cancelled_at,timestamp with time zone,,,YES
@@ -549,6 +619,13 @@ trading_plan,take_profit_price,numeric,28,12,NO
 trading_plan,updated_at,timestamp with time zone,,,NO
 trading_plan,user_id,uuid,,,NO
 trading_plan,version,bigint,64,0,NO
+trading_plan,estimated_entry_fee,numeric,28,8,YES
+trading_plan,estimated_slippage,numeric,28,8,YES
+trading_plan,estimated_stop_loss_exit_fee,numeric,28,8,YES
+trading_plan,estimated_take_profit_exit_fee,numeric,28,8,YES
+trading_plan,fee_share_of_risk,numeric,20,8,YES
+trading_plan,loss_at_stop_loss,numeric,28,8,YES
+trading_plan,net_risk_reward_ratio,numeric,20,8,YES
 trading_plan_warning,created_at,timestamp with time zone,,,NO
 trading_plan_warning,plan_id,uuid,,,NO
 trading_plan_warning,severity,character varying,,,NO

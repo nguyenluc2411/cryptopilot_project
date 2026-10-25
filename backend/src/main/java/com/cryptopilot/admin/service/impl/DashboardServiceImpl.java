@@ -60,7 +60,7 @@ public class DashboardServiceImpl implements DashboardService {
         Map<String, Object> indicators = new TreeMap<>();
         Instant now = clock.instant();
         for (AdminMetricSource source : sources) {
-            indicators.putAll(source.indicators(start(first), start(last.plusDays(1)), now));
+            merge(indicators, source.indicators(start(first), start(last.plusDays(1)), now));
         }
         return new DashboardResponse(first, last, indicators);
     }
@@ -83,7 +83,7 @@ public class DashboardServiceImpl implements DashboardService {
         }
         Map<String, Map<LocalDate, BigDecimal>> series = new HashMap<>();
         for (AdminMetricSource source : sources) {
-            series.putAll(source.series(start(first), start(last.plusDays(1)), grouping));
+            merge(series, source.series(start(first), start(last.plusDays(1)), grouping));
         }
         List<String> columns = series.keySet().stream()
                 .sorted(Comparator.comparingInt(DashboardServiceImpl::rank).thenComparing(Comparator.naturalOrder()))
@@ -91,6 +91,8 @@ public class DashboardServiceImpl implements DashboardService {
         List<ReportResponse.Row> rows = buckets.stream()
                 .map(bucket -> new ReportResponse.Row(
                         bucket,
+                        bucket.isBefore(first) ? first : bucket,
+                        lastDayOf(bucket, grouping).isAfter(last) ? last : lastDayOf(bucket, grouping),
                         columns.stream()
                                 .collect(Collectors.toMap(
                                         column -> column,
@@ -103,11 +105,15 @@ public class DashboardServiceImpl implements DashboardService {
 
     @Override
     public String csv(ReportResponse report) {
-        StringBuilder csv = new StringBuilder("period");
+        StringBuilder csv = new StringBuilder("period,coveredFrom,coveredTo");
         report.columns().forEach(column -> csv.append(',').append(column));
         csv.append("\r\n");
         for (ReportResponse.Row row : report.rows()) {
-            csv.append(row.period());
+            csv.append(row.period())
+                    .append(',')
+                    .append(row.coveredFrom())
+                    .append(',')
+                    .append(row.coveredTo());
             for (String column : report.columns()) {
                 csv.append(',')
                         .append(row.values().get(column).stripTrailingZeros().toPlainString());
@@ -145,11 +151,28 @@ public class DashboardServiceImpl implements DashboardService {
         };
     }
 
+    /** The last day of the day, week or month a bucket starts. */
+    private static LocalDate lastDayOf(LocalDate bucket, ReportGrouping grouping) {
+        return next(bucket, grouping).minusDays(1);
+    }
+
     private static LocalDate next(LocalDate bucket, ReportGrouping grouping) {
         return switch (grouping) {
             case DAY -> bucket.plusDays(1);
             case WEEK -> bucket.plusWeeks(1);
             case MONTH -> bucket.plusMonths(1);
         };
+    }
+
+    /**
+     * Adds one source's metrics. Each module names its own metrics, so a name two sources share is a defect, reported
+     * rather than letting one source silently replace the other's figure.
+     */
+    private static <V> void merge(Map<String, V> into, Map<String, V> from) {
+        from.forEach((name, value) -> {
+            if (into.putIfAbsent(name, value) != null) {
+                throw new IllegalStateException("two metric sources both report " + name);
+            }
+        });
     }
 }

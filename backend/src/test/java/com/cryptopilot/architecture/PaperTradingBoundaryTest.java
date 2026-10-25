@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
 @AnalyzeClasses(packages = LayerRulesTest.ROOT, importOptions = ImportOption.DoNotIncludeTests.class)
 class PaperTradingBoundaryTest {
 
-    /** The tables of paper trading since V35. */
+    /** The tables of paper trading since V47. */
     private static final Pattern PAPER_TABLES =
             Pattern.compile("\\b(wallet_balance|wallet_ledger_entry|order_list|trade_order|order_fill|equity_snapshot"
                     + "|order_matching_watermark)\\b");

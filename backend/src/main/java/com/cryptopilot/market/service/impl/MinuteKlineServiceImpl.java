@@ -19,6 +19,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -32,7 +33,8 @@ import org.springframework.stereotype.Service;
  * exception. A request the exchange rejects as wrong, or an answer it cannot read, gives an empty page and a warning;
  * the replay then counts as failed and asks again with a back-off.
  *
- * <p>Only candles closed at this instant are returned (BR-08): the endpoint also answers the one still forming.
+ * <p>Only candles closed at this instant are returned (BR-08): the endpoint also answers the one still forming. The
+ * futures mark price candles, which liquidation is replayed from, are fetched the same way.
  *
  * <p>Rule: NSF-07, BR-08, BR-09; TECHNICAL_DESIGN 7.1.2 and 7.7; A-04.
  *
@@ -53,29 +55,62 @@ public class MinuteKlineServiceImpl implements MinuteKlineService {
     /** No transaction: the pair is read in the repository's own short one, so no connection is held over HTTP. */
     @Override
     public MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from) {
+        BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
+        int pageSize = market == MarketType.SPOT
+                ? properties.pageSize().spot()
+                : properties.pageSize().futures();
+        return fetch(
+                market,
+                pairId,
+                from,
+                "1m candles",
+                venue,
+                symbol -> exchange.klines(venue, symbol, MarketInterval.ONE_MINUTE, from, null, pageSize));
+    }
+
+    /** As {@link #closedMinuteKlines}, from the futures mark price candles. */
+    @Override
+    public MinuteKlineBatch closedMarkPriceKlines(UUID pairId, Instant from) {
+        return fetch(
+                MarketType.FUTURES,
+                pairId,
+                from,
+                "1m mark price candles",
+                BinanceVenue.USD_M_FUTURES,
+                symbol -> exchange.markPriceKlines(
+                        symbol,
+                        MarketInterval.ONE_MINUTE,
+                        from,
+                        properties.pageSize().futures()));
+    }
+
+    private MinuteKlineBatch fetch(
+            MarketType market,
+            UUID pairId,
+            Instant from,
+            String what,
+            BinanceVenue venue,
+            Function<String, List<Kline>> request) {
         Optional<String> symbol =
                 pairs.findById(pairId).filter(pair -> pair.isEnabledOn(market)).map(CryptoPair::getSymbol);
         if (symbol.isEmpty()) {
             return MinuteKlineBatch.of(List.of());
         }
-        BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
         Optional<Instant> pause = budgetPause(venue);
         if (pause.isPresent()) {
             return MinuteKlineBatch.refusedUntil(pause.get());
         }
-        int pageSize = market == MarketType.SPOT
-                ? properties.pageSize().spot()
-                : properties.pageSize().futures();
         List<Kline> page;
         try {
-            page = exchange.klines(venue, symbol.get(), MarketInterval.ONE_MINUTE, from, null, pageSize);
+            page = request.apply(symbol.get());
         } catch (BinanceClientException refusal) {
             if (refusal.kind() == BinanceClientException.Kind.REJECTED
                     || refusal.kind() == BinanceClientException.Kind.MALFORMED) {
                 log.warn(
-                        "NSF-07 {} {} 1m candles from {} not fetched: {}",
+                        "NSF-07 {} {} {} from {} not fetched: {}",
                         market,
                         symbol.get(),
+                        what,
                         from,
                         refusal.getMessage());
                 return MinuteKlineBatch.of(List.of());

@@ -15,7 +15,7 @@ import com.cryptopilot.trading.model.TradeClose;
 import com.cryptopilot.trading.model.TradeResult;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
-import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -38,6 +38,27 @@ class TradeResultCalculatorTest {
     private static final LeverageBracket B2 = bracket(2, "50000", "250000", "0.005", "50");
     private static final List<LeverageBracket> BRACKETS = List.of(B1, B2);
 
+    // ------------------------------------------------------------------ unrealized P/L (T-048a)
+
+    /**
+     * Q-55: the unrealized P/L at the mark price is the price result without fees, LONG (mark − entry) × qty and SHORT
+     * mirrored, at the stored scale: LONG 2 at 100 marked 101.5 gains 3, SHORT loses 3; a SHORT marked 98.25 gains
+     * 3.5; 0.123 at 60,000 marked 60,000.01 gains 0.00123.
+     */
+    @ParameterizedTest(name = "{0} {1} at {2} marked {3}: {4}")
+    @CsvSource({
+        "LONG, 2, 100, 101.5, 3.00000000",
+        "SHORT, 2, 100, 101.5, -3.00000000",
+        "SHORT, 2, 100, 98.25, 3.50000000",
+        "LONG, 0.123, 60000, 60000.01, 0.00123000"
+    })
+    void Q55_theUnrealizedPnl_isThePriceResultAtTheMarkPrice_withoutFees(
+            Direction direction, String quantity, String entry, String mark, String expected) {
+        assertThat(TradeResultCalculator.unrealizedPnl(
+                        direction, new BigDecimal(entry), new BigDecimal(mark), new BigDecimal(quantity)))
+                .isEqualTo(new BigDecimal(expected));
+    }
+
     // ------------------------------------------------------------------ T-044 acceptance cases
 
     /** (a) LONG Futures TP, qty 2, LIMIT 100, TP 115: realized 30, fee 0.04 + 0.046, net 29.914. */
@@ -46,7 +67,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.LONG,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "100",
                 "2",
                 CloseReason.TAKE_PROFIT,
@@ -65,7 +86,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.SHORT,
-                EntryType.MARKET,
+                LiquidityRole.TAKER,
                 "100",
                 "2",
                 CloseReason.STOP_LOSS,
@@ -85,7 +106,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.LONG,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "100",
                 "2",
                 CloseReason.LIQUIDATION,
@@ -105,7 +126,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.SPOT,
                 Direction.LONG,
-                EntryType.MARKET,
+                LiquidityRole.TAKER,
                 "60000",
                 "0.5",
                 CloseReason.MANUAL,
@@ -124,8 +145,8 @@ class TradeResultCalculatorTest {
      */
     @Test
     void BR38_longTakeProfitWithOneFunding_isTheDesignVector() {
-        TradeResult r =
-                withFunding(Direction.LONG, EntryType.LIMIT, CloseReason.TAKE_PROFIT, "115", List.of(), Direction.LONG);
+        TradeResult r = withFunding(
+                Direction.LONG, LiquidityRole.MAKER, CloseReason.TAKE_PROFIT, "115", List.of(), Direction.LONG);
 
         assertThat(r.fundingFeeAmount()).isEqualByComparingTo("-0.0202");
         assertAmounts(r, "30", "0.086", "29.8938");
@@ -135,7 +156,7 @@ class TradeResultCalculatorTest {
     @Test
     void BR38_shortStopLossWithOneFunding_receivesIt() {
         TradeResult r = withFunding(
-                Direction.SHORT, EntryType.MARKET, CloseReason.STOP_LOSS, "105", List.of(), Direction.SHORT);
+                Direction.SHORT, LiquidityRole.TAKER, CloseReason.STOP_LOSS, "105", List.of(), Direction.SHORT);
 
         assertThat(r.fundingFeeAmount()).isEqualByComparingTo("0.0202");
         assertAmounts(r, "-10", "0.205", "-10.1848");
@@ -145,7 +166,7 @@ class TradeResultCalculatorTest {
     @Test
     void BR38_longLiquidationWithOneFunding_paysItOnTopOfTheClearanceFee() {
         TradeResult r = withFunding(
-                Direction.LONG, EntryType.LIMIT, CloseReason.LIQUIDATION, "90.37", BRACKETS, Direction.LONG);
+                Direction.LONG, LiquidityRole.MAKER, CloseReason.LIQUIDATION, "90.37", BRACKETS, Direction.LONG);
 
         assertThat(r.fundingFeeAmount()).isEqualByComparingTo("-0.0202");
         assertAmounts(r, "-19.26", "0.76296", "-20.04316");
@@ -157,7 +178,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.SPOT,
                 Direction.LONG,
-                EntryType.MARKET,
+                LiquidityRole.TAKER,
                 "60000",
                 "0.5",
                 CloseReason.MANUAL,
@@ -177,7 +198,7 @@ class TradeResultCalculatorTest {
                 .isThrownBy(() -> calculate(
                         MarketType.SPOT,
                         Direction.LONG,
-                        EntryType.MARKET,
+                        LiquidityRole.TAKER,
                         "60000",
                         "0.5",
                         CloseReason.MANUAL,
@@ -189,7 +210,7 @@ class TradeResultCalculatorTest {
                 .isThrownBy(() -> calculate(
                         MarketType.FUTURES,
                         Direction.LONG,
-                        EntryType.LIMIT,
+                        LiquidityRole.MAKER,
                         "100",
                         "2",
                         CloseReason.TAKE_PROFIT,
@@ -212,7 +233,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.LONG,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "100",
                 "2",
                 CloseReason.TAKE_PROFIT,
@@ -233,12 +254,12 @@ class TradeResultCalculatorTest {
     /** A complete funding gives a final net; Spot has no funding, so neither flag nor missing instants. */
     @Test
     void A05_aCompleteFunding_orASpotTrade_givesAFinalNet() {
-        TradeResult futures =
-                withFunding(Direction.LONG, EntryType.LIMIT, CloseReason.TAKE_PROFIT, "115", List.of(), Direction.LONG);
+        TradeResult futures = withFunding(
+                Direction.LONG, LiquidityRole.MAKER, CloseReason.TAKE_PROFIT, "115", List.of(), Direction.LONG);
         TradeResult spot = calculate(
                 MarketType.SPOT,
                 Direction.LONG,
-                EntryType.MARKET,
+                LiquidityRole.TAKER,
                 "60000",
                 "0.5",
                 CloseReason.MANUAL,
@@ -262,7 +283,7 @@ class TradeResultCalculatorTest {
                 .isThrownBy(() -> calculate(
                         MarketType.SPOT,
                         Direction.LONG,
-                        EntryType.MARKET,
+                        LiquidityRole.TAKER,
                         "60000",
                         "0.5",
                         CloseReason.MANUAL,
@@ -275,7 +296,7 @@ class TradeResultCalculatorTest {
     /** Qty 2, entry 100, one settlement at mark 101 and rate 0.0001, signed for the position by the calculator. */
     private static TradeResult withFunding(
             Direction direction,
-            EntryType entryType,
+            LiquidityRole entryLiquidity,
             CloseReason reason,
             String exit,
             List<LeverageBracket> brackets,
@@ -283,7 +304,34 @@ class TradeResultCalculatorTest {
         FundingFee funding = FundingFee.complete(Rounding.toAmount(FundingCalculator.settlementAmount(
                 fundingSide, new BigDecimal("2"), new BigDecimal("101"), new BigDecimal("0.0001"))));
         return calculate(
-                MarketType.FUTURES, direction, entryType, "100", "2", reason, exit, FUTURES, brackets, funding);
+                MarketType.FUTURES, direction, entryLiquidity, "100", "2", reason, exit, FUTURES, brackets, funding);
+    }
+
+    // ------------------------------------------------------------------ D-111 E1: the entry's liquidity role
+
+    /**
+     * TD 7.8: a LONG LIMIT 100 activated while the last price is 99.50 filled at once at 99.50 and took liquidity, so
+     * its entry pays taker, 99.50 × 2 × 0.0005 = 0.0995 (by its entry type it paid maker, 0.0398). A LIMIT 100 reached
+     * later by a candle rested first and pays maker, 100 × 2 × 0.0002 = 0.04, as case (a).
+     */
+    @ParameterizedTest(name = "{0} at {1}: entry fee {2}")
+    @CsvSource({"TAKER, 99.50, 0.0995", "MAKER, 100, 0.04"})
+    void D111_theEntryFee_followsTheLiquidityRoleOfTheFill(LiquidityRole role, String entry, String entryFee) {
+        TradeResult r = calculate(
+                MarketType.FUTURES,
+                Direction.LONG,
+                role,
+                entry,
+                "2",
+                CloseReason.TAKE_PROFIT,
+                "115",
+                FUTURES,
+                List.of());
+
+        assertThat(r.entryFee()).isEqualByComparingTo(entryFee);
+        assertThat(r.exitFee())
+                .as("a take profit is maker whatever the entry was")
+                .isEqualByComparingTo("0.046");
     }
 
     // ------------------------------------------------------------------ further cases
@@ -294,7 +342,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.LONG,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "100",
                 "2",
                 CloseReason.MANUAL,
@@ -312,7 +360,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.SHORT,
-                EntryType.MARKET,
+                LiquidityRole.TAKER,
                 "100",
                 "2",
                 CloseReason.LIQUIDATION,
@@ -330,7 +378,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.LONG,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "100",
                 "1",
                 CloseReason.LIQUIDATION,
@@ -355,7 +403,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.LONG,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "50000",
                 "1",
                 CloseReason.LIQUIDATION,
@@ -375,7 +423,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.SHORT,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "240000",
                 "1",
                 CloseReason.LIQUIDATION,
@@ -410,7 +458,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 direction,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 entry,
                 "1",
                 CloseReason.LIQUIDATION,
@@ -453,7 +501,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.LONG,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "12345.67",
                 "0.123456789",
                 CloseReason.MANUAL,
@@ -477,7 +525,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.LONG,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "100",
                 "0.123456789",
                 CloseReason.TAKE_PROFIT,
@@ -496,7 +544,7 @@ class TradeResultCalculatorTest {
         TradeResult r = calculate(
                 MarketType.FUTURES,
                 Direction.LONG,
-                EntryType.LIMIT,
+                LiquidityRole.MAKER,
                 "100",
                 "0.123456789",
                 CloseReason.LIQUIDATION,
@@ -514,7 +562,7 @@ class TradeResultCalculatorTest {
                 .isThrownBy(() -> calculate(
                         MarketType.FUTURES,
                         Direction.LONG,
-                        EntryType.LIMIT,
+                        LiquidityRole.MAKER,
                         "250000",
                         "1",
                         CloseReason.LIQUIDATION,
@@ -545,7 +593,7 @@ class TradeResultCalculatorTest {
                 .isThrownBy(() -> new TradeClose(
                         MarketType.SPOT,
                         Direction.LONG,
-                        EntryType.MARKET,
+                        LiquidityRole.TAKER,
                         BigDecimal.ONE,
                         BigDecimal.ZERO,
                         CloseReason.MANUAL,
@@ -560,7 +608,7 @@ class TradeResultCalculatorTest {
                 .isThrownBy(() -> calculate(
                         MarketType.SPOT,
                         Direction.LONG,
-                        EntryType.MARKET,
+                        LiquidityRole.TAKER,
                         "0",
                         "1",
                         CloseReason.MANUAL,
@@ -571,7 +619,7 @@ class TradeResultCalculatorTest {
                 .isThrownBy(() -> calculate(
                         MarketType.SPOT,
                         Direction.LONG,
-                        EntryType.MARKET,
+                        LiquidityRole.TAKER,
                         "1",
                         "1",
                         CloseReason.MANUAL,
@@ -591,7 +639,7 @@ class TradeResultCalculatorTest {
         return new TradeClose(
                 market,
                 Direction.LONG,
-                EntryType.MARKET,
+                LiquidityRole.TAKER,
                 BigDecimal.TEN,
                 BigDecimal.ONE,
                 reason,
@@ -603,7 +651,7 @@ class TradeResultCalculatorTest {
     private static TradeResult calculate(
             MarketType market,
             Direction direction,
-            EntryType entryType,
+            LiquidityRole entryLiquidity,
             String entry,
             String qty,
             CloseReason reason,
@@ -612,13 +660,13 @@ class TradeResultCalculatorTest {
             List<LeverageBracket> brackets) {
         // A Futures trade with no settlement while it was open: its funding is a complete 0.
         FundingFee funding = market == MarketType.SPOT ? null : FundingFee.complete(Rounding.toAmount(BigDecimal.ZERO));
-        return calculate(market, direction, entryType, entry, qty, reason, exit, fees, brackets, funding);
+        return calculate(market, direction, entryLiquidity, entry, qty, reason, exit, fees, brackets, funding);
     }
 
     private static TradeResult calculate(
             MarketType market,
             Direction direction,
-            EntryType entryType,
+            LiquidityRole entryLiquidity,
             String entry,
             String qty,
             CloseReason reason,
@@ -630,7 +678,7 @@ class TradeResultCalculatorTest {
                 new TradeClose(
                         market,
                         direction,
-                        entryType,
+                        entryLiquidity,
                         new BigDecimal(entry),
                         new BigDecimal(qty),
                         reason,

@@ -263,6 +263,12 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional(readOnly = true)
+    public List<UUID> activeAdministrators() {
+        return accounts.findIdsOfActiveAdministrators();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<AuthorCard> authors(Collection<UUID> userIds) {
         if (userIds.isEmpty()) {
             return List.of();

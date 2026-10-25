@@ -65,6 +65,9 @@ class OpenApiDocsTest {
             "/api/v1/plans/{id}",
             "/api/v1/plans/{id}/activate",
             "/api/v1/plans/{id}/cancel",
+            "/api/v1/plans/{id}/close-estimate",
+            "/api/v1/plans/{id}/close-position",
+            "/api/v1/plans/{id}/position-levels",
             "/api/v1/paper/account",
             "/api/v1/paper/wallets/{wallet}",
             "/api/v1/paper/transfers",
@@ -104,6 +107,22 @@ class OpenApiDocsTest {
             "/api/v1/admin/posts/{id}",
             "/api/v1/admin/posts/{id}/restore",
             "/api/v1/posts/coins/{symbol}/discussion",
+            "/api/v1/academy/topics",
+            "/api/v1/academy/articles",
+            "/api/v1/academy/articles/{slug}",
+            "/api/v1/academy/path",
+            "/api/v1/academy/terms",
+            "/api/v1/me/academy/progress",
+            "/api/v1/me/academy/progress/{slug}",
+            "/api/v1/admin/academy/articles",
+            "/api/v1/admin/academy/articles/{id}",
+            "/api/v1/admin/academy/articles/{id}/publish",
+            "/api/v1/admin/academy/articles/{id}/hide",
+            "/api/v1/admin/academy/terms",
+            "/api/v1/admin/academy/terms/{id}",
+            "/api/v1/admin/academy/topics",
+            "/api/v1/admin/academy/topics/{id}",
+            "/api/v1/admin/academy/covers/upload-signature",
             "/api/v1/community/members/{memberId}",
             "/api/v1/notifications",
             "/api/v1/notifications/unread-count",
@@ -123,9 +142,20 @@ class OpenApiDocsTest {
             "/api/v1/admin/users/{id}/role",
             "/api/v1/admin/dashboard",
             "/api/v1/admin/reports",
-            "/api/v1/admin/reports/export");
+            "/api/v1/admin/reports/export",
+            "/api/v1/admin/news-sources",
+            "/api/v1/admin/news-sources/{id}",
+            "/api/v1/admin/news-sources/{id}/crawl-logs",
+            "/api/v1/news",
+            "/api/v1/news/{articleId}",
+            "/api/v1/admin/news-sources/{id}/crawl",
+            "/api/v1/admin/news-articles",
+            "/api/v1/admin/news-articles/sentiment-summary",
+            "/api/v1/admin/news-articles/{id}/hide",
+            "/api/v1/admin/news-articles/{id}/restore",
+            "/api/v1/admin/news-articles/{id}/summarize");
 
-    private static final int OPERATIONS = 114;
+    private static final int OPERATIONS = 155;
 
     @Autowired
     private MockMvc mvc;
@@ -225,6 +255,68 @@ class OpenApiDocsTest {
         assertThat((Map<String, Object>)
                         JsonPath.read(body, "$.components.schemas.TradingPlanSummaryResponse.properties"))
                 .containsKeys("invalidatedAt", "invalidationReason");
+    }
+
+    /**
+     * TP-0 (D-116): the plan snapshot documents the fee figures as decimal strings, and the panel says which fees they
+     * leave out.
+     */
+    @Test
+    @SuppressWarnings("unchecked") // TP-0: the schema object of a JSON document is read as a raw map
+    void D116_theSnapshot_documentsTheFeeFiguresAsStrings() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Map<String, Object>> snapshot =
+                JsonPath.read(body, "$.components.schemas.PlanSnapshotResponse.properties");
+        for (String figure : java.util.List.of(
+                "estimatedEntryFee",
+                "estimatedStopLossExitFee",
+                "estimatedTakeProfitExitFee",
+                "estimatedSlippage",
+                "lossAtStopLoss",
+                "feeShareOfRisk",
+                "netRiskReward")) {
+            assertThat(snapshot).containsKey(figure);
+            assertThat(snapshot.get(figure)).containsEntry("type", "string").containsEntry("format", "decimal");
+        }
+        assertThat((Map<String, Object>) JsonPath.read(
+                        body, "$.components.schemas.PlanCalculationResponse.properties.expectedFillPrice"))
+                .containsEntry("type", "string")
+                .containsEntry("format", "decimal");
+        assertThat((String) JsonPath.read(body, "$.paths['/api/v1/plans/calculate'].post.responses.200.description"))
+                .contains("funding and the liquidation clearance fee are not included");
+        assertThat((java.util.List<String>)
+                        JsonPath.read(body, "$.components.schemas.PlanWarningResponse.properties.type.enum"))
+                .contains("HIGH_FEE_SHARE");
+    }
+
+    /**
+     * D-121: the plan requests carry no capital, the plan and the panel still answer the one they were sized on, and
+     * each plan write documents MSG01 on {@code capital} for a profile without a default capital.
+     */
+    @Test
+    @SuppressWarnings("unchecked") // TP-D: JsonPath reads untyped maps
+    void D121_thePlanRequestsHaveNoCapital_theResponsesKeepIt() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        for (String request : java.util.List.of("CreateTradingPlanRequest", "UpdateTradingPlanRequest")) {
+            assertThat((Map<String, Object>) JsonPath.read(body, "$.components.schemas." + request + ".properties"))
+                    .containsKey("riskPercent")
+                    .doesNotContainKey("capital");
+        }
+        for (String response : java.util.List.of("PlanCalculationResponse", "TradingPlanResponse")) {
+            assertThat((Map<String, Object>) JsonPath.read(body, "$.components.schemas." + response + ".properties"))
+                    .containsKey("capital");
+        }
+        for (String path : java.util.List.of(
+                "$.paths['/api/v1/plans/calculate'].post",
+                "$.paths['/api/v1/plans'].post",
+                "$.paths['/api/v1/plans/{id}'].put",
+                "$.paths['/api/v1/plans/{id}/activate'].post")) {
+            assertThat((String) JsonPath.read(body, path + ".responses.400.description"))
+                    .as(path)
+                    .contains("MSG01 on `capital`");
+        }
     }
 
     /** D-65: the unconfirmed switch to AGGRESSIVE is documented as the 400 of MSG48, like every validation error. */

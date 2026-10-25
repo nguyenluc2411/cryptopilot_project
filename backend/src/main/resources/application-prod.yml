@@ -10,6 +10,9 @@ logging:
       console: ecs
 
 cryptopilot:
+  # Production unless the environment says otherwise; staging runs this profile too and sets
+  # CRYPTOPILOT_ENVIRONMENT=staging, without which the demo profile refuses to start (D-120).
+  environment: ${CRYPTOPILOT_ENVIRONMENT:production}
   outbox:
     # T-056 runs in this profile: failed event deliveries (mail) are retried.
     enabled: true
@@ -81,6 +84,9 @@ cryptopilot:
       # NSF-04 runs in this profile: the futures metrics and funding settlements of the streamed pairs.
       enabled: true
   trading:
+    expiry:
+      # NSF-09 runs in this profile: ACTIVE plans whose expiry has come are expired every minute.
+      enabled: true
     matching:
       replay:
         # T-043 runs in this profile: after a restart, the closed 1-minute candles missed since the
@@ -101,10 +107,21 @@ cryptopilot:
         # TR-02, Q-T6 run in this profile: after a restart or a lost stream, the closed 1-minute candles the
         # paper matching engine missed are fetched from the exchange and replayed.
         enabled: true
+  journal:
+    funding-correction:
+      # T-048b runs in this profile: closed trades whose funding was incomplete are recomputed every 10 minutes.
+      enabled: true
   alert:
     # NSF-06 runs in this profile: PRICE alerts on the 1-minute candle updates, and the expiry sweep.
     enabled: true
     expiry-sweep:
+      enabled: true
+  news:
+    crawl:
+      # NSF-10 runs in this profile: the active sources whose interval has elapsed, every 5 minutes.
+      enabled: true
+    summary:
+      # NSF-11 runs in this profile: the articles without a summary, through the AI Service, every 5 minutes.
       enabled: true
 
 springdoc:

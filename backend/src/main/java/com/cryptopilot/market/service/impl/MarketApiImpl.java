@@ -149,6 +149,12 @@ public class MarketApiImpl implements MarketApi {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<CoinListing> listedCoins() {
+        return coins.findListed().stream().map(MarketApiImpl::listing).toList();
+    }
+
+    @Override
     @Transactional
     public List<CoinListing> ensureCoins(Collection<String> symbols) {
         if (symbols.isEmpty()) {
@@ -179,7 +185,11 @@ public class MarketApiImpl implements MarketApi {
 
     @Override
     public Optional<BigDecimal> currentLastPrice(MarketType market, String symbol) {
-        return current(market, symbol, CachedPrice::lastPrice);
+        PriceLookup lookup = prices.latestLast(market, symbol);
+        if (lookup.status() != PriceLookup.Status.FOUND) {
+            return Optional.empty();
+        }
+        return lookup.price().map(CachedPrice::lastPrice);
     }
 
     @Override
@@ -200,6 +210,11 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public Map<String, BigDecimal> currentLastPrices(MarketType market, Collection<String> symbols) {
         Map<String, BigDecimal> current = new HashMap<>();
+        if (market == MarketType.FUTURES) {
+            // The futures last price has an instant of its own, which the batch read of the mark prices does not see.
+            symbols.forEach(symbol -> currentLastPrice(market, symbol).ifPresent(price -> current.put(symbol, price)));
+            return current;
+        }
         prices.latest(market, symbols).forEach((symbol, lookup) -> {
             if (lookup.status() == PriceLookup.Status.FOUND) {
                 lookup.price().map(CachedPrice::lastPrice).ifPresent(price -> current.put(symbol, price));
@@ -252,6 +267,11 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from) {
         return minuteKlines.closedMinuteKlines(market, pairId, from);
+    }
+
+    @Override
+    public MinuteKlineBatch closedMarkPriceKlines(UUID pairId, Instant from) {
+        return minuteKlines.closedMarkPriceKlines(pairId, from);
     }
 
     @Override

@@ -5,25 +5,35 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.calculator.LiquidationCalculator;
+import com.cryptopilot.trading.calculator.PlanCostCalculator;
 import com.cryptopilot.trading.calculator.PositionSizeCalculator;
+import com.cryptopilot.trading.matching.EntryFillRule;
+import com.cryptopilot.trading.model.EntryExpectation;
+import com.cryptopilot.trading.model.FeeSchedule;
 import com.cryptopilot.trading.model.LeverageBracket;
 import com.cryptopilot.trading.model.LiquidationEstimate;
 import com.cryptopilot.trading.model.LiquidationInput;
 import com.cryptopilot.trading.model.LiquidationOutcome;
 import com.cryptopilot.trading.model.PlanCalculation;
+import com.cryptopilot.trading.model.PlanCosts;
 import com.cryptopilot.trading.model.RiskCalculation;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskOutcome;
 import com.cryptopilot.trading.model.RiskProfileLimits;
 import com.cryptopilot.trading.model.WarningThresholds;
 import com.cryptopilot.trading.model.enums.Direction;
+import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 
 /**
- * A plan run through the real sizing (T-035) and liquidation estimate (T-036), so each rule is tested on the values
- * those calculations produce. The default is a Futures LONG that raises no warning: E 100, S 95, T 110, capital
- * 1,000, risk 1 %, 5x, a BALANCED profile (1 %, 5x, 4 %) and the seeded thresholds (1.5, 10 %, 0.001).
+ * A plan run through the real sizing (T-035), liquidation estimate (T-036) and cost estimate (TP-0), so each rule is
+ * tested on the values those calculations produce. The default is a Futures LONG that raises no warning: E 100, S 95,
+ * T 110, capital 1,000, risk 1 %, 5x, a BALANCED profile (1 %, 5x, 4 %), a resting LIMIT entry (maker) without
+ * slippage at the seeded fee rates (Futures 0.02 % / 0.05 %, Spot 0.1 %) and the seeded thresholds (1.5, 10 %,
+ * 0.001, 0.2).
  */
 public final class PlanFixture {
 
@@ -45,8 +55,11 @@ public final class PlanFixture {
     private RiskProfileLimits profile = new RiskProfileLimits(BigDecimal.ONE, 5, new BigDecimal("4"));
     private String otherOpenRisk = "0";
     private String fundingRate;
-    private WarningThresholds thresholds =
-            new WarningThresholds(new BigDecimal("1.5"), BigDecimal.TEN, new BigDecimal("0.001"));
+    private WarningThresholds thresholds = new WarningThresholds(
+            new BigDecimal("1.5"), BigDecimal.TEN, new BigDecimal("0.001"), new BigDecimal("0.2"));
+    private EntryType entryType = EntryType.LIMIT;
+    private String lastPrice;
+    private int slippageBps;
 
     public static PlanFixture futuresLong() {
         return new PlanFixture();
@@ -120,8 +133,48 @@ public final class PlanFixture {
 
     public PlanFixture thresholds(String minRiskReward, String wideStopPercent, String highFunding) {
         thresholds = new WarningThresholds(
-                new BigDecimal(minRiskReward), new BigDecimal(wideStopPercent), new BigDecimal(highFunding));
+                new BigDecimal(minRiskReward),
+                new BigDecimal(wideStopPercent),
+                new BigDecimal(highFunding),
+                thresholds.feeRiskWarnRatio());
         return this;
+    }
+
+    /** {@code FEE_RISK_WARN_RATIO}: HIGH_FEE_SHARE at or above this share of the risk amount. */
+    public PlanFixture feeRiskWarnRatio(String value) {
+        thresholds = new WarningThresholds(
+                thresholds.minRiskRewardRatio(),
+                thresholds.wideStopLossPercent(),
+                thresholds.highFundingRate(),
+                new BigDecimal(value));
+        return this;
+    }
+
+    /**
+     * The entry type, filled as it would be: MARKET and STOP taker; a LIMIT taker when {@link #lastPrice} reaches it,
+     * else maker. A MARKET entry is the price already moved by the slippage from {@link #lastPrice}.
+     */
+    public PlanFixture entryType(EntryType value) {
+        entryType = value;
+        return this;
+    }
+
+    /** The current last price: the reference of a MARKET entry, and what decides whether a LIMIT is taker. */
+    public PlanFixture lastPrice(String value) {
+        lastPrice = value;
+        return this;
+    }
+
+    public PlanFixture slippageBps(int value) {
+        slippageBps = value;
+        return this;
+    }
+
+    /** The seeded fee rates of the fixture's market. */
+    public FeeSchedule fees() {
+        return market == MarketType.SPOT
+                ? new FeeSchedule(new BigDecimal("0.001"), new BigDecimal("0.001"), null)
+                : new FeeSchedule(new BigDecimal("0.0002"), new BigDecimal("0.0005"), new BigDecimal("0.0125"));
     }
 
     public PlanCalculation build() {
@@ -146,7 +199,21 @@ public final class PlanFixture {
             assertThat(estimate).as("the fixture's plan is estimated").isInstanceOf(LiquidationEstimate.class);
             liquidation = (LiquidationEstimate) estimate;
         }
+        PlanCosts costs = PlanCostCalculator.calculate(plan, sized, expectation(plan), fees());
         return new PlanCalculation(
-                plan, sized, liquidation, fundingRate == null ? null : new BigDecimal(fundingRate), thresholds);
+                plan, sized, liquidation, fundingRate == null ? null : new BigDecimal(fundingRate), costs, thresholds);
+    }
+
+    private EntryExpectation expectation(RiskInput plan) {
+        Optional<BigDecimal> last = Optional.ofNullable(lastPrice).map(BigDecimal::new);
+        LiquidityRole role = EntryFillRule.expectedLiquidity(entryType, plan.direction(), plan.entryPrice(), last);
+        BigDecimal reference =
+                switch (entryType) {
+                    case MARKET ->
+                        last.orElseThrow(() -> new IllegalStateException("a MARKET entry needs a last price"));
+                    case STOP -> plan.entryPrice();
+                    case LIMIT -> role == LiquidityRole.TAKER ? last.orElseThrow() : null;
+                };
+        return new EntryExpectation(entryType, role, reference, slippageBps);
     }
 }

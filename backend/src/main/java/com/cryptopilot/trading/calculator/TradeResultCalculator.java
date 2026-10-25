@@ -2,22 +2,23 @@ package com.cryptopilot.trading.calculator;
 
 import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.matching.ExitRule;
 import com.cryptopilot.trading.model.FeeSchedule;
 import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.LeverageBracket;
 import com.cryptopilot.trading.model.TradeClose;
 import com.cryptopilot.trading.model.TradeResult;
+import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
-import com.cryptopilot.trading.model.enums.EntryType;
 import java.math.BigDecimal;
 
 /**
  * The realized profit and loss and the fees of a closed position. Realized is the price result only. Each fill pays
- * notional × rate: maker for a LIMIT entry and a take profit, taker for a MARKET entry, a stop loss and a manual
- * close. A liquidation pays the clearance fee instead of the taker fee. Funding is computed by
+ * notional × the rate of its liquidity role: the entry by the role stored with its fill, a take profit maker, a stop
+ * loss and a manual close taker. A liquidation pays the clearance fee instead. Funding is computed by
  * {@link FundingCalculator} and passed in.
  *
- * <p>Rule: BR-35, BR-36, BR-37, BR-38; D-97; Q-54; TECHNICAL_DESIGN 7.8.
+ * <p>Rule: BR-35, BR-36, BR-37, BR-38; D-97; D-111 E1; Q-54; TECHNICAL_DESIGN 7.8.
  */
 public final class TradeResultCalculator {
 
@@ -34,21 +35,41 @@ public final class TradeResultCalculator {
         if ((in.market() == MarketType.SPOT) != (funding == null)) {
             throw new IllegalArgumentException("a Futures trade needs its funding and a Spot trade has none");
         }
-        BigDecimal priceMove = in.exitPrice().subtract(in.entryPrice());
-        BigDecimal realized =
-                (in.direction() == Direction.LONG ? priceMove : priceMove.negate()).multiply(in.quantity());
+        BigDecimal realized = priceResult(in.direction(), in.entryPrice(), in.exitPrice(), in.quantity());
         FeeSchedule fees = in.fees();
-        BigDecimal entryRate = in.entryType() == EntryType.LIMIT ? fees.maker() : fees.taker();
-        BigDecimal entryFee = in.entryPrice().multiply(in.quantity()).multiply(entryRate);
-        BigDecimal exitNotional = in.exitPrice().multiply(in.quantity());
-        BigDecimal exitFee =
-                switch (in.reason()) {
-                    case TAKE_PROFIT -> exitNotional.multiply(fees.maker());
-                    case STOP_LOSS, MANUAL -> exitNotional.multiply(fees.taker());
-                    case LIQUIDATION -> clearanceFee(exitNotional, fees.liquidationClearance(), liquidationBracket(in));
-                };
+        BigDecimal entryFee = fees.fee(in.entryLiquidity(), in.entryPrice(), in.quantity());
+        BigDecimal exitFee = in.reason() == CloseReason.LIQUIDATION
+                ? clearanceFee(
+                        in.exitPrice().multiply(in.quantity()), fees.liquidationClearance(), liquidationBracket(in))
+                : fees.fee(ExitRule.liquidity(in.reason()), in.exitPrice(), in.quantity());
         return new TradeResult(
                 Rounding.toAmount(realized), Rounding.toAmount(entryFee), Rounding.toAmount(exitFee), funding);
+    }
+
+    /**
+     * The unrealized P/L of an open position at the current price, rounded to the stored scale: the price result the
+     * position would realize if it closed there, without fees or funding. The current price is the Futures mark price
+     * or the Spot last price.
+     *
+     * <p>Rule: BR-35; UC-20; Q-55 (the live P/L of SCR-18 is unrealized by mark, no fees); TECHNICAL_DESIGN 7.8.
+     * <p>Reference: Binance FAQ, <i>How to Calculate Profit and Loss for Futures Contracts</i> (unrealized PnL =
+     * position size × direction × (mark price − entry price)).
+     *
+     * @param direction LONG gains when the price rises, SHORT when it falls
+     * @param entryPrice the actual fill price
+     * @param currentPrice the Futures mark price or the Spot last price
+     * @param quantity the quantity held
+     */
+    public static BigDecimal unrealizedPnl(
+            Direction direction, BigDecimal entryPrice, BigDecimal currentPrice, BigDecimal quantity) {
+        return Rounding.toAmount(priceResult(direction, entryPrice, currentPrice, quantity));
+    }
+
+    /** LONG {@code (exit − entry) × qty}, SHORT {@code (entry − exit) × qty}, at full precision (BR-35, D-97 rule 1). */
+    private static BigDecimal priceResult(
+            Direction direction, BigDecimal entryPrice, BigDecimal exitPrice, BigDecimal quantity) {
+        BigDecimal priceMove = exitPrice.subtract(entryPrice);
+        return (direction == Direction.LONG ? priceMove : priceMove.negate()).multiply(quantity);
     }
 
     /**

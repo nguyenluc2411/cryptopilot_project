@@ -2,10 +2,12 @@ package com.cryptopilot.market.repository;
 
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.enums.MarketType;
+import jakarta.persistence.LockModeType;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +29,14 @@ public interface CryptoPairRepository extends Repository<CryptoPair, UUID> {
 
     @Transactional(readOnly = true)
     Optional<CryptoPair> findById(UUID pairId);
+
+    /**
+     * The pair, its row locked until the calling transaction ends: an administrator's change reads the leverage
+     * ceiling or the brackets and writes against them, and another change of the same pair must wait for it (BR-26).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from CryptoPair p where p.id = :pairId")
+    Optional<CryptoPair> findByIdForUpdate(UUID pairId);
 
     /** The stored pairs among these ids; an unknown id is left out. */
     @Transactional(readOnly = true)

@@ -6,14 +6,16 @@ import java.util.Objects;
 
 /**
  * Everything the warning rules read: the plan as entered, its sizing (T-035), on Futures its margin and liquidation
- * estimate (T-036) and the pair's current funding rate, and the configured thresholds.
+ * estimate (T-036) and the pair's current funding rate, its expected fees and slippage, and the configured
+ * thresholds.
  *
- * <p>Rule: BR-25, BR-26, BR-28, BR-29; TECHNICAL_DESIGN 7.5.
+ * <p>Rule: BR-25, BR-26, BR-28, BR-29; TECHNICAL_DESIGN 7.5; D-116.
  *
  * @param plan the plan's values and the Trader's risk profile
  * @param sized the sizing of the plan
  * @param liquidation the liquidation estimate on Futures; {@code null} on Spot
  * @param fundingRate the pair's current funding rate on Futures, {@code null} on Spot or when none is known
+ * @param costs the expected fees and slippage of the sized plan
  * @param thresholds the BR-29 thresholds from system settings
  */
 public record PlanCalculation(
@@ -21,11 +23,13 @@ public record PlanCalculation(
         RiskCalculation sized,
         LiquidationEstimate liquidation,
         BigDecimal fundingRate,
+        PlanCosts costs,
         WarningThresholds thresholds) {
 
     public PlanCalculation {
         Objects.requireNonNull(plan, "plan");
         Objects.requireNonNull(sized, "sized");
+        Objects.requireNonNull(costs, "costs");
         Objects.requireNonNull(thresholds, "thresholds");
         boolean futures = plan.market() == MarketType.FUTURES;
         if (futures != (liquidation != null)) {

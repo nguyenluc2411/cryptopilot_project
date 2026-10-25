@@ -19,9 +19,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * The rules V21 and V35 put on the paper trading tables, each proved by a row the database has to refuse, next to
+ * The rules V21 and V47 put on the paper trading tables, each proved by a row the database has to refuse, next to
  * the nearest row it has to accept, so a refusal is known to come from the rule under test and not from a broken
- * fixture. Since V35 every row belongs to the Trader directly, a transfer is its pair of ledger entries and an order
+ * fixture. Since V47 every row belongs to the Trader directly, a transfer is its pair of ledger entries and an order
  * may name the plan it carries out (D-117).
  *
  * <p>Every test runs in a transaction that is rolled back; the statement expected to fail is the last one, because a
@@ -84,7 +84,7 @@ class PaperTradingSchemaTest {
         assertThat(jdbc.sql("""
                         select count(*) from information_schema.tables
                          where table_schema = 'public' and table_name like 'paper\\_%'""").query(Long.class).single())
-                .as("no paper_ table is left: V35 renamed, folded or dropped each one")
+                .as("no paper_ table is left: V47 renamed, folded or dropped each one")
                 .isZero();
         assertThat(jdbc.sql("""
                         select count(*) from information_schema.tables

@@ -48,6 +48,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -140,33 +141,51 @@ public class PairAdminServiceImpl implements PairAdminService {
             throw new BusinessException(ErrorCode.PAIR_NOT_TRADING, "the exchange trades " + wanted + " nowhere");
         }
         Instant now = clock.instant();
+        try {
+            return transactions.execute(status -> created(adminId, wanted, spot, futures, now));
+        } catch (DataIntegrityViolationException refused) {
+            // The whole registration rolled back, so no CREATED audit row was written for it (BR-57). The pair being
+            // there now means another administrator registered it meanwhile. Anything else, such as two pairs of one
+            // new coin (SOLUSDT and SOLUSDC) racing on uq_coin_symbol, is a conflict the client may simply retry.
+            if (pairs.findBySymbol(wanted).isPresent()) {
+                throw new BusinessException(ErrorCode.PAIR_ALREADY_REGISTERED, wanted + " is already a pair");
+            }
+            throw refused;
+        }
+    }
+
+    /**
+     * Creates the pair from the exchange information, places it last and audits it, in the caller's transaction: the
+     * pair never exists without its place and its CREATED audit row (BR-57). The exchange is read before, so no
+     * transaction waits on it.
+     */
+    private AdminPairResponse created(
+            UUID adminId, String wanted, List<ExchangeSymbol> spot, List<ExchangeSymbol> futures, Instant now) {
         syncWriter.apply(MarketType.SPOT, spot, List.of(wanted), now);
         syncWriter.apply(MarketType.FUTURES, futures, List.of(wanted), now);
-        return transactions.execute(status -> {
-            CryptoPair pair = pairs.findBySymbol(wanted)
-                    .orElseThrow(() -> new IllegalStateException(wanted + " was not created by the synchronisation"));
-            int last = pairs.findAllForSync().stream()
-                    .filter(other -> !other.getId().equals(pair.getId()))
-                    .mapToInt(CryptoPair::getDisplayOrder)
-                    .max()
-                    .orElse(0);
-            pair.placeAt(last + 1);
-            pairs.save(pair);
-            admin.audit(new AuditEntry(
-                    adminId,
-                    AuditAction.CONFIGURATION_CREATED,
-                    AuditedEntity.CRYPTO_PAIR,
-                    pair.getId(),
-                    null,
-                    values(pair)));
-            return responses(List.of(pair)).getFirst();
-        });
+        CryptoPair pair = pairs.findBySymbol(wanted)
+                .orElseThrow(() -> new IllegalStateException(wanted + " was not created by the synchronisation"));
+        int last = pairs.findAllForSync().stream()
+                .filter(other -> !other.getId().equals(pair.getId()))
+                .mapToInt(CryptoPair::getDisplayOrder)
+                .max()
+                .orElse(0);
+        pair.placeAt(last + 1);
+        pairs.save(pair);
+        admin.audit(new AuditEntry(
+                adminId,
+                AuditAction.CONFIGURATION_CREATED,
+                AuditedEntity.CRYPTO_PAIR,
+                pair.getId(),
+                null,
+                values(pair)));
+        return responses(List.of(pair)).getFirst();
     }
 
     @Override
     @Transactional
     public AdminPairResponse update(UUID adminId, UUID pairId, UpdatePairRequest request) {
-        CryptoPair pair = pair(pairId);
+        CryptoPair pair = lockedPair(pairId);
         if (request.futuresEnabled() && request.maxLeverage() == null) {
             throw new FieldValidationException(
                     "a futures market needs its maximum leverage", Map.of("maxLeverage", "MSG01"));
@@ -209,6 +228,13 @@ public class PairAdminServiceImpl implements PairAdminService {
         for (MarketType market : disabled) {
             events.publishEvent(new PairMarketDisabled(pair.getId(), pair.getSymbol(), market, now));
         }
+        // Again, now the listeners hold the market's ACTIVE plans under their row locks: a fill that was committing
+        // when the first check ran has finished, so a position it opened is seen here and the change rolls back.
+        // The trading check reads the journal, which the matching engine writes from T-048 on; until then only the
+        // paper positions refuse.
+        for (MarketType market : disabled) {
+            requireNoOpenPositions(pair, market);
+        }
         Map<String, Object> after = values(pair);
         if (!before.equals(after)) {
             admin.audit(new AuditEntry(
@@ -232,7 +258,7 @@ public class PairAdminServiceImpl implements PairAdminService {
     @Override
     @Transactional
     public LeverageBracketsResponse replaceBrackets(UUID adminId, UUID pairId, LeverageBracketsRequest request) {
-        CryptoPair pair = pair(pairId);
+        CryptoPair pair = lockedPair(pairId);
         if (pair.exchangeStatus(MarketType.FUTURES) == null) {
             throw new BusinessException(
                     ErrorCode.PAIR_NOT_TRADING, "the exchange has never listed " + pair.getSymbol() + " on futures");
@@ -336,6 +362,14 @@ public class PairAdminServiceImpl implements PairAdminService {
 
     private CryptoPair pair(UUID pairId) {
         return pairs.findById(pairId).orElseThrow(() -> new ResourceNotFoundException("Pair", pairId));
+    }
+
+    /**
+     * The pair under its row lock: a change of the leverage ceiling and a change of the brackets each check against
+     * the other's stored value, so two of them on one pair run one after the other and BR-26 holds after both.
+     */
+    private CryptoPair lockedPair(UUID pairId) {
+        return pairs.findByIdForUpdate(pairId).orElseThrow(() -> new ResourceNotFoundException("Pair", pairId));
     }
 
     private List<AdminPairResponse> responses(List<CryptoPair> found) {

@@ -91,6 +91,58 @@ class PlanValidityRuleTest {
         }
     }
 
+    /** D-112 (Q-72): the bounds of the books are inclusive, so a last price equal to the take profit has reached it. */
+    @ParameterizedTest(name = "LIMIT {0} take profit 110 at last {1} -> refused {2}")
+    @CsvSource({
+        "LONG,  109.99, false",
+        "LONG,  110,    true",
+        "LONG,  110.01, true",
+        "SHORT, 110.01, false",
+        "SHORT, 110,    true",
+        "SHORT, 109.99, true"
+    })
+    void BR68_aTakeProfitTheLastPriceAlreadyReached_isMsg16OnTheTakeProfit(
+            Direction direction, String last, boolean refused) {
+        Optional<InputViolation> violation =
+                PlanValidityRule.takeProfitAlreadyReached(direction, new BigDecimal("110"), new BigDecimal(last));
+
+        if (refused) {
+            assertThat(violation).hasValueSatisfying(v -> {
+                assertThat(v.field()).isEqualTo("takeProfit");
+                assertThat(v.messageCode()).isEqualTo("MSG16");
+                assertThat(v.detail()).contains(direction.name()).contains("current price " + last);
+            });
+        } else {
+            assertThat(violation).isEmpty();
+        }
+    }
+
+    /** D-112 (Q-72): a last price equal to the stop loss has reached it. */
+    @ParameterizedTest(name = "STOP {0} stop loss 95 at last {1} -> refused {2}")
+    @CsvSource({
+        "LONG,  95.01, false",
+        "LONG,  95,    true",
+        "LONG,  94.99, true",
+        "SHORT, 94.99, false",
+        "SHORT, 95,    true",
+        "SHORT, 95.01, true"
+    })
+    void BR68_aStopLossTheLastPriceAlreadyReached_isMsg16OnTheStopLoss(
+            Direction direction, String last, boolean refused) {
+        Optional<InputViolation> violation =
+                PlanValidityRule.stopLossAlreadyReached(direction, new BigDecimal("95"), new BigDecimal(last));
+
+        if (refused) {
+            assertThat(violation).hasValueSatisfying(v -> {
+                assertThat(v.field()).isEqualTo("stopLoss");
+                assertThat(v.messageCode()).isEqualTo("MSG16");
+                assertThat(v.detail()).contains(direction.name()).contains("current price " + last);
+            });
+        } else {
+            assertThat(violation).isEmpty();
+        }
+    }
+
     @ParameterizedTest(name = "{0} R with block {1} -> {2}")
     @CsvSource({
         "0,          0.75, false",
