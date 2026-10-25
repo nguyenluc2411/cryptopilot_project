@@ -38,6 +38,27 @@ class TradeResultCalculatorTest {
     private static final LeverageBracket B2 = bracket(2, "50000", "250000", "0.005", "50");
     private static final List<LeverageBracket> BRACKETS = List.of(B1, B2);
 
+    // ------------------------------------------------------------------ unrealized P/L (T-048a)
+
+    /**
+     * Q-55: the unrealized P/L at the mark price is the price result without fees, LONG (mark − entry) × qty and SHORT
+     * mirrored, at the stored scale: LONG 2 at 100 marked 101.5 gains 3, SHORT loses 3; a SHORT marked 98.25 gains
+     * 3.5; 0.123 at 60,000 marked 60,000.01 gains 0.00123.
+     */
+    @ParameterizedTest(name = "{0} {1} at {2} marked {3}: {4}")
+    @CsvSource({
+        "LONG, 2, 100, 101.5, 3.00000000",
+        "SHORT, 2, 100, 101.5, -3.00000000",
+        "SHORT, 2, 100, 98.25, 3.50000000",
+        "LONG, 0.123, 60000, 60000.01, 0.00123000"
+    })
+    void Q55_theUnrealizedPnl_isThePriceResultAtTheMarkPrice_withoutFees(
+            Direction direction, String quantity, String entry, String mark, String expected) {
+        assertThat(TradeResultCalculator.unrealizedPnl(
+                        direction, new BigDecimal(entry), new BigDecimal(mark), new BigDecimal(quantity)))
+                .isEqualTo(new BigDecimal(expected));
+    }
+
     // ------------------------------------------------------------------ T-044 acceptance cases
 
     /** (a) LONG Futures TP, qty 2, LIMIT 100, TP 115: realized 30, fee 0.04 + 0.046, net 29.914. */

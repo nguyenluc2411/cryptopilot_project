@@ -30,11 +30,13 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
+import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
@@ -43,6 +45,7 @@ import com.cryptopilot.trading.dto.request.UpdateTradingPlanRequest;
 import com.cryptopilot.trading.dto.response.PlanCalculationResponse;
 import com.cryptopilot.trading.dto.response.PlanSnapshotResponse;
 import com.cryptopilot.trading.dto.response.PlanWarningResponse;
+import com.cryptopilot.trading.dto.response.PositionResponse;
 import com.cryptopilot.trading.dto.response.StatusChangeResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
@@ -58,6 +61,7 @@ import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.model.enums.PlanTab;
+import com.cryptopilot.trading.model.enums.PositionStatus;
 import com.cryptopilot.trading.model.enums.WarningSeverity;
 import com.cryptopilot.trading.model.enums.WarningType;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
@@ -894,6 +898,140 @@ class TradingPlanServiceImplTest {
                 .extracting(PlanWarningResponse::type)
                 .doesNotContain(WarningType.TOTAL_OPEN_RISK);
         verify(plans, never()).riskOf(any());
+    }
+
+    /**
+     * UC-20, Q-55: an open Spot position is valued at the Spot last price, without fees: (103 − 100) × 2 = 6. Spot has
+     * no liquidation price.
+     */
+    @Test
+    void UC20_anOpenSpotPosition_answersItsUnrealizedPnlAtTheLastPrice() {
+        TradingPlan plan = executedSpotMarket();
+        position(plan, PositionStatus.OPEN);
+        when(market.pairListings(List.of(PAIR))).thenReturn(List.of(new PairListing(PAIR, "BTCUSDT", true, true)));
+        currentPrice(MarketType.SPOT, "103");
+
+        PositionResponse position = service.get(USER, plan.getId()).position();
+
+        assertThat(position.status()).isEqualTo(PositionStatus.OPEN);
+        assertThat(position.fillPrice()).isEqualByComparingTo("100");
+        assertThat(position.quantity()).isEqualByComparingTo("2");
+        assertThat(position.entryTime()).isEqualTo(NOW);
+        assertThat(position.entryFee()).isEqualByComparingTo("0.2");
+        assertThat(position.liquidationPrice()).isNull();
+        assertThat(position.currentPrice()).isEqualByComparingTo("103");
+        assertThat(position.unrealizedPnl()).isEqualTo(new BigDecimal("6.00000000"));
+    }
+
+    /**
+     * UC-20, Q-55: an open Futures position is valued at the mark price, not the last price: (99 − 100) × 2 = −2, and
+     * answers the liquidation price of its snapshot.
+     */
+    @Test
+    void UC20_anOpenFuturesPosition_isValuedAtTheMarkPrice_andAnswersItsLiquidationPrice() {
+        currentPrice(MarketType.FUTURES, "100");
+        service.create(USER, activating(futuresMarket()));
+        TradingPlan plan = saved;
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        position(plan, PositionStatus.OPEN);
+        when(market.pairListings(List.of(PAIR))).thenReturn(List.of(new PairListing(PAIR, "BTCUSDT", true, true)));
+        when(market.currentMarkPrice("BTCUSDT")).thenReturn(Optional.of(new BigDecimal("99")));
+
+        PositionResponse position = service.get(USER, plan.getId()).position();
+
+        assertThat(position.currentPrice()).isEqualByComparingTo("99");
+        assertThat(position.unrealizedPnl()).isEqualTo(new BigDecimal("-2.00000000"));
+        assertThat(position.liquidationPrice())
+                .isNotNull()
+                .isEqualByComparingTo(plan.getSnapshot().estimatedLiquidationPrice());
+    }
+
+    /** Q-55: without a cached price an open position answers no current price and no unrealized P/L. */
+    @Test
+    void UC20_anOpenPositionWithoutACachedPrice_answersNoUnrealizedPnl() {
+        TradingPlan plan = executedSpotMarket();
+        position(plan, PositionStatus.OPEN);
+        when(market.pairListings(List.of(PAIR))).thenReturn(List.of(new PairListing(PAIR, "BTCUSDT", true, true)));
+        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.empty());
+
+        PositionResponse position = service.get(USER, plan.getId()).position();
+
+        assertThat(position.status()).isEqualTo(PositionStatus.OPEN);
+        assertThat(position.currentPrice()).isNull();
+        assertThat(position.unrealizedPnl()).isNull();
+    }
+
+    /** UC-20: a closed position answers its entry figures and reads no price at all. */
+    @Test
+    void UC20_aClosedPosition_readsNoPrice() {
+        TradingPlan plan = executedSpotMarket();
+        position(plan, PositionStatus.CLOSED);
+
+        PositionResponse position = service.get(USER, plan.getId()).position();
+
+        assertThat(position.status()).isEqualTo(PositionStatus.CLOSED);
+        assertThat(position.currentPrice()).isNull();
+        assertThat(position.unrealizedPnl()).isNull();
+        verify(market, never()).pairListings(any());
+    }
+
+    /** UC-20: a plan that is not EXECUTED has no position and does not ask the journal. */
+    @Test
+    void UC20_aPlanNotExecuted_hasNoPosition() {
+        TradingPlan plan = draft();
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+
+        assertThat(service.get(USER, plan.getId()).position()).isNull();
+        verify(journal, never()).positionOf(any());
+    }
+
+    /**
+     * SRS 3.5.2, BR-34: the list asks the journal once, for the page's EXECUTED plans only, and each row answers its
+     * position status; a row that is not EXECUTED answers none.
+     */
+    @Test
+    void SCR16_theExecutedRows_answerTheirPositionStatus() {
+        TradingPlan executed = executedSpotMarket();
+        TradingPlan waiting = draft();
+        when(plans.search(any(), any(), any(), any(boolean.class), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of(executed, waiting), PageRequest.of(0, 20), 2));
+        when(journal.positionStatuses(List.of(executed.getId())))
+                .thenReturn(Map.of(executed.getId(), PositionStatus.OPEN));
+
+        PageResponse<TradingPlanSummaryResponse> page =
+                service.list(USER, new PlanListQuery(null, null, null, null, null, 1, 20));
+
+        assertThat(page.items())
+                .extracting(TradingPlanSummaryResponse::positionStatus)
+                .containsExactly(PositionStatus.OPEN, null);
+    }
+
+    /** SRS 3.5.2: a page without an EXECUTED plan does not ask the journal. */
+    @Test
+    void SCR16_aPageWithoutExecutedPlans_doesNotAskTheJournal() {
+        TradingPlan waiting = draft();
+        when(plans.search(any(), any(), any(), any(boolean.class), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of(waiting), PageRequest.of(0, 20), 1));
+
+        service.list(USER, new PlanListQuery(null, null, null, null, null, 1, 20));
+
+        verify(journal, never()).positionStatuses(any());
+    }
+
+    /** A Spot MARKET filled at activation at 100 (quantity 2), readable by its owner. */
+    private TradingPlan executedSpotMarket() {
+        currentPrice(MarketType.SPOT, "100");
+        service.create(USER, activating(spotMarket("95", "110")));
+        TradingPlan plan = saved;
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        return plan;
+    }
+
+    /** The journal holds the plan's position: filled at 100, quantity 2, at {@code NOW}, entry fee 0.2. */
+    private void position(TradingPlan plan, PositionStatus status) {
+        when(journal.positionOf(plan.getId()))
+                .thenReturn(Optional.of(new RecordedPosition(
+                        plan.getId(), status, new BigDecimal("100"), new BigDecimal("2"), NOW, new BigDecimal("0.2"))));
     }
 
     // ------------------------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
+import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.PlanValidityRule;
 import com.cryptopilot.trading.calculator.SlippageCalculator;
@@ -24,6 +25,7 @@ import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.dto.request.PlanInputs;
 import com.cryptopilot.trading.dto.request.UpdateTradingPlanRequest;
 import com.cryptopilot.trading.dto.response.PlanCalculationResponse;
+import com.cryptopilot.trading.dto.response.PositionResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
@@ -45,6 +47,7 @@ import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
+import com.cryptopilot.trading.model.enums.PositionStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import com.cryptopilot.trading.service.TradingPlanService;
 import com.cryptopilot.user.PlanDefaults;
@@ -155,7 +158,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             requireRoomForAnActivePlan(userId);
             activate(plan, calculated, now, last);
         }
-        return PlanResponses.detail(store(plan));
+        return detail(store(plan));
     }
 
     @Override
@@ -182,7 +185,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             requireRoomForAnActivePlan(userId);
             activate(plan, calculated, now, last);
         }
-        return PlanResponses.detail(store(plan));
+        return detail(store(plan));
     }
 
     @Override
@@ -203,7 +206,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         // After the calculation and its entitlement check, which answers MSG29 before a missing price answers 503.
         requireValidAtActivation(plan, last);
         activate(plan, calculated, now, last);
-        return PlanResponses.detail(store(plan));
+        return detail(store(plan));
     }
 
     @Override
@@ -214,7 +217,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 .orElseThrow(() -> new ResourceNotFoundException("TradingPlan", planId));
         plan.cancel(clock.instant());
         events.publishEvent(new TradingPlanCancelled(plan.getId(), plan.getMarket(), plan.getPairId()));
-        return PlanResponses.detail(plans.save(plan));
+        return detail(plans.save(plan));
     }
 
     @Override
@@ -240,7 +243,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     @Override
     @Transactional(readOnly = true)
     public TradingPlanResponse get(UUID userId, UUID planId) {
-        return PlanResponses.detail(owned(userId, planId));
+        return detail(owned(userId, planId));
     }
 
     @Override
@@ -260,7 +263,13 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 TimeBounds.fromOrEarliest(query.from()),
                 TimeBounds.toOrLatest(query.to()),
                 request);
-        return PageResponse.of(found, PlanResponses::summary);
+        // One read of the journal for the page's executed plans (the Executed tab shows their position status).
+        List<UUID> executed = found.getContent().stream()
+                .filter(plan -> plan.getStatus() == PlanStatus.EXECUTED)
+                .map(TradingPlan::getId)
+                .toList();
+        Map<UUID, PositionStatus> positionStatuses = executed.isEmpty() ? Map.of() : journal.positionStatuses(executed);
+        return PageResponse.of(found, plan -> PlanResponses.summary(plan, positionStatuses.get(plan.getId())));
     }
 
     /**
@@ -276,6 +285,32 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         TradingPlan stored = plans.saveAndFlush(plan);
         positions.open(stored);
         return stored;
+    }
+
+    /** The plan in full and, once it is EXECUTED, the position it opened (UC-20). */
+    private TradingPlanResponse detail(TradingPlan plan) {
+        PositionResponse position = plan.getStatus() != PlanStatus.EXECUTED
+                ? null
+                : journal.positionOf(plan.getId())
+                        .map(recorded -> PlanResponses.position(plan, recorded, currentPrice(plan, recorded)))
+                        .orElse(null);
+        return PlanResponses.detail(plan, position);
+    }
+
+    /**
+     * The price an open position's unrealized P/L is read at: the Futures mark price, the Spot last price (Q-55; D-111
+     * E2/E3 keeps the mark price for unrealized P/L). Empty when the position is closed, or when the pair or a current
+     * price is not found.
+     */
+    private Optional<BigDecimal> currentPrice(TradingPlan plan, RecordedPosition position) {
+        if (position.status() != PositionStatus.OPEN) {
+            return Optional.empty();
+        }
+        return market.pairListings(List.of(plan.getPairId())).stream()
+                .findFirst()
+                .flatMap(pair -> plan.getMarket() == MarketType.FUTURES
+                        ? market.currentMarkPrice(pair.symbol())
+                        : market.currentLastPrice(MarketType.SPOT, pair.symbol()));
     }
 
     /**

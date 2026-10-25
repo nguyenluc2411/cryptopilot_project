@@ -1,9 +1,12 @@
 package com.cryptopilot.trading.service.impl;
 
+import com.cryptopilot.trading.RecordedPosition;
+import com.cryptopilot.trading.calculator.TradeResultCalculator;
 import com.cryptopilot.trading.calculator.warning.WarningEvaluator;
 import com.cryptopilot.trading.dto.response.PlanCalculationResponse;
 import com.cryptopilot.trading.dto.response.PlanSnapshotResponse;
 import com.cryptopilot.trading.dto.response.PlanWarningResponse;
+import com.cryptopilot.trading.dto.response.PositionResponse;
 import com.cryptopilot.trading.dto.response.StatusChangeResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
@@ -15,18 +18,20 @@ import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PlanStatus;
+import com.cryptopilot.trading.model.enums.PositionStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /** Maps plans and calculations to the API's responses; nothing is decided here. */
 final class PlanResponses {
 
     private PlanResponses() {}
 
-    /** A plan in full; reads its warnings. */
-    static TradingPlanResponse detail(TradingPlan plan) {
+    /** A plan in full; reads its warnings. {@code position} is the position it opened, or {@code null}. */
+    static TradingPlanResponse detail(TradingPlan plan, PositionResponse position) {
         List<PlanWarning> warnings = plan.getWarnings();
         return new TradingPlanResponse(
                 plan.getId(),
@@ -56,11 +61,34 @@ final class PlanResponses {
                 snapshot(plan.getSnapshot()),
                 warnings(warnings),
                 WarningEvaluator.blocksActivation(warnings),
-                history(plan));
+                history(plan),
+                position);
     }
 
-    /** A row of the list; the warnings are not read. */
-    static TradingPlanSummaryResponse summary(TradingPlan plan) {
+    /**
+     * The position of an executed plan from its journal record: the Futures liquidation price from the plan's snapshot
+     * and, while it is open, the unrealized P/L at {@code currentPrice} without fees (Q-55).
+     *
+     * @param currentPrice the Futures mark price or the Spot last price; empty when closed or not cached
+     */
+    static PositionResponse position(TradingPlan plan, RecordedPosition position, Optional<BigDecimal> currentPrice) {
+        BigDecimal current = position.status() == PositionStatus.OPEN ? currentPrice.orElse(null) : null;
+        return new PositionResponse(
+                position.status(),
+                position.entryPrice(),
+                position.quantity(),
+                position.entryTime(),
+                position.entryFee(),
+                plan.getSnapshot().estimatedLiquidationPrice(),
+                current,
+                current == null
+                        ? null
+                        : TradeResultCalculator.unrealizedPnl(
+                                plan.getDirection(), position.entryPrice(), current, position.quantity()));
+    }
+
+    /** A row of the list; the warnings are not read. {@code positionStatus} is its position's, or {@code null}. */
+    static TradingPlanSummaryResponse summary(TradingPlan plan, PositionStatus positionStatus) {
         PlanSnapshot snapshot = plan.getSnapshot();
         return new TradingPlanSummaryResponse(
                 plan.getId(),
@@ -80,7 +108,8 @@ final class PlanResponses {
                 plan.getActivatedAt(),
                 plan.getExpiresAt(),
                 plan.getInvalidatedAt(),
-                plan.getInvalidationReason());
+                plan.getInvalidationReason(),
+                positionStatus);
     }
 
     /**

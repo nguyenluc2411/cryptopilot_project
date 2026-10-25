@@ -93,7 +93,9 @@ public class TradingPlanController {
     }
 
     @Operation(summary = "The caller's plans, newest first, 20 per page by default (SCR-16, CR-04)")
-    @ApiResponse(responseCode = "200", description = "One page of plans")
+    @ApiResponse(
+            responseCode = "200",
+            description = "One page of plans; an EXECUTED row carries its position status, OPEN or CLOSED")
     @ApiResponse(responseCode = "400", description = "MSG01, MSG15: a parameter is invalid")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @GetMapping
@@ -113,11 +115,13 @@ public class TradingPlanController {
         return plans.list(callerOf(caller), new PlanListQuery(tab, pairId, market, from, to, page, pageSize));
     }
 
-    @Operation(summary = "A plan with its snapshot, warnings and status history (SCR-18)")
+    @Operation(summary = "A plan with its snapshot, warnings, status history and, once executed, its position (SCR-18)")
     @ApiResponse(
             responseCode = "200",
             description = "The plan. The snapshot's fee figures exclude funding and the liquidation clearance fee, and"
-                    + " are null on a plan saved before they existed (D-116)")
+                    + " are null on a plan saved before they existed (D-116). An EXECUTED plan carries its position:"
+                    + " fill, quantity, entry time and fee, the Futures liquidation price and, while OPEN, the"
+                    + " unrealized P/L at the Futures mark or Spot last price, without fees (UC-20, Q-55)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller")
     @GetMapping("/{id}")
