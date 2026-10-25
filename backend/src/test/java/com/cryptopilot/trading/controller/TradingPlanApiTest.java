@@ -1046,6 +1046,43 @@ class TradingPlanApiTest {
     }
 
     /**
+     * BR-34, BR-36: the STOP fill of the engine opens the journal in the same call as the LIMIT fill, at the price the
+     * plan stored. At 10 bps a LONG STOP at 100 is stored at 100.10 as TAKER, and the journal entry is the same 100.10,
+     * TAKER, at the triggering candle's open time, not the stop of 100 before slippage.
+     */
+    @Test
+    void BR34_aStopTheEngineTriggers_opensTheJournalAtTheStoredSlippedPrice() throws Exception {
+        lastPrice("99");
+        String id = id(as(trader(), post(PLANS), spotStop("{\"activate\": true}"))
+                .andExpect(jsonPath("$.status").value("ACTIVE")));
+        Instant candle = Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(60);
+        UUID admin = account(UserRole.ADMIN);
+        Map<String, Object> audit = sql.sql(
+                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
+                .query()
+                .singleRow();
+        changeSetting(admin, "SLIPPAGE_BPS", "10");
+        try {
+            assertThat(matching.fill(new Fill(waiting(id), LiquidityRole.TAKER, new BigDecimal("100"), candle)))
+                    .isTrue();
+        } finally {
+            changeSetting(admin, "SLIPPAGE_BPS", "0");
+            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
+                    .params(audit.get("updated_by"), audit.get("updated_at"))
+                    .update();
+            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
+        }
+
+        assertJournalEntry(id, "100.10");
+        assertThat(sql.sql("select entry_time from trading_journal where plan_id = ?")
+                        .param(UUID.fromString(id))
+                        .query(Timestamp.class)
+                        .single()
+                        .toInstant())
+                .isEqualTo(candle);
+    }
+
+    /**
      * D-111 E2/E3 (TP-0 closes the gap TP-A pinned): a Futures plan's invalidation price and a Futures STOP at
      * activation are checked against the Futures last price, the close of the latest 1-minute candle update, never
      * against the mark price. Mark 100 and last 103 are cached together: an invalidation price of 102 lies on the
