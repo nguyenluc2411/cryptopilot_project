@@ -537,6 +537,7 @@ trading_journal,close_reason,character varying,,,YES
 trading_journal,created_at,timestamp with time zone,,,NO
 trading_journal,direction,character varying,,,NO
 trading_journal,entry_deviation_r,numeric,20,8,YES
+trading_journal,entry_fee_amount,numeric,28,8,YES
 trading_journal,entry_liquidity,character varying,,,YES
 trading_journal,entry_price,numeric,28,12,NO
 trading_journal,entry_time,timestamp with time zone,,,NO
