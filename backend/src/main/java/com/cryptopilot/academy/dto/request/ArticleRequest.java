@@ -24,6 +24,8 @@ import jakarta.validation.constraints.Size;
  * @param sortOrder the place inside the topic, from 0
  * @param pathOrder the place on the beginner path from 1, or {@code null} when it is not on it
  * @param appLink a screen of the application such as {@code /trade/spot}, or {@code null}
+ * @param coverImageUrl the https address of the cover photo, or {@code null}
+ * @param coverCredit who took the cover photo and where it comes from, up to 200 characters, or {@code null}
  */
 public record ArticleRequest(
         @NotBlank(message = "MSG01") String topic,
@@ -51,7 +53,12 @@ public record ArticleRequest(
         @Min(value = 1, message = "MSG15") Integer pathOrder,
 
         @Size(max = 200, message = "MSG01") @Pattern(regexp = APP_LINK, message = "MSG01")
-        String appLink) {
+        String appLink,
+
+        @Size(max = 500, message = "MSG01") @Pattern(regexp = HTTPS_URL, message = "MSG01")
+        String coverImageUrl,
+
+        @Size(max = 200, message = "MSG01") String coverCredit) {
 
     /** Lower-case words of letters and digits joined by single hyphens. */
     public static final String SLUG = "^[a-z0-9]+(-[a-z0-9]+)*$";
@@ -59,13 +66,22 @@ public record ArticleRequest(
     /** A path of the application: one leading slash, never two. */
     public static final String APP_LINK = "^/([^/].*)?$";
 
+    /** An absolute https address without white space. */
+    public static final String HTTPS_URL = "^https://\\S+$";
+
     public ArticleRequest {
         topic = strip(topic);
         slug = strip(slug);
         title = strip(title);
         summary = strip(summary);
         body = strip(body);
-        appLink = appLink == null || appLink.isBlank() ? null : appLink.strip();
+        appLink = blankToNull(appLink);
+        coverImageUrl = blankToNull(coverImageUrl);
+        coverCredit = blankToNull(coverCredit);
+    }
+
+    private static String blankToNull(String text) {
+        return text == null || text.isBlank() ? null : text.strip();
     }
 
     private static String strip(String text) {

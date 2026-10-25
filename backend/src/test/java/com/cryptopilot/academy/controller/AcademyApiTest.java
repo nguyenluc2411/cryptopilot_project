@@ -1,5 +1,6 @@
 package com.cryptopilot.academy.controller;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasItem;
@@ -36,7 +37,8 @@ class AcademyApiTest {
 
     private static final String ACADEMY = "/api/v1/academy";
     private static final String DRAFT_SLUG = "bai-nhap-thu-nghiem";
-    private static final String DISCLAIMER = "không phải lời khuyên đầu tư.*\n";
+    // Compared without the line ending, which follows how git checked the migration out (LF or CRLF).
+    private static final String DISCLAIMER = "không phải lời khuyên đầu tư.*";
 
     @Autowired
     private MockMvc mvc;
@@ -68,7 +70,8 @@ class AcademyApiTest {
                 .andExpect(jsonPath("$.total").value(21))
                 .andExpect(jsonPath("$.items.length()").value(5))
                 .andExpect(jsonPath("$.items[0].slug").value("tien-ma-hoa-la-gi"))
-                .andExpect(jsonPath("$.items[0].body").doesNotExist());
+                .andExpect(jsonPath("$.items[0].body").doesNotExist())
+                .andExpect(jsonPath("$.items[0].coverImageUrl", startsWith("https://")));
         mvc.perform(get(ACADEMY + "/articles?topic=futures-don-bay"))
                 .andExpect(jsonPath("$.total").value(3))
                 .andExpect(jsonPath("$.items[*].topicSlug", everyItem(is("futures-don-bay"))));
@@ -95,9 +98,11 @@ class AcademyApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.title").value("Blockchain hoạt động như thế nào?"))
                 .andExpect(jsonPath("$.body", startsWith("## ")))
-                .andExpect(jsonPath("$.body", endsWith(DISCLAIMER)))
+                .andExpect(jsonPath("$.body", containsString(DISCLAIMER)))
                 .andExpect(jsonPath("$.level").value("BEGINNER"))
                 .andExpect(jsonPath("$.pathOrder").value(3))
+                .andExpect(jsonPath("$.coverImageUrl", startsWith("https://res.cloudinary.com/")))
+                .andExpect(jsonPath("$.coverCredit", endsWith(" / Unsplash")))
                 .andExpect(jsonPath("$.publishedAt").exists())
                 .andExpect(jsonPath("$.previous.slug").value("bitcoin-ethereum-va-altcoin"))
                 .andExpect(jsonPath("$.next.slug").value("vi-khoa-rieng-seed-phrase"))

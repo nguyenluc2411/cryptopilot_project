@@ -65,6 +65,12 @@ public class AcademyArticle extends BaseEntity {
     @Column(name = "app_link", length = 200)
     private String appLink;
 
+    @Column(name = "cover_image_url", length = 500)
+    private String coverImageUrl;
+
+    @Column(name = "cover_credit", length = 200)
+    private String coverCredit;
+
     /** The first publication, kept when the lesson is hidden and published again. */
     @Column(name = "published_at")
     private Instant publishedAt;
@@ -127,6 +133,8 @@ public class AcademyArticle extends BaseEntity {
         values.put("sortOrder", sortOrder);
         values.put("pathOrder", pathOrder);
         values.put("appLink", appLink);
+        values.put("coverImageUrl", coverImageUrl);
+        values.put("coverCredit", coverCredit);
         values.put("bodyLength", body.length());
         return values;
     }
@@ -142,5 +150,7 @@ public class AcademyArticle extends BaseEntity {
         this.sortOrder = content.sortOrder();
         this.pathOrder = content.pathOrder();
         this.appLink = content.appLink();
+        this.coverImageUrl = content.coverImageUrl();
+        this.coverCredit = content.coverCredit();
     }
 }

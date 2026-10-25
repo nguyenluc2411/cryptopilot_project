@@ -19,6 +19,8 @@ import java.util.UUID;
  * @param sortOrder the place inside the topic
  * @param pathOrder the place on the beginner path, or {@code null}
  * @param appLink the screen of the application the lesson leads to, or {@code null}
+ * @param coverImageUrl the address of the cover photo, or {@code null}
+ * @param coverCredit who took the cover photo, or {@code null}
  * @param status where the lesson stands
  * @param publishedAt the first publication, or {@code null}
  * @param createdAt when the lesson was created
@@ -36,6 +38,8 @@ public record AdminArticleResponse(
         int sortOrder,
         Integer pathOrder,
         String appLink,
+        String coverImageUrl,
+        String coverCredit,
         ArticleStatus status,
         Instant publishedAt,
         Instant createdAt,

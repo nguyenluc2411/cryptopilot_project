@@ -32,7 +32,7 @@ import org.springframework.stereotype.Repository;
 public class AcademyCatalogRepository {
 
     private static final String CARD_COLUMNS = """
-            select a.slug, a.title, a.summary, a.article_level, a.reading_minutes, a.path_order,
+            select a.slug, a.title, a.summary, a.article_level, a.reading_minutes, a.path_order, a.cover_image_url,
                    t.slug as topic_slug, t.name as topic_name""";
 
     private static final String PUBLISHED_FROM = """
@@ -108,15 +108,16 @@ public class AcademyCatalogRepository {
 
     /** The published lesson with this slug, or empty. */
     public Optional<ArticleText> article(String slug) {
-        return sql.sql(CARD_COLUMNS + ", a.body, a.app_link, a.published_at, a.updated_at" + PUBLISHED_FROM
-                        + " and a.slug = :slug")
+        return sql.sql(CARD_COLUMNS + ", a.body, a.app_link, a.published_at, a.updated_at, a.cover_credit"
+                        + PUBLISHED_FROM + " and a.slug = :slug")
                 .param("slug", slug)
                 .query((row, index) -> new ArticleText(
                         card(row),
                         row.getString("body"),
                         row.getString("app_link"),
                         row.getTimestamp("published_at").toInstant(),
-                        row.getTimestamp("updated_at").toInstant()))
+                        row.getTimestamp("updated_at").toInstant(),
+                        row.getString("cover_credit")))
                 .optional();
     }
 
@@ -161,7 +162,8 @@ public class AcademyCatalogRepository {
                 row.getInt("reading_minutes"),
                 row.getString("topic_slug"),
                 row.getString("topic_name"),
-                row.getObject("path_order", Integer.class));
+                row.getObject("path_order", Integer.class),
+                row.getString("cover_image_url"));
     }
 
     // A LIKE pattern matches the text literally: its own wildcards and the escape are escaped.

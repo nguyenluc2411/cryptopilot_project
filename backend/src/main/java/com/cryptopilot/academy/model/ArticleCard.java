@@ -13,6 +13,7 @@ import com.cryptopilot.academy.model.enums.ArticleLevel;
  * @param topicSlug the slug of the lesson's topic
  * @param topicName the name of the lesson's topic
  * @param pathOrder the lesson's place on the beginner path, or {@code null} when it is not on it
+ * @param coverImageUrl the address of the cover photo, or {@code null}
  */
 public record ArticleCard(
         String slug,
@@ -22,4 +23,5 @@ public record ArticleCard(
         int readingMinutes,
         String topicSlug,
         String topicName,
-        Integer pathOrder) {}
+        Integer pathOrder,
+        String coverImageUrl) {}

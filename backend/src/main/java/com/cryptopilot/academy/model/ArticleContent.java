@@ -16,6 +16,8 @@ import java.util.UUID;
  * @param sortOrder the place inside the topic
  * @param pathOrder the place on the beginner path, or {@code null} when it is not on it
  * @param appLink the screen of the application the lesson leads to, or {@code null}
+ * @param coverImageUrl the address of the cover photo, or {@code null}
+ * @param coverCredit who took the cover photo and where it comes from, or {@code null}
  */
 public record ArticleContent(
         UUID topicId,
@@ -27,4 +29,6 @@ public record ArticleContent(
         int readingMinutes,
         int sortOrder,
         Integer pathOrder,
-        String appLink) {}
+        String appLink,
+        String coverImageUrl,
+        String coverCredit) {}

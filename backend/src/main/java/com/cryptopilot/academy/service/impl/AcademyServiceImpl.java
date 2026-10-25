@@ -85,7 +85,9 @@ public class AcademyServiceImpl implements AcademyService {
                 text.updatedAt(),
                 link(previous),
                 link(next),
-                related);
+                related,
+                card.coverImageUrl(),
+                text.coverCredit());
     }
 
     @Override
@@ -116,7 +118,8 @@ public class AcademyServiceImpl implements AcademyService {
                 card.readingMinutes(),
                 card.topicSlug(),
                 card.topicName(),
-                card.pathOrder());
+                card.pathOrder(),
+                card.coverImageUrl());
     }
 
     private static ArticleLinkResponse link(ArticleCard card) {

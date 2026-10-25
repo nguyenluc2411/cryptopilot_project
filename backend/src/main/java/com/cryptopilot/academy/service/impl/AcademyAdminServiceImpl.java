@@ -232,7 +232,9 @@ public class AcademyAdminServiceImpl implements AcademyAdminService {
                 request.readingMinutes(),
                 request.sortOrder(),
                 request.pathOrder(),
-                request.appLink());
+                request.appLink(),
+                request.coverImageUrl(),
+                request.coverCredit());
     }
 
     private UUID articleId(TermRequest request) {
@@ -258,6 +260,8 @@ public class AcademyAdminServiceImpl implements AcademyAdminService {
                 article.getSortOrder(),
                 article.getPathOrder(),
                 article.getAppLink(),
+                article.getCoverImageUrl(),
+                article.getCoverCredit(),
                 article.getStatus(),
                 article.getPublishedAt(),
                 article.getCreatedAt(),

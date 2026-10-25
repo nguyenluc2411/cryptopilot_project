@@ -24,6 +24,8 @@ import java.util.List;
  * @param previous the lesson before this one, or {@code null}
  * @param next the lesson after this one, or {@code null}
  * @param related up to three other lessons of the same topic
+ * @param coverImageUrl the address of the cover photo, or {@code null}
+ * @param coverCredit who took the cover photo and where it comes from, or {@code null}
  */
 public record ArticleDetailResponse(
         String slug,
@@ -40,7 +42,9 @@ public record ArticleDetailResponse(
         Instant updatedAt,
         ArticleLinkResponse previous,
         ArticleLinkResponse next,
-        List<ArticleSummaryResponse> related) {
+        List<ArticleSummaryResponse> related,
+        String coverImageUrl,
+        String coverCredit) {
 
     public ArticleDetailResponse {
         related = List.copyOf(related);
