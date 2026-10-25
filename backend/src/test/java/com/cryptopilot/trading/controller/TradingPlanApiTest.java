@@ -717,6 +717,52 @@ class TradingPlanApiTest {
     }
 
     /**
+     * BR-34, BR-36: the journal opens at the price the plan stored, slippage included, never at the price before it. At
+     * 10 bps a Spot MARKET with the last price at 100 fills at 100.10, and a LIMIT at 100 reached by a last price of
+     * 99.80 fills at 99.80 × 1.001 = 99.8998, rounded against the Trader to 99.90 (under its limit). The setting is
+     * changed through the admin endpoint and restored.
+     */
+    @Test
+    void BR34_theJournalOpensAtTheStoredFillPrice_slippageIncluded() throws Exception {
+        UUID trader = trader();
+        UUID admin = account(UserRole.ADMIN);
+        Map<String, Object> audit = sql.sql(
+                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
+                .query()
+                .singleRow();
+        changeSetting(admin, "SLIPPAGE_BPS", "10");
+        try {
+            lastPrice("100");
+            String market = id(as(trader, post(PLANS), spotMarket(true)).andExpect(status().isCreated()));
+            lastPrice("99.80");
+            String limit = id(as(trader, post(PLANS), spotLimit("100", "95", "110", true))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.status").value("EXECUTED")));
+
+            assertJournalEntry(market, "100.10");
+            assertJournalEntry(limit, "99.90");
+        } finally {
+            changeSetting(admin, "SLIPPAGE_BPS", "0");
+            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
+                    .params(audit.get("updated_by"), audit.get("updated_at"))
+                    .update();
+            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
+        }
+    }
+
+    /** The journal's entry price of the plan is the plan's stored fill price, and both are {@code expected}. */
+    private void assertJournalEntry(String planId, String expected) {
+        Map<String, Object> row =
+                sql.sql("""
+                        select p.fill_price, j.entry_price, j.entry_liquidity
+                          from trading_plan p join trading_journal j on j.plan_id = p.plan_id
+                         where p.plan_id = ?""").param(UUID.fromString(planId)).query().singleRow();
+        assertThat((BigDecimal) row.get("fill_price")).isEqualByComparingTo(expected);
+        assertThat((BigDecimal) row.get("entry_price")).isEqualByComparingTo((BigDecimal) row.get("fill_price"));
+        assertThat(row.get("entry_liquidity")).isEqualTo("TAKER");
+    }
+
+    /**
      * BR-62, D-63: an EXECUTED plan with an OPEN position keeps its {@code ACTIVE_PLAN_MAX} slot. A FREE Trader (3)
      * with two ACTIVE plans and one open position cannot activate another.
      */

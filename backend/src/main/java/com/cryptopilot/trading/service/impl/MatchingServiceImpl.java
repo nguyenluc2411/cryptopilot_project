@@ -70,8 +70,8 @@ public class MatchingServiceImpl implements MatchingService {
                     price,
                     fill.liquidity(),
                     fill.executedAt());
-            // Read again: the compare-and-set cleared the persistence context, and the plan is now EXECUTED with the
-            // stored (slipped) price and role, which the journal copies (LIMIT MAKER, STOP TAKER).
+            // Read again: the compare-and-set cleared the persistence context, and the record takes the price and role
+            // it stored (LIMIT MAKER, STOP TAKER), never fill.price(), which is the price before slippage.
             positions.open(plans.findById(fill.planId()).orElseThrow());
         }
         return filled;
