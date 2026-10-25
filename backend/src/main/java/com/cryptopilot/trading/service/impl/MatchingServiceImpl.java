@@ -29,9 +29,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Settles a fill or an invalidation against a cancel, an expiry or the other outcome with one compare-and-set on the
  * plan's status: the update only matches an ACTIVE plan, so of two racing writers exactly one changes the row and the
- * other sees nothing to change.
+ * other sees nothing to change. The writer that fills it opens the position in the journal in the same transaction
+ * (BR-34); the other writes nothing.
  *
- * <p>Rule: NSF-07, BR-32, BR-33, BR-36, BR-68; TECHNICAL_DESIGN 5.5 and 7.7; D-111 (E1, E5); D-112 (R6).
+ * <p>Rule: NSF-07, BR-32, BR-33, BR-34, BR-36, BR-68; TECHNICAL_DESIGN 5.5 and 7.7; D-111 (E1, E5); D-112 (R6); D-119.
  *
  * <p>Reference: Herlihy, M. &amp; Shavit, N. (2008). <i>The Art of Multiprocessor Programming</i>. Morgan Kaufmann,
  * ch. 5 (compare-and-set: one of several concurrent callers succeeds, the others observe the new state).
@@ -47,6 +48,7 @@ public class MatchingServiceImpl implements MatchingService {
     private final SystemSettingApi settings;
     private final MarketApi market;
     private final ApplicationEventPublisher events;
+    private final PositionOpener positions;
     private final Clock clock;
 
     @Override
@@ -68,6 +70,9 @@ public class MatchingServiceImpl implements MatchingService {
                     price,
                     fill.liquidity(),
                     fill.executedAt());
+            // Read again: the compare-and-set cleared the persistence context, and the record takes the price and role
+            // it stored (LIMIT MAKER, STOP TAKER), never fill.price(), which is the price before slippage.
+            positions.open(plans.findById(fill.planId()).orElseThrow());
         }
         return filled;
     }

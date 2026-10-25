@@ -148,6 +148,9 @@ class TradingPlanApiTest {
     @AfterEach
     void removeRows() {
         for (UUID account : accounts) {
+            sql.sql("delete from trading_journal where user_id = ?")
+                    .param(account)
+                    .update();
             sql.sql("delete from trading_plan where user_id = ?").param(account).update();
             sql.sql("""
                             delete from user_subscription
@@ -158,6 +161,7 @@ class TradingPlanApiTest {
             sql.sql("delete from user_profile where user_id = ?").param(account).update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
+        sql.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         sql.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         new MarketTestData(sql, Instant.now()).remove(pair);
     }
@@ -644,6 +648,274 @@ class TradingPlanApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // The position of a filled plan (T-048a: BR-34, BR-62, BR-29, UC-20)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * UC-20, Q-55: a Spot MARKET filled at activation at 100 (quantity 2) answers its position in the detail: OPEN, the
+     * fill, the entry fee at the seeded Spot taker rate (100 × 2 × 0.1 % = 0.2), no liquidation price, and the unrealized
+     * P/L at the current last price 103, (103 − 100) × 2 = 6, without fees; the Executed tab shows OPEN.
+     */
+    @Test
+    void UC20_aPlanFilledAtActivation_answersItsPositionInTheDetailAndTheExecutedTab() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        String id = id(as(trader, post(PLANS), spotMarket(true))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("EXECUTED"))
+                .andExpect(jsonPath("$.position.status").value("OPEN")));
+        lastPrice("103");
+
+        as(trader, get(PLANS + "/" + id), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.position.status").value("OPEN"))
+                .andExpect(jsonPath("$.position.fillPrice").value("100.000000000000"))
+                .andExpect(jsonPath("$.position.quantity").value("2.000000000000"))
+                .andExpect(jsonPath("$.position.entryFee").value("0.20000000"))
+                .andExpect(jsonPath("$.position.entryTime").isNotEmpty())
+                .andExpect(jsonPath("$.position.liquidationPrice").isEmpty())
+                .andExpect(jsonPath("$.position.currentPrice").value("103"))
+                .andExpect(jsonPath("$.position.unrealizedPnl").value("6.00000000"));
+        as(trader, get(PLANS + "?tab=EXECUTED"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].id").value(id))
+                .andExpect(jsonPath("$.items[0].positionStatus").value("OPEN"));
+        as(trader, get(PLANS + "?tab=ACTIVE"), null)
+                .andExpect(jsonPath("$.items").isEmpty());
+    }
+
+    /**
+     * UC-20, Q-55: a Futures position is valued at the mark price, not the last price: filled at the last price 100,
+     * marked 98 while the last price is 101, it shows (98 − 100) × quantity, and the snapshot's liquidation price.
+     */
+    @Test
+    void UC20_aFuturesPosition_isValuedAtTheMarkPrice_andShowsItsLiquidationPrice() throws Exception {
+        UUID trader = trader();
+        subscribeToPro(trader);
+        lastPrice(MarketType.FUTURES, "100");
+        String created = content(as(
+                        trader,
+                        post(PLANS),
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
+                                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110,"
+                                + " \"leverage\": 5, \"activate\": true}")
+                .andExpect(status().isCreated()));
+        String id = JsonPath.read(created, "$.id");
+        BigDecimal quantity = new BigDecimal((String) JsonPath.read(created, "$.snapshot.positionQuantity"));
+        String liquidation = JsonPath.read(created, "$.snapshot.estimatedLiquidationPrice");
+        markPrice("98");
+        lastPrice(MarketType.FUTURES, "101");
+
+        String detail = content(as(trader, get(PLANS + "/" + id), null).andExpect(status().isOk()));
+
+        assertThat(new BigDecimal((String) JsonPath.read(detail, "$.position.currentPrice")))
+                .isEqualByComparingTo("98");
+        assertThat(new BigDecimal((String) JsonPath.read(detail, "$.position.unrealizedPnl")))
+                .isEqualByComparingTo(new BigDecimal("-2").multiply(quantity));
+        assertThat((String) JsonPath.read(detail, "$.position.liquidationPrice"))
+                .isEqualTo(liquidation);
+    }
+
+    /**
+     * BR-34, BR-36: the journal opens at the price the plan stored, slippage included, never at the price before it. At
+     * 10 bps a Spot MARKET with the last price at 100 fills at 100.10, and a LIMIT at 100 reached by a last price of
+     * 99.80 fills at 99.80 × 1.001 = 99.8998, rounded against the Trader to 99.90 (under its limit). The setting is
+     * changed through the admin endpoint and restored.
+     */
+    @Test
+    void BR34_theJournalOpensAtTheStoredFillPrice_slippageIncluded() throws Exception {
+        UUID trader = trader();
+        UUID admin = account(UserRole.ADMIN);
+        Map<String, Object> audit = sql.sql(
+                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
+                .query()
+                .singleRow();
+        changeSetting(admin, "SLIPPAGE_BPS", "10");
+        try {
+            lastPrice("100");
+            String market = id(as(trader, post(PLANS), spotMarket(true)).andExpect(status().isCreated()));
+            lastPrice("99.80");
+            String limit = id(as(trader, post(PLANS), spotLimit("100", "95", "110", true))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.status").value("EXECUTED")));
+
+            assertJournalEntry(market, "100.10");
+            assertJournalEntry(limit, "99.90");
+        } finally {
+            changeSetting(admin, "SLIPPAGE_BPS", "0");
+            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
+                    .params(audit.get("updated_by"), audit.get("updated_at"))
+                    .update();
+            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
+        }
+    }
+
+    /** The journal's entry price of the plan is the plan's stored fill price, and both are {@code expected}. */
+    private void assertJournalEntry(String planId, String expected) {
+        Map<String, Object> row =
+                sql.sql("""
+                        select p.fill_price, j.entry_price, j.entry_liquidity
+                          from trading_plan p join trading_journal j on j.plan_id = p.plan_id
+                         where p.plan_id = ?""").param(UUID.fromString(planId)).query().singleRow();
+        assertThat((BigDecimal) row.get("fill_price")).isEqualByComparingTo(expected);
+        assertThat((BigDecimal) row.get("entry_price")).isEqualByComparingTo((BigDecimal) row.get("fill_price"));
+        assertThat(row.get("entry_liquidity")).isEqualTo("TAKER");
+    }
+
+    /**
+     * BR-62, D-63: an EXECUTED plan with an OPEN position keeps its {@code ACTIVE_PLAN_MAX} slot. A FREE Trader (3)
+     * with two ACTIVE plans and one open position cannot activate another.
+     */
+    @Test
+    void BR62_anOpenPosition_keepsItsActivePlanMaxSlot() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        as(trader, post(PLANS), spotMarket(true))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("EXECUTED"));
+        for (int i = 0; i < 2; i++) {
+            as(trader, post(PLANS), spotLimit("90", "85", "110", true))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.status").value("ACTIVE"));
+        }
+        String fourth = id(as(trader, post(PLANS), spotLimit("90", "85", "110", false)));
+
+        as(trader, post(PLANS + "/" + fourth + "/activate"), null)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.messageCode").value("MSG27"));
+    }
+
+    /**
+     * BR-34, D-119: the fill and its journal record commit together. With a record already in place for the plan, the
+     * journal's insert refuses the MARKET activation (409, MSG43), and the activation rolls back with it: the plan is
+     * still a DRAFT with no fill and the one record is the one that was there.
+     */
+    @Test
+    void BR34_aJournalRecordAlreadyThere_failsTheMarketActivation_andThePlanStaysDraft() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        String id = id(as(trader, post(PLANS), spotMarket(false))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("DRAFT")));
+        sql.sql("""
+                        insert into trading_journal (journal_id, user_id, pair_id, plan_id, market_type, direction,
+                                                     entry_price, entry_time, quantity, entry_liquidity, source,
+                                                     trade_status, created_at, updated_at, version)
+                        values (gen_random_uuid(), ?, ?, ?, 'SPOT', 'LONG', 100, ?, 1, 'TAKER', 'SIMULATED', 'OPEN',
+                                ?, ?, 0)""")
+                .params(trader, pair, UUID.fromString(id), now(), now(), now())
+                .update();
+
+        as(trader, post(PLANS + "/" + id + "/activate"), null)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"))
+                .andExpect(jsonPath("$.messageCode").value("MSG43"));
+
+        as(trader, get(PLANS + "/" + id), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andExpect(jsonPath("$.statusHistory.length()").value(1))
+                .andExpect(jsonPath("$.position").doesNotExist());
+        assertThat(sql.sql("select fill_price, executed_at from trading_plan where plan_id = ?")
+                        .param(UUID.fromString(id))
+                        .query()
+                        .singleRow())
+                .containsEntry("fill_price", null)
+                .containsEntry("executed_at", null);
+        assertThat(sql.sql("select count(*) from trading_journal where plan_id = ?")
+                        .param(UUID.fromString(id))
+                        .query(Long.class)
+                        .single())
+                .isEqualTo(1L);
+    }
+
+    /**
+     * D-63: at {@code max − 1} counting an open position (one open, one ACTIVE, limit 3), two parallel activations let
+     * exactly one through.
+     */
+    @RepeatedTest(5)
+    void D63_twoConcurrentActivationsAtTheLimitMinusOne_withAnOpenPosition_letExactlyOneThrough() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        as(trader, post(PLANS), spotMarket(true)).andExpect(jsonPath("$.status").value("EXECUTED"));
+        service.create(trader, waiting(true));
+        UUID draftA = service.create(trader, waiting(false)).id();
+        UUID draftB = service.create(trader, waiting(false)).id();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<String>> outcomes = List.of(
+                    pool.submit(activation(trader, draftA, start)), pool.submit(activation(trader, draftB, start)));
+            start.countDown();
+
+            List<String> results = new ArrayList<>();
+            for (Future<String> outcome : outcomes) {
+                results.add(outcome.get(30, TimeUnit.SECONDS));
+            }
+            assertThat(results).containsExactlyInAnyOrder("ACTIVE", ErrorCode.PLAN_LIMIT_REACHED.code());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /**
+     * BR-29: the risk of an open position counts in TOTAL_OPEN_RISK. A plan risking 1.5 % of 1,000 is under BALANCED's
+     * 4 % alone; after a position risking 3 % opened, the total is 4.5 % and the panel warns.
+     */
+    @Test
+    void BR29_theRiskOfAnOpenPosition_countsInTotalOpenRisk() throws Exception {
+        UUID trader = trader();
+        String panel = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"LIMIT\", \"entryPrice\": 90, \"stopLoss\": 85, \"takeProfit\": 110,"
+                + " \"riskPercent\": 1.5}";
+        as(trader, post(PLANS + "/calculate"), panel)
+                .andExpect(status().isOk())
+                .andExpect(
+                        jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')]").isEmpty());
+        lastPrice("100");
+        as(
+                        trader,
+                        post(PLANS),
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110,"
+                                + " \"riskPercent\": 3, \"activate\": true}")
+                .andExpect(jsonPath("$.status").value("EXECUTED"));
+
+        as(trader, post(PLANS + "/calculate"), panel)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')].severity")
+                        .value("WARNING"));
+    }
+
+    /** A Spot LONG LIMIT at 90 (SL 85, TP 110), below a last price of 100, so it waits when activated. */
+    private CreateTradingPlanRequest waiting(boolean activate) {
+        return new CreateTradingPlanRequest(
+                pair,
+                MarketType.SPOT,
+                Direction.LONG,
+                EntryType.LIMIT,
+                new BigDecimal("90"),
+                new BigDecimal("85"),
+                new BigDecimal("110"),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                activate);
+    }
+
+    /** A Spot LONG MARKET (SL 95, TP 110) on the test pair, saved and activated when {@code activate}. */
+    private String spotMarket(boolean activate) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110, \"activate\": "
+                + activate + "}";
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Plan validity (TP-A; BR-68, BR-69, BR-70; D-111, D-112)
     // ------------------------------------------------------------------------------------------
 
@@ -810,6 +1082,43 @@ class TradingPlanApiTest {
 
         assertFill(id, "100.10", "TAKER");
         assertThat(sql.sql("select executed_at from trading_plan where plan_id = ?")
+                        .param(UUID.fromString(id))
+                        .query(Timestamp.class)
+                        .single()
+                        .toInstant())
+                .isEqualTo(candle);
+    }
+
+    /**
+     * BR-34, BR-36: the STOP fill of the engine opens the journal in the same call as the LIMIT fill, at the price the
+     * plan stored. At 10 bps a LONG STOP at 100 is stored at 100.10 as TAKER, and the journal entry is the same 100.10,
+     * TAKER, at the triggering candle's open time, not the stop of 100 before slippage.
+     */
+    @Test
+    void BR34_aStopTheEngineTriggers_opensTheJournalAtTheStoredSlippedPrice() throws Exception {
+        lastPrice("99");
+        String id = id(as(trader(), post(PLANS), spotStop("{\"activate\": true}"))
+                .andExpect(jsonPath("$.status").value("ACTIVE")));
+        Instant candle = Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(60);
+        UUID admin = account(UserRole.ADMIN);
+        Map<String, Object> audit = sql.sql(
+                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
+                .query()
+                .singleRow();
+        changeSetting(admin, "SLIPPAGE_BPS", "10");
+        try {
+            assertThat(matching.fill(new Fill(waiting(id), LiquidityRole.TAKER, new BigDecimal("100"), candle)))
+                    .isTrue();
+        } finally {
+            changeSetting(admin, "SLIPPAGE_BPS", "0");
+            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
+                    .params(audit.get("updated_by"), audit.get("updated_at"))
+                    .update();
+            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
+        }
+
+        assertJournalEntry(id, "100.10");
+        assertThat(sql.sql("select entry_time from trading_journal where plan_id = ?")
                         .param(UUID.fromString(id))
                         .query(Timestamp.class)
                         .single()

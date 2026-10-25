@@ -302,6 +302,7 @@ class MatchingReplayTest {
                 .update();
         jdbc.sql("delete from audit_log where user_id = ?").param(admin).update();
         jdbc.sql("delete from user_account where user_id = ?").param(admin).update();
+        jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
         jdbc.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
@@ -494,6 +495,7 @@ class MatchingReplayTest {
     private void reset() {
         feed.stop();
         worker.stop();
+        jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
         served.clear();
