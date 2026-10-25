@@ -81,7 +81,7 @@ class AiServiceClientTest {
     @Test
     void NSF11_theRequestCarriesTheModelTheInstructionsAndTheArticle_withTheSecret() {
         answer.set(new Answer(200, """
-                {"summary":"Bitcoin đi ngang.","sentiment":"NEUTRAL","model":"gemini-test-lite",
+                {"title":"Bitcoin giữ giá","summary":"Bitcoin đi ngang.","sentiment":"NEUTRAL","model":"gemini-test-lite",
                  "inputTokens":210,"outputTokens":40}"""));
 
         NewsSummaryResult result;
@@ -90,7 +90,8 @@ class AiServiceClientTest {
         }
 
         assertThat(result)
-                .isEqualTo(new NewsSummaryResult("Bitcoin đi ngang.", "NEUTRAL", "gemini-test-lite", 210, 40));
+                .isEqualTo(new NewsSummaryResult(
+                        "Bitcoin giữ giá", "Bitcoin đi ngang.", "NEUTRAL", "gemini-test-lite", 210, 40));
         assertThat(secretSeen.get()).isEqualTo(SECRET);
         JsonNode sent = json.readTree(bodySeen.get());
         assertThat(sent.path("model").asString()).isEqualTo("gemini-test-lite");
@@ -105,12 +106,12 @@ class AiServiceClientTest {
 
     @Test
     void NSF11_optionalFieldsAreLeftOut_andMissingCountsDefault() {
-        answer.set(new Answer(200, "{\"summary\":\"s\",\"sentiment\":\"BULLISH\"}"));
+        answer.set(new Answer(200, "{\"title\":\"t\",\"summary\":\"s\",\"sentiment\":\"BULLISH\"}"));
         NewsSummaryRequest bare = new NewsSummaryRequest("m", "p", 0, 64, "t", null, "x", null);
 
         NewsSummaryResult result = client(SECRET).summarizeNews(bare);
 
-        assertThat(result).isEqualTo(new NewsSummaryResult("s", "BULLISH", "m", 0, 0));
+        assertThat(result).isEqualTo(new NewsSummaryResult("t", "s", "BULLISH", "m", 0, 0));
         JsonNode sent = json.readTree(bodySeen.get());
         assertThat(sent.has("feedback")).isFalse();
         assertThat(sent.path("article").has("source")).isFalse();
@@ -136,16 +137,19 @@ class AiServiceClientTest {
         answer.set(new Answer(200, "<html>"));
         assertFailure("BAD_ANSWER", true, "not JSON");
 
-        answer.set(new Answer(200, "{\"summary\":\" \",\"sentiment\":\"NEUTRAL\"}"));
+        answer.set(new Answer(200, "{\"title\":\"t\",\"summary\":\" \",\"sentiment\":\"NEUTRAL\"}"));
         assertFailure("BAD_ANSWER", false, "has no summary");
 
-        answer.set(new Answer(200, "{\"summary\":\"s\"}"));
+        answer.set(new Answer(200, "{\"title\":\"t\",\"summary\":\"s\"}"));
         assertFailure("BAD_ANSWER", false, "has no sentiment");
+
+        answer.set(new Answer(200, "{\"summary\":\"s\",\"sentiment\":\"NEUTRAL\"}"));
+        assertFailure("BAD_ANSWER", false, "has no title");
     }
 
     @Test
     void NSF11_aCallWhoseThreadIsInterrupted_isUnreachable_andKeepsTheInterrupt() {
-        answer.set(new Answer(200, "{\"summary\":\"s\",\"sentiment\":\"NEUTRAL\"}"));
+        answer.set(new Answer(200, "{\"title\":\"t\",\"summary\":\"s\",\"sentiment\":\"NEUTRAL\"}"));
         AiServiceClient client = client(SECRET);
 
         Thread.currentThread().interrupt();

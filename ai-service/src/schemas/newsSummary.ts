@@ -27,8 +27,12 @@ export const NewsSummaryRequestSchema = z
 
 export type NewsSummaryRequest = z.infer<typeof NewsSummaryRequestSchema>;
 
-/** What the model must return; anything else is a bad answer, never passed on. */
+/**
+ * What the model must return: the headline in the summary's language, the summary and the sentiment; anything else is
+ * a bad answer, never passed on.
+ */
 export const NewsSummaryAnswerSchema = z.object({
+  title: z.string().trim().min(1),
   summary: z.string().trim().min(1),
   sentiment: z.enum(SENTIMENTS),
 });
@@ -39,11 +43,12 @@ export type NewsSummaryAnswer = z.infer<typeof NewsSummaryAnswerSchema>;
 export const NEWS_SUMMARY_RESPONSE_SCHEMA: Record<string, unknown> = {
   type: "OBJECT",
   properties: {
+    title: { type: "STRING" },
     summary: { type: "STRING" },
     sentiment: { type: "STRING", enum: [...SENTIMENTS] },
   },
-  required: ["summary", "sentiment"],
-  propertyOrdering: ["summary", "sentiment"],
+  required: ["title", "summary", "sentiment"],
+  propertyOrdering: ["title", "summary", "sentiment"],
 };
 
 export interface NewsSummaryResponse extends NewsSummaryAnswer {

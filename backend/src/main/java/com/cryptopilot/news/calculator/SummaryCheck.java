@@ -7,7 +7,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * What an AI summary must be before it is stored (NSF-11): not empty, at most the configured number of words, free of
+ * What an AI summary and its translated headline must be before they are stored (NSF-11, D-127): not empty, at most the
+ * configured number of words, free of
  * any instruction to buy or sell, and stating no figure the article does not contain ({@link NumericGuard}). The
  * reason a summary fails is written for the model, which is asked once more with it.
  *
@@ -50,6 +51,30 @@ public final class SummaryCheck {
         List<String> invented = NumericGuard.unsupported(summary, article);
         if (!invented.isEmpty()) {
             return Optional.of("these figures are not in the article: " + String.join(", ", invented));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Why {@code title} cannot be stored as the translated headline of {@code article}, or empty when it can. The same
+     * rules as a summary, with a limit of its own; a headline is never cut, as a cut one reads as a different claim.
+     */
+    public static Optional<String> titleProblem(String title, String article, int maxWords) {
+        if (title == null || title.isBlank()) {
+            return Optional.of("the title is empty");
+        }
+        int words = words(title);
+        if (words > maxWords) {
+            return Optional.of("the title has " + words + " words, more than " + maxWords);
+        }
+        Matcher advice = ADVICE.matcher(title);
+        if (advice.find()) {
+            return Optional.of(
+                    "the title tells the reader to trade (\"" + advice.group() + "\"); report, do not advise");
+        }
+        List<String> invented = NumericGuard.unsupported(title, article);
+        if (!invented.isEmpty()) {
+            return Optional.of("these figures of the title are not in the article: " + String.join(", ", invented));
         }
         return Optional.empty();
     }

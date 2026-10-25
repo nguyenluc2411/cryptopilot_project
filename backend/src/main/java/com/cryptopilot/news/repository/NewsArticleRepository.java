@@ -72,16 +72,18 @@ public interface NewsArticleRepository extends Repository<NewsArticle, UUID> {
     List<NewsArticle> findUnsummarized(@Param("since") Instant since, @Param("limit") int limit);
 
     /**
-     * Stores the summary and the sentiment of an article that has none yet; 0 when it has one already, so two runs
-     * that summarize the same article keep the first answer.
+     * Stores the translated headline, the summary and the sentiment of an article that has no summary yet; 0 when it
+     * has one already, so two runs that summarize the same article keep the first answer.
      */
     @Modifying
     @Query(value = """
                     update news_article
-                       set ai_summary = :summary, sentiment_label = :sentiment, updated_at = :now, version = version + 1
+                       set ai_title = :title, ai_summary = :summary, sentiment_label = :sentiment, updated_at = :now,
+                           version = version + 1
                      where article_id = :id and ai_summary is null""", nativeQuery = true)
     int saveSummary(
             @Param("id") UUID id,
+            @Param("title") String title,
             @Param("summary") String summary,
             @Param("sentiment") String sentiment,
             @Param("now") Instant now);

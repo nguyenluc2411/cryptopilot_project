@@ -23,6 +23,24 @@ class SummaryCheckTest {
     }
 
     @Test
+    void D118_aFaithfulHeadline_passes_withItsTermsKept() {
+        assertThat(SummaryCheck.titleProblem("Bitcoin giảm 3.5% khi ETF bị rút $120 million", ARTICLE, 30))
+                .isEmpty();
+    }
+
+    @Test
+    void D118_aHeadlineThatIsEmptyTooLongAdvisesOrInventsAFigure_isRefused() {
+        assertThat(SummaryCheck.titleProblem(" ", ARTICLE, 30)).contains("the title is empty");
+        assertThat(SummaryCheck.titleProblem(null, ARTICLE, 30)).contains("the title is empty");
+        assertThat(SummaryCheck.titleProblem("từ ".repeat(31).strip(), ARTICLE, 30))
+                .contains("the title has 31 words, more than 30");
+        assertThat(SummaryCheck.titleProblem("Nên bán Bitcoin ngay", ARTICLE, 30))
+                .hasValueSatisfying(reason -> assertThat(reason).startsWith("the title tells the reader to trade"));
+        assertThat(SummaryCheck.titleProblem("Bitcoin giảm về $75,000", ARTICLE, 30))
+                .contains("these figures of the title are not in the article: 75,000");
+    }
+
+    @Test
     void NSF11_anEmptySummary_isRefused() {
         assertThat(SummaryCheck.problem("  ", ARTICLE, 60)).contains("the summary is empty");
         assertThat(SummaryCheck.problem(null, ARTICLE, 60)).contains("the summary is empty");

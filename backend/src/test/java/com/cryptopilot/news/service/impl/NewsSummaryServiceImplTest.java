@@ -102,7 +102,12 @@ class NewsSummaryServiceImplTest {
         assertThat(sent.feedback()).isNull();
         verify(rss).readPage(article.getOriginalUrl(), "UA/1");
         verify(articles)
-                .saveSummary(article.getId(), "Bitcoin đi ngang quanh $81,700; ETF rút $635 triệu.", "BEARISH", NOW);
+                .saveSummary(
+                        article.getId(),
+                        "Tiêu đề.",
+                        "Bitcoin đi ngang quanh $81,700; ETF rút $635 triệu.",
+                        "BEARISH",
+                        NOW);
     }
 
     @Test
@@ -156,7 +161,7 @@ class NewsSummaryServiceImplTest {
         List<NewsSummaryRequest> requests = sent(2);
         assertThat(requests.get(0).feedback()).isNull();
         assertThat(requests.get(1).feedback()).isEqualTo("these figures are not in the article: 90,000");
-        verify(articles).saveSummary(article.getId(), "Bitcoin quanh $81,700.", "NEUTRAL", NOW);
+        verify(articles).saveSummary(article.getId(), "Tiêu đề.", "Bitcoin quanh $81,700.", "NEUTRAL", NOW);
     }
 
     @Test
@@ -167,7 +172,7 @@ class NewsSummaryServiceImplTest {
 
         assertThat(service(properties(30)).summarizeDue()).isEqualTo(new SummaryRun(1, 0, 1));
         verify(ai, times(2)).summarize(any());
-        verify(articles, never()).saveSummary(any(), any(), any(), any());
+        verify(articles, never()).saveSummary(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -180,14 +185,40 @@ class NewsSummaryServiceImplTest {
         service(properties(30)).summarizeDue();
 
         ArgumentCaptor<String> stored = ArgumentCaptor.forClass(String.class);
-        verify(articles).saveSummary(eq(article.getId()), stored.capture(), eq("BEARISH"), eq(NOW));
+        verify(articles).saveSummary(eq(article.getId()), eq("Tiêu đề."), stored.capture(), eq("BEARISH"), eq(NOW));
         assertThat(stored.getValue()).endsWith("…").hasSizeLessThan(fortyWords.length());
 
         NewsArticle other = article("Ether", "y");
         when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(other));
         when(ai.summarize(any())).thenReturn(answer(fortyWords, "MIXED"));
         assertThat(service(properties(30)).summarizeDue().failed()).isEqualTo(1);
-        verify(articles, never()).saveSummary(eq(other.getId()), any(), any(), any());
+        verify(articles, never()).saveSummary(eq(other.getId()), any(), any(), any(), any());
+    }
+
+    @Test
+    void D118_theTranslatedHeadline_isStored_andARefusedOneIsAskedForAgain() {
+        NewsArticle article = article("Bitcoin ETFs see $635M outflows", "ETF outflows reached $635 million.");
+        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article));
+        when(ai.summarize(any()))
+                .thenReturn(answer("ETF Bitcoin bị rút $900 triệu", "ETF rút $635 triệu.", "BEARISH"))
+                .thenReturn(answer("  ETF Bitcoin bị rút $635 triệu  ", "ETF rút $635 triệu.", "BEARISH"));
+
+        assertThat(service(properties(30)).summarizeDue().summarized()).isEqualTo(1);
+
+        assertThat(sent(2).get(1).feedback()).isEqualTo("these figures of the title are not in the article: 900");
+        verify(articles)
+                .saveSummary(article.getId(), "ETF Bitcoin bị rút $635 triệu", "ETF rút $635 triệu.", "BEARISH", NOW);
+    }
+
+    @Test
+    void D118_aSummaryTooLong_isNotCut_whenItsHeadlineIsRefused() {
+        NewsArticle article = article("Bitcoin", "x");
+        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article));
+        String fortyWords = "thị trường ".repeat(20).strip();
+        when(ai.summarize(any())).thenReturn(answer("Hãy mua Bitcoin", fortyWords, "BULLISH"));
+
+        assertThat(service(properties(30)).summarizeDue()).isEqualTo(new SummaryRun(1, 0, 1));
+        verify(articles, never()).saveSummary(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -270,6 +301,7 @@ class NewsSummaryServiceImplTest {
                 512,
                 "Vietnamese",
                 maxWords,
+                20,
                 1200,
                 minBodyWords,
                 prompt);
@@ -282,7 +314,11 @@ class NewsSummaryServiceImplTest {
     }
 
     private static NewsSummaryResult answer(String summary, String sentiment) {
-        return new NewsSummaryResult(summary, sentiment, "test-model", 100, 20);
+        return answer("Tiêu đề.", summary, sentiment);
+    }
+
+    private static NewsSummaryResult answer(String title, String summary, String sentiment) {
+        return new NewsSummaryResult(title, summary, sentiment, "test-model", 100, 20);
     }
 
     private NewsArticle article(String title, String excerpt) {

@@ -33,10 +33,10 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 /**
  * NSF-11 against PostgreSQL with the application's own configuration — the model, the prompt file — and the AI Service
- * a mock: only recent articles without a summary are sent, the answer is stored with its sentiment, and an article that
- * has one is never sent again.
+ * a mock: only recent articles without a summary are sent, the answer is stored with its translated headline and its
+ * sentiment, and an article that has one is never sent again.
  *
- * <p>Rule: NSF-11; BR-48.
+ * <p>Rule: NSF-11; BR-48; D-127.
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
@@ -71,9 +71,10 @@ class NewsSummaryTest {
         // An answer true to each article: the checks refuse a summary whose figures the article does not hold.
         when(ai.summarize(any())).thenAnswer(call -> {
             NewsSummaryRequest request = call.getArgument(0);
-            String summary =
-                    request.title().startsWith("Bitcoin") ? "Bitcoin đi ngang quanh $81,700." : "Tóm tắt ngắn.";
-            return new NewsSummaryResult(summary, "NEUTRAL", request.model(), 300, 40);
+            boolean bitcoin = request.title().startsWith("Bitcoin");
+            String title = bitcoin ? "Bitcoin giữ mức $81,700" : "Tiêu đề tiếng Việt";
+            String summary = bitcoin ? "Bitcoin đi ngang quanh $81,700." : "Tóm tắt ngắn.";
+            return new NewsSummaryResult(title, summary, "NEUTRAL", request.model(), 300, 40);
         });
     }
 
@@ -103,15 +104,17 @@ class NewsSummaryTest {
         assertThat(request.model()).as("from application.yml").isEqualTo("gemini-3.5-flash-lite");
         assertThat(request.systemPrompt())
                 .as("the prompt file, with its placeholders filled")
-                .contains("Write the summary in Vietnamese, in at most 60 words")
-                .doesNotContain("{language}", "{maxWords}");
+                .contains("summary: at most 60 words")
+                .contains("translated into Vietnamese, in at most 30 words")
+                .doesNotContain("{language}", "{maxWords}", "{maxTitleWords}");
         assertThat(request.text()).isEqualTo("Bitcoin traded near $81,700.");
         verifyNoInteractions(rss);
 
         assertThat(row(fresh))
+                .containsEntry("ai_title", "Bitcoin giữ mức $81,700")
                 .containsEntry("ai_summary", "Bitcoin đi ngang quanh $81,700.")
                 .containsEntry("sentiment_label", "NEUTRAL");
-        assertThat(row(old)).containsEntry("ai_summary", null);
+        assertThat(row(old)).containsEntry("ai_summary", null).containsEntry("ai_title", null);
         assertThat(row(done)).containsEntry("ai_summary", "Đã có tóm tắt.").containsEntry("sentiment_label", null);
     }
 
@@ -155,7 +158,7 @@ class NewsSummaryTest {
     }
 
     private Map<String, Object> row(UUID article) {
-        return sql.sql("select ai_summary, sentiment_label from news_article where article_id = ?")
+        return sql.sql("select ai_title, ai_summary, sentiment_label from news_article where article_id = ?")
                 .param(article)
                 .query()
                 .singleRow();

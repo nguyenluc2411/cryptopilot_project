@@ -496,6 +496,8 @@ cryptopilot:
       # The prompt names the language; NSF-11: at most 60 words.
       language: ${NEWS_SUMMARY_LANGUAGE:Vietnamese}
       max-words: 60
+      # D-127: the headline is translated too, in at most this many words.
+      max-title-words: 30
       max-input-words: 1200
       min-body-words: 80
       prompt: classpath:prompts/news-summary.txt

@@ -77,6 +77,7 @@ class NewsSummaryJobTest {
                         512,
                         "Vietnamese",
                         60,
+                        30,
                         1200,
                         80,
                         new ByteArrayResource(new byte[0])),

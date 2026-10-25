@@ -233,6 +233,7 @@ matching_watermark,market_type,character varying,,,NO
 matching_watermark,pair_id,uuid,,,NO
 matching_watermark,updated_at,timestamp with time zone,,,NO
 news_article,ai_summary,text,,,YES
+news_article,ai_title,character varying,,,YES
 news_article,article_id,uuid,,,NO
 news_article,collected_at,timestamp with time zone,,,NO
 news_article,created_at,timestamp with time zone,,,NO

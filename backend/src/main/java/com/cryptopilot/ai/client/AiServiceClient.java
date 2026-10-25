@@ -64,6 +64,7 @@ public class AiServiceClient implements AutoCloseable {
         }
         JsonNode answer = post("/v1/news/summary", body);
         return new NewsSummaryResult(
+                text(answer, "title"),
                 text(answer, "summary"),
                 text(answer, "sentiment"),
                 answer.path("model").asString(request.model()),

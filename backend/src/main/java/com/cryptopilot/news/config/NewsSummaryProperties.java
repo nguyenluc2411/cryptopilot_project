@@ -15,7 +15,7 @@ import org.springframework.validation.annotation.Validated;
 /**
  * How NSF-11 summarizes articles, under {@code cryptopilot.news.summary}. The model, the instructions and the limits
  * are configuration, not code: the model is chosen per environment ({@code NEWS_SUMMARY_MODEL}), the instructions are a
- * text file with {@code {language}} and {@code {maxWords}} placeholders, and the AI Service receives them with every
+ * text file with {@code {language}}, {@code {maxWords}} and {@code {maxTitleWords}} placeholders, and the AI Service receives them with every
  * request.
  *
  * <p>Rule: NSF-11 (articles without a summary, a summary of at most 60 words and a sentiment label, failures retried at
@@ -31,6 +31,7 @@ import org.springframework.validation.annotation.Validated;
  * @param maxOutputTokens the longest answer the model may write, reasoning included
  * @param language the language the summary is written in, as the prompt names it
  * @param maxWords the longest summary stored (NSF-11: 60 words)
+ * @param maxTitleWords the longest translated headline stored (D-127)
  * @param maxInputWords the most words of an article sent to the model
  * @param minBodyWords below this many words a page's text is not the article (a paywall, a cookie wall) and the
  *     feed's excerpt is used instead
@@ -52,6 +53,7 @@ public record NewsSummaryProperties(
         @Min(16) @Max(8192) @DefaultValue("512") int maxOutputTokens,
         @NotBlank @DefaultValue("Vietnamese") String language,
         @Min(10) @Max(200) @DefaultValue("60") int maxWords,
+        @Min(5) @Max(100) @DefaultValue("30") int maxTitleWords,
         @Min(50) @Max(5000) @DefaultValue("1200") int maxInputWords,
         @Min(0) @DefaultValue("80") int minBodyWords,
 

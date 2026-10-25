@@ -14,7 +14,7 @@ import lombok.Getter;
 
 /**
  * A collected article: what BR-48 allows to keep of it — the title, the original address, the publish time, an excerpt
- * and, once NSF-11 has run, the AI summary and its sentiment — and the two hashes duplicates are found by. The full
+ * and, once NSF-11 has run, the translated headline, the AI summary and its sentiment — and the two hashes duplicates are found by. The full
  * text is never stored. Written by {@link com.cryptopilot.news.repository.NewsArticleRepository#insert} with a single
  * statement that leaves an address already stored alone, so this entity is read only here.
  *
@@ -43,6 +43,10 @@ public class NewsArticle extends BaseEntity {
 
     @Column(name = "excerpt", updatable = false)
     private String excerpt;
+
+    /** The headline in the summary's language (D-127); {@code null} until NSF-11 has run, when {@link #title} is shown. */
+    @Column(name = "ai_title", length = 500)
+    private String aiTitle;
 
     @Column(name = "ai_summary")
     private String aiSummary;

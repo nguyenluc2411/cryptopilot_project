@@ -43,9 +43,9 @@ afterEach(async () => {
 });
 
 describe("POST /v1/news/summary", () => {
-  it("NSF11 returns the model's summary and sentiment with the token usage", async () => {
+  it("NSF11 returns the model's title, summary and sentiment with the token usage", async () => {
     const provider = new FakeProvider(() => ({
-      text: '```json\n{"summary":"Bitcoin đi ngang quanh $81,000.","sentiment":"NEUTRAL"}\n```',
+      text: '```json\n{"title":"Bitcoin giữ mức $81K","summary":"Bitcoin đi ngang quanh $81,000.","sentiment":"NEUTRAL"}\n```',
       inputTokens: 210,
       outputTokens: 40,
     }));
@@ -54,6 +54,7 @@ describe("POST /v1/news/summary", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
+      title: "Bitcoin giữ mức $81K",
       summary: "Bitcoin đi ngang quanh $81,000.",
       sentiment: "NEUTRAL",
       model: "gemini-test-lite",
@@ -67,11 +68,15 @@ describe("POST /v1/news/summary", () => {
     expect(sent?.maxOutputTokens).toBe(256);
     expect(sent?.userPrompt).toContain("TITLE: Bitcoin holds $81K");
     expect(sent?.userPrompt).toContain("SOURCE: CoinDesk Markets");
-    expect(sent?.responseSchema).toMatchObject({ required: ["summary", "sentiment"] });
+    expect(sent?.responseSchema).toMatchObject({ required: ["title", "summary", "sentiment"] });
   });
 
   it("NSF11 passes the backend's reason for a retry to the model", async () => {
-    const provider = new FakeProvider(() => ({ text: '{"summary":"x","sentiment":"BULLISH"}', inputTokens: 1, outputTokens: 1 }));
+    const provider = new FakeProvider(() => ({
+      text: '{"title":"t","summary":"x","sentiment":"BULLISH"}',
+      inputTokens: 1,
+      outputTokens: 1,
+    }));
 
     await post(provider, { ...BODY, feedback: "the number 90,000 is not in the article" });
 
@@ -105,7 +110,13 @@ describe("POST /v1/news/summary", () => {
   });
 
   it("NSF11 an answer outside the shape is a bad response, never a summary", async () => {
-    for (const text of ['{"summary":"x","sentiment":"VERY_BULLISH"}', '{"summary":"  "}', "not json"]) {
+    for (const text of [
+      '{"title":"t","summary":"x","sentiment":"VERY_BULLISH"}',
+      '{"title":"t","summary":"  "}',
+      '{"summary":"x","sentiment":"NEUTRAL"}',
+      '{"title":" ","summary":"x","sentiment":"NEUTRAL"}',
+      "not json",
+    ]) {
       const provider = new FakeProvider(() => ({ text, inputTokens: 1, outputTokens: 1 }));
 
       const response = await post(provider, BODY);

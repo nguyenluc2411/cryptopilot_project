@@ -24,7 +24,8 @@ const FAILURES: Record<LlmError["kind"], { status: number; code: string }> = {
 };
 
 /**
- * `POST /v1/news/summary`, NSF-11: one article in, a summary and a sentiment label out, with the token usage. The
+ * `POST /v1/news/summary`, NSF-11: one article in, its translated title, a summary and a sentiment label out, with the
+ * token usage. The
  * request is checked before anything is sent to the provider, and the answer is checked before anything is returned:
  * a model that answers outside the shape is a failure, never a summary.
  */
@@ -52,9 +53,10 @@ export function registerNewsSummary(app: FastifyInstance, deps: NewsSummaryRoute
       );
       const answer = NewsSummaryAnswerSchema.safeParse(json(result.text));
       if (!answer.success) {
-        return failure(reply, new LlmError("BAD_RESPONSE", "the model's answer is not a summary and a sentiment"));
+        return failure(reply, new LlmError("BAD_RESPONSE", "the model's answer is not a title, a summary and a sentiment"));
       }
       const body: NewsSummaryResponse = {
+        title: answer.data.title,
         summary: answer.data.summary,
         sentiment: answer.data.sentiment,
         model: input.model,

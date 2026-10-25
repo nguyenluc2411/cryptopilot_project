@@ -40,13 +40,14 @@ import org.springframework.transaction.support.TransactionTemplate;
  * extracted, then dropped (BR-48). Where that fails — no selector, a paywall, a page too short to be the article — the
  * headline and the feed's excerpt are summarized instead, so every article can be summarized.
  *
- * <p>An answer is stored only once it passes {@link SummaryCheck}: within the word limit, no advice to trade, no figure
- * the article does not hold. A refused answer is asked for once more with the reason; an answer whose only fault is
+ * <p>The model also translates the headline (D-127), so a Trader reads the feed in one language. An answer is stored
+ * only once its headline and its summary pass {@link SummaryCheck}: within the word limits, no advice to trade, no
+ * figure the article does not hold. A refused answer is asked for once more with the reason; an answer whose only fault is
  * its length is cut rather than thrown away. Otherwise the article keeps no summary and the next run takes it up again
  * (NSF-11). A provider that rate limits, a service that is down or not configured ends the run: the other articles
  * would fail the same way, and each would cost a request.
  *
- * <p>Rule: NSF-11; BR-48; the hard scope boundary (no investment advice).
+ * <p>Rule: NSF-11; BR-48; D-127; the hard scope boundary (no investment advice).
  */
 @Service
 public class NewsSummaryServiceImpl implements NewsSummaryService {
@@ -134,7 +135,9 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
         String summary = answer.summary().strip();
         Optional<String> remaining = problem(answer, material);
         if (remaining.isPresent()) {
-            if (sentiment(answer).isPresent() && SummaryCheck.onlyTooLong(summary, material, properties.maxWords())) {
+            if (sentiment(answer).isPresent()
+                    && titleProblem(answer, material).isEmpty()
+                    && SummaryCheck.onlyTooLong(summary, material, properties.maxWords())) {
                 summary = SummaryCheck.cut(summary, properties.maxWords());
             } else {
                 log.info("NSF-11 article {} keeps no summary: {}", article.getId(), remaining.get());
@@ -142,10 +145,11 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
             }
         }
         SentimentLabel sentiment = sentiment(answer).orElseThrow();
+        String title = answer.title().strip();
         String stored = summary;
         // No row written means another run stored a summary meanwhile, which is as good as this one.
         transactions.executeWithoutResult(
-                status -> articles.saveSummary(article.getId(), stored, sentiment.name(), clock.instant()));
+                status -> articles.saveSummary(article.getId(), title, stored, sentiment.name(), clock.instant()));
         return true;
     }
 
@@ -155,7 +159,12 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
             return Optional.of("the sentiment \"" + answer.sentiment() + "\" is not one of "
                     + Arrays.toString(SentimentLabel.values()));
         }
-        return SummaryCheck.problem(answer.summary(), material, properties.maxWords());
+        return titleProblem(answer, material)
+                .or(() -> SummaryCheck.problem(answer.summary(), material, properties.maxWords()));
+    }
+
+    private Optional<String> titleProblem(NewsSummaryResult answer, String material) {
+        return SummaryCheck.titleProblem(answer.title(), material, properties.maxTitleWords());
     }
 
     private static Optional<SentimentLabel> sentiment(NewsSummaryResult answer) {
@@ -205,7 +214,8 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
                         .prompt()
                         .getContentAsString(StandardCharsets.UTF_8)
                         .replace("{language}", properties.language())
-                        .replace("{maxWords}", String.valueOf(properties.maxWords()));
+                        .replace("{maxWords}", String.valueOf(properties.maxWords()))
+                        .replace("{maxTitleWords}", String.valueOf(properties.maxTitleWords()));
             } catch (IOException e) {
                 throw new UncheckedIOException("the news summary prompt cannot be read: " + properties.prompt(), e);
             }
