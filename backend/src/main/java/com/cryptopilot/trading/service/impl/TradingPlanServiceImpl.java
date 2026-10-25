@@ -17,10 +17,12 @@ import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
+import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.EntryDeviationCalculator;
 import com.cryptopilot.trading.calculator.PlanValidityRule;
+import com.cryptopilot.trading.calculator.PositionLevelRule;
 import com.cryptopilot.trading.calculator.SlippageCalculator;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.dto.request.PlanInputs;
@@ -472,14 +474,26 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * is read first and the journal second: a fill committing between the reads moves its plan from the first to the
      * second, so it is counted twice (a spurious MSG27 or TOTAL_OPEN_RISK), never zero times. When {@code activating},
      * the caller holds the D-63 lock and the ACTIVE plans are counted for {@code ACTIVE_PLAN_MAX}; otherwise they are
-     * not counted.
+     * not counted. An ACTIVE plan counts its planned risk, an open position its risk at its current stop loss (D-124).
      */
     private OpenExposure exposure(UUID userId, UUID excludedPlan, boolean activating) {
         long activePlans = activating ? plans.countActive(userId) : 0L;
         BigDecimal activeRisk = plans.activeRiskExcluding(userId, excludedPlan);
-        Set<UUID> open = journal.openPositionPlans(userId);
-        BigDecimal openRisk = open.isEmpty() ? BigDecimal.ZERO : plans.riskOf(open);
-        return new OpenExposure(activating ? activePlans + open.size() : 0L, activeRisk.add(openRisk));
+        List<OpenTrade> open = journal.openSimulatedTrades(userId);
+        return new OpenExposure(activating ? activePlans + open.size() : 0L, activeRisk.add(currentRisk(open)));
+    }
+
+    /**
+     * The risk the open positions still carry at their current stop losses, the open half of TOTAL_OPEN_RISK: a
+     * position whose stop was moved to or past its entry carries none.
+     *
+     * <p>Rule: BR-29; D-124.
+     */
+    static BigDecimal currentRisk(List<OpenTrade> open) {
+        return open.stream()
+                .map(trade -> PositionLevelRule.currentRisk(
+                        trade.direction(), trade.entryPrice(), trade.stopLoss(), trade.quantity()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /** {@code ACTIVE_PLAN_MAX} counts ACTIVE plans and open positions together (BR-62); MSG27 when it is reached. */
