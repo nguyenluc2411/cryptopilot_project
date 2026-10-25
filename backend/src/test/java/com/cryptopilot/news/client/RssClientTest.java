@@ -300,9 +300,13 @@ class RssClientTest {
         return "http://127.0.0.1:" + server.getAddress().getPort() + path;
     }
 
+    /**
+     * A read timeout long enough that a loaded machine does not fail an ordinary answer: only {@code /slow} waits for
+     * it, and that one never answers before the test ends.
+     */
     private static RssClientProperties properties(boolean allowPrivate, DataSize maxFeedSize) {
         return new RssClientProperties(
-                Duration.ofSeconds(2), Duration.ofMillis(500), "TestAgent/1.0", maxFeedSize, 3, allowPrivate);
+                Duration.ofSeconds(2), Duration.ofSeconds(3), "TestAgent/1.0", maxFeedSize, 3, allowPrivate);
     }
 
     private static void redirect(HttpExchange exchange, String location) throws IOException {
