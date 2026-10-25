@@ -148,9 +148,7 @@ class JournalExitTest {
     void removeRows() {
         feed.stop();
         worker.stop();
-        jdbc.sql("delete from notification where reference_id in (select plan_id from trading_plan where pair_id = ?)")
-                .param(pair)
-                .update();
+        deleteNotifications();
         jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
@@ -506,6 +504,23 @@ class JournalExitTest {
                         insert into crypto_pair (pair_id, base_coin_id, quote_coin_id, symbol, pair_status,
                                                  spot_exchange_status, created_at, updated_at)
                         values (?, ?, ?, ?, 'INACTIVE', 'TRADING', ?, ?)""").params(pair, baseCoin, quoteCoin, "JX" + suffix, at, at).update();
+    }
+
+    /**
+     * Waits until every closed position of the pair has its notification, written after the close commits, and
+     * deletes them, so no row of this test is left for the tests that follow.
+     */
+    private void deleteNotifications() {
+        awaitUntil(
+                () -> jdbc.sql("""
+                                        select count(*) from trading_journal j
+                                         where j.pair_id = ? and j.trade_status = 'CLOSED'
+                                           and not exists (select 1 from notification n
+                                                            where n.source_key = 'POSITION_CLOSED:' || j.journal_id)""").param(pair).query(Long.class).single() == 0,
+                "the notifications of the closed positions");
+        jdbc.sql("""
+                        delete from notification where source_key in
+                               (select 'POSITION_CLOSED:' || journal_id from trading_journal where pair_id = ?)""").param(pair).update();
     }
 
     private static void awaitUntil(Supplier<Boolean> condition, String what) {

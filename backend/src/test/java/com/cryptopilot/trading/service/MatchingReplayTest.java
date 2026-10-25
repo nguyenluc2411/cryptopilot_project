@@ -632,10 +632,21 @@ class MatchingReplayTest {
         return value == null ? null : value.stripTrailingZeros();
     }
 
+    /**
+     * Waits until every closed position of the pair has its notification, written after the close commits, and
+     * deletes them, so no row of this test is left for the tests that follow.
+     */
     private void deleteNotifications() {
-        jdbc.sql("delete from notification where reference_id in (select plan_id from trading_plan where pair_id = ?)")
-                .param(pair)
-                .update();
+        awaitUntil(
+                () -> jdbc.sql("""
+                                        select count(*) from trading_journal j
+                                         where j.pair_id = ? and j.trade_status = 'CLOSED'
+                                           and not exists (select 1 from notification n
+                                                            where n.source_key = 'POSITION_CLOSED:' || j.journal_id)""").param(pair).query(Long.class).single() == 0,
+                "the notifications of the closed positions");
+        jdbc.sql("""
+                        delete from notification where source_key in
+                               (select 'POSITION_CLOSED:' || journal_id from trading_journal where pair_id = ?)""").param(pair).update();
     }
 
     /** R1, R5: every closed minute reaches the engine once: one watermark advance per minute, none skipped. */
