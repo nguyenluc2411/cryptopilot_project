@@ -75,14 +75,17 @@ class SeedDataTest {
      * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V26 adds the
      * liquidation clearance fee (BR-36); V32 the entry deviation, setup score drop and slippage settings (BR-36, BR-69,
      * BR-70), V33 the two resend limits (BR-65), V34 the fee share threshold of HIGH_FEE_SHARE (BR-29, D-116); V11
-     * seeds the five packages.
+     * seeds the five packages; V39 the Academy's 8 topics, 21 lessons and 64 glossary terms (T-114).
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
             "system_setting", 20,
             "trading_strategy", 3,
             "user_account", 1,
             "user_profile", 1,
-            "subscription_package", 5);
+            "subscription_package", 5,
+            "academy_topic", 8,
+            "academy_article", 21,
+            "academy_term", 64);
 
     /**
      * The settings V3 seeds and a later migration deletes: V10 the plan limits (BR-62, D-58), V13 the thresholds the
@@ -120,7 +123,10 @@ class SeedDataTest {
         "trading_strategy, 3",
         "user_account, 1",
         "user_profile, 1",
-        "subscription_package, 5"
+        "subscription_package, 5",
+        "academy_topic, 8",
+        "academy_article, 21",
+        "academy_term, 64"
     })
     void seededTable_holdsExactlyTheExpectedNumberOfRows(String table, int expected) {
         assertThat(countOf(table)).isEqualTo(expected);
@@ -488,7 +494,7 @@ class SeedDataTest {
     // ------------------------------------------------------------------------------------------
 
     /**
-     * The production migration path writes rows into five tables and no others. This is the
+     * The production migration path writes rows into eight tables and no others. This is the
      * assertion a sample row has to get past: a pair invented to make a demo browsable, or a demo
      * account that reached the versioned migrations instead of the development-only set, shows up
      * here as a table that is no longer empty.

@@ -55,6 +55,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * <tr><th>Row of SRS 3.1.3</th><th>Paths</th><th>Who</th></tr>
  * <tr><td>SCR-02…06 Register, Verify, Log In, Password Reset</td><td>the six below</td><td>anyone</td></tr>
  * <tr><td>SCR-01 Public Home, Query Public Data</td><td>{@code GET /market/**}</td><td>anyone</td></tr>
+ * <tr><td>Academy (T-114, outside SRS 3.1.3)</td><td>{@code GET /academy/**}</td><td>anyone</td></tr>
  * <tr><td>SCR-07 Security tab</td><td>{@code /me/password}</td><td>TRADER, ADMIN</td></tr>
  * <tr><td>SCR-07 Profile, Notifications, Subscription tabs</td><td>{@code /me/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-08…15 Dashboard, Market, Watchlist, Alerts, Notifications</td><td>{@code /analysis/**}, {@code /watchlist/**}, {@code /alerts/**}, {@code /notifications/**}</td><td>TRADER</td></tr>
@@ -177,6 +178,12 @@ public class SecurityConfig {
         "/api/v1/community/members/*"
     };
 
+    /**
+     * The Academy a Guest reads (T-114): topics, published lessons, the beginner path and the glossary. Read-only;
+     * a Trader's progress lives under {@code /api/v1/me/**} and writing the lessons under {@link #ADMIN_CONSOLE}.
+     */
+    static final String PUBLIC_ACADEMY = "/api/v1/academy/**";
+
     /** Liveness and readiness. Narrower than {@code /actuator/**}, which describes the application. */
     static final String[] PUBLIC_HEALTH_PROBES = {"/actuator/health", "/actuator/health/**"};
 
@@ -252,6 +259,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, PUBLIC_MARKET_DATA)
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, PUBLIC_COMMUNITY)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_ACADEMY)
                         .permitAll()
                         .requestMatchers(PUBLIC_HEALTH_PROBES)
                         .permitAll()

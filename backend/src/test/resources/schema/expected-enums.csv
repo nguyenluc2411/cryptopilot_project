@@ -1,4 +1,6 @@
 table,column,constraint,values
+academy_article,article_level,ck_academy_article_level,BEGINNER|INTERMEDIATE|ADVANCED
+academy_article,article_status,ck_academy_article_status,DRAFT|PUBLISHED|HIDDEN
 ai_message,message_status,ck_ai_message_status,PENDING|COMPLETED|FAILED
 ai_message,sender_role,ck_ai_message_sender_role,USER|ASSISTANT
 alert,alert_status,ck_alert_status,ACTIVE|PAUSED|TRIGGERED|EXPIRED

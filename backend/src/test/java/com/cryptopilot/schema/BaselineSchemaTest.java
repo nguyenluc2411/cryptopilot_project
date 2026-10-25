@@ -31,7 +31,8 @@ class BaselineSchemaTest {
 
     /**
      * The business tables of the logical model, in the order the model lists them: 39, the 11 of paper trading
-     * (V21, TR-02) after them, and the history of a position's level changes (V37, TP-E).
+     * (V21, TR-02) after them, the history of a position's level changes (V37, TP-E), and the 4 of the Academy
+     * (V38, T-114) last.
      */
     private static final List<String> BUSINESS_TABLES = List.of(
             "user_account",
@@ -84,7 +85,11 @@ class BaselineSchemaTest {
             "paper_position",
             "paper_funding_payment",
             "paper_equity_snapshot",
-            "trading_journal_level_change");
+            "trading_journal_level_change",
+            "academy_topic",
+            "academy_article",
+            "academy_term",
+            "academy_progress");
 
     @Autowired
     private JdbcClient jdbc;
@@ -109,9 +114,9 @@ class BaselineSchemaTest {
     }
 
     @Test
-    void schema_holdsTheFiftyOneBusinessTables() {
+    void schema_holdsTheFiftyFiveBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(51);
+        assertThat(BUSINESS_TABLES).hasSize(55);
     }
 
     @Test
