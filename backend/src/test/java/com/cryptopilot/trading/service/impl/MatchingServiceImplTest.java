@@ -79,6 +79,7 @@ class MatchingServiceImplTest {
             positions,
             closer,
             journal,
+            market,
             Clock.fixed(NOW, ZoneOffset.UTC));
 
     private static final TrackedPosition OPENED = new TrackedPosition(
@@ -200,13 +201,20 @@ class MatchingServiceImplTest {
         TrackedEntry stop = stop(Direction.LONG);
         when(plans.invalidateIfActive(PLAN, AT, InvalidationReason.STOP_LOSS_REACHED, NOW))
                 .thenReturn(1);
+        when(market.tradablePair(PAIR, MarketType.FUTURES)).thenReturn(Optional.of(pair("0.01")));
 
         assertThat(service.invalidate(new Invalidation(stop, InvalidationReason.STOP_LOSS_REACHED, AT)))
                 .isTrue();
 
         verify(events)
                 .publishEvent(new TradingPlanInvalidated(
-                        PLAN, TrackedEntries.OWNER, InvalidationReason.STOP_LOSS_REACHED, AT));
+                        PLAN,
+                        TrackedEntries.OWNER,
+                        MarketType.FUTURES,
+                        Direction.LONG,
+                        "BTCUSDT",
+                        InvalidationReason.STOP_LOSS_REACHED,
+                        AT));
         verify(positions, never()).open(any());
     }
 

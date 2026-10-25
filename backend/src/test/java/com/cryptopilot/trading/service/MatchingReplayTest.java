@@ -633,8 +633,8 @@ class MatchingReplayTest {
     }
 
     /**
-     * Waits until every closed position of the pair has its notification, written after the close commits, and
-     * deletes them, so no row of this test is left for the tests that follow.
+     * Waits until every closed position and every invalidated plan of the pair has its notification (MSG23, MSG24,
+     * MSG54), written after the commit, and deletes them, so no row of this test is left for the tests that follow.
      */
     private void deleteNotifications() {
         awaitUntil(
@@ -644,9 +644,18 @@ class MatchingReplayTest {
                                            and not exists (select 1 from notification n
                                                             where n.source_key = 'POSITION_CLOSED:' || j.journal_id)""").param(pair).query(Long.class).single() == 0,
                 "the notifications of the closed positions");
+        awaitUntil(
+                () -> jdbc.sql("""
+                                        select count(*) from trading_plan p
+                                         where p.pair_id = ? and p.plan_status = 'INVALIDATED'
+                                           and not exists (select 1 from notification n
+                                                            where n.source_key = 'PLAN_INVALIDATED:' || p.plan_id)""").param(pair).query(Long.class).single() == 0,
+                "the notifications of the invalidated plans");
         jdbc.sql("""
                         delete from notification where source_key in
-                               (select 'POSITION_CLOSED:' || journal_id from trading_journal where pair_id = ?)""").param(pair).update();
+                               (select 'POSITION_CLOSED:' || journal_id from trading_journal where pair_id = ?
+                                union all
+                                select 'PLAN_INVALIDATED:' || plan_id from trading_plan where pair_id = ?)""").params(pair, pair).update();
     }
 
     /** R1, R5: every closed minute reaches the engine once: one watermark advance per minute, none skipped. */

@@ -5,6 +5,7 @@ import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.event.PositionOpened;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
+import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.matching.MatchingEngine;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
@@ -52,8 +53,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * {@link MatchingEngine}. A pair always lands in the same partition (by market and pair), so its books see the
  * updates in arrival order without locks, while different pairs are matched in parallel.
  *
- * <p>Commands: track an activated plan, untrack a cancelled plan, open a position filled at activation, and a price
- * range of last or mark prices. Track, untrack and open wait for room in the channel, because losing one would leave
+ * <p>Commands: track an activated plan, untrack a cancelled or expired plan, open a position filled at activation, and
+ * a price range of last or mark prices. Track, untrack and open wait for room in the channel, because losing one would leave
  * the books wrong. A range never waits and is never lost: when the channel is full it waits as a pending range of its
  * pair (see {@link #submit}). An outcome the engine decided, a fill, an invalidation or an exit, that fails to be
  * stored is kept as it is and tried again on the pair's next range once its back-off has passed, until a deadline. A
@@ -244,10 +245,20 @@ public class MatchingWorker {
     /** A cancelled plan leaves the books of its pair's partition. */
     @TransactionalEventListener
     public void onCancelled(TradingPlanCancelled event) {
+        untrack(event.market(), event.pairId(), event.planId());
+    }
+
+    /** An expired plan leaves the books of its pair's partition (NSF-09). */
+    @TransactionalEventListener
+    public void onExpired(TradingPlanExpired event) {
+        untrack(event.market(), event.pairId(), event.planId());
+    }
+
+    private void untrack(MarketType market, UUID pairId, UUID planId) {
         if (running) {
-            PairKey key = new PairKey(event.market(), event.pairId());
-            Partition partition = partitionOf(event.market(), event.pairId());
-            partition.put(new Command.Untrack(key, partition.seal(key), event.planId()));
+            PairKey key = new PairKey(market, pairId);
+            Partition partition = partitionOf(market, pairId);
+            partition.put(new Command.Untrack(key, partition.seal(key), planId));
         }
     }
 
@@ -737,9 +748,10 @@ public class MatchingWorker {
         record Untrack(PairKey key, long number, UUID planId) implements PairCommand {}
 
         record Open(PairKey key, long number, TrackedPosition position) implements PairCommand {}
+
     }
 
-    /** An activation, a cancel or a position opened at activation, of one pair, with its number. */
+    /** An activation, a cancel or expiry, or a position opened at activation, of one pair, with its number. */
     private sealed interface PairCommand extends Command {
 
         PairKey key();

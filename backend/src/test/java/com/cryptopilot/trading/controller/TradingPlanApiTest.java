@@ -42,6 +42,7 @@ import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.service.MatchingService;
+import com.cryptopilot.trading.service.PlanExpiryService;
 import com.cryptopilot.trading.service.TradingPlanService;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -126,6 +127,9 @@ class TradingPlanApiTest {
 
     @Autowired
     private PriceCacheService prices;
+
+    @Autowired
+    private PlanExpiryService expiry;
 
     /** A spy, so one test can make the setup score read fail inside the activation's transaction. */
     @MockitoSpyBean
@@ -1200,6 +1204,108 @@ class TradingPlanApiTest {
     private void profileCapital(UUID trader, String capital) throws Exception {
         as(trader, put("/api/v1/me/profile"), "{\"displayName\": \"Trader\", \"defaultCapital\": " + capital + "}")
                 .andExpect(status().isOk());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Expiry (T-046; NSF-09)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * NSF-09, BR-62: an EXPIRED plan frees its {@code ACTIVE_PLAN_MAX} slot, and an EXECUTED plan past its expiry is
+     * never expired. A FREE Trader (3) with three ACTIVE plans, one of them past its expiry, activates a fourth once
+     * NSF-09 ran; MSG53 is sent.
+     */
+    @Test
+    void NSF09_anExpiredPlan_freesItsSlot_andAnExecutedPlanIsNeverExpired() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        List<String> active = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            active.add(id(as(trader, post(PLANS), spotLimit("90", "85", "110", true))
+                    .andExpect(jsonPath("$.status").value("ACTIVE"))));
+        }
+        String fourth = id(as(trader, post(PLANS), spotLimit("90", "85", "110", false)));
+        as(trader, post(PLANS + "/" + fourth + "/activate"), null)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.messageCode").value("MSG27"));
+        String executed = id(as(trader, post(PLANS), spotMarket(false)));
+        pastExpiry(active.getFirst());
+        pastExpiry(executed);
+
+        expiry.expireDue(100);
+
+        as(trader, get(PLANS + "/" + active.getFirst()), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"));
+        as(trader, get(PLANS + "/" + executed), null)
+                .andExpect(jsonPath("$.status").value("DRAFT"));
+        as(trader, post(PLANS + "/" + fourth + "/activate"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+        assertThat(awaitNotification(UUID.fromString(active.getFirst())))
+                .isEqualTo(symbol + " LONG plan expired before its entry was filled.");
+    }
+
+    /** NSF-09: a position whose plan is EXECUTED keeps it EXECUTED past the plan's expiry. */
+    @Test
+    void NSF09_anExecutedPlanPastItsExpiry_staysExecuted() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        String executed = id(as(trader, post(PLANS), spotMarket(true))
+                .andExpect(jsonPath("$.status").value("EXECUTED")));
+        sql.sql("update trading_plan set expires_at = ? where plan_id = ?")
+                .params(Timestamp.from(Instant.now().minusSeconds(60)), UUID.fromString(executed))
+                .update();
+
+        assertThat(expiry.expireDue(100)).isZero();
+
+        as(trader, get(PLANS + "/" + executed), null)
+                .andExpect(jsonPath("$.status").value("EXECUTED"))
+                .andExpect(jsonPath("$.position.status").value("OPEN"));
+    }
+
+    /** BR-68, BR-62: an INVALIDATED plan frees its slot; MSG54 names the reason. */
+    @Test
+    void BR68_anInvalidatedPlan_freesItsSlot_andMsg54NamesTheReason() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        List<String> active = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            active.add(id(as(trader, post(PLANS), spotLimit("90", "85", "110", true))
+                    .andExpect(jsonPath("$.status").value("ACTIVE"))));
+        }
+        String fourth = id(as(trader, post(PLANS), spotLimit("90", "85", "110", false)));
+
+        assertThat(matching.invalidate(new Invalidation(
+                        waiting(active.getFirst()), InvalidationReason.TAKE_PROFIT_REACHED, Instant.now())))
+                .isTrue();
+
+        as(trader, post(PLANS + "/" + fourth + "/activate"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+        assertThat(awaitNotification(UUID.fromString(active.getFirst())))
+                .isEqualTo(symbol + " LONG plan was invalidated before its entry was filled: the take profit was"
+                        + " reached first.");
+    }
+
+    /** An ACTIVE plan's expiry moved into the past, as if it had come. */
+    private void pastExpiry(String planId) {
+        sql.sql("update trading_plan set expires_at = ? where plan_id = ?")
+                .params(Timestamp.from(Instant.now().minusSeconds(60)), UUID.fromString(planId))
+                .update();
+    }
+
+    /** The one notification of the plan, once written after the commit. */
+    private String awaitNotification(UUID planId) {
+        await().atMost(Duration.ofSeconds(20))
+                .until(() -> sql.sql("select count(*) from notification where reference_id = ?")
+                                .param(planId)
+                                .query(Long.class)
+                                .single()
+                        == 1);
+        return sql.sql("select content from notification where reference_id = ?")
+                .param(planId)
+                .query(String.class)
+                .single();
     }
 
     /** The engine's take profit exit of the plan's open position, stored through the matching service. */

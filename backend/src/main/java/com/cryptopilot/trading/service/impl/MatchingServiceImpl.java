@@ -1,5 +1,7 @@
 package com.cryptopilot.trading.service.impl;
 
+import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.SlippageCalculator;
@@ -52,6 +54,7 @@ public class MatchingServiceImpl implements MatchingService {
     private final PositionOpener positions;
     private final PositionCloser closer;
     private final TradeJournal journal;
+    private final MarketApi market;
     private final Clock clock;
 
     @Override
@@ -87,9 +90,15 @@ public class MatchingServiceImpl implements MatchingService {
                         invalidation.planId(), invalidation.invalidatedAt(), invalidation.reason(), clock.instant())
                 == 1;
         if (invalidated) {
+            TrackedEntry entry = invalidation.entry();
             events.publishEvent(new TradingPlanInvalidated(
                     invalidation.planId(),
-                    invalidation.entry().userId(),
+                    entry.userId(),
+                    entry.market(),
+                    entry.direction(),
+                    market.tradablePair(entry.pairId(), entry.market())
+                            .map(TradablePair::symbol)
+                            .orElse(null),
                     invalidation.reason(),
                     invalidation.invalidatedAt()));
             log.info(

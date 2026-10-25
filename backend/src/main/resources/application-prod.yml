@@ -84,6 +84,9 @@ cryptopilot:
       # NSF-04 runs in this profile: the futures metrics and funding settlements of the streamed pairs.
       enabled: true
   trading:
+    expiry:
+      # NSF-09 runs in this profile: ACTIVE plans whose expiry has come are expired every minute.
+      enabled: true
     matching:
       replay:
         # T-043 runs in this profile: after a restart, the closed 1-minute candles missed since the

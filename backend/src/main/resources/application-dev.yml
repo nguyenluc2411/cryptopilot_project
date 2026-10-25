@@ -87,6 +87,9 @@ cryptopilot:
       # after the first symbol synchronisation, so NSF-03 has pairs to stream. Never set in prod (BR-07).
       activate-seed-symbols: true
   trading:
+    expiry:
+      # NSF-09 runs in this profile: ACTIVE plans whose expiry has come are expired every minute.
+      enabled: true
     matching:
       replay:
         # T-043 runs in this profile: after a restart, the closed 1-minute candles missed since the

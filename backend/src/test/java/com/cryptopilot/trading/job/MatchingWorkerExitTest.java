@@ -14,6 +14,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.event.PositionOpened;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
+import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.PositionExit;
 import com.cryptopilot.trading.model.PriceRange;
@@ -263,6 +264,35 @@ class MatchingWorkerExitTest {
 
         verify(matching, timeout(WAIT)).close(exitOf(liquidated, CloseReason.LIQUIDATION, "90.37"));
         verify(matching, timeout(WAIT)).close(exitOf(stopped, CloseReason.STOP_LOSS, "97.5"));
+    }
+
+    /** NSF-09: an expired plan leaves the books: a later range at its entry fills nothing. */
+    @Test
+    void NSF09_anExpiredPlan_leavesTheBooks() {
+        TrackedEntry expired = TrackedEntries.limit(
+                UUID.randomUUID(), MarketType.FUTURES, PAIR, Direction.LONG, new BigDecimal("100"), EARLIER);
+        TrackedEntry kept = TrackedEntries.limit(
+                UUID.randomUUID(), MarketType.FUTURES, PAIR, Direction.LONG, new BigDecimal("99.5"), EARLIER);
+        when(matching.activeEntries()).thenReturn(List.of(expired, kept));
+        worker = started(1, 100);
+
+        worker.onExpired(new TradingPlanExpired(
+                expired.planId(), TrackedEntries.OWNER, MarketType.FUTURES, PAIR, Direction.LONG, null, AT));
+        worker.submit(futures(AT, "100", "99", "101", false));
+
+        verify(matching, timeout(WAIT))
+                .fill(argThat((Fill fill) -> fill.planId().equals(kept.planId())));
+        verify(matching, never()).fill(argThat((Fill fill) -> fill.planId().equals(expired.planId())));
+    }
+
+    @Test
+    void NSF09_eventsWhileTheEngineIsStopped_areIgnored() {
+        worker = new MatchingWorker(
+                matching, properties(1, 100), clock, Thread.ofVirtual().factory(), () -> 0.0);
+        worker.onExpired(new TradingPlanExpired(
+                UUID.randomUUID(), TrackedEntries.OWNER, MarketType.FUTURES, PAIR, Direction.LONG, null, AT));
+
+        verify(matching, never()).close(any());
     }
 
     private MatchingWorker started(int partitions, int capacity) {

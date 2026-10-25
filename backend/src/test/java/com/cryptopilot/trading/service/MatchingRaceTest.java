@@ -116,6 +116,16 @@ class MatchingRaceTest {
 
     @AfterEach
     void removeRows() {
+        // MSG54 of every invalidated plan is written after its commit: wait for it so none is left behind.
+        await().atMost(Duration.ofSeconds(20))
+                .until(() -> jdbc.sql("""
+                                        select count(*) from trading_plan p
+                                         where p.pair_id = ? and p.plan_status = 'INVALIDATED'
+                                           and not exists (select 1 from notification n
+                                                            where n.source_key = 'PLAN_INVALIDATED:' || p.plan_id)""").param(pair).query(Long.class).single() == 0);
+        jdbc.sql("""
+                        delete from notification where source_key in
+                               (select 'PLAN_INVALIDATED:' || plan_id from trading_plan where pair_id = ?)""").param(pair).update();
         jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
