@@ -245,6 +245,29 @@ class AuthorizationMatrixTest {
         }
     }
 
+    /** The Academy (T-114): its lessons and glossary are open to anyone for GET, writing them is an Admin's. */
+    @Nested
+    class PublicAcademy {
+
+        @ParameterizedTest(name = "GET {0} admits a Guest")
+        @ValueSource(
+                strings = {
+                    "/api/v1/academy/topics",
+                    "/api/v1/academy/articles",
+                    "/api/v1/academy/articles/tien-ma-hoa-la-gi",
+                    "/api/v1/academy/path",
+                    "/api/v1/academy/terms"
+                })
+        void T114_theAcademyReads_admitAGuest(String path) throws Exception {
+            assertAdmitted(mvc.perform(get(path)));
+        }
+
+        @Test
+        void T114_writingToTheAcademy_isNotPublic() throws Exception {
+            assertUnauthenticated(mvc.perform(post("/api/v1/academy/articles")));
+        }
+    }
+
     /**
      * SCR-07's Security tab, the one row of the matrix both roles hold.
      *

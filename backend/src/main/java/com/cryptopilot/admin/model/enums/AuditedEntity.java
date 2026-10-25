@@ -15,5 +15,14 @@ public enum AuditedEntity {
     SUBSCRIPTION_ORDER,
     NEWS_SOURCE,
     AI_CONFIGURATION,
-    SYSTEM_SETTING
+    SYSTEM_SETTING,
+
+    /** A lesson of the Academy (T-114). */
+    ACADEMY_ARTICLE,
+
+    /** A term of the Academy glossary (T-114). */
+    ACADEMY_TERM,
+
+    /** A topic of the Academy (T-114). */
+    ACADEMY_TOPIC
 }

@@ -1,4 +1,46 @@
 table,column,data_type,numeric_precision,numeric_scale,is_nullable
+academy_article,app_link,character varying,,,YES
+academy_article,article_id,uuid,,,NO
+academy_article,article_level,character varying,,,NO
+academy_article,article_status,character varying,,,NO
+academy_article,body,text,,,NO
+academy_article,cover_credit,character varying,,,YES
+academy_article,cover_image_url,character varying,,,YES
+academy_article,created_at,timestamp with time zone,,,NO
+academy_article,created_by,uuid,,,YES
+academy_article,path_order,integer,32,0,YES
+academy_article,published_at,timestamp with time zone,,,YES
+academy_article,reading_minutes,integer,32,0,NO
+academy_article,slug,character varying,,,NO
+academy_article,sort_order,integer,32,0,NO
+academy_article,summary,character varying,,,NO
+academy_article,title,character varying,,,NO
+academy_article,topic_id,uuid,,,NO
+academy_article,updated_at,timestamp with time zone,,,NO
+academy_article,updated_by,uuid,,,YES
+academy_article,version,bigint,64,0,NO
+academy_progress,article_id,uuid,,,NO
+academy_progress,created_at,timestamp with time zone,,,NO
+academy_progress,progress_id,uuid,,,NO
+academy_progress,updated_at,timestamp with time zone,,,NO
+academy_progress,user_id,uuid,,,NO
+academy_progress,version,bigint,64,0,NO
+academy_term,article_id,uuid,,,YES
+academy_term,created_at,timestamp with time zone,,,NO
+academy_term,definition,character varying,,,NO
+academy_term,slug,character varying,,,NO
+academy_term,term,character varying,,,NO
+academy_term,term_id,uuid,,,NO
+academy_term,updated_at,timestamp with time zone,,,NO
+academy_term,version,bigint,64,0,NO
+academy_topic,created_at,timestamp with time zone,,,NO
+academy_topic,description,character varying,,,NO
+academy_topic,name,character varying,,,NO
+academy_topic,slug,character varying,,,NO
+academy_topic,sort_order,integer,32,0,NO
+academy_topic,topic_id,uuid,,,NO
+academy_topic,updated_at,timestamp with time zone,,,NO
+academy_topic,version,bigint,64,0,NO
 ai_configuration,config_id,uuid,,,NO
 ai_configuration,created_at,timestamp with time zone,,,NO
 ai_configuration,is_active,boolean,,,NO

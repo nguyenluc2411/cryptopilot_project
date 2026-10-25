@@ -48,7 +48,8 @@ class SchemaCatalogueTest {
             "news_crawl_log.source_id -> news_source",
             "news_article_tag.article_id -> news_article",
             "news_article_tag.tag_id -> news_tag",
-            "news_article_coin.article_id -> news_article");
+            "news_article_coin.article_id -> news_article",
+            "academy_progress.article_id -> academy_article");
 
     @Autowired
     private JdbcClient jdbc;
