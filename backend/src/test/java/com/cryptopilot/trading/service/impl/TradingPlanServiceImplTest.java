@@ -901,6 +901,58 @@ class TradingPlanServiceImplTest {
     }
 
     /**
+     * BR-29, BR-62, D-119: an activation reads the open positions once, under the lock and after the plan table, and
+     * both checks use that read: 1 ACTIVE plan and 1 open position fill 2 slots, and the position's 15 with the 20 in
+     * ACTIVE plans is 3.5 % of 1,000, which with the plan's 10 raises TOTAL_OPEN_RISK.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"create", "update", "activate"})
+    void BR62_anActivation_readsTheOpenPositionsOnceForBothChecks(String path) {
+        TradingPlan plan = draft();
+        when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
+        UUID openPlan = UUID.randomUUID();
+        when(plans.countActive(USER)).thenReturn(1L);
+        when(plans.activeRiskExcluding(eq(USER), any())).thenReturn(new BigDecimal("20"));
+        when(journal.openPositionPlans(USER)).thenReturn(Set.of(openPlan));
+        when(plans.riskOf(Set.of(openPlan))).thenReturn(new BigDecimal("15"));
+        Mockito.clearInvocations(plans, journal);
+
+        TradingPlanResponse active =
+                switch (path) {
+                    case "create" -> service.create(USER, activating(spotLimit("100", "95", "110")));
+                    case "update" -> service.update(USER, plan.getId(), update("100", "95", "110", true));
+                    default -> service.activate(USER, plan.getId());
+                };
+
+        assertThat(active.status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(active.warnings()).extracting(PlanWarningResponse::type).contains(WarningType.TOTAL_OPEN_RISK);
+        verify(journal, Mockito.times(1)).openPositionPlans(USER);
+        InOrder order = inOrder(lock, plans, journal, entitlements);
+        order.verify(lock).lock(USER);
+        order.verify(plans).countActive(USER);
+        order.verify(plans).activeRiskExcluding(eq(USER), any());
+        order.verify(journal).openPositionPlans(USER);
+        order.verify(entitlements).requireWithinLimit(USER, Feature.ACTIVE_PLAN_MAX, 2L);
+    }
+
+    /**
+     * BR-29, D-119: a calculation and a draft save activate nothing, so they count no ACTIVE plan and check no
+     * {@code ACTIVE_PLAN_MAX}; each still reads the open positions once, after the ACTIVE plans' risk.
+     */
+    @Test
+    void BR29_aCalculationOrADraftSave_countsNoActivePlanAndReadsTheJournalOnce() {
+        service.calculate(USER, spotLimit("100", "95", "110"));
+        service.create(USER, spotLimit("100", "95", "110"));
+
+        verify(plans, never()).countActive(any());
+        verify(entitlements, never()).requireWithinLimit(any(), eq(Feature.ACTIVE_PLAN_MAX), anyLong());
+        verify(journal, Mockito.times(2)).openPositionPlans(USER);
+        InOrder order = inOrder(plans, journal);
+        order.verify(plans).activeRiskExcluding(eq(USER), any());
+        order.verify(journal).openPositionPlans(USER);
+    }
+
+    /**
      * UC-20, Q-55: an open Spot position is valued at the Spot last price, without fees: (103 − 100) × 2 = 6. Spot has
      * no liquidation price.
      */

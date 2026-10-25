@@ -37,6 +37,7 @@ import com.cryptopilot.trading.matching.EntryFillRule;
 import com.cryptopilot.trading.model.CalculatedPlan;
 import com.cryptopilot.trading.model.EntryExpectation;
 import com.cryptopilot.trading.model.InputViolation;
+import com.cryptopilot.trading.model.OpenExposure;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanListQuery;
 import com.cryptopilot.trading.model.PlanTerms;
@@ -131,7 +132,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         PlanTerms terms = terms(request);
         TradablePair pair = pair(userId, request.pairId(), terms.market());
         Optional<BigDecimal> last = lastPriceRead(pair, terms.entryType(), request.invalidationPrice(), false);
-        CalculatedPlan calculated = calculate(userId, pair, terms, NO_PLAN, true, last);
+        CalculatedPlan calculated = calculate(userId, pair, terms, true, last, exposure(userId, NO_PLAN, false));
         // The save's checks too, so the panel accepts only what create accepts.
         PlanDetails details = details(userId, request, calculated, clock.instant());
         requireValidAtSave(pair, calculated, details, false, last);
@@ -150,12 +151,13 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         PlanTerms terms = terms(request);
         TradablePair pair = pair(userId, request.pairId(), terms.market());
         Optional<BigDecimal> last = lastPriceRead(pair, terms.entryType(), request.invalidationPrice(), activate);
-        CalculatedPlan calculated = calculate(userId, pair, terms, NO_PLAN, true, last);
+        OpenExposure exposure = exposure(userId, NO_PLAN, activate);
+        CalculatedPlan calculated = calculate(userId, pair, terms, true, last, exposure);
         PlanDetails details = details(userId, request, calculated, now);
         requireValidAtSave(pair, calculated, details, activate, last);
         TradingPlan plan = TradingPlan.draft(userId, request.pairId(), calculated, details);
         if (activate) {
-            requireRoomForAnActivePlan(userId);
+            requireRoomForAnActivePlan(userId, exposure);
             activate(plan, calculated, now, last);
         }
         return detail(store(plan));
@@ -177,12 +179,13 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         PlanTerms terms = terms(request);
         TradablePair pair = pair(userId, plan.getPairId(), terms.market());
         Optional<BigDecimal> last = lastPriceRead(pair, terms.entryType(), request.invalidationPrice(), activate);
-        CalculatedPlan calculated = calculate(userId, pair, terms, plan.getId(), true, last);
+        OpenExposure exposure = exposure(userId, plan.getId(), activate);
+        CalculatedPlan calculated = calculate(userId, pair, terms, true, last, exposure);
         PlanDetails details = details(userId, request, calculated, now);
         requireValidAtSave(pair, calculated, details, activate, last);
         plan.updateDraft(calculated, details);
         if (activate) {
-            requireRoomForAnActivePlan(userId);
+            requireRoomForAnActivePlan(userId, exposure);
             activate(plan, calculated, now, last);
         }
         return detail(store(plan));
@@ -198,11 +201,12 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             // Before the count, so activating twice is a state error and not a limit error.
             throw new IllegalPlanStateException(plan.getId(), plan.getStatus(), "move to " + PlanStatus.ACTIVE);
         }
-        requireRoomForAnActivePlan(userId);
+        OpenExposure exposure = exposure(userId, plan.getId(), true);
+        requireRoomForAnActivePlan(userId, exposure);
         TradablePair pair = pair(userId, plan.getPairId(), plan.getMarket());
         Optional<BigDecimal> last = lastPriceRead(pair, plan.getEntryType(), plan.getInvalidationPrice(), true);
         // Stored prices are checked against the current tick, not rounded to it (BR-30, BR-31).
-        CalculatedPlan calculated = calculate(userId, pair, terms(plan), plan.getId(), false, last);
+        CalculatedPlan calculated = calculate(userId, pair, terms(plan), false, last, exposure);
         // After the calculation and its entitlement check, which answers MSG29 before a missing price answers 503.
         requireValidAtActivation(plan, last);
         activate(plan, calculated, now, last);
@@ -327,12 +331,12 @@ public class TradingPlanServiceImpl implements TradingPlanService {
 
     /**
      * The plan calculated with its defaults applied and the current data of the other modules: the pair's filters,
-     * the last price for a MARKET entry, the risk profile, the other open risk, and the expected fees and slippage of
-     * the entry ({@code last}, the request's one read of the last price, decides whether a LIMIT is expected to take
-     * or to supply liquidity). With {@code roundPrices} the prices are rounded to the pair's tick, as for values just
-     * entered (BR-30); without it they are passed as stored, so a price that is no longer a multiple of the current
-     * tick is refused by the calculation on its field (MSG15) instead of being moved to a price the Trader never
-     * entered.
+     * the last price for a MARKET entry, the risk profile, the other open risk ({@code exposure}, read once by the
+     * caller), and the expected fees and slippage of the entry ({@code last}, the request's one read of the last
+     * price, decides whether a LIMIT is expected to take or to supply liquidity). With {@code roundPrices} the prices
+     * are rounded to the pair's tick, as for values just entered (BR-30); without it they are passed as stored, so a
+     * price that is no longer a multiple of the current tick is refused by the calculation on its field (MSG15)
+     * instead of being moved to a price the Trader never entered.
      *
      * <p>Rule: BR-23, BR-29, BR-30, BR-31, BR-36; D-111 E1, E5; D-112 R6; D-116.
      */
@@ -340,9 +344,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             UUID userId,
             TradablePair pair,
             PlanTerms terms,
-            UUID excludedPlan,
             boolean roundPrices,
-            Optional<BigDecimal> last) {
+            Optional<BigDecimal> last,
+            OpenExposure exposure) {
         PlanDefaults defaults = riskProfiles.planDefaultsOf(userId);
         BigDecimal capital = terms.capital() != null ? terms.capital() : defaults.defaultCapital();
         if (capital == null) {
@@ -371,7 +375,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 terms.leverage() == null ? 1 : terms.leverage(),
                 pair.filters(),
                 limits(defaults.riskProfile()),
-                plans.activeRiskExcluding(userId, excludedPlan).add(openPositionRisk(userId)));
+                exposure.otherOpenRisk());
         LiquidityRole role = EntryFillRule.expectedLiquidity(terms.entryType(), terms.direction(), entryPrice, last);
         BigDecimal slipsFrom =
                 switch (terms.entryType()) {
@@ -412,24 +416,23 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * {@code ACTIVE_PLAN_MAX} counts ACTIVE plans and open positions together (BR-62); MSG27 when it is reached. Called
-     * under the D-63 lock. ACTIVE plans are counted first: a fill committing between the two reads moves its plan from
-     * the first to the second, so it is counted twice, never zero times (D-119).
+     * What the Trader has open besides {@code excludedPlan}, with one read of the journal (D-63, D-119). The plan table
+     * is read first and the journal second: a fill committing between the reads moves its plan from the first to the
+     * second, so it is counted twice (a spurious MSG27 or TOTAL_OPEN_RISK), never zero times. When {@code activating},
+     * the caller holds the D-63 lock and the ACTIVE plans are counted for {@code ACTIVE_PLAN_MAX}; otherwise they are
+     * not counted.
      */
-    private void requireRoomForAnActivePlan(UUID userId) {
-        long active = plans.countActive(userId);
-        entitlements.requireWithinLimit(userId, Feature.ACTIVE_PLAN_MAX, active + openPositions(userId));
-    }
-
-    /** The user's open simulated positions, as the journal holds them (BR-62; D-63, D-119). */
-    private long openPositions(UUID userId) {
-        return journal.openPositionPlans(userId).size();
-    }
-
-    /** The risk of the user's open simulated positions: the risk amount of the plans that opened them (BR-29; D-119). */
-    private BigDecimal openPositionRisk(UUID userId) {
+    private OpenExposure exposure(UUID userId, UUID excludedPlan, boolean activating) {
+        long activePlans = activating ? plans.countActive(userId) : 0L;
+        BigDecimal activeRisk = plans.activeRiskExcluding(userId, excludedPlan);
         Set<UUID> open = journal.openPositionPlans(userId);
-        return open.isEmpty() ? BigDecimal.ZERO : plans.riskOf(open);
+        BigDecimal openRisk = open.isEmpty() ? BigDecimal.ZERO : plans.riskOf(open);
+        return new OpenExposure(activating ? activePlans + open.size() : 0L, activeRisk.add(openRisk));
+    }
+
+    /** {@code ACTIVE_PLAN_MAX} counts ACTIVE plans and open positions together (BR-62); MSG27 when it is reached. */
+    private void requireRoomForAnActivePlan(UUID userId, OpenExposure exposure) {
+        entitlements.requireWithinLimit(userId, Feature.ACTIVE_PLAN_MAX, exposure.usedPlanSlots());
     }
 
     private TradingPlan owned(UUID userId, UUID planId) {
