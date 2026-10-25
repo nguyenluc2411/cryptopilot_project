@@ -1407,6 +1407,70 @@ class TradingPlanServiceImplTest {
     }
 
     /**
+     * D-123 (team lead, 2026-10-25): a LIMIT whose stop loss the last price has reached, at the level or past it, is
+     * refused on the stop loss for Save and Activate and for Activate, instead of filling a position already past its
+     * stop; Futures reads the last price, never the mark price.
+     */
+    @ParameterizedTest(name = "{0} {1} limit 100 at last {2}")
+    @CsvSource({"SPOT, LONG, 95", "SPOT, LONG, 94", "FUTURES, SHORT, 105", "FUTURES, SHORT, 106"})
+    void D123_aLimitWhoseStopLossIsReached_isRefusedOnTheStopLoss_atSaveAndActivateAndAtActivate(
+            MarketType marketType, Direction direction, String last) {
+        currentPrice(marketType, last);
+
+        assertThatThrownBy(() -> service.create(USER, activating(limit(marketType, direction))))
+                .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
+        verify(plans, never()).save(any());
+
+        TradingPlan plan = savedDraft(limit(marketType, direction));
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        verify(events, never()).publishEvent(any(TradingPlanActivated.class));
+        verify(journal, never()).openSimulatedTrade(any());
+        verify(market, never()).currentMarkPrice(any());
+    }
+
+    /** D-123: a LIMIT short of its stop loss still fills at once when the last price reaches its entry. */
+    @ParameterizedTest(name = "{0} {1} limit 100 at last {2}")
+    @CsvSource({"SPOT, LONG, 95.01", "FUTURES, SHORT, 104.99"})
+    void D123_aLimitShortOfItsStopLoss_isActivatedAndFillsAtOnce(
+            MarketType marketType, Direction direction, String last) {
+        currentPrice(marketType, last);
+
+        service.create(USER, activating(limit(marketType, direction)));
+
+        assertThat(saved.getStatus()).isEqualTo(PlanStatus.EXECUTED);
+    }
+
+    /**
+     * D-123: a MARKET whose stop loss the unslipped last price has reached, at the level or past it, is refused on the
+     * stop loss, also when the slippage would move its fill back over the stop (100 bps: LONG last 95 would buy at
+     * 95.95, above the stop of 95), for Save and Activate and for Activate; the stop distance of the deviation is
+     * never read at zero.
+     */
+    @ParameterizedTest(name = "{0} stop {1} at last {2}")
+    @CsvSource({"LONG, 95, 110, 95", "LONG, 95, 110, 94.5", "SHORT, 105, 90, 105", "SHORT, 105, 90, 105.5"})
+    void D123_aMarketWhoseStopLossIsReached_isRefusedOnTheStopLoss_evenWhenTheSlippageCrossesItBack(
+            Direction direction, String stop, String takeProfit, String last) {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(100);
+        CreateTradingPlanRequest market =
+                create(PAIR, MarketType.FUTURES, direction, EntryType.MARKET, null, stop, takeProfit, null, 5);
+        currentPrice(MarketType.FUTURES, last);
+
+        assertThatThrownBy(() -> service.create(USER, activating(market)))
+                .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
+        verify(plans, never()).save(any());
+
+        TradingPlan plan = savedDraft(market, "100");
+        currentPrice(MarketType.FUTURES, last);
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        verify(journal, never()).openSimulatedTrade(any());
+        verify(this.market, never()).currentMarkPrice(any());
+    }
+
+    /**
      * D-112 (Q-72): a LIMIT whose take profit the last price has reached, at the level or past it, is refused on the
      * take profit for Save and Activate and for Activate; the draft is unchanged and nothing is published.
      */
