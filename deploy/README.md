@@ -16,11 +16,17 @@ should type SQL by hand to get there. It comes in two parts.
 (`@cryptopilot.invalid`) with their tier, risk profile and default capital, plus the older demo accounts. Flyway only
 applies that location when the profile asks for it:
 
-| Environment | `SPRING_PROFILES_ACTIVE` | Demo accounts |
-|---|---|---|
-| Developer machine | `dev` | yes, `dev` already lists `db/demo` |
-| Staging | `prod,demo` | yes, the `demo` profile adds `db/demo` |
-| Production | `prod` | **no**, and nothing in `prod` can add it |
+| Environment | `SPRING_PROFILES_ACTIVE` | `CRYPTOPILOT_ENVIRONMENT` | Demo accounts |
+|---|---|---|---|
+| Developer machine | `dev` | not needed (`development`) | yes, `dev` already lists `db/demo` |
+| Staging | `prod,demo` | `staging`, **required** | yes, the `demo` profile adds `db/demo` |
+| Production | `prod` | not needed (`production` under `prod`) | **no**, and nothing in `prod` can add it |
+
+**Production guard.** The backend refuses to start when the `demo` profile is active and `CRYPTOPILOT_ENVIRONMENT`
+(property `cryptopilot.environment`) is anything but `development` or `staging`. Under `prod` it defaults to
+`production`, so `prod,demo` without `CRYPTOPILOT_ENVIRONMENT=staging` stops at start-up, before Flyway runs, with a
+message naming both variables. A production deployment that lists `demo` by mistake therefore never writes a demo
+account.
 
 The accounts sign in with the password that `DEMO_PASSWORD_HASH` was made from (a BCrypt hash at strength 12 in the
 backend's environment, see `.env.example`). No password is in the repository.
@@ -70,5 +76,5 @@ accounts there exactly as it does in dev, and production cannot reach them. Ever
 data goes through the API, so the demo data is checked by the same validation as real use and needs no database
 access from the machine running the demonstration.
 
-`DemoDatasetTest`, `DemoProfileTest` and `DemoLoaderTest` (backend) prove the accounts, the profile split, the bracket
-data and the script, including that a second run changes nothing.
+`DemoDatasetTest`, `DemoProfileTest`, `DemoEnvironmentGuardTest` and `DemoLoaderTest` (backend) prove the accounts, the profile
+split, the production guard, the bracket data and the script, including that a second run changes nothing.

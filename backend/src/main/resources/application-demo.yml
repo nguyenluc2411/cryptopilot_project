@@ -5,6 +5,8 @@
 # It changes one thing: Flyway also applies classpath:db/demo, the accounts the demonstration signs in with. The dev
 # profile already lists that location, so dev needs nothing from here. A production deployment runs "prod" alone and
 # never reaches the demo set; SeedDataTest and DemoProfileTest fail if the base or prod configuration ever lists it.
+# And if a production deployment lists demo anyway, DemoEnvironmentGuard stops the start before Flyway runs: this
+# profile needs CRYPTOPILOT_ENVIRONMENT=development or staging, and prod defaults it to production.
 #
 # Pairs, leverage brackets and the demo plans are loaded afterwards through the API by deploy/demo/load-wf01.ps1, see
 # deploy/README.md.

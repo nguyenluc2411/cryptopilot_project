@@ -1,0 +1,3 @@
+# Runs while the environment is prepared, before Flyway: the demo profile never starts on production (D-120).
+org.springframework.boot.EnvironmentPostProcessor=\
+com.cryptopilot.common.config.DemoEnvironmentGuard

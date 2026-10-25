@@ -10,6 +10,9 @@ logging:
       console: ecs
 
 cryptopilot:
+  # Production unless the environment says otherwise; staging runs this profile too and sets
+  # CRYPTOPILOT_ENVIRONMENT=staging, without which the demo profile refuses to start (D-120).
+  environment: ${CRYPTOPILOT_ENVIRONMENT:production}
   outbox:
     # T-056 runs in this profile: failed event deliveries (mail) are retried.
     enabled: true
