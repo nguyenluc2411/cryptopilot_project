@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -27,10 +28,15 @@ import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
+import com.cryptopilot.trading.model.Excursion;
+import com.cryptopilot.trading.model.Exit;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanListQuery;
+import com.cryptopilot.trading.model.PositionExit;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.TrackedPosition;
+import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
@@ -158,6 +164,7 @@ class TradingPlanApiTest {
             sql.sql("delete from subscription_order where user_id = ?")
                     .param(account)
                     .update();
+            sql.sql("delete from notification where user_id = ?").param(account).update();
             sql.sql("delete from user_profile where user_id = ?").param(account).update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
@@ -1121,6 +1128,66 @@ class TradingPlanApiTest {
                         jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')]").isEmpty());
     }
 
+    /**
+     * BR-62, T-048b: a position that closed frees its {@code ACTIVE_PLAN_MAX} slot. A FREE Trader (3) with two ACTIVE
+     * plans and one position, closed by its take profit, can activate a third plan.
+     */
+    @Test
+    void BR62_aClosedPosition_freesItsActivePlanMaxSlot() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        String executed = id(as(trader, post(PLANS), spotMarket(true))
+                .andExpect(jsonPath("$.status").value("EXECUTED")));
+        for (int i = 0; i < 2; i++) {
+            as(trader, post(PLANS), spotLimit("90", "85", "110", true))
+                    .andExpect(jsonPath("$.status").value("ACTIVE"));
+        }
+        String third = id(as(trader, post(PLANS), spotLimit("90", "85", "110", false)));
+
+        closeByTakeProfit(executed);
+
+        as(trader, post(PLANS + "/" + third + "/activate"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+        as(trader, get(PLANS + "/" + executed), null)
+                .andExpect(jsonPath("$.status").value("EXECUTED"))
+                .andExpect(jsonPath("$.position.status").value("CLOSED"))
+                .andExpect(jsonPath("$.position.closeReason").value("TAKE_PROFIT"))
+                .andExpect(jsonPath("$.position.provisional").value(false));
+    }
+
+    /**
+     * BR-29, D-121, T-048b: a position that closed leaves TOTAL_OPEN_RISK, divided by the profile's capital of now
+     * (1,000): with the 3 % position (risk 30) open, the 1.5 % plan (risk 15) makes 4.5 %, above BALANCED's 4 %; once
+     * the position closed it is 1.5 % again.
+     */
+    @Test
+    void BR29_aClosedPosition_leavesTotalOpenRisk() throws Exception {
+        UUID trader = trader();
+        profileCapital(trader, "1000");
+        String panel = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"LIMIT\", \"entryPrice\": 90, \"stopLoss\": 85, \"takeProfit\": 110,"
+                + " \"riskPercent\": 1.5}";
+        lastPrice("100");
+        String executed = id(as(
+                        trader,
+                        post(PLANS),
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110,"
+                                + " \"riskPercent\": 3, \"activate\": true}")
+                .andExpect(jsonPath("$.status").value("EXECUTED")));
+        as(trader, post(PLANS + "/calculate"), panel)
+                .andExpect(jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')].severity")
+                        .value("WARNING"));
+
+        closeByTakeProfit(executed);
+
+        as(trader, post(PLANS + "/calculate"), panel)
+                .andExpect(status().isOk())
+                .andExpect(
+                        jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')]").isEmpty());
+    }
+
     /** {@link #waiting} as the JSON a client sends. */
     private String waitingBody(boolean activate) {
         return spotLimit("90", "85", "110", activate);
@@ -1133,6 +1200,26 @@ class TradingPlanApiTest {
     private void profileCapital(UUID trader, String capital) throws Exception {
         as(trader, put("/api/v1/me/profile"), "{\"displayName\": \"Trader\", \"defaultCapital\": " + capital + "}")
                 .andExpect(status().isOk());
+    }
+
+    /** The engine's take profit exit of the plan's open position, stored through the matching service. */
+    private void closeByTakeProfit(String planId) {
+        TrackedPosition position = matching.openPositions().stream()
+                .filter(open -> open.planId().equals(UUID.fromString(planId)))
+                .findFirst()
+                .orElseThrow();
+        assertThat(matching.close(new PositionExit(
+                        position,
+                        new Exit(position.planId(), CloseReason.TAKE_PROFIT, position.takeProfit(), Instant.now()),
+                        Excursion.at(position.entryPrice()))))
+                .isTrue();
+        // MSG23 is written after the commit; wait for it so the account's rows can be removed.
+        await().atMost(Duration.ofSeconds(20))
+                .until(() -> sql.sql("select count(*) from notification where reference_id = ?")
+                                .param(position.planId())
+                                .query(Long.class)
+                                .single()
+                        == 1);
     }
 
     /** A Spot LONG LIMIT at 90 (SL 85, TP 110), below a last price of 100, so it waits when activated. */
