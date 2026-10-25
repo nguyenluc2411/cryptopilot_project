@@ -313,6 +313,29 @@ public class TradingPlan extends BaseEntity {
     }
 
     /**
+     * The checks of {@link #activate} without the activation, so a caller can add its own refusal between them and the
+     * change (BR-69: a confirmation is asked for only of a plan that would otherwise be activated). Changes nothing.
+     *
+     * @throws IllegalPlanStateException when the plan is not a DRAFT
+     * @throws FieldValidationException when the recalculated inputs are rejected
+     * @throws PlanActivationBlockedException when a warning is BLOCKING (MSG18)
+     * @throws BusinessException {@code VALIDATION_FAILED} when the expiry is not after {@code now}
+     */
+    public void requireActivatable(PlanCalculation calculation, List<PlanWarning> warnings, Instant now) {
+        Objects.requireNonNull(now, "now");
+        requireTransition(PlanStatus.ACTIVE);
+        requireAccepted(calculation);
+        requireSameTerms(calculation.plan());
+        if (expiresAt != null && !expiresAt.isAfter(now)) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_FAILED, "the expiry " + expiresAt + " is not after the activation " + now);
+        }
+        if (WarningEvaluator.blocksActivation(warnings)) {
+            throw new PlanActivationBlockedException(getId());
+        }
+    }
+
+    /**
      * Activates a DRAFT plan with the calculation re-run at this moment (UC-18, BR-31). Nothing changes when it is
      * refused.
      *
@@ -326,17 +349,7 @@ public class TradingPlan extends BaseEntity {
      * @throws BusinessException {@code VALIDATION_FAILED} when the expiry is not after {@code now}
      */
     public void activate(PlanCalculation calculation, List<PlanWarning> warnings, Instant now) {
-        Objects.requireNonNull(now, "now");
-        requireTransition(PlanStatus.ACTIVE);
-        requireAccepted(calculation);
-        requireSameTerms(calculation.plan());
-        if (expiresAt != null && !expiresAt.isAfter(now)) {
-            throw new BusinessException(
-                    ErrorCode.VALIDATION_FAILED, "the expiry " + expiresAt + " is not after the activation " + now);
-        }
-        if (WarningEvaluator.blocksActivation(warnings)) {
-            throw new PlanActivationBlockedException(getId());
-        }
+        requireActivatable(calculation, warnings, now);
         entryPrice = calculation.plan().entryPrice();
         replaceSnapshot(PlanSnapshot.of(calculation));
         replaceWarnings(warnings);

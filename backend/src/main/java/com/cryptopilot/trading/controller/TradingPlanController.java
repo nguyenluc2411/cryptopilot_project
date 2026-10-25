@@ -51,6 +51,17 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class TradingPlanController {
 
+    /** The MSG51 answer of an activation, in the 400 description of each endpoint that activates. */
+    private static final String MSG51 = "MSG51 (code ENTRY_DEVIATION_CONFIRMATION_REQUIRED): a MARKET entry moved from"
+            + " ENTRY_DEVIATION_CONFIRM_R up to and including the plan's limit in R (BR-69); the body carries, as decimal"
+            + " texts, deviationR, maxDeviationR, expectedFillPrice, positionQuantity, riskRewardRatio and netRiskReward,"
+            + " and messageArgs [deviation, quantity, riskReward]. Repeat the request with confirmDeviation=true.";
+
+    /** The MSG52 answer of an activation, in the 409 description of each endpoint that activates. */
+    private static final String MSG52 = "MSG52 (code ENTRY_DEVIATION_REFUSED): a MARKET entry moved beyond the plan's"
+            + " limit in R, or to or past the take profit (BR-69); no confirmation lifts it. The body carries deviationR,"
+            + " maxDeviationR, expectedFillPrice, takeProfitReached and messageArgs [deviation, max].";
+
     private final TradingPlanService plans;
 
     @Operation(summary = "Calculate the risk panel of the values entered; nothing is saved (SRS 3.5.1)")
@@ -75,13 +86,15 @@ public class TradingPlanController {
 
     @Operation(summary = "Create a plan as a draft, or save and activate it (UC-16)")
     @ApiResponse(responseCode = "201", description = "The plan; MSG19 when it was activated")
-    @ApiResponse(responseCode = "400", description = "MSG01, MSG15, MSG16: `errors` names each rejected field")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01, MSG15, MSG16: `errors` names each rejected field. " + MSG51)
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: the pair is not enabled on the market")
     @ApiResponse(
             responseCode = "409",
-            description = "MSG18: a BLOCKING warning; MSG27: the limit of ACTIVE plans and open positions")
+            description = "MSG18: a BLOCKING warning; MSG27: the limit of ACTIVE plans and open positions. " + MSG52)
     @ApiResponse(
             responseCode = "503",
             description = "MSG43: no current price for a MARKET entry or to check the invalidation or stop price")
@@ -131,13 +144,15 @@ public class TradingPlanController {
 
     @Operation(summary = "Edit a draft, or save and activate it (UC-17)")
     @ApiResponse(responseCode = "200", description = "The plan")
-    @ApiResponse(responseCode = "400", description = "MSG01, MSG15, MSG16: `errors` names each rejected field")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01, MSG15, MSG16: `errors` names each rejected field. " + MSG51)
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller, or the pair is not enabled")
     @ApiResponse(
             responseCode = "409",
-            description = "MSG43: the plan is not a draft; MSG18: a BLOCKING warning; MSG27: the plan limit")
+            description = "MSG43: the plan is not a draft; MSG18: a BLOCKING warning; MSG27: the plan limit. " + MSG52)
     @ApiResponse(
             responseCode = "503",
             description = "MSG43: no current price for a MARKET entry or to check the invalidation or stop price")
@@ -154,19 +169,25 @@ public class TradingPlanController {
     @ApiResponse(
             responseCode = "400",
             description =
-                    "MSG01, MSG15, MSG16: the plan no longer passes the calculation, its invalidation price is no longer on the far side of the current price, its STOP is already triggered (entryPrice), or the last price has already reached its stop loss (STOP) or take profit (LIMIT)")
+                    "MSG01, MSG15, MSG16: the plan no longer passes the calculation, its invalidation price is no longer on the far side of the current price, its STOP is already triggered (entryPrice), or the last price has already reached its stop loss (STOP) or take profit (LIMIT). "
+                            + MSG51)
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller, or the pair is not enabled")
     @ApiResponse(
             responseCode = "409",
-            description = "MSG43: the plan is not a draft; MSG18: a BLOCKING warning; MSG27: the plan limit")
+            description = "MSG43: the plan is not a draft; MSG18: a BLOCKING warning; MSG27: the plan limit. " + MSG52)
     @ApiResponse(
             responseCode = "503",
             description = "MSG43: no current price for a MARKET entry or to check the invalidation or stop price")
     @PostMapping("/{id}/activate")
-    public TradingPlanResponse activate(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
-        return plans.activate(callerOf(caller), id);
+    public TradingPlanResponse activate(
+            @AuthenticationPrincipal Jwt caller,
+            @PathVariable UUID id,
+            @Parameter(description = "true once the Trader confirmed the MSG51 of a MARKET plan; default false")
+                    @RequestParam(defaultValue = "false")
+                    boolean confirmDeviation) {
+        return plans.activate(callerOf(caller), id, confirmDeviation);
     }
 
     @Operation(summary = "Cancel a draft or active plan (UC-19)")

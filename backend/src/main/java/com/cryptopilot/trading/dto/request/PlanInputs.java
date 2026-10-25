@@ -48,4 +48,7 @@ public interface PlanInputs {
 
     /** "Save and Activate" rather than "Save as Draft"; {@code null} is a draft. */
     Boolean activate();
+
+    /** Whether the Trader confirmed MSG51 for the entry deviation of a MARKET plan; {@code null} is not (BR-69). */
+    Boolean confirmDeviation();
 }

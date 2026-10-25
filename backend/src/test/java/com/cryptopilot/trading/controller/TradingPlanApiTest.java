@@ -519,6 +519,118 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.messageCode").value("MSG18"));
     }
 
+    // ------------------------------------------------------------------------------------------
+    // BR-69: entry deviation of a MARKET activation (MSG51, MSG52). The BTC example of TD 7.8 at a hundredth of its
+    // prices: planned 100, SL 98, TP 106, risk 10 (the default capital of 1,000 at 1 %), step 0.001.
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Last price 101, 0.5R: 400 MSG51 whose body carries the deviation and the recalculated plan as decimal texts, in
+     * the message arguments and as named members; the plan stays a draft. The same call with
+     * {@code confirmDeviation=true} fills it at 101.
+     */
+    @Test
+    void MSG51_aMarketEntryHalfAnRFromThePlan_answersTheRecalculatedPlan_untilConfirmed() throws Exception {
+        UUID trader = trader();
+        String id = marketDraft(trader);
+        lastPrice("101");
+
+        as(trader, post(PLANS + "/" + id + "/activate"), null)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("ENTRY_DEVIATION_CONFIRMATION_REQUIRED"))
+                .andExpect(jsonPath("$.messageCode").value("MSG51"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("0.50000000"))
+                .andExpect(jsonPath("$.messageArgs[1]").value("3.333000000000"))
+                .andExpect(jsonPath("$.messageArgs[2]").value("1.66666667"))
+                .andExpect(jsonPath("$.deviationR").value("0.50000000"))
+                .andExpect(jsonPath("$.maxDeviationR").value("0.75000000"))
+                .andExpect(jsonPath("$.expectedFillPrice").value("101"))
+                .andExpect(jsonPath("$.positionQuantity").value("3.333000000000"))
+                .andExpect(jsonPath("$.riskRewardRatio").value("1.66666667"))
+                .andExpect(jsonPath("$.netRiskReward").isString())
+                .andExpect(jsonPath("$.takeProfitReached").doesNotExist());
+        assertThat(statusOf(id)).isEqualTo("DRAFT");
+
+        as(trader, post(PLANS + "/" + id + "/activate").param("confirmDeviation", "true"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("EXECUTED"))
+                .andExpect(jsonPath("$.snapshot.positionQuantity").value("3.333000000000"));
+        assertFill(id, "101", "TAKER");
+    }
+
+    /** Last price 102, 1.0R: 409 MSG52 with the deviation and the limit, even with {@code confirmDeviation=true}. */
+    @Test
+    void MSG52_aMarketEntryOneRFromThePlan_isRefused_evenWhenConfirmed() throws Exception {
+        UUID trader = trader();
+        String id = marketDraft(trader);
+        lastPrice("102");
+
+        as(trader, post(PLANS + "/" + id + "/activate").param("confirmDeviation", "true"), null)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ENTRY_DEVIATION_REFUSED"))
+                .andExpect(jsonPath("$.messageCode").value("MSG52"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("1.00000000"))
+                .andExpect(jsonPath("$.messageArgs[1]").value("0.75000000"))
+                .andExpect(jsonPath("$.takeProfitReached").value(false))
+                .andExpect(jsonPath("$.positionQuantity").doesNotExist());
+        assertThat(statusOf(id)).isEqualTo("DRAFT");
+    }
+
+    /**
+     * Save and Activate measures from its own save, so only the slippage moves it: with {@code SLIPPAGE_BPS} 100 a
+     * last price of 100 buys at 101.00, 0.5R, so MSG51 and nothing saved; repeated with {@code "confirmDeviation":
+     * true} in the body it is filled. The setting is changed through the admin endpoint, which evicts the reader's
+     * cached value.
+     */
+    @Test
+    void MSG51_saveAndActivate_isConfirmedInTheBody() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        String body = marketBody(true);
+        UUID admin = account(UserRole.ADMIN);
+        Map<String, Object> audit = sql.sql(
+                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
+                .query()
+                .singleRow();
+        changeSetting(admin, "SLIPPAGE_BPS", "100");
+        try {
+            as(trader, post(PLANS), body)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("ENTRY_DEVIATION_CONFIRMATION_REQUIRED"))
+                    .andExpect(jsonPath("$.deviationR").value("0.50000000"));
+            assertThat(plansOf(trader)).isZero();
+
+            String confirmed = body.substring(0, body.length() - 1) + ", \"confirmDeviation\": true}";
+            as(trader, post(PLANS), confirmed)
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.status").value("EXECUTED"));
+        } finally {
+            changeSetting(admin, "SLIPPAGE_BPS", "0");
+            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
+                    .params(audit.get("updated_by"), audit.get("updated_at"))
+                    .update();
+            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
+        }
+    }
+
+    /** A MARKET draft of the BR-69 example, saved while the last price is 100. */
+    private String marketDraft(UUID trader) throws Exception {
+        lastPrice("100");
+        return id(as(trader, post(PLANS), marketBody(false)).andExpect(status().isCreated()));
+    }
+
+    private String marketBody(boolean activate) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"MARKET\", \"stopLoss\": 98, \"takeProfit\": 106, \"activate\": " + activate + "}";
+    }
+
+    private String statusOf(String id) {
+        return sql.sql("select plan_status from trading_plan where plan_id = ?")
+                .param(UUID.fromString(id))
+                .query(String.class)
+                .single();
+    }
+
     @Test
     void UC17_aDraft_isEditedAndThenActivated() throws Exception {
         UUID trader = trader();
@@ -640,7 +752,7 @@ class TradingPlanApiTest {
         return () -> {
             start.await();
             try {
-                return service.activate(trader, plan).status().name();
+                return service.activate(trader, plan, false).status().name();
             } catch (BusinessException e) {
                 return e.errorCode().code();
             }
@@ -905,7 +1017,8 @@ class TradingPlanApiTest {
                 null,
                 null,
                 null,
-                activate);
+                activate,
+                null);
     }
 
     /** A Spot LONG MARKET (SL 95, TP 110) on the test pair, saved and activated when {@code activate}. */
@@ -1526,7 +1639,8 @@ class TradingPlanApiTest {
                 null,
                 null,
                 null,
-                activate);
+                activate,
+                null);
     }
 
     private long plansOf(UUID trader) {

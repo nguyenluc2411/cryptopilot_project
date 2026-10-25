@@ -32,6 +32,8 @@ import java.time.Instant;
  * @param maxEntryDeviationR the plan's own limit on the entry deviation in R, at most the system's (BR-69)
  * @param analysisTimeframe {@code 15m}, {@code 1h}, {@code 4h} or {@code 1d}; {@code null} for the style preset's
  * @param activate whether to activate right after saving
+ * @param confirmDeviation {@code true} once the Trader confirmed the MSG51 of a MARKET plan's entry deviation; only
+ *     read when activating (BR-69)
  */
 public record UpdateTradingPlanRequest(
         @NotNull(message = "MSG01") MarketType market,
@@ -79,5 +81,7 @@ public record UpdateTradingPlanRequest(
 
         String analysisTimeframe,
 
-        Boolean activate)
+        Boolean activate,
+
+        Boolean confirmDeviation)
         implements PlanInputs {}

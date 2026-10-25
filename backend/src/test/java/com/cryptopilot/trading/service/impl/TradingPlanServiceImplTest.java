@@ -52,6 +52,7 @@ import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
+import com.cryptopilot.trading.exception.EntryDeviationException;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.exception.PlanActivationBlockedException;
 import com.cryptopilot.trading.model.PlanListQuery;
@@ -108,6 +109,12 @@ class TradingPlanServiceImplTest {
     private static final Instant NOW = Instant.parse("2026-10-01T08:00:00Z");
     private static final PairFilters FILTERS =
             new PairFilters(new BigDecimal("0.01"), new BigDecimal("0.001"), new BigDecimal("5"));
+
+    /** The pair of the BTC example of BR-69 (TD 7.8), with its step of 0.0001. */
+    private static final UUID BTC = UUID.fromString("019b76da-a800-7000-8000-00000000b002");
+
+    private static final PairFilters BTC_FILTERS =
+            new PairFilters(new BigDecimal("0.01"), new BigDecimal("0.0001"), new BigDecimal("5"));
     private static final RiskProfileParameters BALANCED =
             new RiskProfileParameters(RiskProfile.BALANCED, BigDecimal.ONE, 5, new BigDecimal("4"), 65);
 
@@ -147,6 +154,7 @@ class TradingPlanServiceImplTest {
                 new PositionOpener(journal, new FeeRates(settings)));
         when(styleProvider.getIfAvailable()).thenReturn(styles);
         when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_BLOCK_R)).thenReturn(new BigDecimal("0.75"));
+        when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_CONFIRM_R)).thenReturn(new BigDecimal("0.25"));
         when(market.tradablePair(eq(PAIR), any()))
                 .thenAnswer(call -> Optional.of(new TradablePair(PAIR, "BTCUSDT", call.getArgument(1), FILTERS)));
         when(market.leverageBrackets(PAIR))
@@ -160,6 +168,10 @@ class TradingPlanServiceImplTest {
                                 b.maintenanceAmount()))
                         .toList());
         when(market.currentFundingRate("BTCUSDT")).thenReturn(Optional.empty());
+        when(market.tradablePair(eq(BTC), any()))
+                .thenAnswer(call -> Optional.of(new TradablePair(BTC, "BTCUSDT", call.getArgument(1), BTC_FILTERS)));
+        List<LeverageTier> brackets = market.leverageBrackets(PAIR);
+        when(market.leverageBrackets(BTC)).thenReturn(brackets);
         // The preset timeframes of the configuration (D-53); no style reads the default preset, DAY_TRADING.
         when(market.presetTimeframe(any())).thenAnswer(call -> switch ((SetupStyle) call.getArgument(0)) {
             case SCALPING -> "15m";
@@ -448,7 +460,8 @@ class TradingPlanServiceImplTest {
                 null,
                 null,
                 null,
-                false);
+                false,
+                null);
 
         TradingPlanResponse plan = service.create(USER, request);
 
@@ -597,7 +610,7 @@ class TradingPlanServiceImplTest {
         assertThatThrownBy(() -> service.get(USER, planId)).isInstanceOf(ResourceNotFoundException.class);
         assertThatThrownBy(() -> service.update(USER, planId, update("100", "96", "120", false)))
                 .isInstanceOf(ResourceNotFoundException.class);
-        assertThatThrownBy(() -> service.activate(USER, planId)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.activate(USER, planId, false)).isInstanceOf(ResourceNotFoundException.class);
         when(plans.findForUpdate(planId, USER)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> service.cancel(USER, planId)).isInstanceOf(ResourceNotFoundException.class);
     }
@@ -608,7 +621,7 @@ class TradingPlanServiceImplTest {
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
         when(plans.countActive(USER)).thenReturn(1L);
 
-        TradingPlanResponse active = service.activate(USER, plan.getId());
+        TradingPlanResponse active = service.activate(USER, plan.getId(), false);
 
         assertThat(active.status()).isEqualTo(PlanStatus.ACTIVE);
         InOrder order = inOrder(lock, plans, entitlements, riskProfiles);
@@ -627,7 +640,8 @@ class TradingPlanServiceImplTest {
         plan.cancel(NOW);
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
 
-        assertThatThrownBy(() -> service.activate(USER, plan.getId())).isInstanceOf(IllegalPlanStateException.class);
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .isInstanceOf(IllegalPlanStateException.class);
         verify(plans, never()).countActive(any());
     }
 
@@ -640,7 +654,7 @@ class TradingPlanServiceImplTest {
                 .when(entitlements)
                 .requireWithinLimit(USER, Feature.ACTIVE_PLAN_MAX, 3L);
 
-        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(
                         e -> assertThat(((BusinessException) e).errorCode()).isEqualTo(ErrorCode.PLAN_LIMIT_REACHED));
@@ -660,7 +674,7 @@ class TradingPlanServiceImplTest {
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
         when(market.currentLastPrice(MarketType.FUTURES, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal(lastPrice)));
 
-        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
         assertThat(plan.getEntryPrice()).isEqualByComparingTo("100");
@@ -680,7 +694,7 @@ class TradingPlanServiceImplTest {
         when(market.tradablePair(eq(PAIR), any()))
                 .thenAnswer(call -> Optional.of(new TradablePair(PAIR, "BTCUSDT", call.getArgument(1), coarser)));
 
-        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG15")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
         assertThat(plan.getStopLoss()).isEqualByComparingTo("95.05");
@@ -921,7 +935,7 @@ class TradingPlanServiceImplTest {
                 switch (path) {
                     case "create" -> service.create(USER, activating(spotLimit("100", "95", "110")));
                     case "update" -> service.update(USER, plan.getId(), update("100", "95", "110", true));
-                    default -> service.activate(USER, plan.getId());
+                    default -> service.activate(USER, plan.getId(), false);
                 };
 
         assertThat(active.status()).isEqualTo(PlanStatus.ACTIVE);
@@ -1169,7 +1183,7 @@ class TradingPlanServiceImplTest {
         TradingPlan plan = savedDraft(stop(marketType, direction));
         currentPrice(marketType, last);
 
-        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .satisfies(e -> assertFields(e, Map.of("entryPrice", "MSG16")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
         verify(plans, Mockito.times(1)).save(any());
@@ -1191,7 +1205,7 @@ class TradingPlanServiceImplTest {
         verify(plans, never()).save(any());
 
         TradingPlan plan = savedDraft(stop(marketType, direction));
-        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
         verify(events, never()).publishEvent(any(TradingPlanActivated.class));
@@ -1212,7 +1226,7 @@ class TradingPlanServiceImplTest {
         verify(plans, never()).save(any());
 
         TradingPlan plan = savedDraft(limit(marketType, direction));
-        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .satisfies(e -> assertFields(e, Map.of("takeProfit", "MSG16")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
         verify(events, never()).publishEvent(any(TradingPlanActivated.class));
@@ -1225,7 +1239,7 @@ class TradingPlanServiceImplTest {
         TradingPlan plan = savedDraft(limit(marketType, direction));
         currentPrice(marketType, last);
 
-        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.ACTIVE);
         assertThat(plan.getFillPrice()).isNull();
         verify(events).publishEvent(any(TradingPlanActivated.class));
     }
@@ -1253,9 +1267,9 @@ class TradingPlanServiceImplTest {
         currentPrice(MarketType.FUTURES, last);
 
         if (refusedField.isEmpty()) {
-            assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.ACTIVE);
+            assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.ACTIVE);
         } else {
-            assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+            assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                     .satisfies(e -> assertFields(e, Map.of(refusedField, "MSG16")));
             assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
         }
@@ -1266,7 +1280,7 @@ class TradingPlanServiceImplTest {
         TradingPlan plan = savedDraft(stop(MarketType.FUTURES, Direction.SHORT));
         currentPrice(MarketType.FUTURES, "100.01");
 
-        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.ACTIVE);
         assertThat(plan.getFillPrice()).isNull();
         verify(events).publishEvent(any(TradingPlanActivated.class));
     }
@@ -1289,7 +1303,7 @@ class TradingPlanServiceImplTest {
         currentPrice(MarketType.SPOT, "99.5");
         Mockito.clearInvocations(market);
 
-        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.ACTIVE);
         verify(market, Mockito.times(1)).currentLastPrice(MarketType.SPOT, "BTCUSDT");
     }
 
@@ -1301,7 +1315,7 @@ class TradingPlanServiceImplTest {
         currentPrice(MarketType.SPOT, last);
         Mockito.clearInvocations(market);
 
-        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(expected);
+        assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(expected);
         verify(market, Mockito.times(1)).currentLastPrice(MarketType.SPOT, "BTCUSDT");
     }
 
@@ -1322,7 +1336,7 @@ class TradingPlanServiceImplTest {
         TradingPlan plan = savedDraft(spotMarket("95", "110"), "100");
         Mockito.clearInvocations(market);
 
-        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.EXECUTED);
         verify(market, Mockito.times(1)).currentLastPrice(MarketType.SPOT, "BTCUSDT");
     }
 
@@ -1362,7 +1376,7 @@ class TradingPlanServiceImplTest {
                 .when(entitlements)
                 .requireFeature(USER, Feature.FUTURES_ANALYSIS);
 
-        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e ->
                         assertThat(((BusinessException) e).errorCode()).isEqualTo(ErrorCode.PLAN_FEATURE_NOT_INCLUDED));
@@ -1553,7 +1567,7 @@ class TradingPlanServiceImplTest {
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
         when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("102")));
 
-        assertThatThrownBy(() -> service.activate(USER, plan.getId()))
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .satisfies(e -> assertFields(e, Map.of("invalidationPrice", "MSG16")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
         verify(plans, Mockito.times(1)).save(any());
@@ -1566,7 +1580,7 @@ class TradingPlanServiceImplTest {
         TradingPlan plan = saved;
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
 
-        assertThat(service.activate(USER, plan.getId()).status()).isEqualTo(PlanStatus.ACTIVE);
+        assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.ACTIVE);
     }
 
     @ParameterizedTest(name = "block {0}, plan {1} -> {2}")
@@ -1657,7 +1671,7 @@ class TradingPlanServiceImplTest {
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
         when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100.5")));
 
-        service.activate(USER, plan.getId());
+        service.activate(USER, plan.getId(), false);
 
         assertThat(plan.getFillPrice()).isEqualByComparingTo("100.5");
         assertThat(plan.getPlannedEntryPrice()).isEqualByComparingTo("100");
@@ -1699,7 +1713,7 @@ class TradingPlanServiceImplTest {
                 .thenReturn(new SetupScoreReading(48, SetupStyle.DAY_TRADING, "v1", "1h", NOW.minusSeconds(3600)));
         when(styles.styleOf(USER)).thenReturn(Optional.empty());
 
-        TradingPlanResponse active = service.activate(USER, plan.getId());
+        TradingPlanResponse active = service.activate(USER, plan.getId(), false);
 
         assertThat(active.setupScoreAtPlan()).isEqualByComparingTo("48");
         assertThat(active.setupScorePreset()).isEqualTo("DAY_TRADING v1");
@@ -1729,7 +1743,7 @@ class TradingPlanServiceImplTest {
 
         TradingPlanResponse active;
         try {
-            active = service.activate(USER, plan.getId());
+            active = service.activate(USER, plan.getId(), false);
         } finally {
             logger.detachAppender(logs);
         }
@@ -1769,7 +1783,7 @@ class TradingPlanServiceImplTest {
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
         when(styles.styleOf(USER)).thenReturn(Optional.of(SetupStyle.SWING));
 
-        TradingPlanResponse active = service.activate(USER, plan.getId());
+        TradingPlanResponse active = service.activate(USER, plan.getId(), false);
 
         verify(market).closedCandleSetupScore(PAIR, MarketType.SPOT, "4h", SetupStyle.SWING, null, NOW);
         assertThat(active.setupScorePreset()).isEqualTo("SWING v1");
@@ -1944,6 +1958,392 @@ class TradingPlanServiceImplTest {
         assertThat(service.create(USER, activating(request)).status()).isEqualTo(PlanStatus.EXECUTED);
     }
 
+    // ------------------------------------------------------------------------------------------
+    // BR-69: entry deviation of a MARKET activation (TP-C). The BTC example of TECHNICAL_DESIGN 7.8: LONG on Spot
+    // planned 100,000, SL 98,000, TP 106,000; SHORT on Futures planned 100,000, SL 102,000, TP 94,000; risk 100 USDT
+    // (capital 10,000 at 1 %), step 0.0001; 0 bps unless a test sets it.
+    // ------------------------------------------------------------------------------------------
+
+    /** Fill 100,000: 0R, quantity 0.05, RR 3.0, activated and filled without a confirmation. */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"LONG", "SHORT"})
+    void BR69_aMarketEntryAtThePlannedPrice_isActivatedWithoutConfirmation(Direction direction) {
+        TradingPlan plan = btcDraft(direction, null);
+
+        TradingPlanResponse active = service.activate(USER, plan.getId(), false);
+
+        assertThat(active.status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(active.snapshot().positionQuantity()).isEqualByComparingTo("0.05");
+        assertThat(active.snapshot().riskRewardRatio()).isEqualByComparingTo("3");
+        assertThat(plan.getFillPrice()).isEqualByComparingTo("100000");
+    }
+
+    /**
+     * Fill 101,000 LONG (99,000 SHORT): 0.5R, MSG51 with the quantity 0.0333 floored to the step, RR 1.67 and the
+     * net-of-fee RR, the plan unchanged; repeated with the flag it is filled there.
+     */
+    @ParameterizedTest(name = "{0} at {1}")
+    @CsvSource({"LONG, 101000, 1.49828071", "SHORT, 99000, 1.59061442"})
+    void BR69_halfAnRFromThePlan_answersMsg51WithTheRecalculatedPlan_untilConfirmed(
+            Direction direction, String fill, String netRiskReward) {
+        TradingPlan plan = btcDraft(direction, null);
+        currentPrice(market(direction), fill);
+
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .isInstanceOfSatisfying(EntryDeviationException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.ENTRY_DEVIATION_CONFIRMATION_REQUIRED);
+                    assertThat(e.messageArgs()).containsExactly("0.50000000", "0.033300000000", "1.66666667");
+                    assertThat(e.problemProperties())
+                            .containsExactly(
+                                    Map.entry(EntryDeviationException.DEVIATION_R, "0.50000000"),
+                                    Map.entry(EntryDeviationException.MAX_DEVIATION_R, "0.75"),
+                                    Map.entry(EntryDeviationException.EXPECTED_FILL_PRICE, fill),
+                                    Map.entry(EntryDeviationException.POSITION_QUANTITY, "0.033300000000"),
+                                    Map.entry(EntryDeviationException.RISK_REWARD_RATIO, "1.66666667"),
+                                    Map.entry(EntryDeviationException.NET_RISK_REWARD, netRiskReward));
+                });
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+        assertThat(plan.getEntryPrice()).isEqualByComparingTo("100000");
+        assertThat(plan.getSnapshot().positionQuantity()).isEqualByComparingTo("0.05");
+        verify(plans).save(plan);
+
+        TradingPlanResponse active = service.activate(USER, plan.getId(), true);
+
+        assertThat(active.status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(active.snapshot().positionQuantity()).isEqualByComparingTo("0.0333");
+        assertThat(plan.getFillPrice()).isEqualByComparingTo(fill);
+        assertThat(plan.getPlannedEntryPrice()).isEqualByComparingTo("100000");
+    }
+
+    /**
+     * BR-69, BR-34: the MSG51 refusal opens no position; the same activation confirmed is written at once and opens its
+     * position at the moved fill (101,000 LONG, 99,000 SHORT) with the recalculated quantity 0.0333.
+     */
+    @ParameterizedTest(name = "{0} at {1}")
+    @CsvSource({"LONG, 101000", "SHORT, 99000"})
+    void BR69_aConfirmedMovedMarketEntry_opensItsPositionInTheJournal(Direction direction, String fill) {
+        TradingPlan plan = btcDraft(direction, null);
+        currentPrice(market(direction), fill);
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .isInstanceOf(EntryDeviationException.class);
+        verify(journal, never()).openSimulatedTrade(any());
+
+        service.activate(USER, plan.getId(), true);
+
+        ArgumentCaptor<SimulatedTradeOpening> opening = ArgumentCaptor.forClass(SimulatedTradeOpening.class);
+        InOrder order = inOrder(plans, journal);
+        order.verify(plans).saveAndFlush(plan);
+        order.verify(journal).openSimulatedTrade(opening.capture());
+        SimulatedTradeOpening opened = opening.getValue();
+        assertThat(opened.planId()).isEqualTo(plan.getId());
+        assertThat(opened.direction()).isEqualTo(direction);
+        assertThat(opened.market()).isEqualTo(market(direction));
+        assertThat(opened.entryPrice()).isEqualByComparingTo(fill);
+        assertThat(opened.quantity()).isEqualByComparingTo("0.0333");
+        assertThat(opened.entryLiquidity()).isEqualTo(LiquidityRole.TAKER);
+        assertThat(opened.entryTime()).isEqualTo(NOW);
+    }
+
+    /**
+     * Fill 102,000 LONG (98,000 SHORT): 1.0R, above 0.75, MSG52 even with the flag; the panel at that price shows the
+     * quantity 0.025 and RR 1.0 the plan would have had.
+     */
+    @ParameterizedTest(name = "{0} at {1}")
+    @CsvSource({"LONG, 102000", "SHORT, 98000"})
+    void BR69_oneRFromThePlan_isRefusedWithMsg52_evenWhenConfirmed(Direction direction, String fill) {
+        TradingPlan plan = btcDraft(direction, null);
+        currentPrice(market(direction), fill);
+
+        for (boolean confirmed : new boolean[] {false, true}) {
+            assertThatThrownBy(() -> service.activate(USER, plan.getId(), confirmed))
+                    .isInstanceOfSatisfying(EntryDeviationException.class, e -> {
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.ENTRY_DEVIATION_REFUSED);
+                        assertThat(e.messageArgs()).containsExactly("1.00000000", "0.75");
+                        assertThat(e.problemProperties())
+                                .containsEntry(EntryDeviationException.TAKE_PROFIT_REACHED, false)
+                                .doesNotContainKey(EntryDeviationException.POSITION_QUANTITY);
+                    });
+        }
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+
+        PlanSnapshotResponse wouldBe =
+                service.calculate(USER, btc(direction, null)).snapshot();
+        assertThat(wouldBe.positionQuantity()).isEqualByComparingTo("0.025");
+        assertThat(wouldBe.riskRewardRatio()).isEqualByComparingTo("1");
+    }
+
+    /**
+     * The bands' edges, LONG and SHORT: exactly 0.25 and exactly 0.75 need confirmation, one cent past 0.75 is refused,
+     * one cent short of 0.25 and a better price (negative R) are filled.
+     */
+    @ParameterizedTest(name = "{0} at {1} -> {2}")
+    @CsvSource({
+        "LONG,  100499.99, EXECUTED",
+        "LONG,  100500,    MSG51",
+        "LONG,  101500,    MSG51",
+        "LONG,  101500.01, MSG52",
+        "LONG,  99000,     EXECUTED",
+        "SHORT, 99500.01,  EXECUTED",
+        "SHORT, 99500,     MSG51",
+        "SHORT, 98500,     MSG51",
+        "SHORT, 98499.99,  MSG52",
+        "SHORT, 101000,    EXECUTED"
+    })
+    void BR69_theBoundaries_ofTheConfirmationBand(Direction direction, String fill, String expected) {
+        TradingPlan plan = btcDraft(direction, null);
+        currentPrice(market(direction), fill);
+
+        switch (expected) {
+            case "EXECUTED" ->
+                assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.EXECUTED);
+            case "MSG51" ->
+                assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                        .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.errorCode())
+                                .isEqualTo(ErrorCode.ENTRY_DEVIATION_CONFIRMATION_REQUIRED));
+            default ->
+                assertThatThrownBy(() -> service.activate(USER, plan.getId(), true))
+                        .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.errorCode())
+                                .isEqualTo(ErrorCode.ENTRY_DEVIATION_REFUSED));
+        }
+    }
+
+    /** A fill at or past the take profit is MSG52, not the sizing's MSG16 on the take profit, even with the flag. */
+    @ParameterizedTest(name = "{0} at {1}")
+    @CsvSource({"LONG, 106000", "LONG, 107000", "SHORT, 94000", "SHORT, 93000"})
+    void BR69_aFillAtOrPastTheTakeProfit_isRefusedWithMsg52(Direction direction, String fill) {
+        TradingPlan plan = btcDraft(direction, new BigDecimal("0.75"));
+        currentPrice(market(direction), fill);
+
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), true))
+                .isInstanceOfSatisfying(EntryDeviationException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.ENTRY_DEVIATION_REFUSED);
+                    assertThat(e.problemProperties()).containsEntry(EntryDeviationException.TAKE_PROFIT_REACHED, true);
+                });
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+    }
+
+    /** A plan's own limit of 0.5 refuses 0.6R, which the system's 0.75 would only have asked to confirm. */
+    @Test
+    void BR69_aPlanLimitOfHalfAnR_refuses0point6R() {
+        TradingPlan plan = btcDraft(Direction.LONG, new BigDecimal("0.5"));
+        currentPrice(MarketType.SPOT, "101200");
+
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), true))
+                .isInstanceOfSatisfying(EntryDeviationException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.ENTRY_DEVIATION_REFUSED);
+                    assertThat(e.messageArgs()).containsExactly("0.60000000", "0.5");
+                });
+    }
+
+    /** A plan's own limit above ENTRY_DEVIATION_BLOCK_R (0.75) is refused at save, MSG15 on its field. */
+    @Test
+    void BR69_aPlanLimitAboveTheBlockValue_isRefusedAtSave() {
+        currentPrice(MarketType.SPOT, "100000");
+
+        assertThatThrownBy(() -> service.create(USER, btc(Direction.LONG, new BigDecimal("0.76"))))
+                .satisfies(e -> assertFields(e, Map.of("maxEntryDeviationR", "MSG15")));
+        verify(plans, never()).save(any());
+    }
+
+    /**
+     * The deviation is measured to the expected fill, slippage included: last 100,400 is 0.2R and is filled at 0 bps;
+     * with 10 bps the fill is 100,500.40, 0.2502R, which needs confirmation. The planned entry stays the unslipped
+     * reference of the save, 100,000, even though the draft was saved with 10 bps.
+     */
+    @Test
+    void BR69_theSlippage_isPartOfTheDeviation() {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
+        TradingPlan plan = btcDraft(Direction.LONG, null);
+        assertThat(plan.getPlannedEntryPrice()).isEqualByComparingTo("100000");
+        currentPrice(MarketType.SPOT, "100400");
+
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .isInstanceOfSatisfying(EntryDeviationException.class, e -> assertThat(e.problemProperties())
+                        .containsEntry(EntryDeviationException.DEVIATION_R, "0.25020000")
+                        .containsEntry(EntryDeviationException.EXPECTED_FILL_PRICE, "100500.40"));
+
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(0);
+        assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(plan.getFillPrice()).isEqualByComparingTo("100400");
+    }
+
+    /** The thresholds are read from the settings on every activation, not kept: 0.25 asks, 0.6 lets 0.5R through. */
+    @Test
+    void BR69_theThresholds_areReadOnEveryActivation() {
+        TradingPlan plan = btcDraft(Direction.LONG, null);
+        currentPrice(MarketType.SPOT, "101000");
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .isInstanceOf(EntryDeviationException.class);
+
+        when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_CONFIRM_R)).thenReturn(new BigDecimal("0.6"));
+
+        assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.EXECUTED);
+    }
+
+    /**
+     * Save and Activate measures from the reference of its own save, so only the slippage moves it: SL 100 below a
+     * last price of 100,000 is 1R = 100, and 3 bps buys at 100,030, 0.3R: MSG51 and nothing saved, then filled with
+     * the flag. Capital 100,000 at 0.1 % keeps the risk at 100.
+     */
+    @Test
+    void BR69_saveAndActivate_asksForConfirmation_andActivatesWithTheFlag() {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(3);
+        currentPrice(MarketType.SPOT, "100000");
+        CreateTradingPlanRequest request = activating(create(
+                BTC,
+                MarketType.SPOT,
+                Direction.LONG,
+                EntryType.MARKET,
+                null,
+                "99900",
+                "100500",
+                "100000",
+                "0.1",
+                null));
+
+        assertThatThrownBy(() -> service.create(USER, request))
+                .isInstanceOfSatisfying(EntryDeviationException.class, e -> assertThat(e.problemProperties())
+                        .containsEntry(EntryDeviationException.DEVIATION_R, "0.30000000")
+                        .containsEntry(EntryDeviationException.EXPECTED_FILL_PRICE, "100030.00"));
+        verify(plans, never()).save(any());
+
+        TradingPlanResponse active = service.create(USER, confirmed(request));
+
+        assertThat(active.status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(saved.getPlannedEntryPrice()).isEqualByComparingTo("100000");
+        assertThat(saved.getFillPrice()).isEqualByComparingTo("100030.00");
+    }
+
+    /** Edit and activate: the same check and the same flag, from the update's own save. */
+    @Test
+    void BR69_editAndActivate_asksForConfirmation_andActivatesWithTheFlag() {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(3);
+        TradingPlan plan = savedDraft(
+                create(
+                        BTC,
+                        MarketType.SPOT,
+                        Direction.LONG,
+                        EntryType.MARKET,
+                        null,
+                        "99900",
+                        "100500",
+                        "100000",
+                        "0.1",
+                        null),
+                "100000");
+
+        assertThatThrownBy(() -> service.update(USER, plan.getId(), btcEdit(false)))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.errorCode())
+                        .isEqualTo(ErrorCode.ENTRY_DEVIATION_CONFIRMATION_REQUIRED));
+        assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
+
+        assertThat(service.update(USER, plan.getId(), btcEdit(true)).status()).isEqualTo(PlanStatus.EXECUTED);
+    }
+
+    /** Save and Activate whose expected fill reaches the take profit is MSG52, not MSG16 on the take profit. */
+    @Test
+    void BR69_saveAndActivate_pastTheTakeProfit_isMsg52() {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
+        currentPrice(MarketType.SPOT, "100000");
+
+        assertThatThrownBy(() -> service.create(
+                        USER,
+                        activating(create(
+                                BTC,
+                                MarketType.SPOT,
+                                Direction.LONG,
+                                EntryType.MARKET,
+                                null,
+                                "98000",
+                                "100050",
+                                "10000",
+                                "1",
+                                null))))
+                .isInstanceOfSatisfying(EntryDeviationException.class, e -> assertThat(e.problemProperties())
+                        .containsEntry(EntryDeviationException.TAKE_PROFIT_REACHED, true));
+    }
+
+    /** A BLOCKING warning answers MSG18 before any confirmation is asked for: confirming would not activate it. */
+    @Test
+    void BR69_aBlockingWarning_answersMsg18_beforeMsg51() {
+        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(3);
+        currentPrice(MarketType.SPOT, "100000");
+        CreateTradingPlanRequest request = activating(create(
+                BTC, MarketType.SPOT, Direction.LONG, EntryType.MARKET, null, "99900", "100500", "10000", "1", null));
+
+        assertThatThrownBy(() -> service.create(USER, request)).isInstanceOf(PlanActivationBlockedException.class);
+    }
+
+    /** Only MARKET is checked: a LIMIT or STOP reads no deviation threshold at activation. */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"LIMIT", "STOP"})
+    void BR69_limitAndStopEntries_haveNoActivationDeviation(EntryType entryType) {
+        TradingPlan plan = savedDraft(
+                create(PAIR, MarketType.SPOT, Direction.LONG, entryType, "100", "95", "110", null, null, null),
+                entryType == EntryType.LIMIT ? "100.4" : "99");
+
+        assertThat(service.activate(USER, plan.getId(), false).status()).isEqualTo(PlanStatus.ACTIVE);
+        verify(settings, never()).decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_CONFIRM_R);
+    }
+
+    /** The BTC draft of the BR-69 tests, saved while the last price is 100,000. */
+    private TradingPlan btcDraft(Direction direction, BigDecimal maxDeviation) {
+        return savedDraft(btc(direction, maxDeviation), "100000");
+    }
+
+    private static CreateTradingPlanRequest btc(Direction direction, BigDecimal maxDeviation) {
+        CreateTradingPlanRequest request = direction == Direction.LONG
+                ? create(BTC, MarketType.SPOT, direction, EntryType.MARKET, null, "98000", "106000", "10000", "1", null)
+                : create(
+                        BTC, MarketType.FUTURES, direction, EntryType.MARKET, null, "102000", "94000", "10000", "1", 2);
+        return withValidity(request, null, maxDeviation == null ? null : maxDeviation.toPlainString(), null);
+    }
+
+    private static MarketType market(Direction direction) {
+        return direction == Direction.LONG ? MarketType.SPOT : MarketType.FUTURES;
+    }
+
+    private static UpdateTradingPlanRequest btcEdit(boolean confirmDeviation) {
+        return new UpdateTradingPlanRequest(
+                MarketType.SPOT,
+                Direction.LONG,
+                EntryType.MARKET,
+                null,
+                decimal("99900"),
+                decimal("100500"),
+                decimal("100000"),
+                decimal("0.1"),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                true,
+                confirmDeviation);
+    }
+
+    private static CreateTradingPlanRequest confirmed(CreateTradingPlanRequest r) {
+        return new CreateTradingPlanRequest(
+                r.pairId(),
+                r.market(),
+                r.direction(),
+                r.entryType(),
+                r.entryPrice(),
+                r.stopLoss(),
+                r.takeProfit(),
+                r.capital(),
+                r.riskPercent(),
+                r.leverage(),
+                r.expiresAt(),
+                r.note(),
+                r.invalidationPrice(),
+                r.maxEntryDeviationR(),
+                r.analysisTimeframe(),
+                r.activate(),
+                true);
+    }
+
     private void currentPrice(MarketType marketType, String price) {
         when(market.currentLastPrice(marketType, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal(price)));
     }
@@ -1991,7 +2391,8 @@ class TradingPlanServiceImplTest {
                 decimal(invalidation),
                 null,
                 null,
-                false);
+                false,
+                null);
     }
 
     private static CreateTradingPlanRequest spotStop(String entry, String stop, String takeProfit) {
@@ -2015,7 +2416,8 @@ class TradingPlanServiceImplTest {
                 r.invalidationPrice(),
                 r.maxEntryDeviationR(),
                 r.analysisTimeframe(),
-                r.activate());
+                r.activate(),
+                r.confirmDeviation());
     }
 
     private static CreateTradingPlanRequest withValidity(
@@ -2036,7 +2438,8 @@ class TradingPlanServiceImplTest {
                 decimal(invalidation),
                 decimal(maxDeviation),
                 timeframe,
-                r.activate());
+                r.activate(),
+                r.confirmDeviation());
     }
 
     private static UpdateTradingPlanRequest updateMarket(String stop, String takeProfit) {
@@ -2055,7 +2458,8 @@ class TradingPlanServiceImplTest {
                 null,
                 null,
                 null,
-                false);
+                false,
+                null);
     }
 
     private TradingPlan draft() {
@@ -2114,7 +2518,8 @@ class TradingPlanServiceImplTest {
                 null,
                 null,
                 null,
-                false);
+                false,
+                null);
     }
 
     private static CreateTradingPlanRequest activating(CreateTradingPlanRequest r) {
@@ -2134,7 +2539,8 @@ class TradingPlanServiceImplTest {
                 r.invalidationPrice(),
                 r.maxEntryDeviationR(),
                 r.analysisTimeframe(),
-                true);
+                true,
+                r.confirmDeviation());
     }
 
     private static UpdateTradingPlanRequest update(String entry, String stop, String takeProfit, boolean activate) {
@@ -2153,7 +2559,8 @@ class TradingPlanServiceImplTest {
                 null,
                 null,
                 null,
-                activate);
+                activate,
+                null);
     }
 
     private static BigDecimal decimal(String value) {
