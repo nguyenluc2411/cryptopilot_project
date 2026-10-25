@@ -123,6 +123,24 @@ public class BinanceRestClient implements AutoCloseable {
 
     // ------------------------------------------------------------------ futures only
 
+    /**
+     * Mark price candles of one futures symbol, oldest first, in the shape of {@link #klines} (no volumes); the last
+     * one may still be forming. Liquidation is decided on the mark price, so a replay after downtime reads these
+     * (TECHNICAL_DESIGN 7.7).
+     *
+     * @param startTime the first open time wanted, or {@code null} for the exchange's default
+     * @param limit how many candles, up to the exchange's maximum of 1500
+     */
+    public List<Kline> markPriceKlines(String symbol, MarketInterval interval, Instant startTime, int limit) {
+        Map<String, Object> query = symbolQuery(symbol);
+        query.put(
+                "interval",
+                Objects.requireNonNull(interval, "interval must not be null").code());
+        putRange(query, startTime, null, limit);
+        return parser.klines(
+                BinanceVenue.USD_M_FUTURES, get(BinanceVenue.USD_M_FUTURES, "/fapi/v1/markPriceKlines", query));
+    }
+
     /** The mark price, the predicted funding rate and the next funding time of one symbol (BR-11). */
     public PremiumIndex premiumIndex(String symbol) {
         return parser.premiumIndex(get(BinanceVenue.USD_M_FUTURES, "/fapi/v1/premiumIndex", symbolQuery(symbol)));

@@ -12,10 +12,12 @@ import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.model.CalculatedPlan;
+import com.cryptopilot.trading.model.NetPnl;
 import com.cryptopilot.trading.model.PlanCosts;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.RiskInput;
+import com.cryptopilot.trading.model.TradeAmounts;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.model.enums.PositionStatus;
@@ -73,18 +75,28 @@ final class PlanResponses {
      */
     static PositionResponse position(TradingPlan plan, RecordedPosition position, Optional<BigDecimal> currentPrice) {
         BigDecimal current = position.status() == PositionStatus.OPEN ? currentPrice.orElse(null) : null;
+        TradeAmounts amounts = position.amounts();
+        NetPnl net = amounts == null ? null : amounts.netPnl();
         return new PositionResponse(
                 position.status(),
                 position.entryPrice(),
                 position.quantity(),
                 position.entryTime(),
                 position.entryFee(),
-                plan.getSnapshot().estimatedLiquidationPrice(),
+                position.liquidationPrice(),
                 current,
                 current == null
                         ? null
                         : TradeResultCalculator.unrealizedPnl(
-                                plan.getDirection(), position.entryPrice(), current, position.quantity()));
+                                plan.getDirection(), position.entryPrice(), current, position.quantity()),
+                position.exitPrice(),
+                position.exitTime(),
+                position.closeReason(),
+                position.realizedPnl(),
+                position.feeAmount(),
+                position.fundingFeeAmount(),
+                net == null ? null : net.amount(),
+                net != null && net.provisional());
     }
 
     /** A row of the list; the warnings are not read. {@code positionStatus} is its position's, or {@code null}. */

@@ -1,5 +1,7 @@
 package com.cryptopilot.trading.job;
 
+import com.cryptopilot.market.MarkPrice;
+import com.cryptopilot.market.MarkPriceListener;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
@@ -8,6 +10,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.service.MatchingService;
 import com.cryptopilot.trading.service.ReplayLockService;
 import jakarta.annotation.PreDestroy;
@@ -16,6 +19,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -28,7 +32,6 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,18 +40,24 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 /**
- * Feeds the matching engine with the {@code kline_1m} updates of the market streams, and replays from closed 1-minute
- * candles whatever it missed, at start-up or when the live feed skips a minute, through the same
- * {@link MatchingWorker#submit} path.
+ * Feeds the matching engine with the {@code kline_1m} updates and the futures mark prices of the market streams, and
+ * replays from closed 1-minute candles whatever it missed, at start-up or when the live feed skips a minute, through the
+ * same {@link MatchingWorker#submit} path.
  *
  * <ul>
  *   <li>An update becomes a {@link PriceRange}: its candle's open, low and high so far, from the candle's open time to
  *       the update's time, closed or not. A fill or an invalidation is recorded at the candle's open time (D-78), so
  *       the many live updates of a minute and the one closed candle of a replay decide the same plans at the same
  *       time, by the same rules.
- *   <li>At start, every pair with a waiting plan (ACTIVE LIMIT or STOP) is replayed from the later of the candle
- *       after its watermark and the minute of its first activation, at most {@code replay.max-window} back (A-04,
- *       Q-34). Older candles are skipped with a warning: nothing is ever filled or invalidated from a guessed price.
+ *   <li>A futures mark price becomes a mark {@link PriceRange} of one price in the minute it was produced; the
+ *       engine liquidates on it only. Mark prices are held and dropped with the last prices of their pair and minute,
+ *       and a held minute hands its last prices before its mark prices.
+ *   <li>At start, every pair with a waiting plan (ACTIVE LIMIT or STOP) or an OPEN position is replayed from the later
+ *       of the candle after its watermark and the minute of its first activation or entry, at most
+ *       {@code replay.max-window} back (A-04, Q-34). Older candles are skipped with a warning: nothing is ever filled,
+ *       invalidated or closed from a guessed price.
+ *   <li>A futures replay fetches the mark price candles of the same minutes with each page of last price candles, and
+ *       hands each minute's last price candle before its mark price candle (TECHNICAL_DESIGN 7.7).
  *   <li>While running, a pair whose live updates jump past the minute after its last closed candle (a stream drop, a
  *       reconnection, a closed candle that never came) goes back to replaying from that minute. Nothing after the
  *       hole reaches the engine before the hole is replayed, so the watermark never passes it.
@@ -60,7 +69,7 @@ import org.springframework.stereotype.Component;
  *       live updates meanwhile, so the watermark never passes the minutes not replayed.
  * </ul>
  *
- * <p>Rule: NSF-07, BR-33; TECHNICAL_DESIGN 7.7; A-04; D-09, D-77, D-78; ADR-011.
+ * <p>Rule: NSF-07, BR-33, BR-35; TECHNICAL_DESIGN 7.7; A-04; D-09, D-77, D-78; D-111 E2; ADR-011.
  *
  * <p>Reference: Akidau, T. et al. (2015). The Dataflow Model. <i>PVLDB</i>, 8(12), 1792-1803 (event time, not
  * processing time; a watermark never passes event time whose input is not complete).
@@ -68,7 +77,7 @@ import org.springframework.stereotype.Component;
  * state by replaying a stream from a recorded offset gives the same result as processing it live).
  */
 @Component
-public class MinuteKlineFeed implements MinuteKlineListener {
+public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
 
     private static final Logger log = LoggerFactory.getLogger(MinuteKlineFeed.class);
     private static final Duration MINUTE = Duration.ofMinutes(1);
@@ -130,6 +139,18 @@ public class MinuteKlineFeed implements MinuteKlineListener {
         }
         PairKey key = new PairKey(kline.market(), kline.pairId());
         feeds.computeIfAbsent(key, PairFeed::new).accept(rangeOf(kline));
+    }
+
+    @Override
+    public void onMarkPrice(MarkPrice markPrice) {
+        if (!properties.enabled()) {
+            return;
+        }
+        Instant at = markPrice.eventTime();
+        PairKey key = new PairKey(MarketType.FUTURES, markPrice.pairId());
+        feeds.computeIfAbsent(key, PairFeed::new)
+                .acceptMark(PriceRange.mark(
+                        markPrice.pairId(), markPrice.price(), markPrice.price(), minuteOf(at), at, false));
     }
 
     /**
@@ -198,13 +219,17 @@ public class MinuteKlineFeed implements MinuteKlineListener {
         return locks.isReplaying(market, pairId);
     }
 
-    /** Where each pair with a waiting plan (ACTIVE LIMIT or STOP) starts its replay. */
+    /** Where each pair with a waiting plan (ACTIVE LIMIT or STOP) or an OPEN position starts its replay. */
     private List<Replay> startupReplays() {
-        Map<PairKey, Instant> firstActivation = matching.activeEntries().stream()
-                .collect(Collectors.toMap(
-                        entry -> new PairKey(entry.market(), entry.pairId()),
-                        TrackedEntry::activatedAt,
-                        (a, b) -> a.isBefore(b) ? a : b));
+        Map<PairKey, Instant> firstActivation = new HashMap<>();
+        for (TrackedEntry entry : matching.activeEntries()) {
+            firstActivation.merge(
+                    new PairKey(entry.market(), entry.pairId()), entry.activatedAt(), MinuteKlineFeed::earlier);
+        }
+        for (TrackedPosition position : matching.openPositions()) {
+            firstActivation.merge(
+                    new PairKey(position.market(), position.pairId()), position.entryTime(), MinuteKlineFeed::earlier);
+        }
         Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
         List<Replay> startup = new ArrayList<>();
         firstActivation.forEach((key, activated) -> {
@@ -228,6 +253,10 @@ public class MinuteKlineFeed implements MinuteKlineListener {
             startup.add(new Replay(key, from));
         });
         return startup;
+    }
+
+    private static Instant earlier(Instant a, Instant b) {
+        return a.isBefore(b) ? a : b;
     }
 
     private void enqueue(Replay replay) {
@@ -318,10 +347,23 @@ public class MinuteKlineFeed implements MinuteKlineListener {
                     sleepUntil(batch.retryAt());
                     continue;
                 }
+                Map<Instant, MinuteKline> marks = Map.of();
+                if (key.market() == MarketType.FUTURES && !batch.klines().isEmpty()) {
+                    MinuteKlineBatch markBatch = market.closedMarkPriceKlines(key.pairId(), cursor);
+                    if (markBatch.refused()) {
+                        sleepUntil(markBatch.retryAt());
+                        continue;
+                    }
+                    marks = byOpenTime(markBatch.klines());
+                }
                 boolean advanced = false;
                 for (MinuteKline kline : batch.klines()) {
                     if (!kline.openTime().isBefore(cursor)) {
                         worker.submit(rangeOf(kline));
+                        MinuteKline mark = marks.get(kline.openTime());
+                        if (mark != null) {
+                            worker.submit(markRangeOf(mark));
+                        }
                         cursor = kline.openTime().plus(MINUTE);
                         advanced = true;
                     }
@@ -428,6 +470,18 @@ public class MinuteKlineFeed implements MinuteKlineListener {
                 kline.closed());
     }
 
+    /** A closed mark price candle as the mark range the engine liquidates on. */
+    private static PriceRange markRangeOf(MinuteKline mark) {
+        Instant at = mark.eventTime().isBefore(mark.openTime()) ? mark.openTime() : mark.eventTime();
+        return PriceRange.mark(mark.pairId(), mark.low(), mark.high(), mark.openTime(), at, true);
+    }
+
+    private static Map<Instant, MinuteKline> byOpenTime(List<MinuteKline> klines) {
+        Map<Instant, MinuteKline> byOpenTime = new HashMap<>();
+        klines.forEach(kline -> byOpenTime.put(kline.openTime(), kline));
+        return byOpenTime;
+    }
+
     private static Instant minuteOf(Instant instant) {
         return instant.truncatedTo(ChronoUnit.MINUTES);
     }
@@ -440,6 +494,9 @@ public class MinuteKlineFeed implements MinuteKlineListener {
 
         /** Held updates, one merged range per candle, by open time. */
         private final TreeMap<Instant, PriceRange> held = new TreeMap<>();
+
+        /** Held mark prices, one merged mark range per minute, by open time. */
+        private final TreeMap<Instant, PriceRange> heldMarks = new TreeMap<>();
 
         /** Live candles that opened before this were replayed and are not applied again. */
         private Instant replayedUntil;
@@ -459,6 +516,18 @@ public class MinuteKlineFeed implements MinuteKlineListener {
                 live(range);
             } else {
                 hold(range);
+            }
+        }
+
+        /** A mark price: handed on once live, held with the last prices of its minute otherwise. */
+        synchronized void acceptMark(PriceRange marks) {
+            if (state == State.WAITING && started) {
+                goLive();
+            }
+            if (state == State.LIVE) {
+                handMark(marks);
+            } else {
+                holdMark(marks);
             }
         }
 
@@ -490,14 +559,22 @@ public class MinuteKlineFeed implements MinuteKlineListener {
             this.replayedUntil = replayedUntil;
             lastClosed = replayedUntil.minus(MINUTE);
             held.headMap(replayedUntil).clear();
+            heldMarks.headMap(replayedUntil).clear();
             goLive();
             return true;
         }
 
+        /** Hands the held minutes on in order, each minute's last prices before its mark prices. */
         private void goLive() {
             state = State.LIVE;
-            while (state == State.LIVE && !held.isEmpty()) {
-                live(held.pollFirstEntry().getValue());
+            while (state == State.LIVE && !(held.isEmpty() && heldMarks.isEmpty())) {
+                boolean lastFirst = !held.isEmpty()
+                        && (heldMarks.isEmpty() || !held.firstKey().isAfter(heldMarks.firstKey()));
+                if (lastFirst) {
+                    live(held.pollFirstEntry().getValue());
+                } else {
+                    handMark(heldMarks.pollFirstEntry().getValue());
+                }
             }
         }
 
@@ -533,6 +610,21 @@ public class MinuteKlineFeed implements MinuteKlineListener {
             if (held.size() > properties.replay().maxBufferedMinutes()) {
                 PriceRange dropped = held.pollFirstEntry().getValue();
                 log.warn("NSF-07 {} {}: held candle {} dropped", dropped.market(), dropped.pairId(), dropped.from());
+            }
+        }
+
+        private void holdMark(PriceRange marks) {
+            heldMarks.merge(marks.from(), marks, PriceRange::mergedWith);
+            if (heldMarks.size() > properties.replay().maxBufferedMinutes()) {
+                PriceRange dropped = heldMarks.pollFirstEntry().getValue();
+                log.warn("NSF-07 {}: held mark prices of {} dropped", dropped.pairId(), dropped.from());
+            }
+        }
+
+        /** A mark range of a minute already replayed is not applied again. */
+        private void handMark(PriceRange marks) {
+            if (replayedUntil == null || !marks.from().isBefore(replayedUntil)) {
+                worker.submit(marks);
             }
         }
 

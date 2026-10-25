@@ -1,13 +1,14 @@
 package com.cryptopilot.trading.service.impl;
 
-import com.cryptopilot.admin.SystemSettingApi;
-import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.SlippageCalculator;
 import com.cryptopilot.trading.event.TradingPlanInvalidated;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
+import com.cryptopilot.trading.model.PositionExit;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.repository.MatchingWatermarkRepository;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
@@ -30,9 +31,10 @@ import org.springframework.transaction.annotation.Transactional;
  * Settles a fill or an invalidation against a cancel, an expiry or the other outcome with one compare-and-set on the
  * plan's status: the update only matches an ACTIVE plan, so of two racing writers exactly one changes the row and the
  * other sees nothing to change. The writer that fills it opens the position in the journal in the same transaction
- * (BR-34); the other writes nothing.
+ * (BR-34); the other writes nothing. An exit is settled the same way on the journal row's status and version.
  *
- * <p>Rule: NSF-07, BR-32, BR-33, BR-34, BR-36, BR-68; TECHNICAL_DESIGN 5.5 and 7.7; D-111 (E1, E5); D-112 (R6); D-119.
+ * <p>Rule: NSF-07, BR-32, BR-33, BR-34, BR-35, BR-36, BR-68; TECHNICAL_DESIGN 5.5 and 7.7; D-111 (E1, E5); D-112 (R6);
+ * D-119.
  *
  * <p>Reference: Herlihy, M. &amp; Shavit, N. (2008). <i>The Art of Multiprocessor Programming</i>. Morgan Kaufmann,
  * ch. 5 (compare-and-set: one of several concurrent callers succeeds, the others observe the new state).
@@ -45,10 +47,11 @@ public class MatchingServiceImpl implements MatchingService {
 
     private final TradingPlanRepository plans;
     private final MatchingWatermarkRepository watermarks;
-    private final SystemSettingApi settings;
-    private final MarketApi market;
+    private final TakerSlippage slippage;
     private final ApplicationEventPublisher events;
     private final PositionOpener positions;
+    private final PositionCloser closer;
+    private final TradeJournal journal;
     private final Clock clock;
 
     @Override
@@ -58,23 +61,23 @@ public class MatchingServiceImpl implements MatchingService {
     }
 
     @Override
+    public List<TrackedPosition> openPositions() {
+        return journal.openSimulatedTrades().stream().map(TrackedPosition::of).toList();
+    }
+
+    @Override
     @Transactional
-    public boolean fill(Fill fill) {
+    public Optional<TrackedPosition> fill(Fill fill) {
         BigDecimal price = storedPrice(fill);
         boolean filled =
                 plans.executeIfActive(fill.planId(), fill.executedAt(), price, fill.liquidity(), clock.instant()) == 1;
-        if (filled) {
-            log.info(
-                    "NSF-07 plan {} filled at {} as {} ({})",
-                    fill.planId(),
-                    price,
-                    fill.liquidity(),
-                    fill.executedAt());
-            // Read again: the compare-and-set cleared the persistence context, and the record takes the price and role
-            // it stored (LIMIT MAKER, STOP TAKER), never fill.price(), which is the price before slippage.
-            positions.open(plans.findById(fill.planId()).orElseThrow());
+        if (!filled) {
+            return Optional.empty();
         }
-        return filled;
+        log.info("NSF-07 plan {} filled at {} as {} ({})", fill.planId(), price, fill.liquidity(), fill.executedAt());
+        // Read again: the compare-and-set cleared the persistence context, and the record takes the price and role
+        // it stored (LIMIT MAKER, STOP TAKER), never fill.price(), which is the price before slippage.
+        return Optional.of(positions.open(plans.findById(fill.planId()).orElseThrow()));
     }
 
     @Override
@@ -99,6 +102,12 @@ public class MatchingServiceImpl implements MatchingService {
     }
 
     @Override
+    @Transactional
+    public boolean close(PositionExit exit) {
+        return closer.close(exit);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public Optional<Instant> watermark(MarketType market, UUID pairId) {
         return watermarks.lastCandleOpenTime(market.name(), pairId);
@@ -111,9 +120,8 @@ public class MatchingServiceImpl implements MatchingService {
     }
 
     /**
-     * The price the fill is stored at. A MAKER fill rested at its own price. A TAKER fill (a triggered STOP) is moved
-     * against the Trader by {@code SLIPPAGE_BPS}, read for this fill, and rounded to the pair's tick; it is a
-     * stop-market order, so nothing caps it. The tick is read only when there is slippage to round.
+     * The price the fill is stored at. A MAKER fill rested at its own price. A TAKER fill (a triggered STOP) is a
+     * stop-market order moved against the Trader by {@code SLIPPAGE_BPS}.
      *
      * <p>Rule: BR-36; D-111 (E5); D-112 (R6).
      */
@@ -121,16 +129,12 @@ public class MatchingServiceImpl implements MatchingService {
         if (fill.liquidity() == LiquidityRole.MAKER) {
             return fill.price();
         }
-        int basisPoints = settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS);
-        if (basisPoints == 0) {
-            return fill.price();
-        }
         TrackedEntry entry = fill.entry();
-        BigDecimal tickSize = market.tradablePair(entry.pairId(), entry.market())
-                .map(pair -> pair.filters().tickSize())
-                .orElseThrow(() -> new IllegalStateException("no tick size for pair " + entry.pairId() + " on "
-                        + entry.market() + " to round the slipped fill of plan " + entry.planId()));
-        return SlippageCalculator.takerFill(
-                fill.price(), SlippageCalculator.buysOnEntry(entry.direction()), basisPoints, tickSize);
+        return slippage.fill(
+                fill.price(),
+                SlippageCalculator.buysOnEntry(entry.direction()),
+                entry.market(),
+                entry.pairId(),
+                "plan " + entry.planId());
     }
 }

@@ -19,6 +19,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
@@ -27,7 +28,9 @@ import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntries;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.Direction;
+import com.cryptopilot.trading.model.enums.PriceSource;
 import com.cryptopilot.trading.service.MatchingService;
 import com.cryptopilot.trading.service.ReplayLockService;
 import java.math.BigDecimal;
@@ -40,7 +43,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,7 +58,7 @@ import org.slf4j.LoggerFactory;
  * order the engine receives it. The engine and the exchange are mocked, and every test waits until no replay is queued
  * or running, so it is deterministic.
  *
- * <p>Rule: NSF-07; TECHNICAL_DESIGN 7.7; A-04; D-78; Q-34.
+ * <p>Rule: NSF-07, BR-35; TECHNICAL_DESIGN 7.7; A-04; D-78; Q-34.
  */
 class MinuteKlineFeedTest {
 
@@ -80,6 +85,11 @@ class MinuteKlineFeedTest {
     /** The closed candles the exchange stub serves, at most three a page. */
     private final List<MinuteKline> served = new CopyOnWriteArrayList<>();
 
+    /** The closed mark price candles the exchange stub serves. */
+    private final List<MinuteKline> marks = new CopyOnWriteArrayList<>();
+
+    private final List<TrackedPosition> positions = new ArrayList<>();
+
     private MinuteKlineFeed feed;
 
     @BeforeEach
@@ -89,6 +99,13 @@ class MinuteKlineFeedTest {
         when(worker.isRunning()).thenReturn(true);
         when(locks.tryAcquire(any(), any())).thenReturn(true);
         doAnswer(call -> submitted.add(call.getArgument(0))).when(worker).submit(any());
+        when(market.closedMarkPriceKlines(any(), any())).thenAnswer(call -> {
+            Instant from = call.getArgument(1);
+            return MinuteKlineBatch.of(marks.stream()
+                    .filter(kline -> !kline.openTime().isBefore(from))
+                    .limit(3)
+                    .toList());
+        });
         when(market.closedMinuteKlines(any(), any(), any())).thenAnswer(call -> {
             Instant from = call.getArgument(2);
             return MinuteKlineBatch.of(served.stream()
@@ -707,6 +724,168 @@ class MinuteKlineFeedTest {
         verify(market, never()).closedMinuteKlines(eq(MarketType.SPOT), any(), any());
     }
 
+    /** NSF-07: once live, a futures mark price is handed on as a mark range of its minute, one price. */
+    @Test
+    void BR35_aLiveMarkPrice_isAMarkRangeOfItsMinute() {
+        feed = feed(replay(true, 3, 1440));
+        startAndAwaitIdle();
+
+        feed.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("90.5"), M0.plusSeconds(7)));
+
+        assertThat(submitted)
+                .containsExactly(PriceRange.mark(
+                        PAIR, new BigDecimal("90.5"), new BigDecimal("90.5"), M0, M0.plusSeconds(7), false));
+    }
+
+    /** Mark prices before the start are held with the last prices, each minute's last prices first. */
+    @Test
+    void NSF07_markPricesBeforeTheStart_areHeldAndHandedOnAfterTheLastPricesOfTheirMinute() {
+        feed = feed(replay(true, 3, 1440));
+        feed.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("99"), M0.plusSeconds(3)));
+        feed.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("98"), M0.plusSeconds(4)));
+        feed.onMinuteKline(futuresUpdate(M0, "99", "101", true, 60));
+        feed.onMinuteKline(futuresUpdate(minute(1), "100", "100", false, 5));
+        assertThat(submitted).isEmpty();
+
+        startAndAwaitIdle();
+
+        assertThat(submitted)
+                .extracting(PriceRange::source, PriceRange::from, PriceRange::low)
+                .containsExactly(
+                        tuple(PriceSource.LAST, M0, new BigDecimal("99")),
+                        tuple(PriceSource.MARK, M0, new BigDecimal("98")),
+                        tuple(PriceSource.LAST, minute(1), new BigDecimal("100")));
+    }
+
+    @Test
+    void NSF07_withMatchingOff_markPricesAreIgnored() {
+        feed = new MinuteKlineFeed(
+                worker,
+                matching,
+                market,
+                new MatchingProperties(false, 1, 100, SLOW_RETRY, 60, Duration.ofSeconds(5), replay(true, 0, 1440)),
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                recording,
+                locks);
+
+        feed.onMarkPrice(new MarkPrice(PAIR, BigDecimal.ONE, M0));
+
+        assertThat(submitted).isEmpty();
+    }
+
+    /**
+     * TD 7.7: a futures replay fetches the mark price candles of the same minutes and hands each minute's last price
+     * candle before its mark price candle; a minute without a mark price candle hands its last prices only.
+     */
+    @Test
+    void A04_aFuturesReplay_handsEachMinutesMarkPriceCandleAfterItsLastPriceCandle() {
+        openPosition(PAIR, minute(1).plusSeconds(20));
+        when(matching.watermark(MarketType.FUTURES, PAIR)).thenReturn(Optional.of(M0));
+        for (int n = 1; n <= 3; n++) {
+            served.add(futuresClosed(minute(n)));
+        }
+        marks.add(markClosed(minute(1), "95", "99"));
+        marks.add(markClosed(minute(3), "94", "98"));
+        feed = feed(replay(true, 0, 1440));
+
+        startAndAwaitIdle();
+
+        assertThat(submitted)
+                .extracting(PriceRange::source, PriceRange::from, PriceRange::closed)
+                .containsExactly(
+                        tuple(PriceSource.LAST, minute(1), true),
+                        tuple(PriceSource.MARK, minute(1), true),
+                        tuple(PriceSource.LAST, minute(2), true),
+                        tuple(PriceSource.LAST, minute(3), true),
+                        tuple(PriceSource.MARK, minute(3), true));
+        assertThat(submitted.get(1).low()).isEqualByComparingTo("95");
+        verify(market).closedMarkPriceKlines(PAIR, minute(1));
+    }
+
+    /** A refused mark price page is asked again from the same minute; nothing of the page is handed before it. */
+    @Test
+    void A04_aRefusedMarkPricePage_isAskedAgain_beforeTheLastPricesOfThePageAreHandedOn() {
+        openPosition(PAIR, minute(1));
+        when(matching.watermark(MarketType.FUTURES, PAIR)).thenReturn(Optional.of(M0));
+        served.add(futuresClosed(minute(1)));
+        marks.add(markClosed(minute(1), "95", "99"));
+        when(market.closedMarkPriceKlines(PAIR, minute(1)))
+                .thenReturn(MinuteKlineBatch.refusedUntil(NOW))
+                .thenAnswer(call -> MinuteKlineBatch.of(List.copyOf(marks)));
+        feed = feed(replay(true, 0, 1440));
+
+        startAndAwaitIdle();
+
+        assertThat(submitted).extracting(PriceRange::source).containsExactly(PriceSource.LAST, PriceSource.MARK);
+        verify(market, times(2)).closedMarkPriceKlines(PAIR, minute(1));
+    }
+
+    /** A Spot replay never asks for mark prices. */
+    @Test
+    void A04_aSpotReplay_neverAsksForMarkPrices() {
+        activeEntry(PAIR, minute(1));
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0));
+        serveClosed(1, 2);
+        feed = feed(replay(true, 0, 1440));
+
+        startAndAwaitIdle();
+
+        verify(market, never()).closedMarkPriceKlines(any(), any());
+    }
+
+    /**
+     * NSF-07: a pair with an OPEN position and no waiting plan is replayed from the minute of its entry, so an exit
+     * during the downtime is matched; with a plan too, from the earlier of the two.
+     */
+    @Test
+    void A04_aPairWithAnOpenPosition_isReplayedFromItsEntryMinute() {
+        openPosition(PAIR, minute(4).plusSeconds(30));
+        openPosition(OTHER_PAIR, minute(6));
+        entries.add(TrackedEntries.limit(
+                UUID.randomUUID(), MarketType.FUTURES, OTHER_PAIR, Direction.LONG, BigDecimal.TEN, minute(2)));
+        when(matching.activeEntries()).thenReturn(List.copyOf(entries));
+        feed = feed(replay(true, 0, 1440));
+
+        startAndAwaitIdle();
+
+        verify(market, atLeastOnce()).closedMinuteKlines(MarketType.FUTURES, PAIR, minute(4));
+        verify(market, atLeastOnce()).closedMinuteKlines(MarketType.FUTURES, OTHER_PAIR, minute(2));
+    }
+
+    /** Live mark prices of minutes the replay covered are dropped, the later ones handed on after it. */
+    @Test
+    void A04_markPricesHeldDuringAReplay_ofReplayedMinutes_areDropped() throws Exception {
+        openPosition(PAIR, minute(1));
+        when(matching.watermark(MarketType.FUTURES, PAIR)).thenReturn(Optional.of(M0));
+        CountDownLatch inReplay = new CountDownLatch(1);
+        CountDownLatch letGo = new CountDownLatch(1);
+        when(market.closedMinuteKlines(eq(MarketType.FUTURES), eq(PAIR), any())).thenAnswer(call -> {
+            Instant from = call.getArgument(2);
+            if (from.equals(minute(1))) {
+                inReplay.countDown();
+                letGo.await();
+                return MinuteKlineBatch.of(List.of(futuresClosed(minute(1))));
+            }
+            return MinuteKlineBatch.of(List.of());
+        });
+        feed = feed(replay(true, 0, 1440));
+
+        feed.start();
+        assertThat(inReplay.await(5, TimeUnit.SECONDS)).isTrue();
+        feed.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), minute(1).plusSeconds(30)));
+        feed.onMinuteKline(futuresUpdate(minute(2), "99", "100", false, 5));
+        feed.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("96"), minute(2).plusSeconds(6)));
+        letGo.countDown();
+        awaitIdle();
+
+        assertThat(submitted)
+                .extracting(PriceRange::source, PriceRange::from)
+                .containsExactly(
+                        tuple(PriceSource.LAST, minute(1)),
+                        tuple(PriceSource.LAST, minute(2)),
+                        tuple(PriceSource.MARK, minute(2)));
+    }
+
     private static final MatchingProperties.Retry RETRY =
             new MatchingProperties.Retry(Duration.ZERO, Duration.ZERO, 0, Duration.ofMinutes(10));
 
@@ -771,6 +950,51 @@ class MinuteKlineFeedTest {
         entries.add(TrackedEntries.limit(
                 UUID.randomUUID(), MarketType.SPOT, pair, Direction.LONG, new BigDecimal("100"), activatedAt));
         when(matching.activeEntries()).thenReturn(List.copyOf(entries));
+    }
+
+    private void openPosition(UUID pair, Instant entryTime) {
+        positions.add(new TrackedPosition(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                TrackedEntries.OWNER,
+                MarketType.FUTURES,
+                pair,
+                Direction.LONG,
+                new BigDecimal("100"),
+                entryTime,
+                new BigDecimal("90"),
+                new BigDecimal("120"),
+                new BigDecimal("80"),
+                0));
+        when(matching.openPositions()).thenReturn(List.copyOf(positions));
+    }
+
+    private static MinuteKline futuresUpdate(Instant open, String low, String high, boolean closed, long seconds) {
+        return new MinuteKline(
+                MarketType.FUTURES,
+                PAIR,
+                open,
+                new BigDecimal(low),
+                new BigDecimal(high),
+                new BigDecimal(high),
+                closed,
+                open.plusSeconds(seconds).minusMillis(closed ? 1 : 0));
+    }
+
+    private static MinuteKline futuresClosed(Instant open) {
+        return futuresUpdate(open, "100", "101", true, 60);
+    }
+
+    private static MinuteKline markClosed(Instant open, String low, String high) {
+        return new MinuteKline(
+                MarketType.FUTURES,
+                PAIR,
+                open,
+                new BigDecimal(low),
+                new BigDecimal(high),
+                new BigDecimal(high),
+                true,
+                open.plusSeconds(60).minusMillis(1));
     }
 
     /** The exchange serves the closed candles of minutes {@code first} to {@code last}. */

@@ -3,6 +3,7 @@ package com.cryptopilot.trading.model;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * A waiting plan the matching engine has decided to invalidate: an invalidation level was reached before its entry.
@@ -20,6 +21,11 @@ public record Invalidation(TrackedEntry entry, InvalidationReason reason, Instan
         Objects.requireNonNull(entry, "entry");
         Objects.requireNonNull(reason, "reason");
         Objects.requireNonNull(invalidatedAt, "invalidatedAt");
+    }
+
+    @Override
+    public UUID planId() {
+        return entry.planId();
     }
 
     @Override

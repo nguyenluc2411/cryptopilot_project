@@ -28,6 +28,8 @@ import java.util.UUID;
  * @param entryFee the fee of the entry fill by its liquidity role, at the stored scale
  * @param stopLoss the stop loss the position starts with
  * @param takeProfit the take profit the position starts with
+ * @param liquidationPrice the liquidation price of a Futures position at its fill price, or {@code null} for Spot and
+ *     for a position no price can liquidate
  */
 public record SimulatedTradeOpening(
         UUID planId,
@@ -42,7 +44,8 @@ public record SimulatedTradeOpening(
         LiquidityRole entryLiquidity,
         BigDecimal entryFee,
         BigDecimal stopLoss,
-        BigDecimal takeProfit) {
+        BigDecimal takeProfit,
+        BigDecimal liquidationPrice) {
 
     public SimulatedTradeOpening {
         Objects.requireNonNull(planId, "planId");

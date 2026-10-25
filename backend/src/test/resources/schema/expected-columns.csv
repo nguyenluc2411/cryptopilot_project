@@ -546,13 +546,16 @@ trading_journal,exit_time,timestamp with time zone,,,YES
 trading_journal,fee_amount,numeric,28,8,YES
 trading_journal,fill_indicators,jsonb,,,YES
 trading_journal,funding_fee_amount,numeric,28,8,YES
+trading_journal,funding_incomplete,boolean,,,NO
 trading_journal,journal_id,uuid,,,NO
 trading_journal,lessons_learned,text,,,YES
 trading_journal,leverage,integer,32,0,YES
+trading_journal,liquidation_price,numeric,28,12,YES
 trading_journal,market_type,character varying,,,NO
 trading_journal,max_adverse_price,numeric,28,12,YES
 trading_journal,max_favorable_price,numeric,28,12,YES
 trading_journal,mistakes,text,,,YES
+trading_journal,missing_funding_times,ARRAY,,,YES
 trading_journal,pair_id,uuid,,,NO
 trading_journal,plan_id,uuid,,,YES
 trading_journal,planned_entry_price,numeric,28,12,YES

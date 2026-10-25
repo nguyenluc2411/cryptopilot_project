@@ -14,4 +14,7 @@ public interface MinuteKlineService {
 
     /** See {@link com.cryptopilot.market.MarketApi#closedMinuteKlines}. */
     MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from);
+
+    /** See {@link com.cryptopilot.market.MarketApi#closedMarkPriceKlines}. */
+    MinuteKlineBatch closedMarkPriceKlines(UUID pairId, Instant from);
 }

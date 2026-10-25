@@ -545,8 +545,9 @@ class PostMediaApiTest {
         decide(admin, lost, "DISMISS");
 
         as(author, delete(POSTS + "/" + deleted), null).andExpect(status().isNoContent());
-        assertThat(releases(deleted)).isEqualTo(1);
+        // Released once: the publication row is deleted as soon as it is delivered, so the file is what is counted.
         await().atMost(WAIT).until(() -> storage().destroyed().contains(released));
+        assertThat(storage().destroyed()).filteredOn(released::equals).hasSize(1);
 
         // As if the release of its files had failed for good: the sweep deletes them.
         sql.sql("update forum_post set post_status = 'DELETED' where post_id = ?")
@@ -632,8 +633,9 @@ class PostMediaApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.media.length()").value(0));
 
-        assertThat(releases(id)).isEqualTo(1);
+        // Released once: the publication row is deleted as soon as it is delivered, so the file is what is counted.
         await().atMost(WAIT).until(() -> storage().destroyed().contains(file));
+        assertThat(storage().destroyed()).filteredOn(file::equals).hasSize(1);
     }
 
     @Test

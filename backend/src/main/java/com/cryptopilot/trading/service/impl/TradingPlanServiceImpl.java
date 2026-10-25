@@ -30,6 +30,7 @@ import com.cryptopilot.trading.dto.response.PositionResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
+import com.cryptopilot.trading.event.PositionOpened;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.event.TradingPlanWithdrawn;
@@ -47,6 +48,7 @@ import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanTerms;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskProfileLimits;
+import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
@@ -288,16 +290,30 @@ public class TradingPlanServiceImpl implements TradingPlanService {
 
     /**
      * Saves the plan. A plan that filled at activation is written at once and its position opened in the journal in
-     * this transaction, so the fill and its record commit or roll back together (BR-34).
+     * this transaction, so the fill and its record commit or roll back together (BR-34); after the commit the
+     * matching engine adds the position to its exit books ({@link PositionOpened}).
      *
-     * <p>Rule: BR-33, BR-34; D-119.
+     * <p>Rule: BR-33, BR-34, BR-35; D-119.
      */
     private TradingPlan store(TradingPlan plan) {
         if (plan.getStatus() != PlanStatus.EXECUTED) {
             return plans.save(plan);
         }
         TradingPlan stored = plans.saveAndFlush(plan);
-        positions.open(stored);
+        TrackedPosition position = positions.open(stored);
+        events.publishEvent(new PositionOpened(
+                position.positionId(),
+                position.planId(),
+                position.userId(),
+                position.market(),
+                position.pairId(),
+                position.direction(),
+                position.entryPrice(),
+                position.entryTime(),
+                position.stopLoss(),
+                position.takeProfit(),
+                position.liquidationPrice(),
+                position.version()));
         return stored;
     }
 
@@ -388,6 +404,11 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 limits(defaults.riskProfile()),
                 exposure.otherOpenRisk());
         if (gate != null && reference != null) {
+            // Activating a MARKET: a stop loss the unslipped last price already reached is MSG16 (D-123), checked
+            // before the deviation, which has no stop distance when the price stands on the stop loss.
+            requireNone(PlanValidityRule.stopLossAlreadyReached(terms.direction(), input.stopLoss(), reference)
+                    .map(List::of)
+                    .orElse(List.of()));
             gate.refuseBeyondLimit(input, reference);
         }
         LiquidityRole role = EntryFillRule.expectedLiquidity(terms.entryType(), terms.direction(), entryPrice, last);
@@ -605,7 +626,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * becomes ACTIVE only to be filled at a gap price or invalidated by the next candle (D-112). The invalidation
      * price and a STOP cannot be checked without a current last price, so the save or activation is refused (MSG43).
      * A LIMIT without one waits for the matching engine as before (BR-33): its take profit is checked whenever the
-     * price is known, and otherwise the engine invalidates it on the first candle that reaches it.
+     * price is known, and otherwise the engine invalidates it on the first candle that reaches it. At activation every
+     * LIMIT or STOP is refused when the last price has already reached its stop loss (D-123); a MARKET is checked in
+     * {@link #calculate}, against the unslipped last price it is calculated on, never the mark price.
      */
     private static List<InputViolation> priceViolations(
             UUID pairId,
@@ -618,20 +641,23 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             BigDecimal invalidation,
             boolean activating,
             Optional<BigDecimal> lastRead) {
+        List<InputViolation> violations = new ArrayList<>();
+        if (activating && entryType != EntryType.MARKET) {
+            lastRead.flatMap(current -> PlanValidityRule.stopLossAlreadyReached(direction, stopLoss, current))
+                    .ifPresent(violations::add);
+        }
         boolean stopAtActivation = activating && entryType == EntryType.STOP;
         boolean limitAtActivation = activating && entryType == EntryType.LIMIT;
         boolean needsPrice = entryType != EntryType.MARKET && (invalidation != null || stopAtActivation);
         if (!needsPrice && (!limitAtActivation || lastRead.isEmpty())) {
-            return List.of();
+            return violations;
         }
         BigDecimal last = lastRead.orElseThrow(() -> new BusinessException(
                 ErrorCode.MARKET_PRICE_UNAVAILABLE,
                 "no current last price for pair " + pairId + " on " + marketType
                         + " to check the invalidation or stop price"));
-        List<InputViolation> violations = new ArrayList<>();
         if (stopAtActivation) {
             PlanValidityRule.stopAlreadyTriggered(direction, entryPrice, last).ifPresent(violations::add);
-            PlanValidityRule.stopLossAlreadyReached(direction, stopLoss, last).ifPresent(violations::add);
         }
         if (limitAtActivation) {
             PlanValidityRule.takeProfitAlreadyReached(direction, takeProfit, last)

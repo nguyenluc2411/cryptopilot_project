@@ -133,7 +133,7 @@ class JournalOpeningTest {
         TradingPlan plan = plan(id);
         BigDecimal quantity = plan.getSnapshot().positionQuantity();
 
-        assertThat(matching.fill(limitFill(id, new BigDecimal("99.5")))).isTrue();
+        assertThat(matching.fill(limitFill(id, new BigDecimal("99.5")))).isPresent();
 
         Map<String, Object> row = record(id);
         assertThat(row.get("source")).isEqualTo("SIMULATED");
@@ -171,7 +171,7 @@ class JournalOpeningTest {
         UUID id = activePlan();
         tradingPlans.cancel(SEEDED_ACCOUNT, id);
 
-        assertThat(matching.fill(limitFill(id, new BigDecimal("100")))).isFalse();
+        assertThat(matching.fill(limitFill(id, new BigDecimal("100")))).isEmpty();
 
         assertThat(records(id)).isZero();
     }
@@ -187,7 +187,7 @@ class JournalOpeningTest {
         CyclicBarrier together = new CyclicBarrier(2);
         Callable<Boolean> fill = () -> {
             together.await();
-            return matching.fill(same);
+            return matching.fill(same).isPresent();
         };
 
         List<Boolean> outcomes = new ArrayList<>();
@@ -207,7 +207,7 @@ class JournalOpeningTest {
     @Test
     void BR34_aSecondRecordOfAPlan_isRefusedByTheDatabase() {
         UUID id = activePlan();
-        assertThat(matching.fill(limitFill(id, new BigDecimal("100")))).isTrue();
+        assertThat(matching.fill(limitFill(id, new BigDecimal("100")))).isPresent();
 
         assertThatThrownBy(() -> inTransaction(() -> {
                     journal.openSimulatedTrade(opening(id));
@@ -278,7 +278,8 @@ class JournalOpeningTest {
                 LiquidityRole.MAKER,
                 new BigDecimal("0.02"),
                 new BigDecimal("95"),
-                new BigDecimal("110"));
+                new BigDecimal("110"),
+                null);
     }
 
     private UUID activePlan() {

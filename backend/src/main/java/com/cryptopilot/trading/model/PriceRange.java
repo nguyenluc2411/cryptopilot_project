@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.model;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.model.enums.PriceSource;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
@@ -8,7 +9,8 @@ import java.util.UUID;
 
 /**
  * The prices a pair traded at in one update, the low and high of the forming 1-minute candle so far (ADR-011), or in
- * several updates merged while the matching engine was behind.
+ * several updates merged while the matching engine was behind. A range is made of last prices, or of Futures mark
+ * prices for liquidation (D-111 E2).
  *
  * <p>Rule: NSF-07; TECHNICAL_DESIGN 7.7; D-09.
  *
@@ -23,6 +25,7 @@ import java.util.UUID;
  *     this time, so a live update and the closed candle replayed later give the same fill (D-78)
  * @param at when the latest update in the range was produced
  * @param closed whether the range holds the candle's final low and high: the candle is closed
+ * @param source last prices or mark prices; only ranges of the same source merge
  */
 public record PriceRange(
         MarketType market,
@@ -32,7 +35,8 @@ public record PriceRange(
         BigDecimal high,
         Instant from,
         Instant at,
-        boolean closed) {
+        boolean closed,
+        PriceSource source) {
 
     public PriceRange {
         Objects.requireNonNull(market, "market");
@@ -41,21 +45,38 @@ public record PriceRange(
         Objects.requireNonNull(high, "high");
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(at, "at");
+        Objects.requireNonNull(source, "source");
         if (low.compareTo(high) > 0) {
             throw new IllegalArgumentException("low " + low + " is above high " + high);
         }
         if (from.isAfter(at)) {
             throw new IllegalArgumentException("from " + from + " is after at " + at);
         }
+        if (source == PriceSource.MARK && market != MarketType.FUTURES) {
+            throw new IllegalArgumentException("only a Futures pair has a mark price");
+        }
     }
 
-    /** Updates of a candle whose open is not known. */
+    /** Last prices of a candle. */
+    public PriceRange(
+            MarketType market,
+            UUID pairId,
+            BigDecimal open,
+            BigDecimal low,
+            BigDecimal high,
+            Instant from,
+            Instant at,
+            boolean closed) {
+        this(market, pairId, open, low, high, from, at, closed, PriceSource.LAST);
+    }
+
+    /** Last prices of a candle whose open is not known. */
     public PriceRange(
             MarketType market, UUID pairId, BigDecimal low, BigDecimal high, Instant from, Instant at, boolean closed) {
         this(market, pairId, null, low, high, from, at, closed);
     }
 
-    /** Updates of a candle still forming, whose open is not known. */
+    /** Last prices of a candle still forming, whose open is not known. */
     public PriceRange(MarketType market, UUID pairId, BigDecimal low, BigDecimal high, Instant from, Instant at) {
         this(market, pairId, low, high, from, at, false);
     }
@@ -66,11 +87,25 @@ public record PriceRange(
     }
 
     /**
-     * This range and another of the same pair as one: the open of the earlier candle (of either when both share one),
-     * the lowest low, the highest high, the earliest and the latest time, closed when either is. Every price either
-     * reached is still reached.
+     * Mark prices of a Futures pair's 1-minute candle: one streamed mark price (low = high, still forming), or a closed
+     * mark price candle replayed after downtime.
+     */
+    public static PriceRange mark(
+            UUID pairId, BigDecimal low, BigDecimal high, Instant from, Instant at, boolean closed) {
+        return new PriceRange(MarketType.FUTURES, pairId, null, low, high, from, at, closed, PriceSource.MARK);
+    }
+
+    /**
+     * This range and another of the same pair and source as one: the open of the earlier candle (of either when both
+     * share one), the lowest low, the highest high, the earliest and the latest time, closed when either is. Every
+     * price either reached is still reached.
+     *
+     * @throws IllegalArgumentException when the two are of different sources
      */
     public PriceRange mergedWith(PriceRange other) {
+        if (source != other.source) {
+            throw new IllegalArgumentException("a " + source + " range does not merge with a " + other.source + " one");
+        }
         int earlier = from.compareTo(other.from);
         BigDecimal mergedOpen = earlier < 0 ? open : earlier > 0 ? other.open : open != null ? open : other.open;
         return new PriceRange(
@@ -81,6 +116,7 @@ public record PriceRange(
                 high.max(other.high),
                 from.isBefore(other.from) ? from : other.from,
                 at.isAfter(other.at) ? at : other.at,
-                closed || other.closed);
+                closed || other.closed,
+                source);
     }
 }

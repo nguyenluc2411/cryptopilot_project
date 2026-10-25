@@ -5,6 +5,8 @@ import static com.cryptopilot.market.client.StubStreamServer.signal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
+import com.cryptopilot.market.MarkPrice;
+import com.cryptopilot.market.MarkPriceListener;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MarketTradeListener;
@@ -88,6 +90,8 @@ class MarketStreamSupervisorTest {
     private final List<MinuteKlineListener> minuteListeners = new CopyOnWriteArrayList<>(List.of(minutes::add));
     private final List<MarketTrade> trades = new CopyOnWriteArrayList<>();
     private final List<MarketTradeListener> tradeListeners = new CopyOnWriteArrayList<>(List.of(trades::add));
+    private final List<MarkPrice> marks = new CopyOnWriteArrayList<>();
+    private final List<MarkPriceListener> markListeners = new CopyOnWriteArrayList<>(List.of(marks::add));
     private boolean tradingStreams;
     private TradingMarketData trading;
     private MarketUpdateService updates = (market, message) -> {
@@ -231,6 +235,31 @@ class MarketStreamSupervisorTest {
         assertThat(minutes).allSatisfy(kline -> assertThat(kline.close()).isEqualByComparingTo("101.20"));
         assertThat(realtime).noneMatch(message -> message instanceof StreamMessage.KlineMessage);
         assertThat(storedCandles()).isZero();
+    }
+
+    /**
+     * NSF-07: a futures mark price is cached and goes to the mark price listeners (the liquidation book) from the one
+     * {@code markPrice@1s} stream; a listener that throws does not stop the next message.
+     */
+    @Test
+    void NSF07_aMarkPrice_isCachedAndGoesToTheMarkPriceListeners() {
+        markListeners.add(mark -> {
+            throw new IllegalStateException("listener down");
+        });
+        supervisor = supervisor(true, 100);
+        supervisor.start();
+        server.awaitConnection(2);
+        Connection futures = connection("/market/stream");
+
+        futures.send(StreamFrames.markPrice("BTCUSDT", AT));
+        futures.send(StreamFrames.markPrice("BTCUSDT", AT.plusSeconds(1)));
+
+        await(() -> marks.size() == 2, "both mark prices");
+        assertThat(marks)
+                .extracting(MarkPrice::pairId, MarkPrice::eventTime)
+                .containsExactly(tuple(btc, AT), tuple(btc, AT.plusSeconds(1)));
+        assertThat(marks).allSatisfy(mark -> assertThat(mark.price()).isEqualByComparingTo("84286.39852899"));
+        assertThat(latest.markPrice(btc)).isPresent();
     }
 
     /**
@@ -442,7 +471,8 @@ class MarketStreamSupervisorTest {
                 updates,
                 minuteListeners,
                 trading,
-                tradeListeners);
+                tradeListeners,
+                markListeners);
     }
 
     private CandleBackfillService backfill() {

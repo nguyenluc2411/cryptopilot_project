@@ -4,6 +4,7 @@ import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * An entry the matching engine has decided to fill: its liquidity role, the price the fill rule gives and the time the
@@ -26,6 +27,11 @@ public record Fill(TrackedEntry entry, LiquidityRole liquidity, BigDecimal price
         Objects.requireNonNull(liquidity, "liquidity");
         Objects.requireNonNull(price, "price");
         Objects.requireNonNull(executedAt, "executedAt");
+    }
+
+    @Override
+    public UUID planId() {
+        return entry.planId();
     }
 
     @Override

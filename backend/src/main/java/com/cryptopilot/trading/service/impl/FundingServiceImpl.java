@@ -1,6 +1,8 @@
 package com.cryptopilot.trading.service.impl;
 
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.trading.ClosedTradeFunding;
+import com.cryptopilot.trading.TradeFunding;
 import com.cryptopilot.trading.calculator.FundingCalculator;
 import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.enums.Direction;
@@ -19,13 +21,14 @@ import org.springframework.stereotype.Service;
  * Reads the pair's funding history for the period and leaves the sum and the completeness check to
  * {@link FundingCalculator}. Nothing is cached, so an incomplete period is computed again on the next call and becomes
  * complete as soon as its settlement is stored (A-05). Each settlement still missing is logged as a warning with the
- * pair and its instant, and a gap whose settlements cannot be told is logged once.
+ * pair and its instant, and a gap whose settlements cannot be told is logged once. The journal asks it again, through
+ * {@link TradeFunding}, for a closed trade whose funding was incomplete.
  *
- * <p>Rule: BR-37; NSF-08 as realized by A-05; TECHNICAL_DESIGN 7.8.
+ * <p>Rule: BR-37; NSF-08 as realized by A-05; D-97 note of 2026-10-24; TECHNICAL_DESIGN 7.8.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
-public class FundingServiceImpl implements FundingService {
+public class FundingServiceImpl implements FundingService, TradeFunding {
 
     private static final Logger log = LoggerFactory.getLogger(FundingServiceImpl.class);
 
@@ -61,5 +64,12 @@ public class FundingServiceImpl implements FundingService {
     public FundingFee fundingSoFar(UUID pairId, Direction direction, BigDecimal quantity, Instant entryTime) {
         Instant now = clock.instant();
         return fundingFee(pairId, direction, quantity, entryTime, now.isBefore(entryTime) ? entryTime : now);
+    }
+
+    @Override
+    public ClosedTradeFunding fundingOf(
+            UUID pairId, Direction direction, BigDecimal quantity, Instant entryTime, Instant exitTime) {
+        FundingFee fee = fundingFee(pairId, direction, quantity, entryTime, exitTime);
+        return new ClosedTradeFunding(fee.amount(), fee.incomplete(), fee.missingFundingTimes());
     }
 }

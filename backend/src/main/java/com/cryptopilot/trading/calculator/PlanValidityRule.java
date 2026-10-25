@@ -124,11 +124,11 @@ public final class PlanValidityRule {
     }
 
     /**
-     * A STOP plan whose stop loss the last price has already reached may not be activated: at or below it for a LONG,
-     * at or above it for a SHORT (MSG16 on {@code stopLoss}). The breakout has failed before it triggered, so the
-     * matching engine would only invalidate it on the next candle.
+     * A plan whose stop loss the last price has already reached may not be activated, whatever its entry type: at or
+     * below it for a LONG, at or above it for a SHORT (MSG16 on {@code stopLoss}). A STOP's breakout has failed before
+     * it triggered; a LIMIT or a MARKET would fill a position that is already past its stop loss.
      *
-     * <p>Rule: BR-68; D-111 (M3), D-112 (Q-72).
+     * <p>Rule: BR-68, BR-35; D-111 (M3), D-112 (Q-72); D-123 (team lead, 2026-10-25).
      *
      * @param direction LONG or SHORT
      * @param stopLoss the plan's stop loss
@@ -148,7 +148,7 @@ public final class PlanValidityRule {
         return Optional.of(new InputViolation(
                 "stopLoss",
                 WRONG_SIDE,
-                "the stop loss of a STOP " + direction + " plan must be " + (isLong ? "below" : "above")
+                "the stop loss of a " + direction + " plan must be " + (isLong ? "below" : "above")
                         + " the current price " + lastPrice.toPlainString()));
     }
 

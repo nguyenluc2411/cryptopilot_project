@@ -215,6 +215,19 @@ class BinanceRestClientTest {
             assertThat(exchange.requests().get(0).getQuery()).isEqualTo("symbol=BTCUSDT&interval=4h&limit=1500");
         }
 
+        /** TD 7.7: the mark price candles come from the futures mark price path, with the start and the limit. */
+        @Test
+        void NSF07_markPriceKlines_useTheMarkPricePathAndSendTheStart() {
+            exchange.on("/fapi/v1/markPriceKlines", Answer.ok(KLINES_BODY));
+
+            List<Kline> klines = client.markPriceKlines(
+                    "BTCUSDT", MarketInterval.ONE_MINUTE, Instant.ofEpochMilli(1727172000000L), 1500);
+
+            assertThat(klines).isNotEmpty();
+            assertThat(exchange.requests().get(0).getQuery())
+                    .isEqualTo("symbol=BTCUSDT&interval=1m&startTime=1727172000000&limit=1500");
+        }
+
         /**
          * ADR-008: a decimal keeps every digit the exchange sent — the smallest step, and more significant
          * digits than a double can hold — because it is parsed from the string and never through a double.

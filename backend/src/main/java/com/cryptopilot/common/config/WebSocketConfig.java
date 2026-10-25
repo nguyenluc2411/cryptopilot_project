@@ -41,8 +41,9 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
  * <p>The public market topics — {@code /topic/ticker.*}, {@code /topic/kline.*}, {@code /topic/overview.*}, and the
  * trades and depth of the trading screen — open to anyone, as the market data is public (D-50). A signed-in session
  * may also subscribe to its own demo trading queues {@code /user/queue/orders}, {@code /user/queue/fills} and
- * {@code /user/queue/balances} (TR-08); the broker delivers there only what was sent to that session's user. Every
- * other subscription and every {@code SEND} is refused.
+ * {@code /user/queue/balances} (TR-08), to the changes of its plans' positions {@code /user/queue/positions} and to its
+ * notifications {@code /user/queue/notifications}; the broker delivers there only what was sent to that session's
+ * user. Every other subscription and every {@code SEND} is refused.
  *
  * <h2>Order and slow clients</h2>
  *
@@ -70,8 +71,12 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     static final Pattern PUBLIC_TOPICS =
             Pattern.compile("/topic/(ticker|kline|overview|trades|depth)\\.[A-Za-z0-9._]+");
 
-    /** The demo trading queues of the signed-in user (TR-08). */
-    static final Pattern USER_QUEUES = Pattern.compile("/user/queue/(orders|fills|balances)");
+    /**
+     * The queues of the signed-in user: demo trading (TR-08), the positions of the plans (UC-20) and the notifications
+     * (SCR-15, Q-75). {@code /user/queue/...} is resolved to the caller's own session, so another user's queue cannot be
+     * named here; {@code /user/{id}/queue/...} matches no pattern and is refused.
+     */
+    static final Pattern USER_QUEUES = Pattern.compile("/user/queue/(orders|fills|balances|positions|notifications)");
 
     private static final String BEARER = "Bearer ";
 

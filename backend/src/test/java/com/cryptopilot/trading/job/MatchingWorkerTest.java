@@ -28,6 +28,7 @@ import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntries;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
@@ -40,6 +41,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -310,7 +312,7 @@ class MatchingWorkerTest {
     void NSF07_anEntryThatLostTheRace_isNotTriedAgain() {
         UUID lost = UUID.randomUUID();
         UUID marker = UUID.randomUUID();
-        when(matching.fill(filled(lost, AT))).thenReturn(false);
+        when(matching.fill(filled(lost, AT))).thenReturn(Optional.empty());
         worker = started(1, 100);
         worker.onActivated(activated(lost, EntryType.LIMIT, "100"));
         worker.submit(range("99", "101", AT));
@@ -328,7 +330,7 @@ class MatchingWorkerTest {
         Instant later = AT.plusSeconds(60);
         when(matching.fill(filled(plan, AT)))
                 .thenThrow(new IllegalStateException("database down"))
-                .thenReturn(true);
+                .thenReturn(opened(plan));
         worker = started(1, 100);
         worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
 
@@ -640,7 +642,7 @@ class MatchingWorkerTest {
         doAnswer(call -> {
                     throw new IOException("connection reset");
                 })
-                .doReturn(true)
+                .doReturn(opened(failing))
                 .when(matching)
                 .fill(filled(failing, AT));
         worker = started(1, 100);
@@ -661,7 +663,7 @@ class MatchingWorkerTest {
         UUID plan = UUID.randomUUID();
         when(matching.fill(filled(plan, AT)))
                 .thenThrow(new IllegalStateException("database down"))
-                .thenReturn(true);
+                .thenReturn(opened(plan));
         worker = new MatchingWorker(matching, retrying(Duration.ofMinutes(10)), clock, recording, () -> 0.0);
         worker.start();
         worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
@@ -781,7 +783,7 @@ class MatchingWorkerTest {
         doAnswer(call -> {
                     filling.get().countDown();
                     new CountDownLatch(1).await();
-                    return true;
+                    return Optional.empty();
                 })
                 .when(matching)
                 .fill(any());
@@ -816,7 +818,7 @@ class MatchingWorkerTest {
                     while (true) {
                         try {
                             letGo.await();
-                            return true;
+                            return Optional.empty();
                         } catch (InterruptedException ignored) {
                             // keeps waiting
                         }
@@ -872,7 +874,7 @@ class MatchingWorkerTest {
         UUID plan = UUID.randomUUID();
         when(matching.fill(filled(plan, AT)))
                 .thenThrow(new IllegalStateException("database down"))
-                .thenReturn(true);
+                .thenReturn(opened(plan));
         worker = started(1, 100);
         worker.onActivated(activated(plan, EntryType.LIMIT, "100"));
 
@@ -1083,6 +1085,23 @@ class MatchingWorkerTest {
                 MarketType.SPOT, PAIR, new BigDecimal(low), new BigDecimal(high), minute, minute.plusSeconds(seconds));
     }
 
+    /** The position a stored fill of the plan opens: Spot LONG at 100, levels no test price reaches. */
+    private static Optional<TrackedPosition> opened(UUID planId) {
+        return Optional.of(new TrackedPosition(
+                UUID.randomUUID(),
+                planId,
+                TrackedEntries.OWNER,
+                MarketType.SPOT,
+                PAIR,
+                Direction.LONG,
+                new BigDecimal("100"),
+                AT,
+                new BigDecimal("0.001"),
+                new BigDecimal("100000"),
+                null,
+                0));
+    }
+
     /** A fill of the plan recorded at {@code executedAt}. */
     private static Fill filled(UUID planId, Instant executedAt) {
         return argThat(fill -> fill != null
@@ -1127,7 +1146,7 @@ class MatchingWorkerTest {
         Object pass(org.mockito.invocation.InvocationOnMock call) throws InterruptedException {
             entered.countDown();
             released.await(WAIT, TimeUnit.MILLISECONDS);
-            return true;
+            return opened(call.<Fill>getArgument(0).planId());
         }
 
         void awaitEntered() throws InterruptedException {

@@ -43,6 +43,7 @@ class MinuteKlineServiceImplTest {
 
     private static final String SPOT_KLINES = "/api/v3/klines";
     private static final String FUTURES_KLINES = "/fapi/v1/klines";
+    private static final String MARK_KLINES = "/fapi/v1/markPriceKlines";
     private static final Instant NOW = Instant.parse("2026-10-03T08:10:30Z");
     private static final Instant M0 = Instant.parse("2026-10-03T08:00:00Z");
     private static final PairFilters FILTERS =
@@ -61,6 +62,7 @@ class MinuteKlineServiceImplTest {
         exchange = new StubExchange();
         exchange.respond(SPOT_KLINES, klines::answer);
         exchange.respond(FUTURES_KLINES, klines::answer);
+        exchange.respond(MARK_KLINES, klines::answer);
         client = clientFor(exchange.baseUrl());
         service = new MinuteKlineServiceImpl(client, pairs, properties(3, 2), clock);
         pair = CryptoPair.register(UUID.randomUUID(), UUID.randomUUID(), "BTCUSDT");
@@ -152,6 +154,42 @@ class MinuteKlineServiceImplTest {
 
         assertThat(batch.klines()).hasSize(2).allMatch(kline -> kline.market() == MarketType.FUTURES);
         assertThat(exchange.hits(FUTURES_KLINES)).isEqualTo(1);
+    }
+
+    /** TD 7.7: the mark price candles a liquidation replays come from the futures mark price endpoint, paged alike. */
+    @Test
+    void A04_theMarkPriceCandles_areFetchedFromTheMarkPriceEndpoint_closedOnly() {
+        pair.applyFilters(MarketType.FUTURES, FILTERS);
+        pair.enable(MarketType.FUTURES);
+
+        MinuteKlineBatch batch = service.closedMarkPriceKlines(pair.getId(), M0);
+        MinuteKlineBatch forming = service.closedMarkPriceKlines(pair.getId(), minute(10));
+
+        assertThat(batch.klines())
+                .hasSize(2)
+                .allMatch(kline -> kline.market() == MarketType.FUTURES && kline.closed())
+                .extracting(MinuteKline::openTime)
+                .containsExactly(M0, minute(1));
+        assertThat(forming.klines()).isEmpty();
+        assertThat(exchange.hits(MARK_KLINES)).isEqualTo(2);
+        assertThat(exchange.hits(FUTURES_KLINES)).isZero();
+    }
+
+    @Test
+    void A04_theMarkPriceCandlesOfAPairNotOnFutures_areNotAsked() {
+        assertThat(service.closedMarkPriceKlines(pair.getId(), M0).klines()).isEmpty();
+        assertThat(exchange.requests()).isEmpty();
+    }
+
+    @Test
+    void BR10_aRefusedMarkPricePage_isReturnedWithTheTimeToAskAgain() {
+        pair.applyFilters(MarketType.FUTURES, FILTERS);
+        pair.enable(MarketType.FUTURES);
+        exchange.on(MARK_KLINES, Answer.status(429).withHeader("Retry-After", "30"));
+
+        MinuteKlineBatch batch = service.closedMarkPriceKlines(pair.getId(), M0);
+
+        assertThat(batch.retryAt()).isEqualTo(NOW.plusSeconds(30));
     }
 
     @Test

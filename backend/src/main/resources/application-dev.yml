@@ -107,6 +107,10 @@ cryptopilot:
         # TR-02, Q-T6 run in this profile: after a restart or a lost stream, the closed 1-minute candles the
         # paper matching engine missed are fetched from the exchange and replayed.
         enabled: true
+  journal:
+    funding-correction:
+      # T-048b runs in this profile: closed trades whose funding was incomplete are recomputed every 10 minutes.
+      enabled: true
   alert:
     # NSF-06 runs in this profile: PRICE alerts on the 1-minute candle updates, and the expiry sweep.
     enabled: true

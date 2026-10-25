@@ -1,6 +1,8 @@
 package com.cryptopilot.market.job;
 
 import com.cryptopilot.market.BookTop;
+import com.cryptopilot.market.MarkPrice;
+import com.cryptopilot.market.MarkPriceListener;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MarketTradeListener;
 import com.cryptopilot.market.MinuteKline;
@@ -61,6 +63,8 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>A 1-minute candle, forming or closed, goes to every {@link MinuteKlineListener} (the matching engine); the
  *       latest closed one of each pair is also held in {@link TradingMarketData}. It is not stored or broadcast.
+ *   <li>A futures mark price is cached and goes to every {@link MarkPriceListener} (the matching engine's liquidation
+ *       book), from the same {@code markPrice@1s} stream; no second stream is opened.
  *   <li>A closed candle of a stored timeframe goes to the {@link ClosedCandlePipeline}; a forming one is not
  *       stored (BR-08).
  *   <li>A Spot ticker or a futures mark price overwrites the pair's entry in {@link LatestMarketData}.
@@ -90,6 +94,7 @@ public class MarketStreamSupervisor {
     private final List<MinuteKlineListener> minuteListeners;
     private final TradingMarketData trading;
     private final List<MarketTradeListener> tradeListeners;
+    private final List<MarkPriceListener> markListeners;
     private final Map<MarketType, MarketStreams> running = new EnumMap<>(MarketType.class);
 
     public MarketStreamSupervisor(
@@ -103,7 +108,8 @@ public class MarketStreamSupervisor {
             MarketUpdateService updates,
             List<MinuteKlineListener> minuteListeners,
             TradingMarketData trading,
-            List<MarketTradeListener> tradeListeners) {
+            List<MarketTradeListener> tradeListeners,
+            List<MarkPriceListener> markListeners) {
         this.streams = streams;
         this.candles = candles;
         this.latest = latest;
@@ -115,6 +121,7 @@ public class MarketStreamSupervisor {
         this.minuteListeners = List.copyOf(minuteListeners);
         this.trading = trading;
         this.tradeListeners = List.copyOf(tradeListeners);
+        this.markListeners = List.copyOf(markListeners);
     }
 
     /** Opens the streams of both markets and schedules the refresh, when enabled. */
@@ -241,7 +248,10 @@ public class MarketStreamSupervisor {
                     }
                 }
                 case TickerMessage ticker -> latest.recordTicker(target.pairId(), ticker);
-                case MarkPriceMessage markPrice -> latest.recordMarkPrice(target.pairId(), markPrice);
+                case MarkPriceMessage markPrice -> {
+                    latest.recordMarkPrice(target.pairId(), markPrice);
+                    toMarkListeners(target, markPrice);
+                }
                 case AggTradeMessage aggTrade -> {
                     MarketTrade trade = trade(target, aggTrade);
                     trading.recordTrade(trade);
@@ -299,6 +309,17 @@ public class MarketStreamSupervisor {
                     listener.onTrade(trade);
                 } catch (RuntimeException failure) {
                     log.warn("NSF-03 {} trade listener failed: {}", market, failure.toString());
+                }
+            }
+        }
+
+        private void toMarkListeners(StreamTarget target, MarkPriceMessage markPrice) {
+            MarkPrice update = new MarkPrice(target.pairId(), markPrice.markPrice(), markPrice.eventTime());
+            for (MarkPriceListener listener : markListeners) {
+                try {
+                    listener.onMarkPrice(update);
+                } catch (RuntimeException failure) {
+                    log.warn("NSF-03 {} mark price listener failed: {}", market, failure.toString());
                 }
             }
         }

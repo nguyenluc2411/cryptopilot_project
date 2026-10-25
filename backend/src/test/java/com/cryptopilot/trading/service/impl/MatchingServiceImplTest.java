@@ -17,12 +17,19 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanInvalidated;
+import com.cryptopilot.trading.model.Excursion;
+import com.cryptopilot.trading.model.Exit;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
+import com.cryptopilot.trading.model.PositionExit;
 import com.cryptopilot.trading.model.TrackedEntries;
 import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.TrackedPosition;
+import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
@@ -36,6 +43,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -46,7 +54,7 @@ import org.springframework.context.ApplicationEventPublisher;
  * The storage side of the engine: the compare-and-sets, the price a fill is stored at (slippage on TAKER fills only)
  * and the invalidation event.
  *
- * <p>Rule: NSF-07, BR-33, BR-36, BR-68; D-111 (E1, E5); D-112 (R6).
+ * <p>Rule: NSF-07, BR-33, BR-35, BR-36, BR-68; D-111 (E1, E5); D-112 (R6); D-119.
  */
 class MatchingServiceImplTest {
 
@@ -61,8 +69,36 @@ class MatchingServiceImplTest {
     private final MarketApi market = mock(MarketApi.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final PositionOpener positions = mock(PositionOpener.class);
+    private final PositionCloser closer = mock(PositionCloser.class);
+    private final TradeJournal journal = mock(TradeJournal.class);
     private final MatchingServiceImpl service = new MatchingServiceImpl(
-            plans, watermarks, settings, market, events, positions, Clock.fixed(NOW, ZoneOffset.UTC));
+            plans,
+            watermarks,
+            new TakerSlippage(settings, market),
+            events,
+            positions,
+            closer,
+            journal,
+            Clock.fixed(NOW, ZoneOffset.UTC));
+
+    private static final TrackedPosition OPENED = new TrackedPosition(
+            UUID.randomUUID(),
+            PLAN,
+            TrackedEntries.OWNER,
+            MarketType.SPOT,
+            PAIR,
+            Direction.LONG,
+            new BigDecimal("100"),
+            AT,
+            new BigDecimal("95"),
+            new BigDecimal("110"),
+            null,
+            0);
+
+    @BeforeEach
+    void opens() {
+        when(positions.open(any())).thenReturn(OPENED);
+    }
 
     @Test
     void BR34_theCompareAndSetThatChangesTheRow_isAFill_andOpensThePositionOfThePlanReadAgain() {
@@ -71,7 +107,7 @@ class MatchingServiceImplTest {
                 .thenReturn(1);
         when(plans.findById(PLAN)).thenReturn(Optional.of(executed));
 
-        assertThat(service.fill(limitFill())).isTrue();
+        assertThat(service.fill(limitFill())).contains(OPENED);
 
         InOrder order = inOrder(plans, positions);
         order.verify(plans).executeIfActive(PLAN, AT, new BigDecimal("100"), LiquidityRole.MAKER, NOW);
@@ -84,7 +120,7 @@ class MatchingServiceImplTest {
         when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), LiquidityRole.MAKER, NOW))
                 .thenReturn(0);
 
-        assertThat(service.fill(limitFill())).isFalse();
+        assertThat(service.fill(limitFill())).isEmpty();
 
         verify(positions, never()).open(any());
         verify(plans, never()).findById(any());
@@ -118,7 +154,7 @@ class MatchingServiceImplTest {
         when(plans.findById(PLAN)).thenReturn(Optional.of(executed));
 
         assertThat(service.fill(new Fill(stop(direction), LiquidityRole.TAKER, new BigDecimal(reference), AT)))
-                .isTrue();
+                .isPresent();
 
         // BR-34: the STOP fill opens its position too, from the plan read back with the stored price and role.
         InOrder order = inOrder(plans, positions);
@@ -142,7 +178,7 @@ class MatchingServiceImplTest {
         when(plans.findById(PLAN)).thenReturn(Optional.of(mock(TradingPlan.class)));
 
         assertThat(service.fill(new Fill(stop(Direction.LONG), LiquidityRole.TAKER, new BigDecimal("100"), AT)))
-                .isTrue();
+                .isPresent();
         verifyNoInteractions(market);
     }
 
@@ -171,7 +207,7 @@ class MatchingServiceImplTest {
         verify(events)
                 .publishEvent(new TradingPlanInvalidated(
                         PLAN, TrackedEntries.OWNER, InvalidationReason.STOP_LOSS_REACHED, AT));
-        verifyNoInteractions(positions);
+        verify(positions, never()).open(any());
     }
 
     @Test
@@ -202,6 +238,43 @@ class MatchingServiceImplTest {
         when(plans.findActiveWaitingEntries()).thenReturn(entries);
 
         assertThat(service.activeEntries()).isEqualTo(entries);
+    }
+
+    /** NSF-07, D-119: the exit books start from the journal's OPEN positions, with their levels and version. */
+    @Test
+    void NSF07_theExitBooksStartFromTheOpenPositionsOfTheJournal() {
+        OpenTrade open = new OpenTrade(
+                OPENED.positionId(),
+                PLAN,
+                TrackedEntries.OWNER,
+                PAIR,
+                MarketType.SPOT,
+                Direction.LONG,
+                new BigDecimal("100"),
+                AT,
+                new BigDecimal("2"),
+                LiquidityRole.MAKER,
+                new BigDecimal("0.2"),
+                new BigDecimal("95"),
+                new BigDecimal("110"),
+                null,
+                0);
+        when(journal.openSimulatedTrades()).thenReturn(List.of(open));
+
+        assertThat(service.openPositions()).containsExactly(OPENED);
+    }
+
+    /** BR-35: the close is the closer's compare-and-set; its answer is the service's. */
+    @Test
+    void BR35_aCloseIsTheClosersCompareAndSet() {
+        PositionExit exit = new PositionExit(
+                OPENED,
+                new Exit(PLAN, CloseReason.TAKE_PROFIT, new BigDecimal("110"), AT),
+                Excursion.at(new BigDecimal("100")));
+        when(closer.close(exit)).thenReturn(true, false);
+
+        assertThat(service.close(exit)).isTrue();
+        assertThat(service.close(exit)).isFalse();
     }
 
     private static Fill limitFill() {
