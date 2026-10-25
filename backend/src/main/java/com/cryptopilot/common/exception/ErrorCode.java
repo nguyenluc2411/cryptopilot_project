@@ -412,7 +412,19 @@ public enum ErrorCode {
     PAIR_NOT_TRADING(HttpStatus.CONFLICT, "MSG43"),
 
     /** The symbol to add is already a pair of the system (UC-45). Borrows MSG43 (A-38). 409: the pair exists. */
-    PAIR_ALREADY_REGISTERED(HttpStatus.CONFLICT, "MSG43");
+    PAIR_ALREADY_REGISTERED(HttpStatus.CONFLICT, "MSG43"),
+
+    /** Another Academy lesson or term already has this slug (T-114). Borrows MSG43. 409: the slug is taken. */
+    ACADEMY_SLUG_TAKEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /** Another Academy lesson already holds this place on the beginner path (T-114). Borrows MSG43. 409. */
+    ACADEMY_PATH_ORDER_TAKEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A published Academy lesson is hidden before it is deleted, so that no reader loses it by surprise (T-114).
+     * Borrows MSG43. 409: the lesson's status refuses it.
+     */
+    ACADEMY_ARTICLE_PUBLISHED(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

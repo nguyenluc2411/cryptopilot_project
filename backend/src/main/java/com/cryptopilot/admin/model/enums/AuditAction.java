@@ -20,9 +20,12 @@ public enum AuditAction {
 
     /** A moderator warned the author of a reported post (UC-43, WARN_USER). */
     USER_WARNED,
-    /** A configuration row added: a pair, a leverage bracket, a package, a news source or an AI configuration. */
+    /**
+     * A configuration row added: a pair, a leverage bracket, a package, a news source, an AI configuration, or Academy
+     * content (T-114).
+     */
     CONFIGURATION_CREATED,
-    /** A configuration row or a system setting changed. */
+    /** A configuration row or a system setting changed, Academy content included (T-114). */
     CONFIGURATION_CHANGED,
     CONFIGURATION_DELETED
 }

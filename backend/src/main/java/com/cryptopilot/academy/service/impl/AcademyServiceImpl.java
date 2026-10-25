@@ -36,9 +36,6 @@ public class AcademyServiceImpl implements AcademyService {
     /** Most related lessons a lesson page lists. */
     static final int RELATED_LIMIT = 3;
 
-    private static final int TEXT_MIN_LENGTH = 2;
-    private static final int TEXT_MAX_LENGTH = 100;
-
     private final AcademyCatalogRepository catalog;
 
     @Override
@@ -53,7 +50,7 @@ public class AcademyServiceImpl implements AcademyService {
     @Transactional(readOnly = true)
     public PageResponse<ArticleSummaryResponse> articles(ArticleFilter filter, Integer page, Integer pageSize) {
         ArticleFilter checked =
-                new ArticleFilter(blankToNull(filter.topic()), filter.level(), searchText(filter.text()));
+                new ArticleFilter(SearchText.blankToNull(filter.topic()), filter.level(), SearchText.of(filter.text()));
         return PageResponse.of(catalog.articles(checked, Paging.of(page, pageSize)), AcademyServiceImpl::summary);
     }
 
@@ -100,11 +97,11 @@ public class AcademyServiceImpl implements AcademyService {
     @Override
     @Transactional(readOnly = true)
     public List<TermResponse> terms(String text, String letter) {
-        String first = blankToNull(letter);
+        String first = SearchText.blankToNull(letter);
         if (first != null && first.codePointCount(0, first.length()) != 1) {
             throw new FieldValidationException("letter must be one letter, was " + first, Map.of("letter", "MSG15"));
         }
-        return catalog.terms(searchText(text), first).stream()
+        return catalog.terms(SearchText.of(text), first).stream()
                 .map(term -> new TermResponse(
                         term.slug(), term.term(), term.definition(), term.articleSlug(), term.articleTitle()))
                 .toList();
@@ -137,19 +134,5 @@ public class AcademyServiceImpl implements AcademyService {
             }
         }
         return -1;
-    }
-
-    /** The search text of the {@code q} parameter, stripped, or {@code null}; MSG15 outside 2 to 100 characters. */
-    private static String searchText(String text) {
-        String stripped = blankToNull(text);
-        if (stripped != null && (stripped.length() < TEXT_MIN_LENGTH || stripped.length() > TEXT_MAX_LENGTH)) {
-            throw new FieldValidationException(
-                    "q must be " + TEXT_MIN_LENGTH + " to " + TEXT_MAX_LENGTH + " characters", Map.of("q", "MSG15"));
-        }
-        return stripped;
-    }
-
-    private static String blankToNull(String text) {
-        return text == null || text.isBlank() ? null : text.strip();
     }
 }
