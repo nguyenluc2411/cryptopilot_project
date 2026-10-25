@@ -238,10 +238,15 @@ news_article,article_id,uuid,,,NO
 news_article,collected_at,timestamp with time zone,,,NO
 news_article,created_at,timestamp with time zone,,,NO
 news_article,excerpt,text,,,YES
+news_article,hidden_at,timestamp with time zone,,,YES
+news_article,hidden_by,uuid,,,YES
 news_article,original_url,character varying,,,NO
 news_article,published_at,timestamp with time zone,,,NO
 news_article,sentiment_label,character varying,,,YES
 news_article,source_id,uuid,,,NO
+news_article,summary_attempted_at,timestamp with time zone,,,YES
+news_article,summary_attempts,integer,32,0,NO
+news_article,summary_error,character varying,,,YES
 news_article,title,character varying,,,NO
 news_article,title_hash,character varying,,,NO
 news_article,updated_at,timestamp with time zone,,,NO

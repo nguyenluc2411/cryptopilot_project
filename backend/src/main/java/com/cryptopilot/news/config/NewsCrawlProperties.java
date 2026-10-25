@@ -22,6 +22,7 @@ import org.springframework.validation.annotation.Validated;
  * @param initialDelay how long after start-up the first run waits
  * @param duplicateTitleWindow how far apart two publish times may be for equal titles to be one story
  * @param failureNoticeAfter how many failed crawls in a row of one source tell the administrators
+ * @param manualCrawlCooldown how soon after a source's last crawl an administrator may not crawl it again (T-080b)
  * @param coinNames what outlets call a coin, by its symbol, e.g. {@code BTC: [Bitcoin]}; the exchange names a coin
  *     after its symbol, so without these a headline that writes the name tags nothing
  */
@@ -33,6 +34,7 @@ public record NewsCrawlProperties(
         @NotNull @DefaultValue("1m") Duration initialDelay,
         @NotNull @DefaultValue("48h") Duration duplicateTitleWindow,
         @Min(1) @DefaultValue("5") int failureNoticeAfter,
+        @NotNull @DefaultValue("1m") Duration manualCrawlCooldown,
         Map<String, List<String>> coinNames) {
 
     public NewsCrawlProperties {

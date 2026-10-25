@@ -35,7 +35,13 @@ class NewsCrawlPropertiesTest {
         names.put(" eth ", List.of("Ethereum", "Ether"));
         names.put("BTC", null);
         NewsCrawlProperties properties = new NewsCrawlProperties(
-                true, Duration.ofMinutes(5), Duration.ofMinutes(1), Duration.ofHours(48), 5, names);
+                true,
+                Duration.ofMinutes(5),
+                Duration.ofMinutes(1),
+                Duration.ofHours(48),
+                5,
+                Duration.ofMinutes(1),
+                names);
 
         assertThat(properties.namesOf("ETH")).containsExactly("Ethereum", "Ether");
         assertThat(properties.namesOf("BTC")).isEmpty();

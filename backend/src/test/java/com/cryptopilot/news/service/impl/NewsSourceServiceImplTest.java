@@ -34,6 +34,7 @@ import com.cryptopilot.news.model.NewsSourceSettings;
 import com.cryptopilot.news.model.enums.CrawlStatus;
 import com.cryptopilot.news.repository.NewsCrawlLogRepository;
 import com.cryptopilot.news.repository.NewsSourceRepository;
+import com.cryptopilot.news.service.CrawlService;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
@@ -68,15 +69,33 @@ class NewsSourceServiceImplTest {
     private final NewsCrawlLogRepository crawlLogs = mock(NewsCrawlLogRepository.class);
     private final RssClient rss = mock(RssClient.class);
     private final AdminApi admin = mock(AdminApi.class);
+    private final CrawlService crawls = mock(CrawlService.class);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     private NewsSourceServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service =
-                new NewsSourceServiceImpl(sources, crawlLogs, rss, admin, new TransactionTemplate(transactionManager));
+        service = new NewsSourceServiceImpl(
+                sources, crawlLogs, rss, admin, crawls, new TransactionTemplate(transactionManager));
         when(sources.save(any())).thenAnswer(call -> call.getArgument(0));
         when(rss.read(anyString(), any())).thenReturn(new RssFeed("Feed", List.of()));
+    }
+
+    @Test
+    void T080b_crawlNow_isTheCrawlOfTheSource_answeredAsItsLogEntry() {
+        UUID sourceId = UUID.randomUUID();
+        Instant started = Instant.parse("2026-10-25T10:00:00Z");
+        when(crawls.crawlNow(sourceId))
+                .thenReturn(NewsCrawlLog.record(
+                        sourceId, started, started.plusSeconds(3), CrawlStatus.PARTIAL, 12, 4, "1 of 12 items had no"));
+
+        NewsCrawlLogResponse log = service.crawlNow(sourceId);
+
+        assertThat(log.status()).isEqualTo(CrawlStatus.PARTIAL);
+        assertThat(log.articlesFound()).isEqualTo(12);
+        assertThat(log.articlesInserted()).isEqualTo(4);
+        assertThat(log.startedAt()).isEqualTo(started);
+        verifyNoInteractions(admin);
     }
 
     @Test

@@ -1,5 +1,8 @@
 package com.cryptopilot.news.service.impl;
 
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
@@ -53,6 +56,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <p>The coins are read once per run and compiled into one {@link CoinTagger} (TECHNICAL_DESIGN 7.13).
  *
+ * <p>An administrator can crawl one source at once (T-080b): the same crawl, refused within a short cooldown of the
+ * source's last crawl so a repeated click does not read the outlet twice in a row.
+ *
  * <p>Rule: NSF-10; BR-48, BR-49.
  */
 @Service
@@ -95,6 +101,27 @@ public class CrawlServiceImpl implements CrawlService {
             }
         }
         return new CrawlRun(due.size(), failed, inserted);
+    }
+
+    @Override
+    public NewsCrawlLog crawlNow(UUID sourceId) {
+        NewsSource source =
+                sources.findById(sourceId).orElseThrow(() -> new ResourceNotFoundException("News source", sourceId));
+        Instant now = clock.instant();
+        if (source.getLastCrawledAt() != null) {
+            Instant allowed = source.getLastCrawledAt().plus(properties.manualCrawlCooldown());
+            if (now.isBefore(allowed)) {
+                long seconds = Math.max(1, Duration.between(now, allowed).toSeconds());
+                throw new BusinessException(
+                        ErrorCode.NEWS_SOURCE_CRAWLED_RECENTLY,
+                        "news source " + sourceId + " was crawled at " + source.getLastCrawledAt(),
+                        seconds);
+            }
+        }
+        crawl(source, CoinTagger.of(taggableCoins()));
+        return crawlLogs.findLatestOf(List.of(sourceId)).stream()
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("News source", sourceId));
     }
 
     /** The articles stored from the source, or empty when its feed could not be read. */

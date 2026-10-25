@@ -26,6 +26,8 @@ import org.springframework.stereotype.Repository;
  * Reads the news feed (SCR-28). A page is one query in feed order through {@code idx_news_article_feed}, newest first,
  * with the source's name joined, plus one count; the coin tags of a page are one more query, never one per article.
  *
+ * <p>An article an administrator hid is in neither the feed nor the summary bar (T-080b).
+ *
  * <p>Rule: UC-34; SRS 3.8.1; CR-04.
  */
 @Repository
@@ -38,7 +40,7 @@ public class NewsFeedRepository {
     public FeedArticlePage feed(NewsFeedQuery query, Pageable page) {
         Map<String, Object> params = new HashMap<>();
         params.put("since", Timestamp.from(query.since()));
-        StringBuilder where = new StringBuilder(" where a.published_at >= :since");
+        StringBuilder where = new StringBuilder(" where a.published_at >= :since and a.hidden_at is null");
         if (query.coinId() != null) {
             where.append(" and exists (select 1 from news_article_coin c"
                     + " where c.article_id = a.article_id and c.coin_id = :coin)");
@@ -93,7 +95,7 @@ public class NewsFeedRepository {
         }
         sql.sql("""
                         select sentiment_label, count(*) as articles from news_article
-                         where published_at >= :since and sentiment_label is not null
+                         where published_at >= :since and sentiment_label is not null and hidden_at is null
                          group by sentiment_label""")
                 .param("since", Timestamp.from(since))
                 .query((row, index) ->

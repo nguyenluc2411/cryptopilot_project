@@ -61,6 +61,24 @@ public class NewsArticle extends BaseEntity {
     @Column(name = "collected_at", nullable = false, updatable = false)
     private Instant collectedAt;
 
+    /** When an administrator hid it from the feed, or {@code null} while it is shown (T-080b). */
+    @Column(name = "hidden_at")
+    private Instant hiddenAt;
+
+    @Column(name = "hidden_by")
+    private UUID hiddenBy;
+
+    /** How many times NSF-11 asked the model for it, refused answers included (D-128). */
+    @Column(name = "summary_attempts", nullable = false)
+    private int summaryAttempts;
+
+    /** Why the latest attempt kept no summary, or {@code null} when it did or none was made. */
+    @Column(name = "summary_error", length = 500)
+    private String summaryError;
+
+    @Column(name = "summary_attempted_at")
+    private Instant summaryAttemptedAt;
+
     /** For JPA only. */
     protected NewsArticle() {}
 }

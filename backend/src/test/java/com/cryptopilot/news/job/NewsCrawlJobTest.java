@@ -70,7 +70,13 @@ class NewsCrawlJobTest {
                 crawl,
                 scheduler,
                 new NewsCrawlProperties(
-                        enabled, Duration.ofMinutes(5), Duration.ofMinutes(1), Duration.ofHours(48), 5, null),
+                        enabled,
+                        Duration.ofMinutes(5),
+                        Duration.ofMinutes(1),
+                        Duration.ofHours(48),
+                        5,
+                        Duration.ofMinutes(1),
+                        null),
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 }

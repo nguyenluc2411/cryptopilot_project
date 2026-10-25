@@ -33,14 +33,14 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
 /**
- * SCR-28 end to end against PostgreSQL: the same feed for a Trader on any plan (D-126), the AI's Vietnamese text once
+ * SCR-28 end to end against PostgreSQL: the same feed for a Trader on any plan (D-130), the AI's Vietnamese text once
  * an article is summarized and the collected text until then (D-127), the coin, sentiment and period filters, paging,
  * the 24-hour summary bar, and Traders only.
  *
  * <p>Each test tags its articles with coins of its own, so the shared database's other articles never match the coin
  * filter; the summary bar, which counts every article, is read before and after.
  *
- * <p>Rule: UC-34; SRS 3.8.1; CR-04; D-126, D-127.
+ * <p>Rule: UC-34; SRS 3.8.1; CR-04; D-130, D-127.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -189,13 +189,17 @@ class NewsApiTest {
     }
 
     @Test
-    void UC34_theSummaryBar_countsTheLabelledArticlesOfTheLast24Hours() throws Exception {
+    void UC34_theSummaryBar_countsTheLabelledArticlesOfTheLast24Hours_butNoHiddenOne() throws Exception {
         long[] before = summary();
         article("New bull", "a", now.minus(Duration.ofHours(1)), "t", "s", "BULLISH");
         article("New bull 2", "a", now.minus(Duration.ofHours(23)), "t", "s", "BULLISH");
         article("New bear", "b", now.minus(Duration.ofHours(3)), "t", "s", "BEARISH");
         article("Old neutral", "c", now.minus(Duration.ofHours(30)), "t", "s", "NEUTRAL");
         article("Unlabelled", "d", now.minus(Duration.ofHours(1)), null, null, null);
+        UUID hidden = article("Hidden bear", "e", now.minus(Duration.ofHours(1)), "t", "s", "BEARISH");
+        sql.sql("update news_article set hidden_at = now(), hidden_by = ? where article_id = ?")
+                .params(trader, hidden)
+                .update();
 
         long[] after = summary();
 

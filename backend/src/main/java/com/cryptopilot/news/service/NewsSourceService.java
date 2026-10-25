@@ -48,4 +48,11 @@ public interface NewsSourceService {
 
     /** One page of a source's crawl log, the latest first (UC-49); MSG41 when the source is unknown. */
     PageResponse<NewsCrawlLogResponse> crawlLogs(UUID sourceId, Integer page, Integer pageSize);
+
+    /**
+     * Crawls a source now, active or not (T-080b); see {@link CrawlService#crawlNow}.
+     *
+     * @return the crawl log entry of this crawl
+     */
+    NewsCrawlLogResponse crawlNow(UUID sourceId);
 }

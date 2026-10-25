@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -16,6 +17,9 @@ import com.cryptopilot.ai.AiServiceException;
 import com.cryptopilot.ai.NewsSummaryApi;
 import com.cryptopilot.ai.NewsSummaryRequest;
 import com.cryptopilot.ai.NewsSummaryResult;
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.news.client.RssClient;
 import com.cryptopilot.news.client.RssClientException;
 import com.cryptopilot.news.client.WebPage;
@@ -75,7 +79,7 @@ class NewsSummaryServiceImplTest {
 
     @Test
     void NSF11_nothingWithoutASummary_sendsNothing() {
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of());
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of());
 
         assertThat(service(properties(10)).summarizeDue()).isEqualTo(SummaryRun.NOTHING_DUE);
         verifyNoInteractions(ai, rss);
@@ -84,7 +88,7 @@ class NewsSummaryServiceImplTest {
     @Test
     void NSF11_theModelReadsTheArticleItself_andASoundAnswerIsStored() {
         NewsArticle article = article("Bitcoin holds $81K", "Excerpt only.");
-        when(articles.findUnsummarized(NOW.minus(Duration.ofDays(7)), 10)).thenReturn(List.of(article));
+        when(articles.findUnsummarized(NOW.minus(Duration.ofDays(7)), 3, 10)).thenReturn(List.of(article));
         when(ai.summarize(any())).thenReturn(answer("Bitcoin đi ngang quanh $81,700; ETF rút $635 triệu.", "BEARISH"));
 
         SummaryRun run = service(properties(30)).summarizeDue();
@@ -115,7 +119,7 @@ class NewsSummaryServiceImplTest {
         NewsArticle unreadable = article("Page down", "Bitcoin rose 2% today.");
         NewsArticle tooShort = article("Paywalled", "Ether fell 4%.");
         NewsArticle bare = article("Only a title 5%", null);
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(unreadable, tooShort, bare));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(unreadable, tooShort, bare));
         when(rss.readPage(eq(unreadable.getOriginalUrl()), any()))
                 .thenThrow(new RssClientException(RssClientException.Reason.HTTP_STATUS, "403"));
         when(rss.readPage(eq(tooShort.getOriginalUrl()), any()))
@@ -138,7 +142,7 @@ class NewsSummaryServiceImplTest {
         when(sources.findById(plain.getId())).thenReturn(Optional.of(plain));
         NewsArticle article = article(plain.getId(), "Title", "The excerpt.");
         NewsArticle orphan = article(UUID.randomUUID(), "Orphan", null);
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article, orphan));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article, orphan));
         when(ai.summarize(any())).thenReturn(answer("Tóm tắt.", "NEUTRAL"));
 
         service(properties(10)).summarizeDue();
@@ -151,7 +155,7 @@ class NewsSummaryServiceImplTest {
     @Test
     void NSF11_aRefusedAnswer_isAskedForOnceMoreWithTheReason() {
         NewsArticle article = article("Bitcoin", "x");
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
         when(ai.summarize(any()))
                 .thenReturn(answer("Bitcoin chạm $90,000.", "BULLISH"))
                 .thenReturn(answer("Bitcoin quanh $81,700.", "NEUTRAL"));
@@ -167,18 +171,20 @@ class NewsSummaryServiceImplTest {
     @Test
     void NSF11_twoRefusedAnswers_leaveTheArticleForTheNextRun() {
         NewsArticle article = article("Bitcoin", "x");
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
         when(ai.summarize(any())).thenReturn(answer("Nhà đầu tư nên mua Bitcoin.", "BULLISH"));
 
         assertThat(service(properties(30)).summarizeDue()).isEqualTo(new SummaryRun(1, 0, 1));
         verify(ai, times(2)).summarize(any());
         verify(articles, never()).saveSummary(any(), any(), any(), any(), any());
+        verify(articles)
+                .recordFailedAttempt(eq(article.getId()), startsWith("the summary tells the reader to trade"), eq(NOW));
     }
 
     @Test
     void NSF11_anAnswerTooLongTwice_isCut_butAnUnknownSentimentIsNot() {
         NewsArticle article = article("Bitcoin", "x");
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
         String fortyWords = "thị trường ".repeat(20).strip();
         when(ai.summarize(any())).thenReturn(answer(fortyWords, "BEARISH"));
 
@@ -189,7 +195,7 @@ class NewsSummaryServiceImplTest {
         assertThat(stored.getValue()).endsWith("…").hasSizeLessThan(fortyWords.length());
 
         NewsArticle other = article("Ether", "y");
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(other));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(other));
         when(ai.summarize(any())).thenReturn(answer(fortyWords, "MIXED"));
         assertThat(service(properties(30)).summarizeDue().failed()).isEqualTo(1);
         verify(articles, never()).saveSummary(eq(other.getId()), any(), any(), any(), any());
@@ -198,7 +204,7 @@ class NewsSummaryServiceImplTest {
     @Test
     void D118_theTranslatedHeadline_isStored_andARefusedOneIsAskedForAgain() {
         NewsArticle article = article("Bitcoin ETFs see $635M outflows", "ETF outflows reached $635 million.");
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
         when(ai.summarize(any()))
                 .thenReturn(answer("ETF Bitcoin bị rút $900 triệu", "ETF rút $635 triệu.", "BEARISH"))
                 .thenReturn(answer("  ETF Bitcoin bị rút $635 triệu  ", "ETF rút $635 triệu.", "BEARISH"));
@@ -213,7 +219,7 @@ class NewsSummaryServiceImplTest {
     @Test
     void D118_aSummaryTooLong_isNotCut_whenItsHeadlineIsRefused() {
         NewsArticle article = article("Bitcoin", "x");
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
         String fortyWords = "thị trường ".repeat(20).strip();
         when(ai.summarize(any())).thenReturn(answer("Hãy mua Bitcoin", fortyWords, "BULLISH"));
 
@@ -224,7 +230,7 @@ class NewsSummaryServiceImplTest {
     @Test
     void NSF11_anUnknownSentiment_isNamedToTheModel() {
         NewsArticle article = article("Bitcoin", "x");
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
         when(ai.summarize(any())).thenReturn(answer("Tóm tắt.", "MIXED")).thenReturn(answer("Tóm tắt.", "NEUTRAL"));
 
         service(properties(30)).summarizeDue();
@@ -237,7 +243,7 @@ class NewsSummaryServiceImplTest {
         NewsArticle first = article("One", "a");
         NewsArticle second = article("Two", "b");
         NewsArticle third = article("Three", "c");
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(first, second, third));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(first, second, third));
         when(ai.summarize(any()))
                 .thenThrow(new AiServiceException("LLM_REJECTED", false, "content blocked"))
                 .thenThrow(new AiServiceException(AiServiceException.RATE_LIMITED, true, "slow down"))
@@ -245,12 +251,74 @@ class NewsSummaryServiceImplTest {
 
         assertThat(service(properties(30)).summarizeDue()).isEqualTo(new SummaryRun(3, 0, 2));
         verify(ai, times(2)).summarize(any());
+        verify(articles).recordFailedAttempt(first.getId(), "LLM_REJECTED: content blocked", NOW);
+        verify(articles, never()).recordFailedAttempt(eq(second.getId()), any(), any());
+    }
+
+    @Test
+    void D119_aFailureIsRecordedWithinTheLengthOfItsColumn() {
+        NewsArticle article = article("Bitcoin", "x");
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
+        when(ai.summarize(any())).thenThrow(new AiServiceException("LLM_REJECTED", false, "x".repeat(900)));
+
+        service(properties(30)).summarizeDue();
+
+        ArgumentCaptor<String> error = ArgumentCaptor.forClass(String.class);
+        verify(articles).recordFailedAttempt(eq(article.getId()), error.capture(), eq(NOW));
+        assertThat(error.getValue())
+                .hasSize(NewsSummaryServiceImpl.MAX_ERROR_LENGTH)
+                .startsWith("LLM_REJECTED: x");
+    }
+
+    @Test
+    void D119_summarizeNow_replacesTheSummary_whateverItsAgeAndAttempts() {
+        NewsArticle article = article("Bitcoin holds $81K", "Excerpt only.");
+        when(articles.findById(article.getId())).thenReturn(Optional.of(article));
+        when(ai.summarize(any())).thenReturn(answer("Bitcoin quanh $81,700.", "NEUTRAL"));
+
+        assertThat(service(properties(30)).summarizeNow(article.getId())).isEmpty();
+
+        verify(articles).replaceSummary(article.getId(), "Tiêu đề.", "Bitcoin quanh $81,700.", "NEUTRAL", NOW);
+        verify(articles, never()).saveSummary(any(), any(), any(), any(), any());
+        verify(articles, never()).findUnsummarized(any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void D119_summarizeNow_refusedOrRejected_isRecordedAndAnswered() {
+        NewsArticle article = article("Bitcoin", "x");
+        when(articles.findById(article.getId())).thenReturn(Optional.of(article));
+        when(ai.summarize(any())).thenReturn(answer("Hãy mua Bitcoin.", "BULLISH"));
+
+        assertThat(service(properties(30)).summarizeNow(article.getId()))
+                .hasValueSatisfying(reason -> assertThat(reason).startsWith("the summary tells the reader to trade"));
+
+        when(ai.summarize(any())).thenThrow(new AiServiceException("LLM_REJECTED", false, "blocked"));
+        assertThat(service(properties(30)).summarizeNow(article.getId())).contains("LLM_REJECTED: blocked");
+        verify(articles, times(2)).recordFailedAttempt(eq(article.getId()), any(), eq(NOW));
+        verify(articles, never()).replaceSummary(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void D119_summarizeNow_withTheServiceDown_isUnavailable_andCountsNoAttempt() {
+        NewsArticle article = article("Bitcoin", "x");
+        when(articles.findById(article.getId())).thenReturn(Optional.of(article));
+        when(ai.summarize(any())).thenThrow(new AiServiceException(AiServiceException.UNREACHABLE, true, "down"));
+
+        assertThatThrownBy(() -> service(properties(30)).summarizeNow(article.getId()))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.errorCode())
+                        .isEqualTo(ErrorCode.NEWS_SUMMARY_UNAVAILABLE));
+        verify(articles, never()).recordFailedAttempt(any(), any(), any());
+
+        UUID unknown = UUID.randomUUID();
+        when(articles.findById(unknown)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service(properties(30)).summarizeNow(unknown))
+                .isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test
     void NSF11_thePrompt_isReadOnce_andAMissingOneFailsTheRun() {
         NewsArticle article = article("Bitcoin", "x");
-        when(articles.findUnsummarized(any(), anyInt())).thenReturn(List.of(article));
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
         when(ai.summarize(any())).thenReturn(answer("Tóm tắt.", "NEUTRAL"));
         NewsSummaryServiceImpl service = service(properties(30));
 
@@ -296,6 +364,7 @@ class NewsSummaryServiceImplTest {
                 Duration.ofMinutes(2),
                 10,
                 Duration.ofDays(7),
+                3,
                 "test-model",
                 0.2,
                 512,

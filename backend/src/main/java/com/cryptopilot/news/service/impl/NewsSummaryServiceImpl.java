@@ -4,6 +4,9 @@ import com.cryptopilot.ai.AiServiceException;
 import com.cryptopilot.ai.NewsSummaryApi;
 import com.cryptopilot.ai.NewsSummaryRequest;
 import com.cryptopilot.ai.NewsSummaryResult;
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.news.calculator.ArticleText;
 import com.cryptopilot.news.calculator.SummaryCheck;
 import com.cryptopilot.news.client.RssClient;
@@ -21,6 +24,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -44,8 +48,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * only once its headline and its summary pass {@link SummaryCheck}: within the word limits, no advice to trade, no
  * figure the article does not hold. A refused answer is asked for once more with the reason; an answer whose only fault is
  * its length is cut rather than thrown away. Otherwise the article keeps no summary and the next run takes it up again
- * (NSF-11). A provider that rate limits, a service that is down or not configured ends the run: the other articles
- * would fail the same way, and each would cost a request.
+ * (NSF-11), up to the configured number of attempts, after which it waits for an administrator (D-128). A provider
+ * that rate limits, a service that is down or not configured ends the run without counting an attempt: the other
+ * articles would fail the same way, and each would cost a request.
  *
  * <p>Rule: NSF-11; BR-48; D-127; the hard scope boundary (no investment advice).
  */
@@ -53,6 +58,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class NewsSummaryServiceImpl implements NewsSummaryService {
 
     private static final Logger log = LoggerFactory.getLogger(NewsSummaryServiceImpl.class);
+
+    /** The length of {@code news_article.summary_error}. */
+    static final int MAX_ERROR_LENGTH = 500;
 
     private final NewsArticleRepository articles;
     private final NewsSourceRepository sources;
@@ -82,8 +90,8 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
 
     @Override
     public SummaryRun summarizeDue() {
-        List<NewsArticle> due =
-                articles.findUnsummarized(clock.instant().minus(properties.maxAge()), properties.maxArticlesPerRun());
+        List<NewsArticle> due = articles.findUnsummarized(
+                clock.instant().minus(properties.maxAge()), properties.maxAttempts(), properties.maxArticlesPerRun());
         if (due.isEmpty()) {
             return SummaryRun.NOTHING_DUE;
         }
@@ -96,25 +104,59 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
                     .computeIfAbsent(article.getSourceId(), sources::findById)
                     .orElse(null);
             try {
-                if (summarize(article, source, prompt)) {
+                Optional<String> refused = summarize(article, source, prompt, false);
+                if (refused.isEmpty()) {
                     summarized++;
                 } else {
                     failed++;
+                    recordFailure(article, refused.get());
                 }
             } catch (AiServiceException e) {
                 failed++;
                 if (e.stopsTheRun()) {
+                    // Not the article's fault: the attempt is not counted against it.
                     log.warn("NSF-11 stops this run: {} ({}); the next run tries again", e.getMessage(), e.code());
                     break;
                 }
                 log.warn("NSF-11 article {} not summarized: {} ({})", article.getId(), e.getMessage(), e.code());
+                recordFailure(article, e.code() + ": " + e.getMessage());
             }
         }
         return new SummaryRun(due.size(), summarized, failed);
     }
 
-    /** Whether the article now has a summary. */
-    private boolean summarize(NewsArticle article, NewsSource source, String prompt) {
+    @Override
+    public Optional<String> summarizeNow(UUID articleId) {
+        NewsArticle article = articles.findById(articleId)
+                .orElseThrow(() -> new ResourceNotFoundException("News article", articleId));
+        NewsSource source = sources.findById(article.getSourceId()).orElse(null);
+        try {
+            Optional<String> refused = summarize(article, source, systemPrompt(), true);
+            refused.ifPresent(reason -> recordFailure(article, reason));
+            return refused;
+        } catch (AiServiceException e) {
+            if (e.stopsTheRun()) {
+                throw new BusinessException(
+                        ErrorCode.NEWS_SUMMARY_UNAVAILABLE,
+                        "the AI Service cannot summarize now: " + e.getMessage() + " (" + e.code() + ")");
+            }
+            String reason = e.code() + ": " + e.getMessage();
+            recordFailure(article, reason);
+            return Optional.of(reason);
+        }
+    }
+
+    private void recordFailure(NewsArticle article, String reason) {
+        String error = reason.length() <= MAX_ERROR_LENGTH ? reason : reason.substring(0, MAX_ERROR_LENGTH);
+        transactions.executeWithoutResult(
+                status -> articles.recordFailedAttempt(article.getId(), error, clock.instant()));
+    }
+
+    /**
+     * Asks the model for the article and stores a sound answer: over the summary it has when {@code replace}, else
+     * only where it has none. Why the answer was refused, or empty when it was stored.
+     */
+    private Optional<String> summarize(NewsArticle article, NewsSource source, String prompt, boolean replace) {
         String text = articleText(article, source);
         String material = article.getTitle() + "\n\n" + text;
         NewsSummaryRequest request = new NewsSummaryRequest(
@@ -141,16 +183,22 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
                 summary = SummaryCheck.cut(summary, properties.maxWords());
             } else {
                 log.info("NSF-11 article {} keeps no summary: {}", article.getId(), remaining.get());
-                return false;
+                return remaining;
             }
         }
         SentimentLabel sentiment = sentiment(answer).orElseThrow();
         String title = answer.title().strip();
         String stored = summary;
-        // No row written means another run stored a summary meanwhile, which is as good as this one.
-        transactions.executeWithoutResult(
-                status -> articles.saveSummary(article.getId(), title, stored, sentiment.name(), clock.instant()));
-        return true;
+        Instant now = clock.instant();
+        // Without replace, no row written means another run stored a summary meanwhile, which is as good as this one.
+        transactions.executeWithoutResult(status -> {
+            if (replace) {
+                articles.replaceSummary(article.getId(), title, stored, sentiment.name(), now);
+            } else {
+                articles.saveSummary(article.getId(), title, stored, sentiment.name(), now);
+            }
+        });
+        return Optional.empty();
     }
 
     /** Why an answer cannot be stored, or empty when it can. */

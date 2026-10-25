@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -132,6 +133,46 @@ class NewsSummaryTest {
                 .extracting(NewsSummaryRequest::title)
                 .doesNotContain("Ether ETF flows " + source);
         assertThat(row(fresh)).containsEntry("sentiment_label", "NEUTRAL");
+    }
+
+    @Test
+    void D119_anArticleOutOfAttemptsOrHidden_isNotSent_andARefusalCountsAsAnAttempt() {
+        UUID spent = article("Spent " + source, "Spent.", now.minusSeconds(60), null);
+        UUID hidden = article("Hidden " + source, "Hidden.", now.minusSeconds(60), null);
+        UUID refused = article("Refused " + source, "Refused.", now.minusSeconds(60), null);
+        sql.sql("update news_article set summary_attempts = 3 where article_id = ?")
+                .param(spent)
+                .update();
+        UUID admin = sql.sql("select user_id from user_account where role = 'ADMIN' limit 1")
+                .query(UUID.class)
+                .single();
+        sql.sql("update news_article set hidden_at = now(), hidden_by = ? where article_id = ?")
+                .params(admin, hidden)
+                .update();
+        // doAnswer, not when(...): when() would call the answer of setUp with no request.
+        doAnswer(call -> {
+                    NewsSummaryRequest request = call.getArgument(0);
+                    return new NewsSummaryResult(
+                            "Tiêu đề", "Nhà đầu tư nên mua ngay.", "BULLISH", request.model(), 1, 1);
+                })
+                .when(ai)
+                .summarize(any());
+
+        summaries.summarizeDue();
+
+        ArgumentCaptor<NewsSummaryRequest> sent = ArgumentCaptor.forClass(NewsSummaryRequest.class);
+        verify(ai, atLeastOnce()).summarize(sent.capture());
+        assertThat(sent.getAllValues())
+                .extracting(NewsSummaryRequest::title)
+                .contains("Refused " + source)
+                .doesNotContain("Spent " + source, "Hidden " + source);
+        assertThat(sql.sql("select summary_attempts, summary_error from news_article where article_id = ?")
+                        .param(refused)
+                        .query()
+                        .singleRow())
+                .containsEntry("summary_attempts", 1)
+                .hasEntrySatisfying("summary_error", error -> assertThat((String) error)
+                        .startsWith("the summary tells the reader to trade"));
     }
 
     @Test

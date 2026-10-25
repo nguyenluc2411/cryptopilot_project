@@ -453,7 +453,19 @@ public enum ErrorCode {
      * {@code feedUrl}, the text of a field whose value is not allowed; its own code so the console can say the feed
      * was tried. 400: the request names it.
      */
-    NEWS_FEED_UNREADABLE(HttpStatus.BAD_REQUEST, "MSG15");
+    NEWS_FEED_UNREADABLE(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /**
+     * An administrator asked to crawl a news source again within the cooldown of its last crawl (T-080b). MSG50 takes
+     * the seconds left: a click repeated by mistake must not make the outlet see the crawler twice in a row.
+     */
+    NEWS_SOURCE_CRAWLED_RECENTLY(HttpStatus.TOO_MANY_REQUESTS, "MSG50"),
+
+    /**
+     * An administrator asked for a summary while the AI Service is not configured, cannot be reached or is rate
+     * limited (T-080b). MSG31: the AI request failed; the same request may succeed later.
+     */
+    NEWS_SUMMARY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG31");
 
     private final HttpStatus status;
     private final String messageCode;

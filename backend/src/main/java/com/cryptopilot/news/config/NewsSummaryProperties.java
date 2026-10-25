@@ -26,6 +26,8 @@ import org.springframework.validation.annotation.Validated;
  * @param initialDelay how long after start-up the first run waits
  * @param maxArticlesPerRun the most articles one run sends, which bounds the cost of a run
  * @param maxAge how old an article may be and still be summarized; older ones keep their excerpt
+ * @param maxAttempts how many times the job asks the model for one article before it waits for an administrator
+ *     (D-128)
  * @param model the provider's model identifier
  * @param temperature the sampling temperature; low, because a summary reports and does not invent
  * @param maxOutputTokens the longest answer the model may write, reasoning included
@@ -45,6 +47,7 @@ public record NewsSummaryProperties(
         @NotNull @DefaultValue("2m") Duration initialDelay,
         @Min(1) @Max(200) @DefaultValue("10") int maxArticlesPerRun,
         @NotNull @DefaultValue("7d") Duration maxAge,
+        @Min(1) @Max(20) @DefaultValue("3") int maxAttempts,
         @NotBlank String model,
 
         @DecimalMin("0.0") @DecimalMax("2.0") @DefaultValue("0.2")

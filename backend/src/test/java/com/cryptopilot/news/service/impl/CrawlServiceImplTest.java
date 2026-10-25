@@ -1,6 +1,7 @@
 package com.cryptopilot.news.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
@@ -11,6 +12,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.news.client.RssClient;
@@ -34,6 +38,7 @@ import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -70,6 +75,7 @@ class CrawlServiceImplTest {
                 Duration.ofMinutes(1),
                 Duration.ofHours(48),
                 5,
+                Duration.ofMinutes(1),
                 Map.of("btc", List.of("Bitcoin")));
         service = new CrawlServiceImpl(
                 sources,
@@ -251,6 +257,45 @@ class CrawlServiceImplTest {
 
         verify(articles).tagCoin(any(), eq(BTC), anyBoolean());
         verify(articles, times(1)).tagCoin(any(), any(), anyBoolean());
+    }
+
+    @Test
+    void T080b_crawlNow_readsTheSourceEvenSwitchedOff_andAnswersItsLogEntry() {
+        NewsSource off = NewsSource.create(
+                new NewsSourceSettings("Off", "https://off.com/feed", 30, false, null, null, null, null), null);
+        off.markCrawled(NOW.minus(Duration.ofMinutes(2)));
+        when(sources.findById(off.getId())).thenReturn(Optional.of(off));
+        when(rss.read(off.getFeedUrl(), null)).thenReturn(feed(item("Bitcoin holds", "https://off.com/1", null)));
+        NewsCrawlLog latest = NewsCrawlLog.record(off.getId(), NOW, NOW, CrawlStatus.SUCCESS, 1, 1, null);
+        when(crawlLogs.findLatestOf(List.of(off.getId()))).thenReturn(List.of(latest));
+
+        assertThat(service.crawlNow(off.getId())).isSameAs(latest);
+
+        verify(sources).markCrawled(off.getId(), NOW);
+        assertThat(logged().getArticlesInserted()).isEqualTo(1);
+    }
+
+    @Test
+    void T080b_crawlNow_withinTheCooldown_isRefusedWithTheSecondsLeft_andReadsNothing() {
+        NewsSource source = source(null);
+        source.markCrawled(NOW.minusSeconds(45));
+        when(sources.findById(source.getId())).thenReturn(Optional.of(source));
+
+        assertThatThrownBy(() -> service.crawlNow(source.getId()))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.NEWS_SOURCE_CRAWLED_RECENTLY);
+                    assertThat(e.messageArgs()).containsExactly("15");
+                });
+        verifyNoInteractions(rss);
+    }
+
+    @Test
+    void T080b_crawlNow_ofAnUnknownSource_isNotFound() {
+        UUID unknown = UUID.randomUUID();
+        when(sources.findById(unknown)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.crawlNow(unknown)).isInstanceOf(ResourceNotFoundException.class);
+        verifyNoInteractions(rss);
     }
 
     private NewsCrawlLog logged() {

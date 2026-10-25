@@ -461,6 +461,8 @@ cryptopilot:
       duplicate-title-window: 48h
       # NSF-10: the administrators are told after this many failed crawls in a row of one source.
       failure-notice-after: 5
+      # T-080b: "crawl now" on SCR-41 is refused this soon after the source's last crawl (MSG50).
+      manual-crawl-cooldown: 1m
       # What outlets call each coin. The exchange names a coin after its symbol, so a headline that writes "Bitcoin"
       # tags BTC only through this list. A name that spells a symbol is never used as a name. The coins of the 13
       # demo pairs; a coin listed later without an entry is still tagged by its symbol.
@@ -489,6 +491,8 @@ cryptopilot:
       max-articles-per-run: 10
       # Older articles keep their excerpt.
       max-age: 7d
+      # D-128: an article the model fails this many times waits for an administrator to ask again (SCR-41).
+      max-attempts: 3
       # The provider's model, per environment. A lite model is enough to shorten an article and label its tone.
       model: ${NEWS_SUMMARY_MODEL:gemini-3.5-flash-lite}
       temperature: 0.2

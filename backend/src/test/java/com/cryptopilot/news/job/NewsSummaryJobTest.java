@@ -72,6 +72,7 @@ class NewsSummaryJobTest {
                         Duration.ofMinutes(2),
                         10,
                         Duration.ofDays(7),
+                        3,
                         "test-model",
                         0.2,
                         512,

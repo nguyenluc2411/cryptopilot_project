@@ -98,6 +98,22 @@ public class AdminNewsSourceController {
         service.delete(UUID.fromString(caller.getSubject()), id);
     }
 
+    @Operation(
+            summary = "Crawl a news source now, active or not (T-080b)",
+            description = "The source is otherwise crawled every crawlIntervalMinutes; the list and the source give"
+                    + " lastCrawledAt and nextCrawlAt for the confirmation the console shows first. After this crawl"
+                    + " the source waits one interval from now (BR-49).")
+    @ApiResponse(responseCode = "200", description = "The crawl log entry: status, articles found and inserted, error")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such source")
+    @ApiResponse(
+            responseCode = "429",
+            description = "NEWS_SOURCE_CRAWLED_RECENTLY, MSG50: crawled less than a minute ago; messageArgs[0] is the"
+                    + " seconds to wait")
+    @PostMapping("/{id}/crawl")
+    public NewsCrawlLogResponse crawlNow(@PathVariable UUID id) {
+        return service.crawlNow(id);
+    }
+
     @Operation(summary = "The crawl log of a news source, the latest first (UC-49)")
     @ApiResponse(responseCode = "200", description = "One page: time, status, articles found and inserted, error")
     @ApiResponse(responseCode = "400", description = "MSG15: page or pageSize out of range")

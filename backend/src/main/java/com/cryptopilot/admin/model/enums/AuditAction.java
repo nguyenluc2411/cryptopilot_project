@@ -24,6 +24,11 @@ public enum AuditAction {
      * A configuration row added: a pair, a leverage bracket, a package, a news source, an AI configuration, or Academy
      * content (T-114).
      */
+    /** An administrator hid a news article from the feed (T-080b). */
+    NEWS_ARTICLE_HIDDEN,
+    /** An administrator showed a hidden news article again (T-080b). */
+    NEWS_ARTICLE_RESTORED,
+    /** A configuration row added: a pair, a leverage bracket, a package, a news source or an AI configuration. */
     CONFIGURATION_CREATED,
     /** A configuration row or a system setting changed, Academy content included (T-114). */
     CONFIGURATION_CHANGED,

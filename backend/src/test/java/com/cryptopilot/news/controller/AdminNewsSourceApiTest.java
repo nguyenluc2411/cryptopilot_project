@@ -235,6 +235,35 @@ class AdminNewsSourceApiTest {
                 .isEqualTo(1);
     }
 
+    @Test
+    void T080b_crawlNow_readsTheSource_logsIt_andIsRefusedAgainWithinAMinute() throws Exception {
+        UUID sourceId = idOf(create("Example", "https://" + host + "/feed", 60));
+        as(admin, put(SOURCES + "/" + sourceId), """
+                        {"sourceName": "Example", "feedUrl": "https://%s/feed", "crawlIntervalMinutes": 60,
+                         "active": false}""".formatted(host)).andExpect(status().isOk());
+
+        as(admin, post(SOURCES + "/" + sourceId + "/crawl"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.articlesFound").value(0))
+                .andExpect(jsonPath("$.articlesInserted").value(0));
+        as(admin, get(SOURCES + "/" + sourceId))
+                .andExpect(jsonPath("$.lastCrawledAt").exists())
+                .andExpect(jsonPath("$.lastCrawl.status").value("SUCCESS"));
+
+        as(admin, post(SOURCES + "/" + sourceId + "/crawl"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("NEWS_SOURCE_CRAWLED_RECENTLY"))
+                .andExpect(jsonPath("$.messageArgs[0]").exists());
+        assertThat(sql.sql("select count(*) from news_crawl_log where source_id = ?")
+                        .param(sourceId)
+                        .query(Long.class)
+                        .single())
+                .isOne();
+        as(trader, post(SOURCES + "/" + sourceId + "/crawl")).andExpect(status().isForbidden());
+        as(admin, post(SOURCES + "/" + UUID.randomUUID() + "/crawl")).andExpect(status().isNotFound());
+    }
+
     private ResultActions create(String name, String feedUrl, int interval) throws Exception {
         return as(admin, post(SOURCES), body(name, feedUrl, interval));
     }

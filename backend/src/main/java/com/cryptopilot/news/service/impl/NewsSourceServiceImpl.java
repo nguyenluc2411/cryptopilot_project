@@ -21,6 +21,7 @@ import com.cryptopilot.news.entity.NewsSource;
 import com.cryptopilot.news.model.NewsSourceSettings;
 import com.cryptopilot.news.repository.NewsCrawlLogRepository;
 import com.cryptopilot.news.repository.NewsSourceRepository;
+import com.cryptopilot.news.service.CrawlService;
 import com.cryptopilot.news.service.NewsSourceService;
 import java.time.Duration;
 import java.time.Instant;
@@ -65,6 +66,7 @@ public class NewsSourceServiceImpl implements NewsSourceService {
     private final NewsCrawlLogRepository crawlLogs;
     private final RssClient rss;
     private final AdminApi admin;
+    private final CrawlService crawls;
     private final TransactionTemplate transactions;
 
     @Override
@@ -174,6 +176,12 @@ public class NewsSourceServiceImpl implements NewsSourceService {
         return PageResponse.of(
                 crawlLogs.findBySourceIdOrderByStartedAtDescIdDesc(sourceId, Paging.of(page, pageSize)),
                 NewsSourceServiceImpl::logResponse);
+    }
+
+    @Override
+    public NewsCrawlLogResponse crawlNow(UUID sourceId) {
+        // Not in a transaction: the feed is read outside one and the crawl stores what it read in its own.
+        return logResponse(crawls.crawlNow(sourceId));
     }
 
     /**
