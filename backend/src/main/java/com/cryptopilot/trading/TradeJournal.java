@@ -32,6 +32,9 @@ public interface TradeJournal {
     /** The position if it is still OPEN; empty once closed or when there is none. */
     Optional<OpenTrade> openTrade(UUID positionId);
 
+    /** The OPEN position of the plan; empty when the plan never filled or its position is closed (UC-21). */
+    Optional<OpenTrade> openTradeOfPlan(UUID planId);
+
     /**
      * Closes an OPEN position with a compare-and-set on its status and version, inside the caller's transaction: of
      * two racing closes, or a close and a replay of the same exit, exactly one changes the row.

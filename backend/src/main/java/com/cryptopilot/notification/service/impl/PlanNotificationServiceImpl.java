@@ -123,8 +123,12 @@ public class PlanNotificationServiceImpl implements PlanNotificationService {
         };
     }
 
+    /** The {@code {reason}} of MSG23; a liquidation is MSG24 and never asks. */
     private static String reason(CloseReason reason) {
-        return reason == CloseReason.TAKE_PROFIT ? "take profit" : "stop loss";
+        if (reason == CloseReason.TAKE_PROFIT) {
+            return "take profit";
+        }
+        return reason == CloseReason.STOP_LOSS ? "stop loss" : "manual close";
     }
 
     private static String plain(BigDecimal amount) {

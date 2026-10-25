@@ -31,6 +31,7 @@ class PositionUserFeedTest {
             UUID.randomUUID(),
             UUID.randomUUID(),
             MarketType.FUTURES,
+            UUID.randomUUID(),
             "BTCUSDT",
             CloseReason.LIQUIDATION,
             new BigDecimal("90.37"),

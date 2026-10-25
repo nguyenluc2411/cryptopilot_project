@@ -24,7 +24,7 @@ import org.mockito.ArgumentCaptor;
 
 /**
  * The exact texts of MSG23 and MSG24, with {@code {pnl}} the net P/L of the journal row (Q-56): the T-044 vectors (a)
- * to (c); and of MSG53 and MSG54 with each invalidation reason.
+ * to (c) and a manual close; and of MSG53 and MSG54 with each invalidation reason.
  *
  * <p>Rule: BR-35, BR-38, BR-68, NSF-09; Q-56.
  */
@@ -70,6 +70,13 @@ class PlanNotificationServiceImplTest {
         notifications.positionClosed(closed(null, CloseReason.TAKE_PROFIT, "115", "0"));
 
         assertThat(written().content()).isEqualTo("Your position closed by take profit at 115. P/L: 0.");
+    }
+
+    @Test
+    void MSG23_aManualClose_isNamedAsSuch() {
+        notifications.positionClosed(closed("BTCUSDT", CloseReason.MANUAL, "108", "15.5"));
+
+        assertThat(written().content()).isEqualTo("BTCUSDT position closed by manual close at 108. P/L: 15.5.");
     }
 
     @Test
@@ -146,6 +153,7 @@ class PlanNotificationServiceImplTest {
                 UUID.randomUUID(),
                 UUID.randomUUID(),
                 MarketType.FUTURES,
+                UUID.randomUUID(),
                 symbol,
                 reason,
                 new BigDecimal(exitPrice),

@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
+import com.cryptopilot.trading.event.PositionClosed;
 import com.cryptopilot.trading.event.PositionOpened;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.event.TradingPlanExpired;
@@ -266,6 +267,49 @@ class MatchingWorkerExitTest {
         verify(matching, timeout(WAIT)).close(exitOf(stopped, CloseReason.STOP_LOSS, "97.5"));
     }
 
+    /** UC-21: a position the Trader closed leaves the books: a later range at its stop loss stores nothing. */
+    @Test
+    void UC21_aPositionClosedByItsTrader_leavesTheBooks() {
+        TrackedPosition open = position(Direction.LONG, "100", EARLIER, "95", "115", null);
+        TrackedPosition other = position(Direction.LONG, "100", EARLIER, "96", "115", null);
+        when(matching.openPositions()).thenReturn(List.of(open, other));
+        when(matching.close(any())).thenReturn(true);
+        worker = started(1, 100);
+
+        worker.onPositionClosed(closed(open));
+        worker.submit(futures(AT, "100", "94", "101", false));
+
+        verify(matching, timeout(WAIT)).close(exitOf(other, CloseReason.STOP_LOSS, "96"));
+        verify(matching, never()).close(exitOf(open, CloseReason.STOP_LOSS, "95"));
+    }
+
+    /**
+     * UC-21: a position closed by its Trader while its exit waits for a retry drops that retry only: the failed exit
+     * of another position and the failed fill of a plan are still tried on the next range.
+     */
+    @Test
+    void UC21_aManualClose_dropsOnlyThePendingExitOfItsPosition() {
+        TrackedPosition closedByHand = position(Direction.LONG, "100", EARLIER, "95", "115", null);
+        TrackedPosition stillOpen = position(Direction.LONG, "100", EARLIER, "96", "115", null);
+        TrackedEntry waiting = TrackedEntries.limit(
+                UUID.randomUUID(), MarketType.FUTURES, PAIR, Direction.LONG, new BigDecimal("94.5"), EARLIER);
+        when(matching.openPositions()).thenReturn(List.of(closedByHand, stillOpen));
+        when(matching.activeEntries()).thenReturn(List.of(waiting));
+        when(matching.close(any())).thenThrow(new IllegalStateException("database down"));
+        when(matching.fill(any())).thenThrow(new IllegalStateException("database down"));
+        worker = started(1, 100);
+        worker.submit(futures(AT, "100", "94", "101", false));
+        verify(matching, timeout(WAIT).times(2)).close(any());
+        verify(matching, timeout(WAIT)).fill(any());
+
+        worker.onPositionClosed(closed(closedByHand));
+        worker.submit(futures(AT.plusSeconds(60), "100", "99", "101", false));
+
+        verify(matching, timeout(WAIT).times(2)).close(exitOf(stillOpen, CloseReason.STOP_LOSS, "96"));
+        verify(matching, timeout(WAIT).times(2)).fill(any());
+        verify(matching, times(1)).close(exitOf(closedByHand, CloseReason.STOP_LOSS, "95"));
+    }
+
     /** NSF-09: an expired plan leaves the books: a later range at its entry fills nothing. */
     @Test
     void NSF09_anExpiredPlan_leavesTheBooks() {
@@ -289,10 +333,30 @@ class MatchingWorkerExitTest {
     void NSF09_eventsWhileTheEngineIsStopped_areIgnored() {
         worker = new MatchingWorker(
                 matching, properties(1, 100), clock, Thread.ofVirtual().factory(), () -> 0.0);
+        TrackedPosition open = position(Direction.LONG, "100", EARLIER, "95", "115", null);
+
+        worker.onPositionClosed(closed(open));
         worker.onExpired(new TradingPlanExpired(
                 UUID.randomUUID(), TrackedEntries.OWNER, MarketType.FUTURES, PAIR, Direction.LONG, null, AT));
 
         verify(matching, never()).close(any());
+    }
+
+    private static PositionClosed closed(TrackedPosition position) {
+        return new PositionClosed(
+                position.positionId(),
+                position.planId(),
+                position.userId(),
+                position.market(),
+                position.pairId(),
+                "BTCUSDT",
+                CloseReason.MANUAL,
+                new BigDecimal("100"),
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                false,
+                AT);
     }
 
     private MatchingWorker started(int partitions, int capacity) {
