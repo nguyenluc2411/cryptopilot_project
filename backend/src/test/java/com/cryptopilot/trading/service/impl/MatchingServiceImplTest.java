@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -16,6 +17,7 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanInvalidated;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
@@ -37,6 +39,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.mockito.InOrder;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
@@ -57,23 +60,34 @@ class MatchingServiceImplTest {
     private final SystemSettingApi settings = mock(SystemSettingApi.class);
     private final MarketApi market = mock(MarketApi.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
-    private final MatchingServiceImpl service =
-            new MatchingServiceImpl(plans, watermarks, settings, market, events, Clock.fixed(NOW, ZoneOffset.UTC));
+    private final PositionOpener positions = mock(PositionOpener.class);
+    private final MatchingServiceImpl service = new MatchingServiceImpl(
+            plans, watermarks, settings, market, events, positions, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @Test
-    void NSF07_theCompareAndSetThatChangesTheRow_isAFill() {
+    void BR34_theCompareAndSetThatChangesTheRow_isAFill_andOpensThePositionOfThePlanReadAgain() {
+        TradingPlan executed = mock(TradingPlan.class);
         when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), LiquidityRole.MAKER, NOW))
                 .thenReturn(1);
+        when(plans.findById(PLAN)).thenReturn(Optional.of(executed));
 
         assertThat(service.fill(limitFill())).isTrue();
+
+        InOrder order = inOrder(plans, positions);
+        order.verify(plans).executeIfActive(PLAN, AT, new BigDecimal("100"), LiquidityRole.MAKER, NOW);
+        order.verify(plans).findById(PLAN);
+        order.verify(positions).open(executed);
     }
 
     @Test
-    void NSF07_theCompareAndSetThatChangesNothing_isNoFill() {
+    void BR34_theCompareAndSetThatChangesNothing_isNoFill_andWritesNoJournalRecord() {
         when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), LiquidityRole.MAKER, NOW))
                 .thenReturn(0);
 
         assertThat(service.fill(limitFill())).isFalse();
+
+        verify(positions, never()).open(any());
+        verify(plans, never()).findById(any());
     }
 
     /** A resting LIMIT supplied liquidity: its own price, with no slippage and no read of the setting or the pair. */
@@ -81,6 +95,7 @@ class MatchingServiceImplTest {
     void D111E1_aMakerFill_isStoredAtItsOwnPrice_withoutSlippage() {
         when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), LiquidityRole.MAKER, NOW))
                 .thenReturn(1);
+        when(plans.findById(PLAN)).thenReturn(Optional.of(mock(TradingPlan.class)));
 
         service.fill(limitFill());
 
@@ -98,18 +113,24 @@ class MatchingServiceImplTest {
             Direction direction, String reference, String stored) {
         when(settings.integer("SLIPPAGE_BPS")).thenReturn(10);
         when(market.tradablePair(PAIR, MarketType.FUTURES)).thenReturn(Optional.of(pair("0.01")));
+        TradingPlan executed = mock(TradingPlan.class);
         when(plans.executeIfActive(any(), any(), any(), any(), any())).thenReturn(1);
+        when(plans.findById(PLAN)).thenReturn(Optional.of(executed));
 
         assertThat(service.fill(new Fill(stop(direction), LiquidityRole.TAKER, new BigDecimal(reference), AT)))
                 .isTrue();
 
-        verify(plans)
+        // BR-34: the STOP fill opens its position too, from the plan read back with the stored price and role.
+        InOrder order = inOrder(plans, positions);
+        order.verify(plans)
                 .executeIfActive(
                         eq(PLAN),
                         eq(AT),
                         argThat(price -> price.compareTo(new BigDecimal(stored)) == 0),
                         eq(LiquidityRole.TAKER),
                         eq(NOW));
+        order.verify(plans).findById(PLAN);
+        order.verify(positions).open(executed);
     }
 
     /** With the default of 0 bps a taker fill keeps its price, and the pair's tick is not read. */
@@ -118,6 +139,7 @@ class MatchingServiceImplTest {
         when(settings.integer("SLIPPAGE_BPS")).thenReturn(0);
         when(plans.executeIfActive(PLAN, AT, new BigDecimal("100"), LiquidityRole.TAKER, NOW))
                 .thenReturn(1);
+        when(plans.findById(PLAN)).thenReturn(Optional.of(mock(TradingPlan.class)));
 
         assertThat(service.fill(new Fill(stop(Direction.LONG), LiquidityRole.TAKER, new BigDecimal("100"), AT)))
                 .isTrue();
@@ -149,6 +171,7 @@ class MatchingServiceImplTest {
         verify(events)
                 .publishEvent(new TradingPlanInvalidated(
                         PLAN, TrackedEntries.OWNER, InvalidationReason.STOP_LOSS_REACHED, AT));
+        verifyNoInteractions(positions);
     }
 
     @Test

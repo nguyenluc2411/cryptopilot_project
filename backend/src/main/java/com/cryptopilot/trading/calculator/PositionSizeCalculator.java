@@ -69,6 +69,8 @@ public final class PositionSizeCalculator {
         BigDecimal rewardAmount =
                 quantity.multiply(in.takeProfit().subtract(in.entryPrice()).abs());
         RiskProfileLimits profile = in.profile();
+        // TODO(TP-D): divide by the profile's capital instead of the plan's; the other open risk includes the open
+        // positions since T-048a.
         BigDecimal totalOpenRiskPercent =
                 Rounding.divide(riskAmount.add(in.otherOpenRisk()).multiply(HUNDRED), in.capital());
         return new RiskCalculation(

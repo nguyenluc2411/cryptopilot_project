@@ -35,6 +35,8 @@ import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
+import com.cryptopilot.trading.SimulatedTradeOpening;
+import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.dto.request.UpdateTradingPlanRequest;
@@ -73,6 +75,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -116,6 +119,8 @@ class TradingPlanServiceImplTest {
     @SuppressWarnings("unchecked") // TP-A: a mock of a generic interface
     private final ObjectProvider<SetupStyleSource> styleProvider = mock(ObjectProvider.class);
 
+    private final TradeJournal journal = mock(TradeJournal.class);
+
     private TradingPlanServiceImpl service;
 
     /** The last plan the service saved. */
@@ -133,7 +138,9 @@ class TradingPlanServiceImplTest {
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 events,
                 settings,
-                styleProvider);
+                styleProvider,
+                journal,
+                new PositionOpener(journal, new FeeRates(settings)));
         when(styleProvider.getIfAvailable()).thenReturn(styles);
         when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_BLOCK_R)).thenReturn(new BigDecimal("0.75"));
         when(market.tradablePair(eq(PAIR), any()))
@@ -176,6 +183,10 @@ class TradingPlanServiceImplTest {
         when(riskProfiles.planDefaultsOf(USER)).thenReturn(new PlanDefaults(BALANCED, new BigDecimal("1000"), null));
         when(plans.activeRiskExcluding(eq(USER), any())).thenReturn(BigDecimal.ZERO);
         when(plans.save(any())).thenAnswer(call -> {
+            saved = call.getArgument(0);
+            return saved;
+        });
+        when(plans.saveAndFlush(any())).thenAnswer(call -> {
             saved = call.getArgument(0);
             return saved;
         });
@@ -777,6 +788,112 @@ class TradingPlanServiceImplTest {
     void MSG15_aPageOutsideItsRange_isReportedOnItsParameter(int page, int pageSize, String field) {
         assertThatThrownBy(() -> service.list(USER, new PlanListQuery(null, null, null, null, null, page, pageSize)))
                 .satisfies(e -> assertFields(e, Map.of(field, "MSG15")));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // The position of a filled plan (T-048a: BR-34, BR-62, BR-29, UC-20)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * BR-34: a Spot MARKET filled at activation (last 100, quantity 2) is written at once and its OPEN position recorded
+     * after it, in the same transaction: fill price and instant, the snapshot quantity, TAKER, the entry fee 100 × 2 ×
+     * 0.1 % = 0.2 at the stored scale, and the levels it starts with.
+     */
+    @Test
+    void BR34_aPlanFilledAtActivation_isWrittenAtOnce_andItsPositionOpenedWithTheTakerFee() {
+        currentPrice(MarketType.SPOT, "100");
+
+        service.create(USER, activating(spotMarket("95", "110")));
+
+        ArgumentCaptor<SimulatedTradeOpening> opening = ArgumentCaptor.forClass(SimulatedTradeOpening.class);
+        InOrder order = inOrder(plans, journal);
+        order.verify(plans).saveAndFlush(saved);
+        order.verify(journal).openSimulatedTrade(opening.capture());
+        verify(plans, never()).save(any());
+        SimulatedTradeOpening opened = opening.getValue();
+        assertThat(opened.planId()).isEqualTo(saved.getId());
+        assertThat(opened.userId()).isEqualTo(USER);
+        assertThat(opened.pairId()).isEqualTo(PAIR);
+        assertThat(opened.market()).isEqualTo(MarketType.SPOT);
+        assertThat(opened.direction()).isEqualTo(Direction.LONG);
+        assertThat(opened.leverage()).isNull();
+        assertThat(opened.entryPrice()).isEqualByComparingTo("100");
+        assertThat(opened.entryTime()).isEqualTo(NOW);
+        assertThat(opened.quantity()).isEqualByComparingTo("2");
+        assertThat(opened.entryLiquidity()).isEqualTo(LiquidityRole.TAKER);
+        assertThat(opened.entryFee()).isEqualTo(new BigDecimal("0.20000000"));
+        assertThat(opened.stopLoss()).isEqualByComparingTo("95");
+        assertThat(opened.takeProfit()).isEqualByComparingTo("110");
+    }
+
+    /** BR-34: a Futures fill pays the Futures taker rate, 100 × 2 × 0.05 % = 0.1, and keeps its leverage. */
+    @Test
+    void BR34_aFuturesFillAtActivation_paysTheFuturesTakerRate() {
+        currentPrice(MarketType.FUTURES, "100");
+
+        service.create(USER, activating(futuresMarket()));
+
+        ArgumentCaptor<SimulatedTradeOpening> opening = ArgumentCaptor.forClass(SimulatedTradeOpening.class);
+        verify(journal).openSimulatedTrade(opening.capture());
+        assertThat(opening.getValue().entryFee()).isEqualTo(new BigDecimal("0.10000000"));
+        assertThat(opening.getValue().leverage()).isEqualTo(5);
+        assertThat(opening.getValue().market()).isEqualTo(MarketType.FUTURES);
+    }
+
+    /** BR-34: a plan that waits for the engine, and a draft, are saved as before and open no position. */
+    @Test
+    void BR34_aPlanThatWaitsOrADraft_opensNoPosition() {
+        service.create(USER, activating(spotLimit("100", "95", "110")));
+        service.create(USER, spotLimit("100", "95", "110"));
+
+        verify(plans, never()).saveAndFlush(any());
+        verify(journal, never()).openSimulatedTrade(any());
+    }
+
+    /**
+     * BR-62, D-63: an open position keeps its {@code ACTIVE_PLAN_MAX} slot: one ACTIVE plan and two open positions count
+     * 3, read under the lock, the ACTIVE plans first (D-119).
+     */
+    @Test
+    void BR62_openPositions_countAgainstActivePlanMax_afterTheActivePlans() {
+        when(plans.countActive(USER)).thenReturn(1L);
+        when(journal.openPositionPlans(USER)).thenReturn(Set.of(UUID.randomUUID(), UUID.randomUUID()));
+        when(plans.riskOf(any())).thenReturn(BigDecimal.ZERO);
+
+        service.create(USER, activating(spotLimit("100", "95", "110")));
+
+        InOrder order = inOrder(lock, plans, journal, entitlements);
+        order.verify(lock).lock(USER);
+        order.verify(plans).countActive(USER);
+        order.verify(journal).openPositionPlans(USER);
+        order.verify(entitlements).requireWithinLimit(USER, Feature.ACTIVE_PLAN_MAX, 3L);
+    }
+
+    /**
+     * BR-29: the risk of the open positions adds to TOTAL_OPEN_RISK as the ACTIVE plans' does. The plan risks 10; with
+     * 20 in ACTIVE plans and 15 in an open position the total is 4.5 % of 1,000, above BALANCED's 4 %.
+     */
+    @Test
+    void BR29_theRiskOfOpenPositions_raisesTotalOpenRisk() {
+        UUID openPlan = UUID.randomUUID();
+        when(plans.activeRiskExcluding(eq(USER), any())).thenReturn(new BigDecimal("20"));
+        when(journal.openPositionPlans(USER)).thenReturn(Set.of(openPlan));
+        when(plans.riskOf(Set.of(openPlan))).thenReturn(new BigDecimal("15"));
+
+        assertThat(service.calculate(USER, spotLimit("100", "95", "110")).warnings())
+                .extracting(PlanWarningResponse::type, PlanWarningResponse::severity)
+                .contains(org.assertj.core.groups.Tuple.tuple(WarningType.TOTAL_OPEN_RISK, WarningSeverity.WARNING));
+    }
+
+    /** BR-29: without an open position no plan risk is read, and 20 in ACTIVE plans stays under the 4 % maximum. */
+    @Test
+    void BR29_withoutOpenPositions_noPlanRiskIsRead() {
+        when(plans.activeRiskExcluding(eq(USER), any())).thenReturn(new BigDecimal("20"));
+
+        assertThat(service.calculate(USER, spotLimit("100", "95", "110")).warnings())
+                .extracting(PlanWarningResponse::type)
+                .doesNotContain(WarningType.TOTAL_OPEN_RISK);
+        verify(plans, never()).riskOf(any());
     }
 
     // ------------------------------------------------------------------------------------------

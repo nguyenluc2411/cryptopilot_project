@@ -91,6 +91,9 @@ class AccountAdminApiTest {
             sql.sql("delete from subscription_order where user_id = ?")
                     .param(account)
                     .update();
+            sql.sql("delete from trading_journal where user_id = ?")
+                    .param(account)
+                    .update();
             sql.sql("delete from trading_plan where user_id = ?").param(account).update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }

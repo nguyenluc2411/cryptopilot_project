@@ -21,8 +21,8 @@ public interface MatchingService {
 
     /**
      * Fills a plan's entry if it is still ACTIVE: the plan becomes EXECUTED at the fill's time, with its liquidity role
-     * and its price, moved by {@code SLIPPAGE_BPS} against the Trader for a TAKER fill. The journal record of BR-34 is
-     * T-048, which reads them.
+     * and its price, moved by {@code SLIPPAGE_BPS} against the Trader for a TAKER fill, and the journal records its OPEN
+     * position at that stored price in the same transaction (BR-34). Nothing is written when the plan is no longer ACTIVE.
      *
      * @param fill the plan, the role, the price before slippage and the time
      * @return whether this call filled it; {@code false} when the plan was cancelled, expired, invalidated or filled

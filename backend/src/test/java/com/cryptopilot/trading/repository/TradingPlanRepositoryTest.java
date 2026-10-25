@@ -108,6 +108,7 @@ class TradingPlanRepositoryTest {
 
     @AfterEach
     void removeRows() {
+        jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
         jdbc.sql("delete from coin where coin_id in (?, ?)")

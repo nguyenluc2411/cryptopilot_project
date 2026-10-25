@@ -148,6 +148,9 @@ class TradingPlanApiTest {
     @AfterEach
     void removeRows() {
         for (UUID account : accounts) {
+            sql.sql("delete from trading_journal where user_id = ?")
+                    .param(account)
+                    .update();
             sql.sql("delete from trading_plan where user_id = ?").param(account).update();
             sql.sql("""
                             delete from user_subscription
@@ -158,6 +161,7 @@ class TradingPlanApiTest {
             sql.sql("delete from user_profile where user_id = ?").param(account).update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
+        sql.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         sql.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         new MarketTestData(sql, Instant.now()).remove(pair);
     }
@@ -641,6 +645,119 @@ class TradingPlanApiTest {
                 return e.errorCode().code();
             }
         };
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // The position of a filled plan (T-048a: BR-34, BR-62, BR-29, UC-20)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * BR-62, D-63: an EXECUTED plan with an OPEN position keeps its {@code ACTIVE_PLAN_MAX} slot. A FREE Trader (3)
+     * with two ACTIVE plans and one open position cannot activate another.
+     */
+    @Test
+    void BR62_anOpenPosition_keepsItsActivePlanMaxSlot() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        as(trader, post(PLANS), spotMarket(true))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("EXECUTED"));
+        for (int i = 0; i < 2; i++) {
+            as(trader, post(PLANS), spotLimit("90", "85", "110", true))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.status").value("ACTIVE"));
+        }
+        String fourth = id(as(trader, post(PLANS), spotLimit("90", "85", "110", false)));
+
+        as(trader, post(PLANS + "/" + fourth + "/activate"), null)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.messageCode").value("MSG27"));
+    }
+
+    /**
+     * D-63: at {@code max − 1} counting an open position (one open, one ACTIVE, limit 3), two parallel activations let
+     * exactly one through.
+     */
+    @RepeatedTest(5)
+    void D63_twoConcurrentActivationsAtTheLimitMinusOne_withAnOpenPosition_letExactlyOneThrough() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        as(trader, post(PLANS), spotMarket(true)).andExpect(jsonPath("$.status").value("EXECUTED"));
+        service.create(trader, waiting(true));
+        UUID draftA = service.create(trader, waiting(false)).id();
+        UUID draftB = service.create(trader, waiting(false)).id();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<String>> outcomes = List.of(
+                    pool.submit(activation(trader, draftA, start)), pool.submit(activation(trader, draftB, start)));
+            start.countDown();
+
+            List<String> results = new ArrayList<>();
+            for (Future<String> outcome : outcomes) {
+                results.add(outcome.get(30, TimeUnit.SECONDS));
+            }
+            assertThat(results).containsExactlyInAnyOrder("ACTIVE", ErrorCode.PLAN_LIMIT_REACHED.code());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /**
+     * BR-29: the risk of an open position counts in TOTAL_OPEN_RISK. A plan risking 1.5 % of 1,000 is under BALANCED's
+     * 4 % alone; after a position risking 3 % opened, the total is 4.5 % and the panel warns.
+     */
+    @Test
+    void BR29_theRiskOfAnOpenPosition_countsInTotalOpenRisk() throws Exception {
+        UUID trader = trader();
+        String panel = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"LIMIT\", \"entryPrice\": 90, \"stopLoss\": 85, \"takeProfit\": 110,"
+                + " \"riskPercent\": 1.5}";
+        as(trader, post(PLANS + "/calculate"), panel)
+                .andExpect(status().isOk())
+                .andExpect(
+                        jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')]").isEmpty());
+        lastPrice("100");
+        as(
+                        trader,
+                        post(PLANS),
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110,"
+                                + " \"riskPercent\": 3, \"activate\": true}")
+                .andExpect(jsonPath("$.status").value("EXECUTED"));
+
+        as(trader, post(PLANS + "/calculate"), panel)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')].severity")
+                        .value("WARNING"));
+    }
+
+    /** A Spot LONG LIMIT at 90 (SL 85, TP 110), below a last price of 100, so it waits when activated. */
+    private CreateTradingPlanRequest waiting(boolean activate) {
+        return new CreateTradingPlanRequest(
+                pair,
+                MarketType.SPOT,
+                Direction.LONG,
+                EntryType.LIMIT,
+                new BigDecimal("90"),
+                new BigDecimal("85"),
+                new BigDecimal("110"),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                activate);
+    }
+
+    /** A Spot LONG MARKET (SL 95, TP 110) on the test pair, saved and activated when {@code activate}. */
+    private String spotMarket(boolean activate) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"MARKET\", \"stopLoss\": 95, \"takeProfit\": 110, \"activate\": "
+                + activate + "}";
     }
 
     // ------------------------------------------------------------------------------------------

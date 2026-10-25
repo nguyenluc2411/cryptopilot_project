@@ -17,6 +17,7 @@ import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
+import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.PlanValidityRule;
 import com.cryptopilot.trading.calculator.SlippageCalculator;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
@@ -79,8 +80,8 @@ import org.springframework.transaction.annotation.Transactional;
  * D-63 lock on the Trader before it counts the ACTIVE plans, so the count and the activation it allows cannot
  * interleave with another one.
  *
- * <p>Rule: UC-16 to UC-20; BR-21 to BR-33, BR-62, BR-66, BR-68, BR-69, BR-70; CR-04; D-63, D-70, D-71, D-72, D-111,
- * D-112.
+ * <p>Rule: UC-16 to UC-20; BR-21 to BR-34, BR-62, BR-66, BR-68, BR-69, BR-70; CR-04; D-63, D-70, D-71, D-72, D-111,
+ * D-112, D-119.
  *
  * <p>Reference: Fowler, M. (2002). <i>Patterns of Enterprise Application Architecture</i>. Addison-Wesley, "Service
  * Layer".
@@ -116,6 +117,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     private final SystemSettingApi settings;
     /** The Trader's style preset, implemented by the profile's owner; absent means no preset (D-53). */
     private final ObjectProvider<SetupStyleSource> styles;
+    /** The positions of filled plans, implemented by the journal's owner (D-119). */
+    private final TradeJournal journal;
+
+    private final PositionOpener positions;
 
     @Override
     @Transactional(readOnly = true)
@@ -150,7 +155,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             requireRoomForAnActivePlan(userId);
             activate(plan, calculated, now, last);
         }
-        return PlanResponses.detail(plans.save(plan));
+        return PlanResponses.detail(store(plan));
     }
 
     @Override
@@ -177,7 +182,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             requireRoomForAnActivePlan(userId);
             activate(plan, calculated, now, last);
         }
-        return PlanResponses.detail(plans.save(plan));
+        return PlanResponses.detail(store(plan));
     }
 
     @Override
@@ -198,7 +203,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         // After the calculation and its entitlement check, which answers MSG29 before a missing price answers 503.
         requireValidAtActivation(plan, last);
         activate(plan, calculated, now, last);
-        return PlanResponses.detail(plans.save(plan));
+        return PlanResponses.detail(store(plan));
     }
 
     @Override
@@ -256,6 +261,21 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 TimeBounds.toOrLatest(query.to()),
                 request);
         return PageResponse.of(found, PlanResponses::summary);
+    }
+
+    /**
+     * Saves the plan. A plan that filled at activation is written at once and its position opened in the journal in
+     * this transaction, so the fill and its record commit or roll back together (BR-34).
+     *
+     * <p>Rule: BR-33, BR-34; D-119.
+     */
+    private TradingPlan store(TradingPlan plan) {
+        if (plan.getStatus() != PlanStatus.EXECUTED) {
+            return plans.save(plan);
+        }
+        TradingPlan stored = plans.saveAndFlush(plan);
+        positions.open(stored);
+        return stored;
     }
 
     /**
@@ -356,20 +376,25 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                 profile.riskPerTradePercent(), profile.maxFuturesLeverage(), profile.maxTotalOpenRiskPercent());
     }
 
-    /** {@code ACTIVE_PLAN_MAX} counts ACTIVE plans and open positions together (BR-62); MSG27 when it is reached. */
+    /**
+     * {@code ACTIVE_PLAN_MAX} counts ACTIVE plans and open positions together (BR-62); MSG27 when it is reached. Called
+     * under the D-63 lock. ACTIVE plans are counted first: a fill committing between the two reads moves its plan from
+     * the first to the second, so it is counted twice, never zero times (D-119).
+     */
     private void requireRoomForAnActivePlan(UUID userId) {
-        entitlements.requireWithinLimit(
-                userId, Feature.ACTIVE_PLAN_MAX, plans.countActive(userId) + openPositions(userId));
+        long active = plans.countActive(userId);
+        entitlements.requireWithinLimit(userId, Feature.ACTIVE_PLAN_MAX, active + openPositions(userId));
     }
 
-    /** Open simulated positions; none exist until the journal records them (T-042). */
-    private static long openPositions(UUID userId) {
-        return 0L;
+    /** The user's open simulated positions, as the journal holds them (BR-62; D-63, D-119). */
+    private long openPositions(UUID userId) {
+        return journal.openPositionPlans(userId).size();
     }
 
-    /** The risk of the open simulated positions; none until the journal records them (T-042). */
-    private static BigDecimal openPositionRisk(UUID userId) {
-        return BigDecimal.ZERO;
+    /** The risk of the user's open simulated positions: the risk amount of the plans that opened them (BR-29; D-119). */
+    private BigDecimal openPositionRisk(UUID userId) {
+        Set<UUID> open = journal.openPositionPlans(userId);
+        return open.isEmpty() ? BigDecimal.ZERO : plans.riskOf(open);
     }
 
     private TradingPlan owned(UUID userId, UUID planId) {
@@ -563,8 +588,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
      * fills at the last price moved by the slippage, but never past its limit (D-112 note). A fill at activation took
      * liquidity, so it is TAKER (D-111 E1, E5).
      * A STOP waits: the matching engine triggers it (one already triggered was refused). The journal record of the
-     * fill is T-048. The setup score of the moment is kept beside the plan, see {@link #recordSetupScore}.
-     * {@code last} is the request's one read of the last price, see {@link #lastPriceRead}.
+     * fill is opened when the plan is stored, see {@link #store}. The setup score of the moment is kept beside the plan,
+     * see {@link #recordSetupScore}. {@code last} is the request's one read of the last price, see
+     * {@link #lastPriceRead}.
      */
     private void activate(TradingPlan plan, CalculatedPlan calculated, Instant now, Optional<BigDecimal> last) {
         plan.activate(calculated.calculation(), calculated.warnings(), now);
