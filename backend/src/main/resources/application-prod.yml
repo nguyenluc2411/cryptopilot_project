@@ -120,6 +120,9 @@ cryptopilot:
     crawl:
       # NSF-10 runs in this profile: the active sources whose interval has elapsed, every 5 minutes.
       enabled: true
+    summary:
+      # NSF-11 runs in this profile: the articles without a summary, through the AI Service, every 5 minutes.
+      enabled: true
 
 springdoc:
   # TECHNICAL_DESIGN 8: no API document and no Swagger UI in production.

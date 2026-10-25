@@ -56,8 +56,10 @@ import java.util.zip.GZIPInputStream;
  */
 public class RssClient implements AutoCloseable {
 
-    private static final String ACCEPT =
+    private static final String FEED_ACCEPT =
             "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.1";
+
+    private static final String PAGE_ACCEPT = "text/html, application/xhtml+xml;q=0.9, */*;q=0.1";
 
     private final RssClientProperties properties;
     private final HttpClient http;
@@ -77,11 +79,32 @@ public class RssClient implements AutoCloseable {
      * @throws RssClientException naming why the feed could not be read
      */
     public RssFeed read(String address, String userAgent) {
+        Fetched fetched = fetch(address, userAgent, FEED_ACCEPT);
+        return parse(fetched.uri(), fetched.response());
+    }
+
+    /**
+     * Reads the article page at {@code address}, for the text an AI summary is written from (NSF-11), with the same
+     * guard, limits and agent as a feed. The page is returned as the server sent it; nothing of it is stored (BR-48).
+     *
+     * @param userAgent the agent the source asks for, or {@code null} for the configured one
+     * @throws RssClientException naming why the page could not be read
+     */
+    public WebPage readPage(String address, String userAgent) {
+        Fetched fetched = fetch(address, userAgent, PAGE_ACCEPT);
+        return new WebPage(
+                fetched.uri().toString(),
+                fetched.response().body(),
+                fetched.response().headers().firstValue("Content-Type").orElse(null));
+    }
+
+    /** One GET, its redirects followed by hand and each target checked like the first, ending with a 2xx. */
+    private Fetched fetch(String address, String userAgent, String accept) {
         URI uri = absolute(address);
         String agent = userAgent == null || userAgent.isBlank() ? properties.userAgent() : userAgent;
         for (int redirects = 0; ; redirects++) {
             requireAllowed(uri);
-            Response response = get(uri, agent);
+            Response response = get(uri, agent, accept);
             if (isRedirect(response.status())) {
                 if (redirects >= properties.maxRedirects()) {
                     throw new RssClientException(
@@ -95,7 +118,7 @@ public class RssClient implements AutoCloseable {
                 throw new RssClientException(
                         RssClientException.Reason.HTTP_STATUS, uri + " answered HTTP " + response.status());
             }
-            return parse(uri, response);
+            return new Fetched(uri, response);
         }
     }
 
@@ -159,11 +182,11 @@ public class RssClient implements AutoCloseable {
         }
     }
 
-    private Response get(URI uri, String agent) {
+    private Response get(URI uri, String agent, String accept) {
         HttpRequest request = HttpRequest.newBuilder(uri)
                 .timeout(properties.readTimeout())
                 .header("User-Agent", agent)
-                .header("Accept", ACCEPT)
+                .header("Accept", accept)
                 .header("Accept-Encoding", "gzip")
                 .GET()
                 .build();
@@ -298,6 +321,8 @@ public class RssClient implements AutoCloseable {
     }
 
     private record Response(int status, HttpHeaders headers, byte[] body) {}
+
+    private record Fetched(URI uri, Response response) {}
 
     /** Thrown inside the body subscriber when the response passes the limit; reported as TOO_LARGE. */
     private static final class ResponseTooLarge extends IOException {

@@ -67,6 +67,7 @@ class RssClientTest {
     private ExecutorService executor;
     private final CountDownLatch release = new CountDownLatch(1);
     private final AtomicReference<String> agentSeen = new AtomicReference<>();
+    private final AtomicReference<String> acceptSeen = new AtomicReference<>();
     private RssClient client;
 
     @BeforeEach
@@ -79,6 +80,12 @@ class RssClientTest {
             send(exchange, 200, "application/rss+xml; charset=UTF-8", RSS);
         });
         server.createContext("/atom", exchange -> send(exchange, 200, "application/atom+xml", ATOM));
+        server.createContext("/article", exchange -> {
+            agentSeen.set(exchange.getRequestHeaders().getFirst("User-Agent"));
+            acceptSeen.set(exchange.getRequestHeaders().getFirst("Accept"));
+            send(exchange, 200, "text/html; charset=UTF-8", "<html><body><p>Bitcoin holds.</p></body></html>");
+        });
+        server.createContext("/moved-article", exchange -> redirect(exchange, "/article"));
         server.createContext("/moved", exchange -> redirect(exchange, "/rss"));
         server.createContext("/loop", exchange -> redirect(exchange, "/loop"));
         server.createContext("/no-location", exchange -> {
@@ -158,6 +165,33 @@ class RssClientTest {
         assertThat(agentSeen.get()).isEqualTo("TestAgent/1.0");
         client.read(url("/rss"), "  ");
         assertThat(agentSeen.get()).isEqualTo("TestAgent/1.0");
+    }
+
+    @Test
+    void NSF11_anArticlePage_isReadAsSent_afterItsRedirects_withTheSourcesAgent() {
+        WebPage page = client.readPage(url("/moved-article"), "Outlet/2.0");
+
+        assertThat(page.url()).isEqualTo(url("/article"));
+        assertThat(new String(page.body(), StandardCharsets.UTF_8)).contains("Bitcoin holds.");
+        assertThat(page.contentType()).isEqualTo("text/html; charset=UTF-8");
+        assertThat(agentSeen.get()).isEqualTo("Outlet/2.0");
+        assertThat(acceptSeen.get()).startsWith("text/html");
+    }
+
+    @Test
+    void NSF11_anArticlePage_isGuardedLikeAFeed() {
+        assertThatThrownBy(() -> client.readPage(url("/missing"), null))
+                .isInstanceOf(RssClientException.class)
+                .extracting(e -> ((RssClientException) e).reason())
+                .isEqualTo(RssClientException.Reason.HTTP_STATUS);
+        assertThatThrownBy(() -> client.readPage(url("/big"), null))
+                .extracting(e -> ((RssClientException) e).reason())
+                .isEqualTo(RssClientException.Reason.TOO_LARGE);
+        try (RssClient guarded = new RssClient(properties(false, DataSize.ofKilobytes(2)))) {
+            assertThatThrownBy(() -> guarded.readPage(url("/article"), null))
+                    .extracting(e -> ((RssClientException) e).reason())
+                    .isEqualTo(RssClientException.Reason.BLOCKED_ADDRESS);
+        }
     }
 
     @Test
