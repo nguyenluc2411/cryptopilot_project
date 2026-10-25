@@ -1,0 +1,14 @@
+---
+title: STM-07 USER_SUBSCRIPTION subscription_status - planned - not implemented (SDD Figure 36)
+---
+%% Drawn from the SRS (section 3.10.4; NSF-14; BR-55, BR-63). The V1 CHECK still allows ACTIVE, EXPIRED, CANCELLED;
+%% the SDD reconciliation lists the alignment to SCHEDULED and REPLACED as open.
+stateDiagram-v2
+    [*] --> ACTIVE : NEW order paid (NSF-12)
+    [*] --> SCHEDULED : RENEW or DOWNGRADE order paid, starts after the queue (NSF-12, BR-55)
+    SCHEDULED --> ACTIVE : start time reached (NSF-14)
+    ACTIVE --> EXPIRED : end time passed (NSF-14)
+    ACTIVE --> REPLACED : UPGRADE order paid (BR-63)
+    SCHEDULED --> REPLACED : UPGRADE order paid (BR-63)
+    EXPIRED --> [*]
+    REPLACED --> [*]

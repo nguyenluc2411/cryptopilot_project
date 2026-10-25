@@ -1,0 +1,19 @@
+---
+title: STM-02 ALERT alert_status (SDD Figure 32)
+---
+%% Source: watchlist/model/enums/AlertStatus.java (transition table), watchlist/entity/Alert.java,
+%% watchlist/repository/AlertRepository.java (trigger and expiry updates), watchlist/job/AlertExpirySweepJob.java.
+stateDiagram-v2
+    [*] --> ACTIVE : create alert within ACTIVE_ALERT_MAX (UC-13, BR-16, BR-17)
+    ACTIVE --> PAUSED : pause (SRS 3.4.3)
+    PAUSED --> ACTIVE : resume within ACTIVE_ALERT_MAX (SRS 3.4.3, BR-17)
+    ACTIVE --> ACTIVE : fires in ONCE_PER_BAR or EVERY_TIME mode, cooldown kept (NSF-06, BR-19)
+    ACTIVE --> TRIGGERED : fires in ONCE mode (NSF-06, BR-19)
+    ACTIVE --> EXPIRED : expiry sweep (BR-19)
+    PAUSED --> EXPIRED : expiry sweep (BR-19)
+    TRIGGERED --> ACTIVE : edit the rule (SRS 3.4.3)
+    EXPIRED --> ACTIVE : edit the rule (SRS 3.4.3)
+    ACTIVE --> [*] : delete, or its watchlist row removed (SRS 3.4.3, BR-16)
+    PAUSED --> [*] : delete, or its watchlist row removed
+    TRIGGERED --> [*] : delete, or its watchlist row removed
+    EXPIRED --> [*] : delete, or its watchlist row removed

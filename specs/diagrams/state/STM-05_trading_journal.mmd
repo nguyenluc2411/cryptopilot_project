@@ -1,0 +1,14 @@
+---
+title: STM-05 TRADING_JOURNAL trade_status (SDD Figure 31)
+---
+%% Source: trading/model/enums/PositionStatus.java, journal/service/impl/PersistentTradeJournal.java,
+%% journal/repository/TradingJournalRepository.java (closeIfOpen, changeLevelsIfOpen, correctFunding),
+%% trading/matching/ExitRule.java, trading/model/enums/CloseReason.java, journal/job/FundingCorrectionJob.java.
+stateDiagram-v2
+    [*] --> OPEN : plan EXECUTED, record opened in the fill transaction (BR-34)
+    OPEN --> OPEN : edit stop loss or take profit, level change kept (UC-21, BR-22, BR-28, BR-29)
+    OPEN --> CLOSED : exit TAKE_PROFIT or STOP_LOSS on the last price (NSF-07, BR-35)
+    OPEN --> CLOSED : exit LIQUIDATION on the mark price, Futures (BR-27, BR-35)
+    OPEN --> CLOSED : manual close at the last price (UC-21, BR-39)
+    CLOSED --> CLOSED : funding recomputed while funding_incomplete (BR-37, NSF-04)
+    CLOSED --> [*] : fees, funding and net P/L recorded (BR-36, BR-37)

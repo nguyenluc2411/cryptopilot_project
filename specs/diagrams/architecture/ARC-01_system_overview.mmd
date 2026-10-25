@@ -1,0 +1,70 @@
+---
+title: ARC-01 System overview (SDD Figure 1); dashed = planned, no code yet
+---
+%% Source: backend/src/main/java/com/cryptopilot (one package per Spring Modulith module), backend/pom.xml,
+%% ai-service/src, deploy/docker-compose.dev.yml, the client packages of market, news, community, academy and
+%% notification. The web client is developed in a separate repository; web/ and mobile/ here hold only .gitkeep.
+flowchart LR
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+    classDef store fill:#eef4ff,stroke:#4a6fa5,color:#1d2b44
+
+    subgraph Clients["Clients"]
+        web["Web app (separate repository)"]
+        mobile["Mobile app"]:::planned
+    end
+
+    subgraph Backend["Backend: Spring Boot modular monolith (REST /api/v1, STOMP over WebSocket /ws)"]
+        direction TB
+        auth["auth"]
+        user["user"]
+        market["market"]
+        watchlist["watchlist"]
+        trading["trading"]
+        journal["journal"]
+        paper["paper"]
+        notification["notification"]
+        community["community"]
+        news["news"]
+        academy["academy"]
+        billing["billing: entitlements"]
+        admin["admin"]
+        ai["ai: AI Service client"]
+        common["common: config, security, outbox, rate limit"]
+        payment["billing: checkout, IPN, subscription lifecycle"]:::planned
+        assistant["AI Assistant conversations"]:::planned
+    end
+
+    subgraph AiSvc["AI Service: Node.js, TypeScript"]
+        summary["POST news summary"]
+        chat["Assistant answer"]:::planned
+    end
+
+    subgraph Stores["Data stores"]
+        pg[("PostgreSQL 16 + TimescaleDB")]:::store
+        redis[("Redis: price cache, rate limits, locks")]:::store
+    end
+
+    subgraph External["External systems"]
+        binance[("Binance REST and WebSocket streams")]
+        rss[("News sources: RSS")]
+        llm[("LLM provider: Gemini")]
+        cloud[("Cloudinary: post media, academy covers")]
+        smtp[("SMTP email")]
+        gateway[("VNPay, MoMo")]:::planned
+        fcm[("Push notification service")]:::planned
+    end
+
+    web -- "HTTPS, WebSocket" --> Backend
+    mobile -.-> Backend
+    Backend --> pg
+    Backend --> redis
+    market --> binance
+    news --> rss
+    news --> ai
+    ai --> summary --> llm
+    community --> cloud
+    academy --> cloud
+    notification --> smtp
+    payment -.-> gateway
+    assistant -.-> chat -.-> llm
+    notification -.-> fcm
