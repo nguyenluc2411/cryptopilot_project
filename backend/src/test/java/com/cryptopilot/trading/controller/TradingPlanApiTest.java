@@ -209,9 +209,10 @@ class TradingPlanApiTest {
     @Test
     void D116_thePanelAndTheSavedPlan_answerTheFeeFigures() throws Exception {
         UUID trader = trader();
+        profileCapital(trader, "10000");
         String body = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
                 + " \"entryType\": \"LIMIT\", \"entryPrice\": 100, \"stopLoss\": 98, \"takeProfit\": 106,"
-                + " \"capital\": 10000, \"riskPercent\": 1}";
+                + " \"riskPercent\": 1}";
 
         as(trader, post(PLANS + "/calculate"), body).andExpect(status().isOk()).andExpectAll(feeFigures());
         String id =
@@ -227,6 +228,7 @@ class TradingPlanApiTest {
     void D116_aHighFeeShare_isStoredAsAWarning_andNeverBlocks() throws Exception {
         UUID trader = trader();
         subscribeToPro(trader);
+        profileCapital(trader, "10000");
         lastPrice(MarketType.FUTURES, "100250");
 
         as(
@@ -234,7 +236,7 @@ class TradingPlanApiTest {
                         post(PLANS),
                         "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
                                 + " \"entryType\": \"MARKET\", \"stopLoss\": 99750, \"takeProfit\": 101750,"
-                                + " \"capital\": 10000, \"riskPercent\": 1, \"leverage\": 5, \"activate\": true}")
+                                + " \"riskPercent\": 1, \"leverage\": 5, \"activate\": true}")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("EXECUTED"))
                 .andExpect(jsonPath("$.snapshot.feeShareOfRisk").value("0.20000000"))
@@ -505,10 +507,11 @@ class TradingPlanApiTest {
     @Test
     void MSG18_aBlockingWarning_refusesTheActivation() throws Exception {
         UUID trader = trader();
+        profileCapital(trader, "100");
         // Risk 10 % of 100 over a stop of 5 buys 2 units: a notional of 200 above the capital (BR-25).
         String blocked = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
                 + " \"entryType\": \"LIMIT\", \"entryPrice\": 100, \"stopLoss\": 95, \"takeProfit\": 110,"
-                + " \"capital\": 100, \"riskPercent\": 10}";
+                + " \"riskPercent\": 10}";
         String id = id(as(trader, post(PLANS), blocked)
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.blocksActivation").value(true)));
@@ -999,6 +1002,139 @@ class TradingPlanApiTest {
                         .value("WARNING"));
     }
 
+    // ------------------------------------------------------------------------------------------
+    // The account capital (TP-D; D-121)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * D-121: the request carries no capital. A client still sending one is not refused and not obeyed: the panel and
+     * the plan are sized on the profile's 1,000.
+     */
+    @Test
+    void D121_aCapitalStillSent_isIgnored_thePlanTakesTheProfileCapital() throws Exception {
+        UUID trader = trader();
+        String body = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"LIMIT\", \"entryPrice\": 100, \"stopLoss\": 95, \"takeProfit\": 110,"
+                + " \"capital\": 5000}";
+
+        as(trader, post(PLANS + "/calculate"), body)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.capital").value("1000.00000000"))
+                .andExpect(jsonPath("$.snapshot.positionQuantity").value("2.000000000000"));
+        as(trader, post(PLANS), body)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.capital").value("1000.00000000"))
+                .andExpect(jsonPath("$.snapshot.positionQuantity").value("2.000000000000"));
+    }
+
+    /**
+     * D-121: a profile without a default capital refuses the panel, the save and the activation with MSG01 on
+     * {@code capital}, so the client can send the Trader to Profile &amp; Settings; nothing is stored.
+     */
+    @Test
+    void MSG01_aProfileWithoutADefaultCapital_refusesThePlanOnTheCapital() throws Exception {
+        UUID trader = trader();
+        String id = id(as(trader, post(PLANS), spotLimit("100", "95", "110", false)));
+        profileCapital(trader, "null");
+
+        as(trader, post(PLANS + "/calculate"), spotLimit("100", "95", "110", false))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.capital").value("MSG01"));
+        as(trader, post(PLANS), spotLimit("100", "95", "110", true))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.capital").value("MSG01"));
+        as(trader, put(PLANS + "/" + id), update("96"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.capital").value("MSG01"));
+        as(trader, post(PLANS + "/" + id + "/activate"), null)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.capital").value("MSG01"));
+
+        assertThat(plansOf(trader)).isOne();
+        as(trader, get(PLANS + "/" + id), null)
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andExpect(jsonPath("$.stopLoss").value("95.000000000000"))
+                .andExpect(jsonPath("$.capital").value("1000.00000000"));
+    }
+
+    /**
+     * D-121, BR-31: the plan keeps the capital of its save while the profile changes, and its activation recalculates
+     * it on the profile's capital of that moment.
+     */
+    @Test
+    void BR31_aDraftKeepsTheCapitalOfItsSave_andActivationTakesTheProfileCapitalOfNow() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        String id = id(as(trader, post(PLANS), waitingBody(false))
+                .andExpect(jsonPath("$.capital").value("1000.00000000"))
+                .andExpect(jsonPath("$.snapshot.riskAmount").value("10.00000000")));
+        profileCapital(trader, "2000");
+
+        as(trader, get(PLANS + "/" + id), null)
+                .andExpect(jsonPath("$.capital").value("1000.00000000"))
+                .andExpect(jsonPath("$.snapshot.positionQuantity").value("2.000000000000"));
+        as(trader, post(PLANS + "/" + id + "/activate"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.capital").value("2000.00000000"))
+                .andExpect(jsonPath("$.snapshot.positionQuantity").value("4.000000000000"))
+                .andExpect(jsonPath("$.snapshot.riskAmount").value("20.00000000"));
+        profileCapital(trader, "500");
+        as(trader, get(PLANS + "/" + id), null)
+                .andExpect(jsonPath("$.capital").value("2000.00000000"))
+                .andExpect(jsonPath("$.snapshot.riskAmount").value("20.00000000"));
+    }
+
+    /**
+     * D-121, BR-29, D-119 (3): TOTAL_OPEN_RISK divides by the profile's capital of now. Three plans waiting at 90 (SL
+     * 85), activated under profile capitals of 1,000, 2,000 and 4,000, risk 10, 20 and 40; a MARKET plan filled under
+     * 1,000 is an open position risking 10. On 2,500 a new plan risks 25: 105 is 4.2 %, above BALANCED's 4 %, and
+     * without the open position it would be 3.8 %. On 10,000 it risks 100: 180 is 1.8 %.
+     */
+    @Test
+    void BR29_theTotalOpenRisk_isDividedByTheProfileCapitalOfNow() throws Exception {
+        UUID trader = trader();
+        subscribeToPro(trader);
+        lastPrice("100");
+        for (String capital : List.of("1000", "2000", "4000")) {
+            profileCapital(trader, capital);
+            as(trader, post(PLANS), waitingBody(true))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.status").value("ACTIVE"))
+                    .andExpect(jsonPath("$.capital").value(capital + ".00000000"));
+        }
+        profileCapital(trader, "1000");
+        as(trader, post(PLANS), spotMarket(true))
+                .andExpect(jsonPath("$.status").value("EXECUTED"))
+                .andExpect(jsonPath("$.snapshot.riskAmount").value("10.00000000"));
+
+        profileCapital(trader, "2500");
+        as(trader, post(PLANS + "/calculate"), waitingBody(false))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.snapshot.riskAmount").value("25.00000000"))
+                .andExpect(jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')].message")
+                        .value("the total open risk of 4.2% of capital is above the risk profile's maximum of 4%"));
+        profileCapital(trader, "10000");
+        as(trader, post(PLANS + "/calculate"), waitingBody(false))
+                .andExpect(status().isOk())
+                .andExpect(
+                        jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')]").isEmpty());
+    }
+
+    /** {@link #waiting} as the JSON a client sends. */
+    private String waitingBody(boolean activate) {
+        return spotLimit("90", "85", "110", activate);
+    }
+
+    /**
+     * Sets the default capital of the Trader's profile as the Trader does on SCR-07 ({@code null} clears it); the
+     * Trader of {@link #trader()} has no other default to keep.
+     */
+    private void profileCapital(UUID trader, String capital) throws Exception {
+        as(trader, put("/api/v1/me/profile"), "{\"displayName\": \"Trader\", \"defaultCapital\": " + capital + "}")
+                .andExpect(status().isOk());
+    }
+
     /** A Spot LONG LIMIT at 90 (SL 85, TP 110), below a last price of 100, so it waits when activated. */
     private CreateTradingPlanRequest waiting(boolean activate) {
         return new CreateTradingPlanRequest(
@@ -1009,7 +1145,6 @@ class TradingPlanApiTest {
                 new BigDecimal("90"),
                 new BigDecimal("85"),
                 new BigDecimal("110"),
-                null,
                 null,
                 null,
                 null,
@@ -1631,7 +1766,6 @@ class TradingPlanApiTest {
                 new BigDecimal("100"),
                 new BigDecimal("95"),
                 new BigDecimal("110"),
-                null,
                 null,
                 null,
                 null,

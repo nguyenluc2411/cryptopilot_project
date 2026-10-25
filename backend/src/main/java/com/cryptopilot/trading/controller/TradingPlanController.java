@@ -71,7 +71,10 @@ public class TradingPlanController {
                     + " loss and take profit fees, slippage, loss at stop loss, fee share of risk, risk/reward after"
                     + " fees) include the trading fees and slippage only; funding and the liquidation clearance fee are"
                     + " not included (D-116)")
-    @ApiResponse(responseCode = "400", description = "MSG01, MSG15, MSG16: `errors` names each rejected field")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01, MSG15, MSG16: `errors` names each rejected field; MSG01 on `capital` when the"
+                    + " caller's profile has no default capital, which every plan is sized on (D-121)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: the pair is not enabled on the market")
@@ -88,7 +91,8 @@ public class TradingPlanController {
     @ApiResponse(responseCode = "201", description = "The plan; MSG19 when it was activated")
     @ApiResponse(
             responseCode = "400",
-            description = "MSG01, MSG15, MSG16: `errors` names each rejected field. " + MSG51)
+            description = "MSG01, MSG15, MSG16: `errors` names each rejected field; MSG01 on `capital` when the"
+                    + " caller's profile has no default capital, which every plan is sized on (D-121). " + MSG51)
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: the pair is not enabled on the market")
@@ -146,7 +150,8 @@ public class TradingPlanController {
     @ApiResponse(responseCode = "200", description = "The plan")
     @ApiResponse(
             responseCode = "400",
-            description = "MSG01, MSG15, MSG16: `errors` names each rejected field. " + MSG51)
+            description = "MSG01, MSG15, MSG16: `errors` names each rejected field; MSG01 on `capital` when the"
+                    + " caller's profile has no default capital, which every plan is sized on (D-121). " + MSG51)
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller, or the pair is not enabled")
@@ -169,7 +174,7 @@ public class TradingPlanController {
     @ApiResponse(
             responseCode = "400",
             description =
-                    "MSG01, MSG15, MSG16: the plan no longer passes the calculation, its invalidation price is no longer on the far side of the current price, its STOP is already triggered (entryPrice), or the last price has already reached its stop loss (STOP) or take profit (LIMIT). "
+                    "MSG01, MSG15, MSG16: the plan no longer passes the calculation, its invalidation price is no longer on the far side of the current price, its STOP is already triggered (entryPrice), or the last price has already reached its stop loss (STOP) or take profit (LIMIT); MSG01 on `capital` when the profile has no default capital, the capital the plan is recalculated on (D-121). "
                             + MSG51)
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")

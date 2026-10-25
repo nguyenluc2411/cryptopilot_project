@@ -15,9 +15,10 @@ import java.util.UUID;
 
 /**
  * A new plan (UC-16), or the values the live risk panel calculates (no persistence). The pair is fixed once the
- * plan is saved. Only the shape is checked here; the rules of BR-21 to BR-30 are the calculation's.
+ * plan is saved. Only the shape is checked here; the rules of BR-21 to BR-30 are the calculation's. There is no
+ * capital: every plan is sized on the Trader's account size, the default capital of the profile (D-121).
  *
- * <p>Rule: SRS 3.5.1; BR-30 (ranges), BR-68, BR-69, BR-70; D-111, D-112.
+ * <p>Rule: SRS 3.5.1; BR-30 (ranges), BR-68, BR-69, BR-70; D-111, D-112, D-121.
  *
  * @param pairId the pair, enabled on the market
  * @param market SPOT or FUTURES
@@ -26,7 +27,6 @@ import java.util.UUID;
  * @param entryPrice required for LIMIT, the stop price of a STOP; ignored for MARKET, which takes the current price
  * @param stopLoss the stop loss
  * @param takeProfit the take profit
- * @param capital the capital, or {@code null} for the profile's default capital
  * @param riskPercent 0.1 to 10, or {@code null} for the profile's default
  * @param leverage 1 or more on Futures, {@code null} for 1; 1 or {@code null} on Spot
  * @param expiresAt when the ACTIVE plan expires unfilled; {@code null} is 7 days for LIMIT and STOP, none for MARKET
@@ -60,10 +60,6 @@ public record CreateTradingPlanRequest(
         @DecimalMin(value = "0", inclusive = false, message = "MSG15")
         @Digits(integer = 16, fraction = 12, message = "MSG15")
         BigDecimal takeProfit,
-
-        @DecimalMin(value = "0", inclusive = false, message = "MSG15")
-        @Digits(integer = 20, fraction = 8, message = "MSG15")
-        BigDecimal capital,
 
         @DecimalMin(value = "0.1", message = "MSG15")
         @DecimalMax(value = "10", message = "MSG15")

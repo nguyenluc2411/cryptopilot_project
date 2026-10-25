@@ -13,7 +13,7 @@ import java.util.List;
  * @param expectedFillPrice MARKET only: the reference price moved against the Trader by {@code SLIPPAGE_BPS}, rounded
  *     to the tick against them; the price the quantity is sized on and the activation fills at (D-112 R6). Equal to
  *     {@code entryPrice} at 0 bps; {@code null} for LIMIT and STOP
- * @param capital the capital calculated with
+ * @param capital the capital calculated with: the profile's default capital, not an input of the plan (D-121)
  * @param riskPercent the risk % calculated with
  * @param snapshot the calculated values
  * @param warnings the warnings, most severe first
