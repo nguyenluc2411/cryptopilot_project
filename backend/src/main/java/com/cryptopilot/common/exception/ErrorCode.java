@@ -424,7 +424,16 @@ public enum ErrorCode {
      * A published Academy lesson is hidden before it is deleted, so that no reader loses it by surprise (T-114).
      * Borrows MSG43. 409: the lesson's status refuses it.
      */
-    ACADEMY_ARTICLE_PUBLISHED(HttpStatus.CONFLICT, "MSG43");
+    ACADEMY_ARTICLE_PUBLISHED(HttpStatus.CONFLICT, "MSG43"),
+
+    /** An Academy topic that still holds lessons cannot be deleted (T-114). Borrows MSG43. 409: move them first. */
+    ACADEMY_TOPIC_IN_USE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * Another administrator changed this Academy lesson, term or topic since the editor opened it (T-114); nothing is
+     * changed. Borrows MSG43. 409: the editor reloads and applies the change again.
+     */
+    ACADEMY_EDIT_CONFLICT(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

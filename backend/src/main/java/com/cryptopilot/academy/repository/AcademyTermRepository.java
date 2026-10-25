@@ -26,4 +26,7 @@ public interface AcademyTermRepository extends Repository<AcademyTerm, UUID> {
     AcademyTerm save(AcademyTerm term);
 
     void delete(AcademyTerm term);
+
+    /** Sends pending statements, so the new version is known before the response is built. */
+    void flush();
 }

@@ -419,6 +419,27 @@ cryptopilot:
       enabled: false
       cron: "0 * * * * *"
       zone: UTC
+  academy:
+    cover:
+      # T-114: the cover photos of Academy lessons, on the community's Cloudinary account (same variables) in a folder of
+      # their own. The admin's browser uploads with a form the backend signs. All three empty: uploads are refused and a
+      # cover keeps any https address (dev and tests).
+      cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+      api-key: ${CLOUDINARY_API_KEY:}
+      api-secret: ${CLOUDINARY_API_SECRET:}
+      api-base-url: https://api.cloudinary.com
+      delivery-base-url: https://res.cloudinary.com
+      folder: cryptopilot/academy
+      # Covers are shown at 16:9; Cloudinary crops around the subject and picks the format and quality per browser.
+      transformation: c_fill,g_auto,w_1200,h_675,q_auto,f_auto
+  ai:
+    service:
+      # ADR-004: the AI Service holds the LLM key; the backend knows only where it is and the secret it expects.
+      url: ${AI_SERVICE_URL:http://localhost:7070}
+      shared-secret: ${AI_SERVICE_SHARED_SECRET:}
+      connect-timeout: 5s
+      # Above the AI Service's own 60-second limit and its one retry.
+      request-timeout: 130s
 
 springdoc:
   # TECHNICAL_DESIGN 8: the OpenAPI document and Swagger UI at their standard paths; off in the prod profile.

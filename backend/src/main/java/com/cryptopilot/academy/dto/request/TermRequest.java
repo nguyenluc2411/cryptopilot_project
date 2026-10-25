@@ -1,5 +1,6 @@
 package com.cryptopilot.academy.dto.request;
 
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -14,6 +15,7 @@ import jakarta.validation.constraints.Size;
  * @param term 1 to 120 characters
  * @param definition 1 to 1 000 characters
  * @param articleSlug the slug of the lesson that explains the term, or {@code null}
+ * @param version the version the administrator edited, required to change a term and ignored for a new one
  */
 public record TermRequest(
         @NotBlank(message = "MSG01")
@@ -27,7 +29,9 @@ public record TermRequest(
         @NotBlank(message = "MSG01") @Size(max = 1_000, message = "MSG01")
         String definition,
 
-        String articleSlug) {
+        String articleSlug,
+
+        @Min(value = 0, message = "MSG15") Long version) {
 
     public TermRequest {
         slug = slug == null ? null : slug.strip();

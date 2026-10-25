@@ -2,9 +2,12 @@ package com.cryptopilot.academy.controller;
 
 import com.cryptopilot.academy.dto.request.ArticleRequest;
 import com.cryptopilot.academy.dto.request.TermRequest;
+import com.cryptopilot.academy.dto.request.TopicRequest;
 import com.cryptopilot.academy.dto.response.AdminArticleResponse;
 import com.cryptopilot.academy.dto.response.AdminArticleSummaryResponse;
 import com.cryptopilot.academy.dto.response.AdminTermResponse;
+import com.cryptopilot.academy.dto.response.AdminTopicResponse;
+import com.cryptopilot.academy.dto.response.CoverUploadResponse;
 import com.cryptopilot.academy.model.enums.ArticleStatus;
 import com.cryptopilot.academy.service.AcademyAdminService;
 import com.cryptopilot.common.config.OpenApiConfig;
@@ -34,8 +37,9 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The Academy in the administration console: lessons in every status, their editor, publishing and hiding, and the
- * glossary. Admin only, under {@code /admin}; every change is audited (BR-57).
+ * The Academy in the administration console: topics, lessons in every status, their editor, publishing and hiding,
+ * cover uploads and the glossary. Admin only, under {@code /admin}; every change is audited (BR-57). A change sends
+ * back the version it was made on and is refused with ACADEMY_EDIT_CONFLICT when somebody saved in between.
  *
  * <p>Rule: BR-57; T-114.
  */
@@ -84,13 +88,14 @@ public class AcademyAdminController {
         return service.create(callerOf(caller), request);
     }
 
-    @Operation(summary = "New content for a lesson; its status stays")
+    @Operation(summary = "New content for a lesson, made on the version it names; its status stays")
     @ApiResponse(responseCode = "200", description = "The lesson")
     @ApiResponse(responseCode = "400", description = "MSG01 or MSG15: a field is missing or invalid")
     @ApiResponse(responseCode = "404", description = "MSG41: no such lesson")
     @ApiResponse(
             responseCode = "409",
-            description = "ACADEMY_SLUG_TAKEN or ACADEMY_PATH_ORDER_TAKEN: the slug or the place is taken")
+            description = "ACADEMY_EDIT_CONFLICT: changed since it was opened; ACADEMY_SLUG_TAKEN or"
+                    + " ACADEMY_PATH_ORDER_TAKEN: the slug or the place is taken")
     @PutMapping("/articles/{id}")
     public AdminArticleResponse update(
             @AuthenticationPrincipal Jwt caller, @PathVariable UUID id, @Valid @RequestBody ArticleRequest request) {
@@ -142,11 +147,13 @@ public class AcademyAdminController {
         return service.createTerm(callerOf(caller), request);
     }
 
-    @Operation(summary = "New content for a term")
+    @Operation(summary = "New content for a term, made on the version it names")
     @ApiResponse(responseCode = "200", description = "The term")
     @ApiResponse(responseCode = "400", description = "MSG01: a field is missing or invalid, or no such lesson")
     @ApiResponse(responseCode = "404", description = "MSG41: no such term")
-    @ApiResponse(responseCode = "409", description = "ACADEMY_SLUG_TAKEN: the slug is taken")
+    @ApiResponse(
+            responseCode = "409",
+            description = "ACADEMY_EDIT_CONFLICT: changed since it was opened; ACADEMY_SLUG_TAKEN: the slug is taken")
     @PutMapping("/terms/{id}")
     public AdminTermResponse updateTerm(
             @AuthenticationPrincipal Jwt caller, @PathVariable UUID id, @Valid @RequestBody TermRequest request) {
@@ -160,6 +167,55 @@ public class AcademyAdminController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteTerm(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
         service.deleteTerm(callerOf(caller), id);
+    }
+
+    @Operation(summary = "Every topic, in display order, with its number of lessons")
+    @ApiResponse(responseCode = "200", description = "The topics")
+    @GetMapping("/topics")
+    public List<AdminTopicResponse> topics() {
+        return service.topics();
+    }
+
+    @Operation(summary = "A new topic")
+    @ApiResponse(responseCode = "201", description = "The topic")
+    @ApiResponse(responseCode = "400", description = "MSG01 or MSG15: a field is missing or invalid")
+    @ApiResponse(responseCode = "409", description = "ACADEMY_SLUG_TAKEN: the slug is taken")
+    @PostMapping("/topics")
+    @ResponseStatus(HttpStatus.CREATED)
+    public AdminTopicResponse createTopic(
+            @AuthenticationPrincipal Jwt caller, @Valid @RequestBody TopicRequest request) {
+        return service.createTopic(callerOf(caller), request);
+    }
+
+    @Operation(summary = "New content for a topic, made on the version it names")
+    @ApiResponse(responseCode = "200", description = "The topic")
+    @ApiResponse(responseCode = "400", description = "MSG01 or MSG15: a field or the version is missing or invalid")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such topic")
+    @ApiResponse(
+            responseCode = "409",
+            description = "ACADEMY_EDIT_CONFLICT: changed since it was opened; ACADEMY_SLUG_TAKEN: the slug is taken")
+    @PutMapping("/topics/{id}")
+    public AdminTopicResponse updateTopic(
+            @AuthenticationPrincipal Jwt caller, @PathVariable UUID id, @Valid @RequestBody TopicRequest request) {
+        return service.updateTopic(callerOf(caller), id, request);
+    }
+
+    @Operation(summary = "Deletes a topic without lessons")
+    @ApiResponse(responseCode = "204", description = "Deleted")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such topic")
+    @ApiResponse(responseCode = "409", description = "ACADEMY_TOPIC_IN_USE: the topic still holds lessons")
+    @DeleteMapping("/topics/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteTopic(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
+        service.deleteTopic(callerOf(caller), id);
+    }
+
+    @Operation(summary = "Signs the upload of one cover photo, straight from the browser to Cloudinary")
+    @ApiResponse(responseCode = "200", description = "The fields of the upload form")
+    @ApiResponse(responseCode = "503", description = "MEDIA_STORAGE_UNAVAILABLE: no media storage is set")
+    @PostMapping("/covers/upload-signature")
+    public CoverUploadResponse coverUpload() {
+        return service.coverUpload();
     }
 
     private static UUID callerOf(Jwt caller) {

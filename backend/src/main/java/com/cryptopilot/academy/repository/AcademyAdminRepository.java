@@ -2,6 +2,7 @@ package com.cryptopilot.academy.repository;
 
 import com.cryptopilot.academy.model.ArticleListing;
 import com.cryptopilot.academy.model.TermListing;
+import com.cryptopilot.academy.model.TopicListing;
 import com.cryptopilot.academy.model.enums.ArticleLevel;
 import com.cryptopilot.academy.model.enums.ArticleStatus;
 import java.sql.Timestamp;
@@ -92,7 +93,7 @@ public class AcademyAdminRepository {
             params.put("text", "%" + likeEscaped(text) + "%");
         }
         return sql.sql("""
-                        select g.term_id, g.slug, g.term, g.definition, a.slug as article_slug
+                        select g.term_id, g.slug, g.term, g.definition, a.slug as article_slug, g.version
                           from academy_term g
                           left join academy_article a on a.article_id = g.article_id""" + where + " order by lower(g.term), g.slug")
                 .params(params)
@@ -101,8 +102,35 @@ public class AcademyAdminRepository {
                         row.getString("slug"),
                         row.getString("term"),
                         row.getString("definition"),
-                        row.getString("article_slug")))
+                        row.getString("article_slug"),
+                        row.getLong("version")))
                 .list();
+    }
+
+    /** Every topic in display order, with the number of its lessons whatever their status. */
+    public List<TopicListing> topics() {
+        return sql.sql("""
+                        select t.topic_id, t.slug, t.name, t.description, t.sort_order, t.version,
+                               (select count(*) from academy_article a where a.topic_id = t.topic_id) as articles
+                          from academy_topic t
+                         order by t.sort_order, t.slug""")
+                .query((row, index) -> new TopicListing(
+                        row.getObject("topic_id", UUID.class),
+                        row.getString("slug"),
+                        row.getString("name"),
+                        row.getString("description"),
+                        row.getInt("sort_order"),
+                        row.getLong("articles"),
+                        row.getLong("version")))
+                .list();
+    }
+
+    /** How many lessons the topic holds, whatever their status. */
+    public long articleCount(UUID topicId) {
+        return sql.sql("select count(*) from academy_article where topic_id = :id")
+                .param("id", topicId)
+                .query(Long.class)
+                .single();
     }
 
     /** The key of the topic with this slug, or empty. */

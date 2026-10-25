@@ -76,7 +76,9 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.PAIR_ALREADY_REGISTERED, "MSG43 409"),
             Map.entry(ErrorCode.ACADEMY_SLUG_TAKEN, "MSG43 409"),
             Map.entry(ErrorCode.ACADEMY_PATH_ORDER_TAKEN, "MSG43 409"),
-            Map.entry(ErrorCode.ACADEMY_ARTICLE_PUBLISHED, "MSG43 409"));
+            Map.entry(ErrorCode.ACADEMY_ARTICLE_PUBLISHED, "MSG43 409"),
+            Map.entry(ErrorCode.ACADEMY_TOPIC_IN_USE, "MSG43 409"),
+            Map.entry(ErrorCode.ACADEMY_EDIT_CONFLICT, "MSG43 409"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

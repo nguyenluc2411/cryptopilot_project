@@ -10,5 +10,7 @@ import java.util.UUID;
  * @param term the term as it is written
  * @param definition what it means
  * @param articleSlug the lesson it points at, whatever that lesson's status, or {@code null}
+ * @param version the version to send back with a change
  */
-public record AdminTermResponse(UUID id, String slug, String term, String definition, String articleSlug) {}
+public record AdminTermResponse(
+        UUID id, String slug, String term, String definition, String articleSlug, long version) {}

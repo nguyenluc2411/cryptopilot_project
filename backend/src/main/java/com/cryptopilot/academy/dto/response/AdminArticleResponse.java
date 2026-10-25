@@ -25,6 +25,7 @@ import java.util.UUID;
  * @param publishedAt the first publication, or {@code null}
  * @param createdAt when the lesson was created
  * @param updatedAt the last change
+ * @param version the version to send back with a change
  */
 public record AdminArticleResponse(
         UUID id,
@@ -43,4 +44,5 @@ public record AdminArticleResponse(
         ArticleStatus status,
         Instant publishedAt,
         Instant createdAt,
-        Instant updatedAt) {}
+        Instant updatedAt,
+        long version) {}

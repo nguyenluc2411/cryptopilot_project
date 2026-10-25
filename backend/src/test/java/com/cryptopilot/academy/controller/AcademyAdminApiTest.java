@@ -49,6 +49,7 @@ class AcademyAdminApiTest {
     private static final String ADMIN = "/api/v1/admin/academy";
     private static final String SLUG = "qa-bai-thu-nghiem";
     private static final String TERM_SLUG = "qa-thuat-ngu";
+    private static final String TOPIC_SLUG = "qa-chu-de";
 
     @Autowired
     private MockMvc mvc;
@@ -65,6 +66,7 @@ class AcademyAdminApiTest {
     void removeRows() {
         sql.sql("delete from academy_term where slug like 'qa-%'").update();
         sql.sql("delete from academy_article where slug like 'qa-%'").update();
+        sql.sql("delete from academy_topic where slug like 'qa-%'").update();
         for (UUID account : accounts) {
             sql.sql("delete from audit_log where user_id = ?").param(account).update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();
@@ -151,11 +153,12 @@ class AcademyAdminApiTest {
                         .getResponse()
                         .getContentAsString(),
                 "$.id");
-        as(admin, put(ADMIN + "/articles/" + id), article(SLUG, 99).replace("Bài thử", "Bài đã sửa"))
+        as(admin, put(ADMIN + "/articles/" + id), edited(article(SLUG, 99).replace("Bài thử", "Bài đã sửa"), 0))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.title").value("Bài đã sửa"))
-                .andExpect(jsonPath("$.pathOrder").value(99));
-        as(admin, put(ADMIN + "/articles/" + id), article("tien-ma-hoa-la-gi", 99))
+                .andExpect(jsonPath("$.pathOrder").value(99))
+                .andExpect(jsonPath("$.version").value(1));
+        as(admin, put(ADMIN + "/articles/" + id), edited(article("tien-ma-hoa-la-gi", 99), 1))
                 .andExpect(jsonPath("$.code").value("ACADEMY_SLUG_TAKEN"));
     }
 
@@ -174,8 +177,9 @@ class AcademyAdminApiTest {
         as(admin, post(ADMIN + "/terms"), term("qa-khac", "khong-co-bai")).andExpect(status().isBadRequest());
         as(admin, get(ADMIN + "/terms?q=QA")).andExpect(jsonPath("$[0].slug").value(TERM_SLUG));
 
-        as(admin, put(ADMIN + "/terms/" + id), term(TERM_SLUG, null))
+        as(admin, put(ADMIN + "/terms/" + id), edited(term(TERM_SLUG, null), 0))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1))
                 .andExpect(jsonPath("$.articleSlug").doesNotExist());
         mvc.perform(get("/api/v1/academy/terms?q=QA thuật"))
                 .andExpect(jsonPath("$[0].slug").value(TERM_SLUG));
@@ -190,12 +194,89 @@ class AcademyAdminApiTest {
     }
 
     @Test
+    void T114_aChangeMadeOnAnOlderVersion_isRefused_andOneWithoutAVersionToo() throws Exception {
+        UUID admin = account(UserRole.ADMIN);
+        String id = JsonPath.read(
+                as(admin, post(ADMIN + "/articles"), article(SLUG, null))
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString(),
+                "$.id");
+
+        // Two administrators open version 0; the first saves, the second must not write over it.
+        as(admin, put(ADMIN + "/articles/" + id), edited(article(SLUG, null).replace("Bài thử", "Bản A"), 0))
+                .andExpect(status().isOk());
+        as(admin, put(ADMIN + "/articles/" + id), edited(article(SLUG, null).replace("Bài thử", "Bản B"), 0))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ACADEMY_EDIT_CONFLICT"));
+        as(admin, put(ADMIN + "/articles/" + id), article(SLUG, null)).andExpect(status().isBadRequest());
+        as(admin, get(ADMIN + "/articles/" + id)).andExpect(jsonPath("$.title").value("Bản A"));
+    }
+
+    @Test
+    void T114_BR57_topics_areEdited_audited_andKeptWhileTheyHoldLessons() throws Exception {
+        UUID admin = account(UserRole.ADMIN);
+
+        as(admin, get(ADMIN + "/topics"))
+                .andExpect(jsonPath("$[0].slug").value("nhap-mon-crypto"))
+                .andExpect(jsonPath("$[0].articles").value(3));
+        String created = as(admin, post(ADMIN + "/topics"), topic(TOPIC_SLUG, null))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.articles").value(0))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String id = JsonPath.read(created, "$.id");
+        as(admin, post(ADMIN + "/topics"), topic(TOPIC_SLUG, null))
+                .andExpect(jsonPath("$.code").value("ACADEMY_SLUG_TAKEN"));
+        as(admin, post(ADMIN + "/topics"), topic("Sai Slug", null)).andExpect(status().isBadRequest());
+        as(admin, put(ADMIN + "/topics/" + id), topic(TOPIC_SLUG, 0).replace("Chủ đề thử", "Chủ đề mới"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Chủ đề mới"))
+                .andExpect(jsonPath("$.version").value(1));
+        as(admin, put(ADMIN + "/topics/" + id), topic(TOPIC_SLUG, 0))
+                .andExpect(jsonPath("$.code").value("ACADEMY_EDIT_CONFLICT"));
+        mvc.perform(get("/api/v1/academy/topics")).andExpect(jsonPath("$[*].slug", hasItem(TOPIC_SLUG)));
+
+        String lesson = JsonPath.read(
+                as(admin, post(ADMIN + "/articles"), article(SLUG, null).replace("nhap-mon-crypto", TOPIC_SLUG))
+                        .andExpect(status().isCreated())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString(),
+                "$.id");
+        as(admin, delete(ADMIN + "/topics/" + id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ACADEMY_TOPIC_IN_USE"));
+        as(admin, delete(ADMIN + "/articles/" + lesson)).andExpect(status().isNoContent());
+        as(admin, delete(ADMIN + "/topics/" + id)).andExpect(status().isNoContent());
+        as(admin, delete(ADMIN + "/topics/" + id)).andExpect(status().isNotFound());
+
+        assertThat(sql.sql("select count(*) from audit_log where entity_type = 'ACADEMY_TOPIC' and entity_id = ?")
+                        .param(UUID.fromString(id))
+                        .query(Long.class)
+                        .single())
+                .isEqualTo(3);
+    }
+
+    @Test
+    void T114_aCoverUpload_isRefused_whileNoMediaStorageIsSet() throws Exception {
+        UUID admin = account(UserRole.ADMIN);
+
+        as(admin, post(ADMIN + "/covers/upload-signature"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MEDIA_STORAGE_UNAVAILABLE"));
+    }
+
+    @Test
     void T114_onlyAnAdmin_writesTheAcademy() throws Exception {
         UUID trader = account(UserRole.TRADER);
 
         mvc.perform(get(ADMIN + "/articles")).andExpect(status().isUnauthorized());
         as(trader, get(ADMIN + "/articles")).andExpect(status().isForbidden());
         as(trader, post(ADMIN + "/articles"), article(SLUG, null)).andExpect(status().isForbidden());
+        as(trader, get(ADMIN + "/topics")).andExpect(status().isForbidden());
+        as(trader, post(ADMIN + "/covers/upload-signature")).andExpect(status().isForbidden());
     }
 
     // ------------------------------------------------------------------------------------------
@@ -205,6 +286,16 @@ class AcademyAdminApiTest {
                 {"topic": "nhap-mon-crypto", "slug": "%s", "title": "Bài thử", "summary": "Tóm tắt",
                  "body": "## Mục\\n\\nNội dung", "level": "BEGINNER", "readingMinutes": 3, "sortOrder": 9,
                  "pathOrder": %s, "appLink": "/markets"}""".formatted(slug, pathOrder == null ? "null" : pathOrder);
+    }
+
+    private static String topic(String slug, Integer version) {
+        return """
+                {"slug": "%s", "name": "Chủ đề thử", "description": "Mô tả", "sortOrder": 99, "version": %s}""".formatted(slug, version == null ? "null" : version);
+    }
+
+    /** The form of a change: the same fields plus the version the change was made on. */
+    private static String edited(String json, long version) {
+        return json.substring(0, json.lastIndexOf('}')) + ", \"version\": " + version + "}";
     }
 
     private static String term(String slug, String articleSlug) {
