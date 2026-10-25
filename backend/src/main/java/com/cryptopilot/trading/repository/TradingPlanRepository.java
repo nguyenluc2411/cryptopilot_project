@@ -13,6 +13,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Lock;
@@ -129,6 +130,24 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
             + " p.invalidatedAt = :at, p.invalidationReason = :reason, p.updatedAt = :now, p.version = p.version + 1"
             + " where p.id = :id and p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE")
     int invalidateIfActive(UUID id, Instant at, InvalidationReason reason, Instant now);
+
+    /**
+     * Compare-and-set ACTIVE to EXPIRED for a plan whose expiry has come, as {@link #executeIfActive}: a plan filled,
+     * cancelled or invalidated first, or one whose expiry was moved past {@code now}, is left unchanged (NSF-09).
+     *
+     * @return 1 when the plan was ACTIVE and expired at {@code now}, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update TradingPlan p set p.status = com.cryptopilot.trading.model.enums.PlanStatus.EXPIRED,"
+            + " p.expiredAt = :now, p.updatedAt = :now, p.version = p.version + 1"
+            + " where p.id = :id and p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE"
+            + " and p.expiresAt <= :now")
+    int expireIfActive(UUID id, Instant now);
+
+    /** The ACTIVE plans whose expiry is at or before {@code now}, the oldest expiry first (NSF-09). */
+    @Query("select p from TradingPlan p where p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE"
+            + " and p.expiresAt <= :now order by p.expiresAt, p.id")
+    List<TradingPlan> findExpiring(Instant now, Limit limit);
 
     /**
      * Every waiting plan, for the matching books: the ACTIVE LIMIT and STOP plans with their entry and invalidation

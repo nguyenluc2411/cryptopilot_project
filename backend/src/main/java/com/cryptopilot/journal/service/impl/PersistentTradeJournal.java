@@ -65,6 +65,12 @@ public class PersistentTradeJournal implements TradeJournal {
         return records.findOpenSimulated(positionId).map(TradingJournal::toOpenTrade);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<OpenTrade> openTradeOfPlan(UUID planId) {
+        return records.findOpenSimulatedOfPlan(planId).map(TradingJournal::toOpenTrade);
+    }
+
     /** Joins the exit's transaction and never starts one: the close and its event commit together. */
     @Override
     @Transactional(propagation = Propagation.MANDATORY)

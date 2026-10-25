@@ -59,6 +59,13 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED")
     Optional<TradingJournal> findOpenSimulated(UUID id);
 
+    /** The record of the plan if it is an OPEN SIMULATED one. */
+    @Transactional(readOnly = true)
+    @Query("select j from TradingJournal j where j.planId = :planId"
+            + " and j.status = com.cryptopilot.trading.model.enums.PositionStatus.OPEN"
+            + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED")
+    Optional<TradingJournal> findOpenSimulatedOfPlan(UUID planId);
+
     /**
      * Compare-and-set OPEN to CLOSED at one version, with the exit and the amounts: of two writers that read the same
      * version, exactly one changes the row; the other, and a replay of the same exit, see 0. The missing funding times

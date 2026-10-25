@@ -1,6 +1,8 @@
 package com.cryptopilot.notification.service;
 
 import com.cryptopilot.trading.event.PositionClosed;
+import com.cryptopilot.trading.event.TradingPlanExpired;
+import com.cryptopilot.trading.event.TradingPlanInvalidated;
 import com.cryptopilot.trading.event.TradingPlanWithdrawn;
 
 /**
@@ -17,4 +19,10 @@ public interface PlanNotificationService {
 
     /** Tells the owner that a position closed (MSG23) or was liquidated (MSG24), with its net P/L. */
     void positionClosed(PositionClosed event);
+
+    /** Tells the owner that a plan expired before its entry was filled (MSG53). */
+    void expired(TradingPlanExpired event);
+
+    /** Tells the owner that a plan was invalidated before its entry was filled, and why (MSG54). */
+    void invalidated(TradingPlanInvalidated event);
 }
