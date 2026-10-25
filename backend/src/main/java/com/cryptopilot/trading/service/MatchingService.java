@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.service;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PositionExit;
@@ -8,6 +9,7 @@ import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.TrackedPosition;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,6 +25,12 @@ public interface MatchingService {
 
     /** Every OPEN simulated position with its current levels, read from the journal (D-119). */
     List<TrackedPosition> openPositions();
+
+    /**
+     * The level changes of every OPEN simulated position, oldest first per position, read from the journal: a candle
+     * replayed after a restart that opened before a change is decided by the levels in force then (D-124).
+     */
+    Map<UUID, List<PositionLevelChange>> openLevelChanges();
 
     /**
      * Fills a plan's entry if it is still ACTIVE: the plan becomes EXECUTED at the fill's time, with its liquidity role
