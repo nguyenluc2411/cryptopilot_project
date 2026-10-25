@@ -3,7 +3,9 @@ package com.cryptopilot.news.controller;
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.news.dto.response.AdminNewsArticleResponse;
+import com.cryptopilot.news.dto.response.NewsSentimentSummaryResponse;
 import com.cryptopilot.news.service.NewsArticleAdminService;
+import com.cryptopilot.news.service.NewsFeedService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -25,7 +27,9 @@ import org.springframework.web.bind.annotation.RestController;
  * The collected articles in the administration console (T-080b): what NSF-11 did with each, hiding one from the feed,
  * and asking for its summary again. Admin only, by the {@code /api/v1/admin/**} rule of the security chain.
  *
- * <p>Rule: NSF-11; BR-57; D-128.
+ * <p>The 24-hour count of articles per sentiment is read here, not on the Trader's feed (D-130).
+ *
+ * <p>Rule: NSF-11; BR-57; D-128, D-130.
  */
 @Tag(name = "Admin: news articles", description = "Collected articles, their AI summary status and moderation.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
@@ -35,6 +39,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminNewsArticleController {
 
     private final NewsArticleAdminService service;
+    private final NewsFeedService feed;
+
+    @Operation(summary = "How many shown articles of the last 24 hours are bullish, neutral and bearish (D-130)")
+    @ApiResponse(responseCode = "200", description = "The counts and the start of the 24 hours")
+    @GetMapping("/sentiment-summary")
+    public NewsSentimentSummaryResponse sentimentSummary() {
+        return feed.sentimentSummary();
+    }
 
     @Operation(summary = "The articles, newest first, hidden ones included, with their summary status")
     @ApiResponse(responseCode = "200", description = "One page")

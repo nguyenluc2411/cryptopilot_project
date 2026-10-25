@@ -4,7 +4,6 @@ import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.news.dto.response.NewsArticleDetailResponse;
 import com.cryptopilot.news.dto.response.NewsArticleResponse;
-import com.cryptopilot.news.dto.response.NewsSentimentSummaryResponse;
 import com.cryptopilot.news.service.NewsFeedService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -24,7 +23,9 @@ import org.springframework.web.bind.annotation.RestController;
  * SCR-28 News Feed and the news blocks of SCR-08, SCR-10 and SCR-11 (UC-34). Traders only, by the
  * {@code /api/v1/news/**} rule of the security chain; every plan reads the same (D-130).
  *
- * <p>Rule: UC-34; SRS 3.8.1; D-126, D-129.
+ * <p>The count of articles per sentiment is the administrators' (D-130), on the console.
+ *
+ * <p>Rule: UC-34; SRS 3.8.1; D-126, D-129, D-130.
  */
 @Tag(name = "News", description = "Aggregated crypto news with AI summary and sentiment, SCR-28 (UC-34).")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
@@ -68,12 +69,5 @@ public class NewsController {
     @GetMapping("/{articleId}")
     public NewsArticleDetailResponse article(@PathVariable UUID articleId) {
         return service.article(articleId);
-    }
-
-    @Operation(summary = "How many articles of the last 24 hours are bullish, neutral and bearish (SRS 3.8.1)")
-    @ApiResponse(responseCode = "200", description = "The counts and the start of the 24 hours")
-    @GetMapping("/sentiment-summary")
-    public NewsSentimentSummaryResponse sentimentSummary() {
-        return service.sentimentSummary();
     }
 }

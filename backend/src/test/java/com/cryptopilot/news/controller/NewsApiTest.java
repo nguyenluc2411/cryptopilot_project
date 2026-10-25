@@ -49,6 +49,8 @@ class NewsApiTest {
 
     private static final String NEWS = "/api/v1/news";
 
+    private static final String SENTIMENT_SUMMARY = "/api/v1/admin/news-articles/sentiment-summary";
+
     @Autowired
     private MockMvc mvc;
 
@@ -93,10 +95,9 @@ class NewsApiTest {
     @Test
     void UC34_theFeed_isForTradersOnly() throws Exception {
         mvc.perform(get(NEWS)).andExpect(status().isUnauthorized());
-        mvc.perform(get(NEWS + "/sentiment-summary")).andExpect(status().isUnauthorized());
         UUID admin = account(UserRole.ADMIN);
         as(admin, NEWS).andExpect(status().isForbidden());
-        as(admin, NEWS + "/sentiment-summary").andExpect(status().isForbidden());
+        as(trader, SENTIMENT_SUMMARY).andExpect(status().isForbidden());
         mvc.perform(get(NEWS + "/" + UUID.randomUUID())).andExpect(status().isUnauthorized());
         as(admin, NEWS + "/" + UUID.randomUUID()).andExpect(status().isForbidden());
     }
@@ -239,7 +240,7 @@ class NewsApiTest {
     }
 
     @Test
-    void UC34_theSummaryBar_countsTheLabelledArticlesOfTheLast24Hours_butNoHiddenOne() throws Exception {
+    void D126_theAdminsSummary_countsTheLabelledArticlesOfTheLast24Hours_butNoHiddenOne() throws Exception {
         long[] before = summary();
         article("New bull", "a", now.minus(Duration.ofHours(1)), "t", "s", "BULLISH");
         article("New bull 2", "a", now.minus(Duration.ofHours(23)), "t", "s", "BULLISH");
@@ -317,7 +318,7 @@ class NewsApiTest {
     }
 
     private long[] summary() throws Exception {
-        String body = as(trader, NEWS + "/sentiment-summary")
+        String body = as(account(UserRole.ADMIN), SENTIMENT_SUMMARY)
                 .andExpect(status().isOk())
                 .andReturn()
                 .getResponse()
