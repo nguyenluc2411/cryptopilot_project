@@ -129,10 +129,10 @@ class MatchingRaceTest {
         UUID id = activePlan(LIMIT);
         long version = plan(id).getVersion();
 
-        assertThat(matching.fill(fill(id, FILLED_AT))).isTrue();
+        assertThat(matching.fill(fill(id, FILLED_AT))).isPresent();
         assertThat(matching.fill(fill(id, FILLED_AT.plusSeconds(60))))
                 .as("a second fill finds nothing ACTIVE")
-                .isFalse();
+                .isEmpty();
 
         TradingPlan filled = plan(id);
         assertThat(filled.getStatus()).isEqualTo(PlanStatus.EXECUTED);
@@ -149,8 +149,8 @@ class MatchingRaceTest {
         UUID cancelled = activePlan(LIMIT);
         tradingPlans.cancel(SEEDED_ACCOUNT, cancelled);
 
-        assertThat(matching.fill(fill(draft, FILLED_AT))).isFalse();
-        assertThat(matching.fill(fill(cancelled, FILLED_AT))).isFalse();
+        assertThat(matching.fill(fill(draft, FILLED_AT))).isEmpty();
+        assertThat(matching.fill(fill(cancelled, FILLED_AT))).isEmpty();
         assertThat(plan(draft).getStatus()).isEqualTo(PlanStatus.DRAFT);
         assertThat(plan(cancelled).getStatus()).isEqualTo(PlanStatus.CANCELLED);
     }
@@ -184,7 +184,7 @@ class MatchingRaceTest {
         assertThat(matching.invalidate(invalidation(id)))
                 .as("a second invalidation finds nothing ACTIVE")
                 .isFalse();
-        assertThat(matching.fill(fill(id, FILLED_AT))).as("nor does a fill").isFalse();
+        assertThat(matching.fill(fill(id, FILLED_AT))).as("nor does a fill").isEmpty();
 
         TradingPlan invalidated = plan(id);
         assertThat(invalidated.getStatus()).isEqualTo(PlanStatus.INVALIDATED);
@@ -199,7 +199,8 @@ class MatchingRaceTest {
         UUID id = activePlan(STOP);
         Invalidation invalidation = invalidation(id);
 
-        List<Boolean> won = race(() -> matching.fill(fill(id, FILLED_AT)), () -> matching.invalidate(invalidation));
+        List<Boolean> won =
+                race(() -> matching.fill(fill(id, FILLED_AT)).isPresent(), () -> matching.invalidate(invalidation));
 
         assertThat(won).containsExactlyInAnyOrder(true, false);
         TradingPlan after = plan(id);
@@ -274,7 +275,7 @@ class MatchingRaceTest {
         CyclicBarrier together = new CyclicBarrier(2);
         Callable<Boolean> fill = () -> {
             together.await();
-            return matching.fill(fill(id, FILLED_AT));
+            return matching.fill(fill(id, FILLED_AT)).isPresent();
         };
         Callable<IllegalPlanStateException> cancel = () -> {
             together.await();

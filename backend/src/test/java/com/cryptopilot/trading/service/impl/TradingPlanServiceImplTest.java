@@ -38,6 +38,7 @@ import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
+import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
@@ -59,6 +60,7 @@ import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.exception.PlanActivationBlockedException;
 import com.cryptopilot.trading.model.PlanListQuery;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
+import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
@@ -154,7 +156,8 @@ class TradingPlanServiceImplTest {
                 settings,
                 styleProvider,
                 journal,
-                new PositionOpener(journal, new FeeRates(settings)));
+                new PositionOpener(journal, new FeeRates(settings), market));
+        when(journal.openSimulatedTrade(any())).thenAnswer(call -> recorded(call.getArgument(0)));
         when(styleProvider.getIfAvailable()).thenReturn(styles);
         when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_BLOCK_R)).thenReturn(new BigDecimal("0.75"));
         when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_CONFIRM_R)).thenReturn(new BigDecimal("0.25"));
@@ -1125,7 +1128,7 @@ class TradingPlanServiceImplTest {
 
     /**
      * UC-20, Q-55: an open Futures position is valued at the mark price, not the last price: (99 − 100) × 2 = −2, and
-     * answers the liquidation price of its snapshot.
+     * answers the liquidation price the journal holds for it.
      */
     @Test
     void UC20_anOpenFuturesPosition_isValuedAtTheMarkPrice_andAnswersItsLiquidationPrice() {
@@ -1142,8 +1145,8 @@ class TradingPlanServiceImplTest {
         assertThat(position.currentPrice()).isEqualByComparingTo("99");
         assertThat(position.unrealizedPnl()).isEqualTo(new BigDecimal("-2.00000000"));
         assertThat(position.liquidationPrice())
-                .isNotNull()
-                .isEqualByComparingTo(plan.getSnapshot().estimatedLiquidationPrice());
+                .as("the journal's liquidation price at the fill, not the plan's estimate")
+                .isEqualByComparingTo("88.88");
     }
 
     /** Q-55: without a cached price an open position answers no current price and no unrealized P/L. */
@@ -1161,9 +1164,12 @@ class TradingPlanServiceImplTest {
         assertThat(position.unrealizedPnl()).isNull();
     }
 
-    /** UC-20: a closed position answers its entry figures and reads no price at all. */
+    /**
+     * UC-20, BR-38: a closed position answers its entry and exit figures and the net P/L of the stored amounts, final
+     * on Spot, and reads no price at all.
+     */
     @Test
-    void UC20_aClosedPosition_readsNoPrice() {
+    void UC20_aClosedPosition_answersItsExitAndNet_andReadsNoPrice() {
         TradingPlan plan = executedSpotMarket();
         position(plan, PositionStatus.CLOSED);
 
@@ -1172,7 +1178,29 @@ class TradingPlanServiceImplTest {
         assertThat(position.status()).isEqualTo(PositionStatus.CLOSED);
         assertThat(position.currentPrice()).isNull();
         assertThat(position.unrealizedPnl()).isNull();
+        assertThat(position.exitPrice()).isEqualByComparingTo("110");
+        assertThat(position.exitTime()).isEqualTo(NOW);
+        assertThat(position.closeReason()).isEqualTo(CloseReason.TAKE_PROFIT);
+        assertThat(position.realizedPnl()).isEqualByComparingTo("20");
+        assertThat(position.feeAmount()).isEqualByComparingTo("0.42");
+        assertThat(position.fundingFeeAmount()).isNull();
+        assertThat(position.netPnl()).isEqualByComparingTo("19.58");
+        assertThat(position.provisional()).isFalse();
         verify(market, never()).pairListings(any());
+    }
+
+    /** UC-20: an open position has no exit, no amounts and no net yet. */
+    @Test
+    void UC20_anOpenPosition_hasNoExitYet() {
+        TradingPlan plan = executedSpotMarket();
+        position(plan, PositionStatus.OPEN);
+
+        PositionResponse position = service.get(USER, plan.getId()).position();
+
+        assertThat(position.exitPrice()).isNull();
+        assertThat(position.closeReason()).isNull();
+        assertThat(position.netPnl()).isNull();
+        assertThat(position.provisional()).isFalse();
     }
 
     /** UC-20: a plan that is not EXECUTED has no position and does not ask the journal. */
@@ -1231,12 +1259,45 @@ class TradingPlanServiceImplTest {
     private void position(TradingPlan plan, PositionStatus status) {
         when(journal.positionOf(plan.getId()))
                 .thenReturn(Optional.of(new RecordedPosition(
-                        plan.getId(), status, new BigDecimal("100"), new BigDecimal("2"), NOW, new BigDecimal("0.2"))));
+                        plan.getId(),
+                        status,
+                        new BigDecimal("100"),
+                        new BigDecimal("2"),
+                        NOW,
+                        new BigDecimal("0.2"),
+                        plan.getMarket() == MarketType.FUTURES ? new BigDecimal("88.88") : null,
+                        status == PositionStatus.CLOSED ? new BigDecimal("110") : null,
+                        status == PositionStatus.CLOSED ? NOW : null,
+                        status == PositionStatus.CLOSED ? CloseReason.TAKE_PROFIT : null,
+                        status == PositionStatus.CLOSED ? new BigDecimal("20") : null,
+                        status == PositionStatus.CLOSED ? new BigDecimal("0.42") : null,
+                        null,
+                        false)));
     }
 
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
+
+    /** The journal's answer to an opening: the same values, a new id, version 0. */
+    private static OpenTrade recorded(SimulatedTradeOpening opening) {
+        return new OpenTrade(
+                UUID.randomUUID(),
+                opening.planId(),
+                opening.userId(),
+                opening.pairId(),
+                opening.market(),
+                opening.direction(),
+                opening.entryPrice(),
+                opening.entryTime(),
+                opening.quantity(),
+                opening.entryLiquidity(),
+                opening.entryFee(),
+                opening.stopLoss(),
+                opening.takeProfit(),
+                opening.liquidationPrice(),
+                0);
+    }
 
     @SuppressWarnings({"unchecked", "rawtypes"}) // A captor of a generic type has no class literal (T-039).
     private static ArgumentCaptor<Collection<PlanStatus>> statusCaptor() {

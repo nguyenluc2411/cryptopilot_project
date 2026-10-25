@@ -12,6 +12,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.market.FundingHistory;
+import com.cryptopilot.market.LeverageTier;
+import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
@@ -30,6 +33,7 @@ import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanOutcome;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
+import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
@@ -104,11 +108,15 @@ import org.springframework.transaction.support.TransactionTemplate;
  * receives while it runs. Every run must leave every plan with the same status, fill price, liquidity role and
  * {@code executed_at}, or the same invalidation reason and {@code invalidated_at}, act on no plan from a candle that
  * opened before its activation, apply each closed minute once (one watermark advance per minute) and store each outcome
- * once. {@code SLIPPAGE_BPS} is changed through the admin endpoint, so the setting reader's cache is evicted as it
+ * once. The positions the fills open exit the same way: the STOP filled at minute 6 is stopped at minute 8, and a LIMIT
+ * at 20x is liquidated by the mark price of minute 7, both during the downtime of the crashes, so the mark price candles
+ * are replayed beside the last price ones; every run must leave every journal row with the same exit, and a crash the
+ * same amounts as live. {@code SLIPPAGE_BPS} is changed through the admin endpoint, so the setting reader's cache is evicted as it
  * would be in use, and restored after each test. No network: the exchange is a stub of {@link MarketApi}. One partition, so the order of the engine's work is
  * the order of the recording.
  *
- * <p>Rule: NSF-07, BR-33, BR-36, BR-68; A-04; D-77, D-78, D-79; D-111 (M1, M3, E5); D-112 (R6); ADR-011.
+ * <p>Rule: NSF-07, BR-33, BR-35, BR-36, BR-68; A-04; D-77, D-78, D-79; D-111 (M1, M3, E5); D-112 (R6); Q-59;
+ * ADR-011.
  */
 @SpringBootTest(
         properties = {
@@ -149,8 +157,21 @@ class MatchingReplayTest {
 
     private static final int LAST = PATHS.length - 1;
 
+    /** The mark price of each minute: steady, but for minute 7, which liquidates the 20x LONG at 96.34. */
+    private static final String[] MARKS = {
+        "100", "100", "100", "100", "100", "100", "100", "96.2", "100", "100", "100", "100"
+    };
+
+    /** The exits: the reason, the stored exit price and the exit time of each position that closes. */
+    private static final Map<String, Exited> EXITED = Map.of(
+            // Stopped at 97.5 by minute 8's low of 97, sold 10 bps lower: 97.4025 rounded down to the tick.
+            "stopLong104.5", new Exited(CloseReason.STOP_LOSS, new BigDecimal("97.4"), minute(8)),
+            // 2 at 101, 20x: (202 − 10.1) / (2 × 0.996) = 96.335…, up to the tick; liquidated there, no slippage.
+            "long101x20", new Exited(CloseReason.LIQUIDATION, new BigDecimal("96.34"), minute(7)));
+
     private static final Map<String, Outcome> EXPECTED = Map.ofEntries(
             Map.entry("long98", Outcome.filled("98", minute(1))),
+            Map.entry("long101x20", Outcome.filled("101", minute(0))),
             Map.entry("short105", Outcome.filled("105", minute(6))),
             Map.entry("long99MidMinute3", Outcome.filled("99", minute(5))),
             Map.entry("short103AtMinute4", Outcome.filled("103", minute(4))),
@@ -217,6 +238,9 @@ class MatchingReplayTest {
     /** The closed candles the exchange stub serves, three a page. */
     private final List<MinuteKline> served = new CopyOnWriteArrayList<>();
 
+    /** The closed mark price candles the exchange stub serves, three a page. */
+    private final List<MinuteKline> servedMarks = new CopyOnWriteArrayList<>();
+
     private final Map<UUID, Fill> fills = new ConcurrentHashMap<>();
     private final Map<UUID, Invalidation> invalidations = new ConcurrentHashMap<>();
     private final List<Instant> pagesAskedFrom = new CopyOnWriteArrayList<>();
@@ -267,13 +291,28 @@ class MatchingReplayTest {
                     .limit(3)
                     .toList());
         });
+        when(market.closedMarkPriceKlines(any(), any())).thenAnswer(call -> {
+            Instant from = call.getArgument(1);
+            if (refusing) {
+                return MinuteKlineBatch.refusedUntil(FixedClockConfig.NOW.plus(Duration.ofHours(1)));
+            }
+            return MinuteKlineBatch.of(servedMarks.stream()
+                    .filter(kline -> !kline.openTime().isBefore(from))
+                    .limit(3)
+                    .toList());
+        });
+        when(market.leverageBrackets(any()))
+                .thenReturn(List.of(new LeverageTier(
+                        1, BigDecimal.ZERO, new BigDecimal("50000"), 125, new BigDecimal("0.004"), BigDecimal.ZERO)));
+        when(market.fundingHistory(any(), any(), any()))
+                .thenReturn(new FundingHistory(List.of(), List.of(), List.of(), List.of(), List.of()));
         doAnswer(call -> {
                     Fill fill = call.getArgument(0);
                     if (fill.planId().equals(failing)) {
                         throw new IllegalStateException("database down");
                     }
-                    boolean filled = (boolean) call.callRealMethod();
-                    if (filled) {
+                    Optional<?> filled = (Optional<?>) call.callRealMethod();
+                    if (filled.isPresent()) {
                         fills.put(fill.planId(), fill);
                     }
                     return filled;
@@ -302,6 +341,7 @@ class MatchingReplayTest {
                 .update();
         jdbc.sql("delete from audit_log where user_id = ?").param(admin).update();
         jdbc.sql("delete from user_account where user_id = ?").param(admin).update();
+        deleteNotifications();
         jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
@@ -318,6 +358,10 @@ class MatchingReplayTest {
         Run replayed = run(Loss.CRASH);
 
         assertThat(replayed.outcomes()).isEqualTo(live.outcomes()).isEqualTo(EXPECTED);
+        assertThat(replayed.journal())
+                .as("an exit during the downtime gives the same journal row as live processing")
+                .isEqualTo(live.journal());
+        assertExits(live);
         assertThat(pagesAskedFrom)
                 .as("the restart replays from the minute after the watermark, three candles a page")
                 .containsSubsequence(minute(5), minute(8), minute(10));
@@ -335,6 +379,7 @@ class MatchingReplayTest {
         Run run = run(loss);
 
         assertThat(run.outcomes()).isEqualTo(EXPECTED);
+        assertExits(run);
         assertEachMinuteAppliedOnce(run);
         assertOneStoreCallPerPlan(
                 run, loss == Loss.GIVE_UP_THEN_CRASH ? run.ids().get("long98") : null);
@@ -389,6 +434,10 @@ class MatchingReplayTest {
     private Run run(Loss loss) {
         Map<String, UUID> ids = new LinkedHashMap<>();
         ids.put("long98", activePlan(Direction.LONG, "98", BEFORE));
+        ids.put(
+                "long101x20",
+                inTransaction(() -> plans.save(leveraged(Direction.LONG, "101", 20, BEFORE)))
+                        .getId());
         ids.put("short105", activePlan(Direction.SHORT, "105", BEFORE));
         ids.put("long97", activePlan(Direction.LONG, "97", BEFORE));
         ids.put("long90", activePlan(Direction.LONG, EntryType.LIMIT, "90", "85", "120", null, BEFORE));
@@ -422,10 +471,16 @@ class MatchingReplayTest {
                         activate(Direction.SHORT, EntryType.STOP, "103.2", "108", "93", null, minute(minute))));
             }
             if (m == 5 && loss == Loss.DROP) {
-                steps.add(() -> served.addAll(List.of(closedCandle(3), closedCandle(4))));
+                steps.add(() -> {
+                    served.addAll(List.of(closedCandle(3), closedCandle(4)));
+                    servedMarks.addAll(List.of(closedMark(3), closedMark(4)));
+                });
             }
             if (m == 4 && loss == Loss.MISSING_CLOSE) {
-                steps.add(() -> served.add(closedCandle(3)));
+                steps.add(() -> {
+                    served.add(closedCandle(3));
+                    servedMarks.add(closedMark(3));
+                });
             }
             if (m == 5 && loss == Loss.DROP_THEN_CRASH) {
                 steps.add(() -> refusing = true);
@@ -444,6 +499,9 @@ class MatchingReplayTest {
                 if (!dropped) {
                     steps.add(() -> feed.onMinuteKline(update(minute, update)));
                 }
+            }
+            if (!dropped && m < LAST) {
+                steps.add(() -> feed.onMarkPrice(markPrice(minute)));
             }
             if (!dropped && !(loss == Loss.MISSING_CLOSE && m == 3)) {
                 steps.add(() -> feed.onMinuteKline(closedCandle(minute)));
@@ -466,6 +524,10 @@ class MatchingReplayTest {
             failing = null;
             served.clear();
             served.addAll(closedCandles(LAST - 2));
+            servedMarks.clear();
+            for (int m = 0; m <= LAST - 2; m++) {
+                servedMarks.add(closedMark(m));
+            }
             List<Runnable> rest = List.copyOf(steps.subList(crashAt, steps.size() - (SECONDS.length + 1)));
             duringReplay = () -> rest.forEach(Runnable::run);
             feed.start();
@@ -476,7 +538,12 @@ class MatchingReplayTest {
             steps.subList(steps.size() - (SECONDS.length + 1), steps.size()).forEach(Runnable::run);
         }
         awaitWatermark(minute(LAST));
-        return new Run(ids, outcomes(ids), List.copyOf(mockingDetails(matching).getInvocations()));
+        awaitExits(ids);
+        return new Run(
+                ids,
+                outcomes(ids),
+                journal(ids),
+                List.copyOf(mockingDetails(matching).getInvocations()));
     }
 
     /** Where the engine crashes: inside minute 5, inside minute 6, or at the start of minute 7. */
@@ -495,14 +562,80 @@ class MatchingReplayTest {
     private void reset() {
         feed.stop();
         worker.stop();
+        deleteNotifications();
         jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
         served.clear();
+        servedMarks.clear();
         fills.clear();
         invalidations.clear();
         pagesAskedFrom.clear();
         clearInvocations(matching);
+    }
+
+    /** The positions that close do so at the expected reason, price and time; the others stay OPEN. */
+    private void assertExits(Run run) {
+        run.journal().forEach((label, row) -> {
+            Exited exited = EXITED.get(label);
+            if (exited == null) {
+                assertThat(row.status()).as("%s stays open", label).isEqualTo("OPEN");
+                return;
+            }
+            assertThat(row.status()).as("%s closes", label).isEqualTo("CLOSED");
+            assertThat(row.closeReason())
+                    .as("%s close reason", label)
+                    .isEqualTo(exited.reason().name());
+            assertThat(row.exitPrice()).as("%s exit price", label).isEqualByComparingTo(exited.price());
+            assertThat(row.exitTime()).as("%s exit time", label).isEqualTo(exited.at());
+        });
+    }
+
+    /** Waits until the positions that close are committed CLOSED; an exit is stored after the candle's watermark. */
+    private void awaitExits(Map<String, UUID> ids) {
+        List<UUID> closing = EXITED.keySet().stream().map(ids::get).toList();
+        awaitUntil(
+                () -> jdbc.sql(
+                                        "select count(*) from trading_journal where plan_id in (:ids) and trade_status = 'CLOSED'")
+                                .param("ids", closing)
+                                .query(Long.class)
+                                .single()
+                        == closing.size(),
+                "the exits committed");
+    }
+
+    /** The journal row of each filled plan: what its position closed with, or OPEN. */
+    private Map<String, JournalRow> journal(Map<String, UUID> ids) {
+        Map<String, JournalRow> rows = new LinkedHashMap<>();
+        ids.forEach((label, id) -> jdbc.sql("""
+                                select trade_status, close_reason, exit_price, exit_time, realized_pnl, fee_amount,
+                                       funding_fee_amount, funding_incomplete
+                                  from trading_journal where plan_id = ?""")
+                .param(id)
+                .query((row, number) -> new JournalRow(
+                        row.getString("trade_status"),
+                        row.getString("close_reason"),
+                        stripped(row.getBigDecimal("exit_price")),
+                        row.getTimestamp("exit_time") == null
+                                ? null
+                                : row.getTimestamp("exit_time").toInstant(),
+                        stripped(row.getBigDecimal("realized_pnl")),
+                        stripped(row.getBigDecimal("fee_amount")),
+                        stripped(row.getBigDecimal("funding_fee_amount")),
+                        row.getBoolean("funding_incomplete")))
+                .optional()
+                .ifPresent(row -> rows.put(label, row)));
+        return rows;
+    }
+
+    private static BigDecimal stripped(BigDecimal value) {
+        return value == null ? null : value.stripTrailingZeros();
+    }
+
+    private void deleteNotifications() {
+        jdbc.sql("delete from notification where reference_id in (select plan_id from trading_plan where pair_id = ?)")
+                .param(pair)
+                .update();
     }
 
     /** R1, R5: every closed minute reaches the engine once: one watermark advance per minute, none skipped. */
@@ -585,6 +718,26 @@ class MatchingReplayTest {
                             plan.getInvalidatedAt()));
         });
         return outcomes;
+    }
+
+    /** A LIMIT plan at {@code leverage}, its stop loss 5 and its take profit 10 away, ACTIVE since {@code at}. */
+    private TradingPlan leveraged(Direction direction, String entry, int leverage, Instant at) {
+        BigDecimal price = new BigDecimal(entry);
+        PlanFixture fixture = PlanFixture.futuresLong()
+                .entry(entry)
+                .stop(price.subtract(BigDecimal.valueOf(5)).toPlainString())
+                .takeProfit(price.add(BigDecimal.TEN).toPlainString())
+                .leverage(leverage)
+                .profile("1", leverage);
+        TradingPlan plan = TradingPlan.draft(
+                SEEDED_ACCOUNT,
+                pair,
+                fixture.build(),
+                new PlanDetails(
+                        EntryType.LIMIT, at.plus(Duration.ofDays(7)), null, null, null, AnalysisTimeframe.ONE_HOUR),
+                List.of());
+        plan.activate(fixture.build(), List.of(), at);
+        return plan;
     }
 
     /** A LIMIT plan ACTIVE in the database before the engine starts, its stop loss 5 and its take profit 10 away. */
@@ -758,6 +911,26 @@ class MatchingReplayTest {
                 new BigDecimal(PATHS[m][0]));
     }
 
+    /** The streamed mark price of minute {@code m}, 30 seconds into it. */
+    private MarkPrice markPrice(int m) {
+        return new MarkPrice(pair, new BigDecimal(MARKS[m]), minute(m).plusSeconds(30));
+    }
+
+    /** The closed mark price candle of minute {@code m}, of its one mark price. */
+    private MinuteKline closedMark(int m) {
+        BigDecimal mark = new BigDecimal(MARKS[m]);
+        return new MinuteKline(
+                MarketType.FUTURES,
+                pair,
+                minute(m),
+                mark,
+                mark,
+                mark,
+                true,
+                minute(m).plusSeconds(60).minusMillis(1),
+                mark);
+    }
+
     private MinuteKline closedCandle(int m) {
         MinuteKline last = update(m, SECONDS.length - 1);
         return new MinuteKline(
@@ -845,8 +1018,26 @@ class MatchingReplayTest {
         return new TransactionTemplate(transactions).execute(status -> work.get());
     }
 
-    /** A run: the plans by label, what it left them with, and every call on the matching service. */
-    private record Run(Map<String, UUID> ids, Map<String, Outcome> outcomes, List<Invocation> invocations) {}
+    /** A run: the plans by label, what it left them and their journal rows with, and every call on the service. */
+    private record Run(
+            Map<String, UUID> ids,
+            Map<String, Outcome> outcomes,
+            Map<String, JournalRow> journal,
+            List<Invocation> invocations) {}
+
+    /** What a run left a journal row with. */
+    private record JournalRow(
+            String status,
+            String closeReason,
+            BigDecimal exitPrice,
+            Instant exitTime,
+            BigDecimal realizedPnl,
+            BigDecimal feeAmount,
+            BigDecimal fundingFeeAmount,
+            boolean fundingIncomplete) {}
+
+    /** How a position closed. */
+    private record Exited(CloseReason reason, BigDecimal price, Instant at) {}
 
     /** What a run left a plan with. */
     private record Outcome(

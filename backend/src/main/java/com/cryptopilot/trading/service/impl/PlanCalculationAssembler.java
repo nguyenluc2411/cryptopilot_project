@@ -98,7 +98,8 @@ public class PlanCalculationAssembler {
                 settings.decimal(FEE_RISK_WARN_RATIO));
     }
 
-    private static LeverageBracket bracket(LeverageTier tier) {
+    /** A stored leverage tier of the pair as the calculators read it. */
+    static LeverageBracket bracket(LeverageTier tier) {
         return new LeverageBracket(
                 tier.bracketNo(),
                 tier.notionalFloor(),

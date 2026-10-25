@@ -1319,7 +1319,7 @@ class TradingPlanApiTest {
         changeSetting(admin, "SLIPPAGE_BPS", "10");
         try {
             assertThat(matching.fill(new Fill(waiting(id), LiquidityRole.TAKER, new BigDecimal("100"), candle)))
-                    .isTrue();
+                    .isPresent();
         } finally {
             changeSetting(admin, "SLIPPAGE_BPS", "0");
             sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
@@ -1356,7 +1356,7 @@ class TradingPlanApiTest {
         changeSetting(admin, "SLIPPAGE_BPS", "10");
         try {
             assertThat(matching.fill(new Fill(waiting(id), LiquidityRole.TAKER, new BigDecimal("100"), candle)))
-                    .isTrue();
+                    .isPresent();
         } finally {
             changeSetting(admin, "SLIPPAGE_BPS", "0");
             sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")

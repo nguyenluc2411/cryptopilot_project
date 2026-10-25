@@ -30,6 +30,7 @@ import com.cryptopilot.trading.dto.response.PositionResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
+import com.cryptopilot.trading.event.PositionOpened;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.event.TradingPlanWithdrawn;
@@ -47,6 +48,7 @@ import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanTerms;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskProfileLimits;
+import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
@@ -288,16 +290,30 @@ public class TradingPlanServiceImpl implements TradingPlanService {
 
     /**
      * Saves the plan. A plan that filled at activation is written at once and its position opened in the journal in
-     * this transaction, so the fill and its record commit or roll back together (BR-34).
+     * this transaction, so the fill and its record commit or roll back together (BR-34); after the commit the
+     * matching engine adds the position to its exit books ({@link PositionOpened}).
      *
-     * <p>Rule: BR-33, BR-34; D-119.
+     * <p>Rule: BR-33, BR-34, BR-35; D-119.
      */
     private TradingPlan store(TradingPlan plan) {
         if (plan.getStatus() != PlanStatus.EXECUTED) {
             return plans.save(plan);
         }
         TradingPlan stored = plans.saveAndFlush(plan);
-        positions.open(stored);
+        TrackedPosition position = positions.open(stored);
+        events.publishEvent(new PositionOpened(
+                position.positionId(),
+                position.planId(),
+                position.userId(),
+                position.market(),
+                position.pairId(),
+                position.direction(),
+                position.entryPrice(),
+                position.entryTime(),
+                position.stopLoss(),
+                position.takeProfit(),
+                position.liquidationPrice(),
+                position.version()));
         return stored;
     }
 

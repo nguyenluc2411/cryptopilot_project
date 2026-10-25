@@ -3,8 +3,10 @@ package com.cryptopilot.journal.entity;
 import com.cryptopilot.common.entity.BaseEntity;
 import com.cryptopilot.journal.model.enums.TradeSource;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.SimulatedTradeOpening;
+import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PositionStatus;
@@ -19,6 +21,8 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import lombok.Getter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * A journal record: one trade, simulated from a filled plan or entered by the Trader. Only the {@code journal} module
@@ -28,9 +32,10 @@ import lombok.Getter;
  * {@code version}: the levels the exits read are these columns (D-119). The levels the plan was made with stay on the
  * plan, which never changes once executed.
  *
- * <p>Only the columns written so far are mapped; the exit (T-048b) and the learning data of D-111 (T-048c) add theirs.
+ * <p>The close and a later funding correction are compare-and-set updates in {@code TradingJournalRepository}, so this
+ * entity only reads the exit columns. The learning data of D-111 is mapped by T-048c.
  *
- * <p>Rule: BR-34, BR-36, BR-40; D-78, D-97, D-119.
+ * <p>Rule: BR-34, BR-35, BR-36, BR-37, BR-40; D-78, D-97 and its note of 2026-10-24, D-119.
  *
  * <p>Reference: Evans, E. (2003). <i>Domain-Driven Design</i>. Addison-Wesley, ch. 5 (an entity is defined by its
  * identity and lifecycle).
@@ -95,9 +100,44 @@ public class TradingJournal extends BaseEntity {
     @Column(name = "entry_fee_amount", precision = 28, scale = 8)
     private BigDecimal entryFee;
 
+    /** The liquidation price of a Futures position at its fill price; {@code null} for Spot (V36). */
+    @Column(name = "liquidation_price", precision = 28, scale = 12, updatable = false)
+    private BigDecimal liquidationPrice;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "trade_status", nullable = false, length = 32)
     private PositionStatus status;
+
+    @Column(name = "exit_price", precision = 28, scale = 12, insertable = false, updatable = false)
+    private BigDecimal exitPrice;
+
+    @Column(name = "exit_time", insertable = false, updatable = false)
+    private Instant exitTime;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "close_reason", length = 32, insertable = false, updatable = false)
+    private CloseReason closeReason;
+
+    /** The price result only (BR-35). */
+    @Column(name = "realized_pnl", precision = 28, scale = 8, insertable = false, updatable = false)
+    private BigDecimal realizedPnl;
+
+    /** The entry fee plus the exit fee, written at the close (BR-36). */
+    @Column(name = "fee_amount", precision = 28, scale = 8, insertable = false, updatable = false)
+    private BigDecimal feeAmount;
+
+    /** The signed funding known so far; {@code null} for Spot (BR-37). */
+    @Column(name = "funding_fee_amount", precision = 28, scale = 8, insertable = false, updatable = false)
+    private BigDecimal fundingFeeAmount;
+
+    /** Whether a funding settlement may still be missing, so the net is provisional (D-97 note of 2026-10-24). */
+    @Column(name = "funding_incomplete", nullable = false, insertable = false, updatable = false)
+    private boolean fundingIncomplete;
+
+    /** The settlement instants known to be missing, oldest first; {@code null} when none. */
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    @Column(name = "missing_funding_times", insertable = false, updatable = false)
+    private Instant[] missingFundingTimes;
 
     /** For JPA only. */
     protected TradingJournal() {}
@@ -123,12 +163,47 @@ public class TradingJournal extends BaseEntity {
         record.entryTime = opening.entryTime().truncatedTo(ChronoUnit.MICROS);
         record.entryLiquidity = opening.entryLiquidity();
         record.entryFee = opening.entryFee();
+        record.liquidationPrice = opening.liquidationPrice();
         record.status = PositionStatus.OPEN;
         return record;
     }
 
     /** The position as the plan detail shows it. Only a SIMULATED record has a plan, and only it is asked. */
     public RecordedPosition toPosition() {
-        return new RecordedPosition(planId, status, entryPrice, quantity, entryTime, entryFee);
+        return new RecordedPosition(
+                planId,
+                status,
+                entryPrice,
+                quantity,
+                entryTime,
+                entryFee,
+                liquidationPrice,
+                exitPrice,
+                exitTime,
+                closeReason,
+                realizedPnl,
+                feeAmount,
+                fundingFeeAmount,
+                fundingIncomplete);
+    }
+
+    /** The OPEN position as the matching engine tracks it and its close is computed from. */
+    public OpenTrade toOpenTrade() {
+        return new OpenTrade(
+                getId(),
+                planId,
+                userId,
+                pairId,
+                market,
+                direction,
+                entryPrice,
+                entryTime,
+                quantity,
+                entryLiquidity,
+                entryFee,
+                stopLoss,
+                takeProfit,
+                liquidationPrice,
+                getVersion());
     }
 }
