@@ -2016,6 +2016,35 @@ class TradingPlanServiceImplTest {
     }
 
     /**
+     * BR-69, BR-34: the MSG51 refusal opens no position; the same activation confirmed is written at once and opens its
+     * position at the moved fill (101,000 LONG, 99,000 SHORT) with the recalculated quantity 0.0333.
+     */
+    @ParameterizedTest(name = "{0} at {1}")
+    @CsvSource({"LONG, 101000", "SHORT, 99000"})
+    void BR69_aConfirmedMovedMarketEntry_opensItsPositionInTheJournal(Direction direction, String fill) {
+        TradingPlan plan = btcDraft(direction, null);
+        currentPrice(market(direction), fill);
+        assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
+                .isInstanceOf(EntryDeviationException.class);
+        verify(journal, never()).openSimulatedTrade(any());
+
+        service.activate(USER, plan.getId(), true);
+
+        ArgumentCaptor<SimulatedTradeOpening> opening = ArgumentCaptor.forClass(SimulatedTradeOpening.class);
+        InOrder order = inOrder(plans, journal);
+        order.verify(plans).saveAndFlush(plan);
+        order.verify(journal).openSimulatedTrade(opening.capture());
+        SimulatedTradeOpening opened = opening.getValue();
+        assertThat(opened.planId()).isEqualTo(plan.getId());
+        assertThat(opened.direction()).isEqualTo(direction);
+        assertThat(opened.market()).isEqualTo(market(direction));
+        assertThat(opened.entryPrice()).isEqualByComparingTo(fill);
+        assertThat(opened.quantity()).isEqualByComparingTo("0.0333");
+        assertThat(opened.entryLiquidity()).isEqualTo(LiquidityRole.TAKER);
+        assertThat(opened.entryTime()).isEqualTo(NOW);
+    }
+
+    /**
      * Fill 102,000 LONG (98,000 SHORT): 1.0R, above 0.75, MSG52 even with the flag; the panel at that price shows the
      * quantity 0.025 and RR 1.0 the plan would have had.
      */
