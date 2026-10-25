@@ -786,6 +786,50 @@ class TradingPlanApiTest {
     }
 
     /**
+     * BR-34, D-119: the fill and its journal record commit together. With a record already in place for the plan, the
+     * journal's insert refuses the MARKET activation (409, MSG43), and the activation rolls back with it: the plan is
+     * still a DRAFT with no fill and the one record is the one that was there.
+     */
+    @Test
+    void BR34_aJournalRecordAlreadyThere_failsTheMarketActivation_andThePlanStaysDraft() throws Exception {
+        UUID trader = trader();
+        lastPrice("100");
+        String id = id(as(trader, post(PLANS), spotMarket(false))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("DRAFT")));
+        sql.sql("""
+                        insert into trading_journal (journal_id, user_id, pair_id, plan_id, market_type, direction,
+                                                     entry_price, entry_time, quantity, entry_liquidity, source,
+                                                     trade_status, created_at, updated_at, version)
+                        values (gen_random_uuid(), ?, ?, ?, 'SPOT', 'LONG', 100, ?, 1, 'TAKER', 'SIMULATED', 'OPEN',
+                                ?, ?, 0)""")
+                .params(trader, pair, UUID.fromString(id), now(), now(), now())
+                .update();
+
+        as(trader, post(PLANS + "/" + id + "/activate"), null)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"))
+                .andExpect(jsonPath("$.messageCode").value("MSG43"));
+
+        as(trader, get(PLANS + "/" + id), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andExpect(jsonPath("$.statusHistory.length()").value(1))
+                .andExpect(jsonPath("$.position").doesNotExist());
+        assertThat(sql.sql("select fill_price, executed_at from trading_plan where plan_id = ?")
+                        .param(UUID.fromString(id))
+                        .query()
+                        .singleRow())
+                .containsEntry("fill_price", null)
+                .containsEntry("executed_at", null);
+        assertThat(sql.sql("select count(*) from trading_journal where plan_id = ?")
+                        .param(UUID.fromString(id))
+                        .query(Long.class)
+                        .single())
+                .isEqualTo(1L);
+    }
+
+    /**
      * D-63: at {@code max − 1} counting an open position (one open, one ACTIVE, limit 3), two parallel activations let
      * exactly one through.
      */
