@@ -130,6 +130,13 @@ public interface MarketApi {
     MinuteKlineBatch closedMinuteKlines(MarketType market, UUID pairId, Instant from);
 
     /**
+     * One page of the futures pair's closed 1-minute mark price candles that opened at or after {@code from}, oldest
+     * first, fetched from the exchange as {@link #closedMinuteKlines} fetches the last price ones: what liquidation is
+     * replayed from after downtime (TECHNICAL_DESIGN 7.7). Their low and high are mark prices.
+     */
+    MinuteKlineBatch closedMarkPriceKlines(UUID pairId, Instant from);
+
+    /**
      * The pair's funding settlements with an instant in {@code (after, upTo]}, read from {@code funding_rate_history},
      * and the settlement instants the exchange announced in that interval, read from the mark price snapshots, so the
      * caller can tell a settlement that is not stored yet (A-05). For the settlements no snapshot announced, also the

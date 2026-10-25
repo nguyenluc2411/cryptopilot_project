@@ -264,6 +264,11 @@ public class MarketApiImpl implements MarketApi {
     }
 
     @Override
+    public MinuteKlineBatch closedMarkPriceKlines(UUID pairId, Instant from) {
+        return minuteKlines.closedMarkPriceKlines(pairId, from);
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public FundingHistory fundingHistory(UUID pairId, Instant after, Instant upTo) {
         return metrics.fundingHistory(pairId, after, upTo);
