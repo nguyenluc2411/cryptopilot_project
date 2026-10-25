@@ -90,6 +90,27 @@ class MatchingEngineLevelChangeTest {
                 .isEqualTo(CloseReason.TAKE_PROFIT));
     }
 
+    /**
+     * Q-80: {@code effectiveFrom} names the first candle the engine decides by the new levels: the next minute after a
+     * change in the middle of one, the minute itself after a change at its open.
+     */
+    @Test
+    void D124_Q80_effectiveFrom_isTheFirstCandleTheEngineUsesTheNewLevelsOn() {
+        PositionLevelChange midMinute = change("95", "110", "98", "110", CHANGED_AT);
+        PositionLevelChange atOpen = change("95", "110", "98", "110", minute(2));
+        assertThat(midMinute.effectiveFrom()).isEqualTo(minute(3));
+        assertThat(atOpen.effectiveFrom()).isEqualTo(minute(2));
+
+        MatchingEngine before = rebuilt(position(1, "98", "110"), midMinute);
+        assertThat(before.onRange(last(2, "100", "97.9", "101")))
+                .as("the minute before effectiveFrom: still the stop 95")
+                .isEmpty();
+        MatchingEngine from = rebuilt(position(1, "98", "110"), midMinute);
+        assertThat(from.onRange(last(3, "100", "97.9", "101")))
+                .as("the minute at effectiveFrom: the stop 98")
+                .hasSize(1);
+    }
+
     /** Two changes: a candle between them is decided by the middle levels, an older one by the first. */
     @Test
     void D124_twoChanges_eachCandleGetsTheLevelsInForceWhenItOpened() {

@@ -2,6 +2,7 @@ package com.cryptopilot.trading;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -30,5 +31,16 @@ public record PositionLevelChange(
     public PositionLevelChange {
         Objects.requireNonNull(positionId, "positionId");
         Objects.requireNonNull(changedAt, "changedAt");
+    }
+
+    /**
+     * The open time of the first 1-minute candle the new levels act on: the next minute, or {@code changedAt} itself
+     * when the change was made exactly at a candle's open.
+     *
+     * <p>Rule: NSF-07; D-77, D-124 (Q-80).
+     */
+    public Instant effectiveFrom() {
+        Instant minute = changedAt.truncatedTo(ChronoUnit.MINUTES);
+        return minute.equals(changedAt) ? changedAt : minute.plus(1, ChronoUnit.MINUTES);
     }
 }

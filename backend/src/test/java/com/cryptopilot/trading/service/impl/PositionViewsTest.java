@@ -125,6 +125,9 @@ class PositionViewsTest {
             assertThat(row.newStopLoss()).isEqualByComparingTo("93");
         });
         assertThat(position.breakevenProvisional()).isFalse();
+        assertThat(position.levelsEffectiveFrom())
+                .as("changed at 08:59:30: the levels act from the 09:00 candle (Q-80)")
+                .isEqualTo(Instant.parse("2026-10-25T09:00:00Z"));
     }
 
     /** Without levels from the journal the plan's own are shown; a closed position has no breakeven. */
@@ -153,6 +156,7 @@ class PositionViewsTest {
         assertThat(position.stopLoss()).isEqualByComparingTo("95");
         assertThat(position.originalTakeProfit()).isEqualByComparingTo("110");
         assertThat(position.levelChanges()).isEmpty();
+        assertThat(position.levelsEffectiveFrom()).as("never changed").isNull();
         verifyNoInteractions(funding);
     }
 

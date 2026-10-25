@@ -82,7 +82,8 @@ final class PlanResponses {
 
     /**
      * The position with its levels (TP-E): the current and original stop loss and take profit, the history of their
-     * changes, the true breakeven stop while OPEN, and the warnings of a change just made.
+     * changes with the candle the current levels act from, the true breakeven stop while OPEN, and the warnings of a
+     * change just made.
      *
      * <p>Rule: BR-35, BR-38, BR-42; D-124.
      *
@@ -139,7 +140,10 @@ final class PlanResponses {
                                 .toList(),
                 open.map(Breakeven::price).orElse(null),
                 open.map(Breakeven::provisional).orElse(false),
-                warnings(levelWarnings));
+                warnings(levelWarnings),
+                levels == null || levels.changes().isEmpty()
+                        ? null
+                        : levels.changes().getLast().effectiveFrom());
     }
 
     /** A row of the list; the warnings are not read. {@code positionStatus} is its position's, or {@code null}. */

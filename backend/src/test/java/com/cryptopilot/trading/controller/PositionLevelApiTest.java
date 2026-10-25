@@ -256,6 +256,7 @@ class PositionLevelApiTest {
                 .andExpect(jsonPath("$.position.stopWidened").value(false))
                 .andExpect(jsonPath("$.position.levelChangeCount").value(1))
                 .andExpect(jsonPath("$.position.levelWarnings").isEmpty())
+                .andExpect(jsonPath("$.position.levelsEffectiveFrom").value("2026-10-25T08:03:00Z"))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();

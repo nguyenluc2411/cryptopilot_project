@@ -46,6 +46,8 @@ import java.util.List;
  *     taker exit fee with slippage and the funding so far; {@code null} once CLOSED or when it cannot be computed
  * @param breakevenProvisional whether a funding settlement may be missing from {@code breakevenPrice}
  * @param levelWarnings the non-blocking warnings of the change just made, in its response only; empty on every read
+ * @param levelsEffectiveFrom the open time of the first 1-minute candle the current levels act on, after the last
+ *     change; {@code null} when the levels were never changed (D-124, Q-80)
  */
 public record PositionResponse(
         PositionStatus status,
@@ -73,4 +75,5 @@ public record PositionResponse(
         List<PositionLevelChangeResponse> levelChanges,
         BigDecimal breakevenPrice,
         boolean breakevenProvisional,
-        List<PlanWarningResponse> levelWarnings) {}
+        List<PlanWarningResponse> levelWarnings,
+        Instant levelsEffectiveFrom) {}
