@@ -47,6 +47,17 @@ public interface CoinRepository extends Repository<Coin, UUID> {
     List<Coin> findListedBySymbolIn(@Param("symbols") Collection<String> symbols);
 
     /**
+     * Every coin that is the base or the quote of an ACTIVE pair enabled on Spot or Futures (BR-07), by symbol. Bounded
+     * by the pairs an administrator lists, not by users.
+     */
+    @Transactional(readOnly = true)
+    @Query("select c from Coin c where exists (select 1 from CryptoPair p"
+            + " where (p.baseCoinId = c.id or p.quoteCoinId = c.id)"
+            + " and p.pairStatus = com.cryptopilot.market.model.enums.PairStatus.ACTIVE"
+            + " and (p.spotEnabled = true or p.futuresEnabled = true)) order by c.symbol")
+    List<Coin> findListed();
+
+    /**
      * Stores a coin by its symbol unless one is stored already, named after the symbol as {@code Coin.fromExchange}
      * names it; the symbol synchronisation finds and keeps it later. One statement, so two callers racing on the same
      * symbol both succeed and one row results ({@code uq_coin_symbol}).

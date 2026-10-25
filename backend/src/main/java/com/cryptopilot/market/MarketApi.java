@@ -45,6 +45,12 @@ public interface MarketApi {
     List<CoinListing> listedCoinsBySymbol(Collection<String> symbols);
 
     /**
+     * Every coin a listed pair trades, as {@link #listedCoinsBySymbol} defines it, by symbol: the coins a news article
+     * is tagged with (NSF-10).
+     */
+    List<CoinListing> listedCoins();
+
+    /**
      * The coins with these symbols, storing any not stored yet, so a caller that must hold a balance in a coin (the
      * virtual funds of a paper account, TR-04) never depends on the symbol synchronisation having run. Every symbol
      * asked for is in the result. Joins the caller's transaction, or runs in its own.

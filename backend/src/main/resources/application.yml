@@ -440,6 +440,75 @@ cryptopilot:
       connect-timeout: 5s
       # Above the AI Service's own 60-second limit and its one retry.
       request-timeout: 130s
+  news:
+    rss:
+      # NSF-10: each feed is read with a 30-second timeout. UC-49 reads a feed once before an administrator saves it.
+      connect-timeout: 10s
+      read-timeout: 30s
+      # Sent to a source that names no agent of its own (news_source.user_agent).
+      user-agent: "CryptoPilotNewsBot/1.0"
+      max-feed-size: 5MB
+      max-redirects: 5
+      # Never true outside a test that serves its feed locally: the server must not be made to read its own network.
+      allow-private-addresses: false
+    crawl:
+      # NSF-10: every 5 minutes, the due sources only. Off here, on in the dev and prod profiles, so a test context
+      # crawls nothing.
+      enabled: false
+      period: 5m
+      initial-delay: 1m
+      # BR-48: the same normalized title published within 48 hours is the same story.
+      duplicate-title-window: 48h
+      # NSF-10: the administrators are told after this many failed crawls in a row of one source.
+      failure-notice-after: 5
+      # T-080b: "crawl now" on SCR-41 is refused this soon after the source's last crawl (MSG50).
+      manual-crawl-cooldown: 1m
+      # What outlets call each coin. The exchange names a coin after its symbol, so a headline that writes "Bitcoin"
+      # tags BTC only through this list. A name that spells a symbol is never used as a name. The coins of the 13
+      # demo pairs; a coin listed later without an entry is still tagged by its symbol.
+      coin-names:
+        BTC: [Bitcoin]
+        ETH: [Ethereum, Ether]
+        BNB: [Binance Coin]
+        SOL: [Solana]
+        XRP: [Ripple]
+        DOGE: [Dogecoin]
+        ADA: [Cardano]
+        AVAX: [Avalanche]
+        LINK: [Chainlink]
+        LTC: [Litecoin]
+        BCH: [Bitcoin Cash]
+        UNI: [Uniswap]
+        ARB: [Arbitrum]
+        USDT: [Tether]
+    summary:
+      # NSF-11: every 5 minutes, the articles without a summary, through the AI Service. Off here, on in the dev and
+      # prod profiles, so a test context sends nothing.
+      enabled: false
+      period: 5m
+      initial-delay: 2m
+      # The cost of one run: at most this many articles, the newest first.
+      max-articles-per-run: 10
+      # Older articles keep their excerpt.
+      max-age: 7d
+      # D-128: an article the model fails this many times waits for an administrator to ask again (SCR-41).
+      max-attempts: 3
+      # The provider's model, per environment. A lite model is enough to shorten an article and label its tone.
+      model: ${NEWS_SUMMARY_MODEL:gemini-3.5-flash-lite}
+      temperature: 0.2
+      # D-129: the answer carries the article written again, at most max-article-words; Vietnamese costs more tokens
+      # per word than English.
+      max-output-tokens: 8192
+      # The prompt names the language; NSF-11: at most 60 words.
+      language: ${NEWS_SUMMARY_LANGUAGE:Vietnamese}
+      max-words: 60
+      # D-127: the headline is translated too, in at most this many words.
+      max-title-words: 30
+      max-input-words: 2000
+      min-body-words: 80
+      # D-129: the article written again in the app's words, about 50-70% of the original, counted in Vietnamese syllables.
+      max-article-words: 2000
+      prompt: classpath:prompts/news-summary.txt
 
 springdoc:
   # TECHNICAL_DESIGN 8: the OpenAPI document and Swagger UI at their standard paths; off in the prod profile.

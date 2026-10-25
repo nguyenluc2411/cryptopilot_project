@@ -232,15 +232,23 @@ matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
 matching_watermark,market_type,character varying,,,NO
 matching_watermark,pair_id,uuid,,,NO
 matching_watermark,updated_at,timestamp with time zone,,,NO
+news_article,ai_body,text,,,YES
 news_article,ai_summary,text,,,YES
+news_article,ai_title,character varying,,,YES
 news_article,article_id,uuid,,,NO
 news_article,collected_at,timestamp with time zone,,,NO
 news_article,created_at,timestamp with time zone,,,NO
 news_article,excerpt,text,,,YES
+news_article,hidden_at,timestamp with time zone,,,YES
+news_article,hidden_by,uuid,,,YES
+news_article,image_url,character varying,,,YES
 news_article,original_url,character varying,,,NO
 news_article,published_at,timestamp with time zone,,,NO
 news_article,sentiment_label,character varying,,,YES
 news_article,source_id,uuid,,,NO
+news_article,summary_attempted_at,timestamp with time zone,,,YES
+news_article,summary_attempts,integer,32,0,NO
+news_article,summary_error,character varying,,,YES
 news_article,title,character varying,,,NO
 news_article,title_hash,character varying,,,NO
 news_article,updated_at,timestamp with time zone,,,NO
@@ -262,8 +270,11 @@ news_crawl_log,source_id,uuid,,,NO
 news_crawl_log,started_at,timestamp with time zone,,,NO
 news_crawl_log,updated_at,timestamp with time zone,,,NO
 news_crawl_log,version,bigint,64,0,NO
+news_source,body_selector,character varying,,,YES
+news_source,category_filter,character varying,,,YES
 news_source,crawl_interval_minutes,integer,32,0,NO
 news_source,created_at,timestamp with time zone,,,NO
+news_source,excluded_selectors,character varying,,,YES
 news_source,feed_url,character varying,,,NO
 news_source,is_active,boolean,,,NO
 news_source,last_crawled_at,timestamp with time zone,,,YES
@@ -272,6 +283,7 @@ news_source,source_id,uuid,,,NO
 news_source,source_name,character varying,,,NO
 news_source,source_type,character varying,,,NO
 news_source,updated_at,timestamp with time zone,,,NO
+news_source,user_agent,character varying,,,YES
 news_source,version,bigint,64,0,NO
 news_tag,created_at,timestamp with time zone,,,NO
 news_tag,tag_id,uuid,,,NO

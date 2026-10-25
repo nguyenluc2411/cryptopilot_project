@@ -166,17 +166,25 @@ class DemoDatasetTest {
         assertThat(count("subscription_package"))
                 .as("the packages are production data (V11), the same in every environment")
                 .isEqualTo(5);
+        assertThat(demoJdbc.sql("select source_name from news_source where is_active order by source_name")
+                        .query(String.class)
+                        .list())
+                .as("the outlets the trial crawl read, development only; production starts with none")
+                .containsExactly("Bitcoin.com Market Updates", "CoinDesk Markets", "Cointelegraph Markets");
     }
 
     @Test
     void reapplyingTheDemoSet_changesNothing() throws Exception {
         List<Map<String, Object>> before = accountRows();
+        List<Map<String, Object>> sourcesBefore = newsSourceRows();
 
         applyDemoScript("db/demo/R__demo_dataset.sql");
         applyDemoScript("db/demo/R__demo_plan_accounts.sql");
         applyDemoScript("db/demo/R__demo_wf01_accounts.sql");
+        applyDemoScript("db/demo/R__demo_news_sources.sql");
 
         assertThat(accountRows()).isEqualTo(before);
+        assertThat(newsSourceRows()).hasSize(3).isEqualTo(sourcesBefore);
         assertThat(count("user_account")).isEqualTo(8);
         assertThat(count("user_profile")).isEqualTo(8);
         assertThat(count("subscription_order")).isEqualTo(4);
@@ -369,6 +377,12 @@ class DemoDatasetTest {
                 .query()
                 .listOfRows());
         return rows;
+    }
+
+    private List<Map<String, Object>> newsSourceRows() {
+        return demoJdbc.sql("select * from news_source order by source_id")
+                .query()
+                .listOfRows();
     }
 
     /** A demo file itself, with its placeholders resolved the way Flyway resolved them. */

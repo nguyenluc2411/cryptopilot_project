@@ -212,4 +212,10 @@ public interface UserApi {
      * is banned, so a banned member's page is gone like their posts.
      */
     Optional<PublicProfile> publicProfile(UUID userId);
+
+    /**
+     * The keys of the ACTIVE administrator accounts: who is told of a fault only an administrator can act on, such as
+     * a news source that keeps failing (NSF-10). Locked and banned administrators are left out.
+     */
+    List<UUID> activeAdministrators();
 }

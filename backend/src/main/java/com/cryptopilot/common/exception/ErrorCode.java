@@ -433,7 +433,39 @@ public enum ErrorCode {
      * Another administrator changed this Academy lesson, term or topic since the editor opened it (T-114); nothing is
      * changed. Borrows MSG43. 409: the editor reloads and applies the change again.
      */
-    ACADEMY_EDIT_CONFLICT(HttpStatus.CONFLICT, "MSG43");
+    ACADEMY_EDIT_CONFLICT(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The feed address is already the address of another news source (UC-49: the feed URL is unique), compared in its
+     * normalized form; nothing is saved. Borrows MSG43 (A-38). 409: the source exists.
+     */
+    NEWS_SOURCE_ALREADY_REGISTERED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A news source articles came from cannot be deleted, because the articles name it; it can be switched off
+     * instead. Borrows MSG43 (A-38). 409: the articles refuse it.
+     */
+    NEWS_SOURCE_IN_USE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The test read of a feed, done before a news source is saved (UC-49), failed: the address cannot be reached, is
+     * on the server's own network, answers with an error, or does not return an RSS or Atom feed. MSG15 under
+     * {@code feedUrl}, the text of a field whose value is not allowed; its own code so the console can say the feed
+     * was tried. 400: the request names it.
+     */
+    NEWS_FEED_UNREADABLE(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /**
+     * An administrator asked to crawl a news source again within the cooldown of its last crawl (T-080b). MSG50 takes
+     * the seconds left: a click repeated by mistake must not make the outlet see the crawler twice in a row.
+     */
+    NEWS_SOURCE_CRAWLED_RECENTLY(HttpStatus.TOO_MANY_REQUESTS, "MSG50"),
+
+    /**
+     * An administrator asked for a summary while the AI Service is not configured, cannot be reached or is rate
+     * limited (T-080b). MSG31: the AI request failed; the same request may succeed later.
+     */
+    NEWS_SUMMARY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG31");
 
     private final HttpStatus status;
     private final String messageCode;

@@ -2,6 +2,7 @@ package com.cryptopilot.user.repository;
 
 import com.cryptopilot.user.entity.UserAccount;
 import jakarta.persistence.LockModeType;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.Lock;
@@ -112,6 +113,15 @@ public interface UserAccountRepository extends Repository<UserAccount, UUID> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from UserAccount a where a.id = :id")
     Optional<UserAccount> findByIdForUpdate(@Param("id") UUID id);
+
+    /**
+     * The keys of the active administrators, whom a notice about the system addresses. The role and the status are
+     * fixed in the query rather than parameters, so the method cannot be turned into a read of every Trader.
+     */
+    @Transactional(readOnly = true)
+    @Query("select a.id from UserAccount a where a.role = com.cryptopilot.user.model.enums.Role.ADMIN"
+            + " and a.accountStatus = com.cryptopilot.user.model.enums.AccountStatus.ACTIVE order by a.id")
+    List<UUID> findIdsOfActiveAdministrators();
 
     /**
      * Writes an account, inserting it when it is new and updating it otherwise.
