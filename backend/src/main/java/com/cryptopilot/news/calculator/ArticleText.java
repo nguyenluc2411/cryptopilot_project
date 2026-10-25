@@ -13,7 +13,8 @@ import org.jsoup.nodes.Element;
 
 /**
  * The readable text of an article page, for the summary only: it is never stored (BR-48). The source's body selectors
- * are tried in the order the administrator wrote them and the first that matches with text wins; the excluded
+ * are tried in the order the administrator wrote them and the first that matches with text wins, taking its longest
+ * match where the page repeats the class (a lede block before the article, D-129); the excluded
  * selectors (related links, widgets, FAQ blocks) are removed first, together with scripts and styles. Paragraphs are
  * kept apart by a blank line, so the model reads them as such.
  *
@@ -51,12 +52,17 @@ public final class ArticleText {
             document.select(excludedSelectors).remove();
         }
         for (String selector : alternatives(bodySelector)) {
-            Element body = document.selectFirst(selector);
-            if (body != null) {
+            // A page may repeat the body's class, e.g. a lede block before the article: the longest match is the
+            // article.
+            String longest = "";
+            for (Element body : document.select(selector)) {
                 String text = text(body);
-                if (!text.isBlank()) {
-                    return Optional.of(firstWords(text, maxWords));
+                if (words(text) > words(longest)) {
+                    longest = text;
                 }
+            }
+            if (!longest.isBlank()) {
+                return Optional.of(firstWords(longest, maxWords));
             }
         }
         return Optional.empty();

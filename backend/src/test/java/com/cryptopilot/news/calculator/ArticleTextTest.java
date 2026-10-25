@@ -68,6 +68,19 @@ class ArticleTextTest {
     }
 
     @Test
+    void D125_whenTheBodyClassRepeats_theLongestMatchIsTheArticle() {
+        String page = """
+                <html><body>
+                <div class="article__body lede"><p>Volume hit a record.</p></div>
+                <div class="article__body"><p>Volume hit a record of $2.7 billion.</p>
+                  <p>Most of it came from short-term bets on Bitcoin.</p></div>
+                </body></html>""";
+
+        assertThat(ArticleText.extract(bytes(page), "https://e.com/a", "div.article__body", null, 100))
+                .contains("Volume hit a record of $2.7 billion.\n\nMost of it came from short-term bets on Bitcoin.");
+    }
+
+    @Test
     void NSF11_theCharsetOfThePage_isHonoured() {
         byte[] latin1 = "<html><head><meta charset=\"iso-8859-1\"></head><body><p>Café résumé</p></body></html>"
                 .getBytes(StandardCharsets.ISO_8859_1);
