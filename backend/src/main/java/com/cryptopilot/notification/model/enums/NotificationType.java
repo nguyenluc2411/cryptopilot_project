@@ -25,7 +25,7 @@ public enum NotificationType {
 
     /**
      * A fault of the system an administrator has to act on, such as a news source that keeps failing (NSF-10). The
-     * logical model has no kind for a notice to administrators; V36 adds this one.
+     * logical model has no kind for a notice to administrators; V42 adds this one.
      */
     SYSTEM
 }

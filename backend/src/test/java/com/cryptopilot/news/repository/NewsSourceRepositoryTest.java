@@ -24,7 +24,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * The SQL of the news repositories against PostgreSQL: a source round-trips with its V35 settings, the due query is
+ * The SQL of the news repositories against PostgreSQL: a source round-trips with its V41 settings, the due query is
  * BR-49 as {@link NewsSource#isDue(Instant)} states it, the latest crawl of each source comes in one statement, and a
  * deleted source takes its crawl log with it.
  *
