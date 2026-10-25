@@ -4,6 +4,8 @@ import com.cryptopilot.common.entity.BaseEntity;
 import com.cryptopilot.journal.model.enums.TradeSource;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PositionLevelChange;
+import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.model.enums.CloseReason;
@@ -19,6 +21,7 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 import lombok.Getter;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -32,8 +35,8 @@ import org.hibernate.type.SqlTypes;
  * {@code version}: the levels the exits read are these columns (D-119). The levels the plan was made with stay on the
  * plan, which never changes once executed.
  *
- * <p>The close and a later funding correction are compare-and-set updates in {@code TradingJournalRepository}, so this
- * entity only reads the exit columns. The learning data of D-111 is mapped by T-048c.
+ * <p>The close, a later funding correction and a change of the levels (TP-E) are compare-and-set updates in
+ * {@code TradingJournalRepository}, so this entity only reads the exit columns and the change counters. The learning data of D-111 is mapped by T-048c.
  *
  * <p>Rule: BR-34, BR-35, BR-36, BR-37, BR-40; D-78, D-97 and its note of 2026-10-24, D-119.
  *
@@ -134,6 +137,22 @@ public class TradingJournal extends BaseEntity {
     @Column(name = "funding_incomplete", nullable = false, insertable = false, updatable = false)
     private boolean fundingIncomplete;
 
+    /** The stop loss at the fill; never changed, whatever the Trader does to the current one (V37, D-124). */
+    @Column(name = "original_stop_loss_price", precision = 28, scale = 12, updatable = false)
+    private BigDecimal originalStopLoss;
+
+    /** The take profit at the fill; never changed (V37, D-124). */
+    @Column(name = "original_take_profit_price", precision = 28, scale = 12, updatable = false)
+    private BigDecimal originalTakeProfit;
+
+    /** Whether a stop loss was ever moved further from the entry than the original; written by the change only. */
+    @Column(name = "stop_widened", nullable = false, updatable = false)
+    private boolean stopWidened;
+
+    /** How many changes of the levels were made; written by the change only. */
+    @Column(name = "level_change_count", nullable = false, updatable = false)
+    private int levelChangeCount;
+
     /** The settlement instants known to be missing, oldest first; {@code null} when none. */
     @JdbcTypeCode(SqlTypes.ARRAY)
     @Column(name = "missing_funding_times", insertable = false, updatable = false)
@@ -158,6 +177,8 @@ public class TradingJournal extends BaseEntity {
         record.entryPrice = opening.entryPrice();
         record.stopLoss = opening.stopLoss();
         record.takeProfit = opening.takeProfit();
+        record.originalStopLoss = opening.stopLoss();
+        record.originalTakeProfit = opening.takeProfit();
         record.quantity = opening.quantity();
         // To the microsecond, like the column, so the record reads back as it was written.
         record.entryTime = opening.entryTime().truncatedTo(ChronoUnit.MICROS);
@@ -185,6 +206,12 @@ public class TradingJournal extends BaseEntity {
                 feeAmount,
                 fundingFeeAmount,
                 fundingIncomplete);
+    }
+
+    /** The current and original levels of the record, with the history of their changes, oldest first (D-124). */
+    public PositionLevels toLevels(List<PositionLevelChange> changes) {
+        return new PositionLevels(
+                stopLoss, takeProfit, originalStopLoss, originalTakeProfit, stopWidened, levelChangeCount, changes);
     }
 
     /** The OPEN position as the matching engine tracks it and its close is computed from. */

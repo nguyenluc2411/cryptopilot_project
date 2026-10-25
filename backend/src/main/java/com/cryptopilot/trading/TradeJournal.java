@@ -51,4 +51,27 @@ public interface TradeJournal {
 
     /** The position status of each plan that has a record; plans without one are absent from the map. */
     Map<UUID, PositionStatus> positionStatuses(Collection<UUID> planIds);
+
+    /**
+     * Changes the stop loss and take profit of an OPEN position with a compare-and-set on its status and version,
+     * inside the caller's transaction, and records the change in the position's history: of a change and an exit that
+     * read the same version, exactly one changes the row (D-119 (5)).
+     *
+     * <p>Rule: BR-35; UC-21; D-119 (5), D-124.
+     *
+     * @return the position at its new version; empty when it was no longer OPEN at that version
+     */
+    Optional<OpenTrade> changeSimulatedLevels(SimulatedLevelChange change);
+
+    /** The OPEN simulated positions of one user, with their current levels: the open risk of BR-29 (D-124). */
+    List<OpenTrade> openSimulatedTrades(UUID userId);
+
+    /** The current and original levels of the plan's position and the history of their changes (D-124). */
+    Optional<PositionLevels> levelsOf(UUID planId);
+
+    /**
+     * The changes of every OPEN simulated position, oldest first per position, from which the matching engine
+     * rebuilds the levels in force at each candle a replay serves; positions never changed are absent.
+     */
+    Map<UUID, List<PositionLevelChange>> openLevelChanges();
 }

@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 
 import com.cryptopilot.journal.entity.TradingJournal;
 import com.cryptopilot.journal.model.PlanPosition;
+import com.cryptopilot.journal.repository.LevelChangeLog;
 import com.cryptopilot.journal.repository.TradingJournalRepository;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.OpenTrade;
@@ -44,8 +45,9 @@ class PersistentTradeJournalTest {
     private static final Instant NOW = Instant.parse("2026-10-25T09:00:00Z");
 
     private final TradingJournalRepository records = mock(TradingJournalRepository.class);
+    private final LevelChangeLog levelChanges = mock(LevelChangeLog.class);
     private final PersistentTradeJournal journal =
-            new PersistentTradeJournal(records, Clock.fixed(NOW, ZoneOffset.UTC));
+            new PersistentTradeJournal(records, levelChanges, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @Test
     void BR34_anOpening_isWrittenAtOnceAsAnOpenRecord_andAnsweredAsTheEngineTracksIt() {

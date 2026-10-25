@@ -97,6 +97,30 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             String missingFundingTimes,
             Instant now);
 
+    /** The user's OPEN SIMULATED records, oldest entry first: the positions whose current risk BR-29 counts. */
+    @Transactional(readOnly = true)
+    @Query("select j from TradingJournal j where j.userId = :userId"
+            + " and j.status = com.cryptopilot.trading.model.enums.PositionStatus.OPEN"
+            + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED order by j.entryTime, j.id")
+    List<TradingJournal> findOpenSimulatedOf(UUID userId);
+
+    /**
+     * Compare-and-set of the current levels of an OPEN record at one version: of a change and an exit that read the
+     * same version, exactly one changes the row. {@code stop_widened} only ever turns on; the count goes up by one.
+     *
+     * @return 1 when the record was OPEN at that version and its levels are now the new ones, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "update trading_journal set stop_loss_price = :stopLoss, take_profit_price = :takeProfit,"
+                    + " stop_widened = stop_widened or :widensStop, level_change_count = level_change_count + 1,"
+                    + " updated_at = :now, version = version + 1"
+                    + " where journal_id = :id and trade_status = 'OPEN' and source = 'SIMULATED'"
+                    + " and version = :version",
+            nativeQuery = true)
+    int changeLevelsIfOpen(
+            UUID id, long version, BigDecimal stopLoss, BigDecimal takeProfit, boolean widensStop, Instant now);
+
     /** CLOSED records whose funding may still miss a settlement, the oldest exits first. */
     @Transactional(readOnly = true)
     @Query("select j from TradingJournal j where j.fundingIncomplete = true"
