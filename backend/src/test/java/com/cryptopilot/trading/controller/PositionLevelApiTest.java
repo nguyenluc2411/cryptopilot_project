@@ -311,7 +311,7 @@ class PositionLevelApiTest {
      * does not clear; at 93 the position risks 2 × 7 = 14, 1.4 % of 1,000, above BALANCED's 1 %: a warning, stored.
      */
     @Test
-    void BR42_aWidenedStop_setsTheFlagForGood_andWarnsAboveTheProfile() throws Exception {
+    void D124_aWidenedStop_setsTheFlagForGood_andWarnsAboveTheProfile() throws Exception {
         UUID id = openPosition();
         clock.set(minute(2).plusSeconds(10));
         patchLevels(trader, id, "{\"stopLoss\": 93}")

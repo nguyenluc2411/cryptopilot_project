@@ -93,7 +93,7 @@ class PositionLevelRuleTest {
         "LONG,  , 95, false",
         "LONG,  94, , false"
     })
-    void BR42_D124_aStopIsFurtherFromTheEntry_whenItLeavesMoreRoomToLose(
+    void D124_aStopIsFurtherFromTheEntry_whenItLeavesMoreRoomToLose(
             Direction direction, BigDecimal stopLoss, BigDecimal reference, boolean further) {
         assertThat(PositionLevelRule.isFurtherFromEntry(direction, stopLoss, reference))
                 .isEqualTo(further);

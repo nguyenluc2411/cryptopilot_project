@@ -170,7 +170,7 @@ class PositionLevelServiceImplTest {
     /** BR-42: widened against the ORIGINAL stop (the plan's 95), not against the current one. */
     @ParameterizedTest(name = "current {0} → {1}: widened {2}")
     @CsvSource({"95, 94, true", "97, 96, false", "93, 94, true", "95, 95.5, false"})
-    void BR42_stopWidened_isAgainstTheOriginalStop(String current, String next, boolean widened) {
+    void D124_stopWidened_isAgainstTheOriginalStop(String current, String next, boolean widened) {
         trade = trade(Direction.LONG, MarketType.SPOT, current, "110", null, 3);
         when(journal.openSimulatedTrades(USER)).thenReturn(List.of(trade));
 
