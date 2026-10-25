@@ -42,12 +42,13 @@ import org.springframework.stereotype.Component;
  * {@link MatchingWorker#submit} path.
  *
  * <ul>
- *   <li>An update becomes a {@link PriceRange}: its candle's low and high so far, from the candle's open time to the
- *       update's time, closed or not. A fill is recorded at the candle's open time (D-78), so the many live updates of
- *       a minute and the one closed candle of a replay fill the same plans at the same time.
- *   <li>At start, every pair with an ACTIVE LIMIT entry is replayed from the later of the candle after its watermark
- *       and the minute of its first activation, at most {@code replay.max-window} back (A-04, Q-34). Older candles are
- *       skipped with a warning: nothing is ever filled from a guessed price.
+ *   <li>An update becomes a {@link PriceRange}: its candle's open, low and high so far, from the candle's open time to
+ *       the update's time, closed or not. A fill or an invalidation is recorded at the candle's open time (D-78), so
+ *       the many live updates of a minute and the one closed candle of a replay decide the same plans at the same
+ *       time, by the same rules.
+ *   <li>At start, every pair with a waiting plan (ACTIVE LIMIT or STOP) is replayed from the later of the candle
+ *       after its watermark and the minute of its first activation, at most {@code replay.max-window} back (A-04,
+ *       Q-34). Older candles are skipped with a warning: nothing is ever filled or invalidated from a guessed price.
  *   <li>While running, a pair whose live updates jump past the minute after its last closed candle (a stream drop, a
  *       reconnection, a closed candle that never came) goes back to replaying from that minute. Nothing after the
  *       hole reaches the engine before the hole is replayed, so the watermark never passes it.
@@ -132,8 +133,8 @@ public class MinuteKlineFeed implements MinuteKlineListener {
     }
 
     /**
-     * Starts the matching engine, then replays the pairs with ACTIVE LIMIT entries on a replay thread while the other
-     * pairs go live. A second call does nothing.
+     * Starts the matching engine, then replays the pairs with waiting plans on a replay thread while the other pairs
+     * go live. A second call does nothing.
      */
     @EventListener(ApplicationReadyEvent.class)
     public synchronized void start() {
@@ -197,7 +198,7 @@ public class MinuteKlineFeed implements MinuteKlineListener {
         return locks.isReplaying(market, pairId);
     }
 
-    /** Where each pair with an ACTIVE LIMIT entry starts its replay. */
+    /** Where each pair with a waiting plan (ACTIVE LIMIT or STOP) starts its replay. */
     private List<Replay> startupReplays() {
         Map<PairKey, Instant> firstActivation = matching.activeEntries().stream()
                 .collect(Collectors.toMap(
@@ -417,7 +418,14 @@ public class MinuteKlineFeed implements MinuteKlineListener {
     private static PriceRange rangeOf(MinuteKline kline) {
         Instant at = kline.eventTime().isBefore(kline.openTime()) ? kline.openTime() : kline.eventTime();
         return new PriceRange(
-                kline.market(), kline.pairId(), kline.low(), kline.high(), kline.openTime(), at, kline.closed());
+                kline.market(),
+                kline.pairId(),
+                kline.open(),
+                kline.low(),
+                kline.high(),
+                kline.openTime(),
+                at,
+                kline.closed());
     }
 
     private static Instant minuteOf(Instant instant) {

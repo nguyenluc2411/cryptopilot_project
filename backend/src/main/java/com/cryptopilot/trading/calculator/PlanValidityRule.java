@@ -9,7 +9,8 @@ import java.util.Optional;
 
 /**
  * The checks of a plan's validity values that the risk calculation does not make: where its invalidation price may
- * lie and how far its own entry deviation limit may go. Pure functions; the caller reads the current price and the
+ * lie, which levels the last price may not have reached when it is activated, and how far its own entry deviation
+ * limit may go. Pure functions; the caller reads the current price and the
  * settings and reports a violation on its field.
  *
  * <p>Rule: BR-33, BR-68, BR-69; D-111, D-112.
@@ -91,6 +92,64 @@ public final class PlanValidityRule {
                 "the stop price of a STOP " + direction + " plan must be "
                         + (direction == Direction.LONG ? "above" : "below") + " the current price "
                         + lastPrice.toPlainString()));
+    }
+
+    /**
+     * A LIMIT plan whose take profit the last price has already reached may not be activated: at or above it for a
+     * LONG, at or below it for a SHORT (MSG16 on {@code takeProfit}). The move the plan waits for has happened, so the
+     * matching engine would only invalidate it on the next candle.
+     *
+     * <p>Rule: BR-68; D-111 (M3), D-112 (Q-72).
+     *
+     * @param direction LONG or SHORT
+     * @param takeProfit the plan's take profit
+     * @param lastPrice the current last price of the pair
+     * @return the violation, or empty when the take profit is not reached yet
+     */
+    public static Optional<InputViolation> takeProfitAlreadyReached(
+            Direction direction, BigDecimal takeProfit, BigDecimal lastPrice) {
+        Objects.requireNonNull(direction, "direction");
+        Objects.requireNonNull(takeProfit, "takeProfit");
+        Objects.requireNonNull(lastPrice, "lastPrice");
+        int compared = lastPrice.compareTo(takeProfit);
+        boolean isLong = direction == Direction.LONG;
+        if (isLong ? compared < 0 : compared > 0) {
+            return Optional.empty();
+        }
+        return Optional.of(new InputViolation(
+                "takeProfit",
+                WRONG_SIDE,
+                "the take profit of a LIMIT " + direction + " plan must be " + (isLong ? "above" : "below")
+                        + " the current price " + lastPrice.toPlainString()));
+    }
+
+    /**
+     * A STOP plan whose stop loss the last price has already reached may not be activated: at or below it for a LONG,
+     * at or above it for a SHORT (MSG16 on {@code stopLoss}). The breakout has failed before it triggered, so the
+     * matching engine would only invalidate it on the next candle.
+     *
+     * <p>Rule: BR-68; D-111 (M3), D-112 (Q-72).
+     *
+     * @param direction LONG or SHORT
+     * @param stopLoss the plan's stop loss
+     * @param lastPrice the current last price of the pair
+     * @return the violation, or empty when the stop loss is not reached yet
+     */
+    public static Optional<InputViolation> stopLossAlreadyReached(
+            Direction direction, BigDecimal stopLoss, BigDecimal lastPrice) {
+        Objects.requireNonNull(direction, "direction");
+        Objects.requireNonNull(stopLoss, "stopLoss");
+        Objects.requireNonNull(lastPrice, "lastPrice");
+        int compared = lastPrice.compareTo(stopLoss);
+        boolean isLong = direction == Direction.LONG;
+        if (isLong ? compared > 0 : compared < 0) {
+            return Optional.empty();
+        }
+        return Optional.of(new InputViolation(
+                "stopLoss",
+                WRONG_SIDE,
+                "the stop loss of a STOP " + direction + " plan must be " + (isLong ? "below" : "above")
+                        + " the current price " + lastPrice.toPlainString()));
     }
 
     /**

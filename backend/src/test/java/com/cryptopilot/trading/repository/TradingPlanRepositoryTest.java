@@ -11,6 +11,7 @@ import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanWarning;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
+import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
@@ -323,7 +324,7 @@ class TradingPlanRepositoryTest {
         });
     }
 
-    /** The compare-and-set the engine will call (TP-B): only an ACTIVE plan moves, once. */
+    /** The compare-and-set the engine calls: only an ACTIVE plan moves, once. */
     @Test
     void BR68_invalidateIfActive_movesAnActivePlanOnce_andNothingElse() {
         UUID active = inTransaction(() -> {
@@ -411,20 +412,57 @@ class TradingPlanRepositoryTest {
                 .isEqualTo(LiquidityRole.MAKER);
     }
 
-    /** The books hold LIMIT entries only until the STOP book exists (TP-B), so an ACTIVE STOP is never filled as one. */
+    /**
+     * The books are rebuilt from every waiting plan: an ACTIVE STOP plan, also one activated before the engine knew
+     * STOP entries and so never tracked, comes back with its levels; a DRAFT does not (BR-33, BR-68).
+     */
     @Test
-    void BR33_theActiveLimitEntries_leaveOutStopPlans() {
-        PlanDetails stop = new PlanDetails(EntryType.STOP, EXPIRY, null, null, null, AnalysisTimeframe.ONE_HOUR);
-        UUID id = inTransaction(() -> {
+    void BR33_BR68_theWaitingEntries_holdActiveLimitAndStopPlansWithTheirLevels() {
+        PlanDetails stop =
+                new PlanDetails(EntryType.STOP, EXPIRY, null, new BigDecimal("97"), null, AnalysisTimeframe.ONE_HOUR);
+        UUID active = inTransaction(() -> {
                     TradingPlan plan = TradingPlan.draft(
                             SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), stop, List.of());
                     plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
                     return plans.save(plan);
                 })
                 .getId();
+        UUID draft = inTransaction(() -> plans.save(TradingPlan.draft(
+                        SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), stop, List.of())))
+                .getId();
 
-        assertThat(plans.findActiveLimitEntries())
-                .noneMatch(entry -> entry.planId().equals(id));
+        assertThat(plans.findActiveWaitingEntries())
+                .noneMatch(entry -> entry.planId().equals(draft))
+                .filteredOn(entry -> entry.planId().equals(active))
+                .singleElement()
+                .satisfies(entry -> {
+                    assertThat(entry.userId()).isEqualTo(SEEDED_ACCOUNT);
+                    assertThat(entry.entryType()).isEqualTo(EntryType.STOP);
+                    assertThat(entry.direction()).isEqualTo(Direction.LONG);
+                    assertThat(entry.entryPrice()).isEqualByComparingTo("100");
+                    assertThat(entry.stopLoss()).isEqualByComparingTo("95");
+                    assertThat(entry.takeProfit()).isEqualByComparingTo("110");
+                    assertThat(entry.invalidationPrice()).isEqualByComparingTo("97");
+                    assertThat(entry.activatedAt()).isEqualTo(NOW);
+                });
+    }
+
+    /** D-63, D-111 M3: an INVALIDATED plan no longer counts against {@code ACTIVE_PLAN_MAX}. */
+    @Test
+    void BR62_anInvalidatedPlan_freesItsActivePlanSlot() {
+        UUID id = inTransaction(() -> {
+                    TradingPlan plan = TradingPlan.draft(
+                            SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of());
+                    plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
+                    return plans.save(plan);
+                })
+                .getId();
+        long before = plans.countActive(SEEDED_ACCOUNT);
+
+        inTransaction(() -> plans.invalidateIfActive(
+                id, NOW.plusSeconds(60), InvalidationReason.TAKE_PROFIT_REACHED, NOW.plusSeconds(61)));
+
+        assertThat(plans.countActive(SEEDED_ACCOUNT)).isEqualTo(before - 1);
     }
 
     /** V32: the validity columns hold their rules in the database itself. */

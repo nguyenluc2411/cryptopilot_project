@@ -12,11 +12,15 @@ import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.job.MatchingWorker;
 import com.cryptopilot.trading.model.Fill;
+import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
+import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.InvalidationReason;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import java.math.BigDecimal;
@@ -45,10 +49,11 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * The compare-and-set fill against the real schema: a fill and a cancel of the same ACTIVE plan race, and exactly one
- * of them changes it. Each test commits its own writes; {@link #removeRows()} deletes them.
+ * The compare-and-set fill and invalidation against the real schema: a fill, an invalidation, a cancel and an expiry
+ * of the same ACTIVE plan race, and exactly one of them changes it. Each test commits its own writes;
+ * {@link #removeRows()} deletes them.
  *
- * <p>Rule: NSF-07, BR-32, UC-19; TECHNICAL_DESIGN 5.5 and 7.7.
+ * <p>Rule: NSF-07, BR-32, BR-68, UC-19; TECHNICAL_DESIGN 5.5 and 7.7; D-111 (M3).
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
@@ -61,6 +66,8 @@ class MatchingRaceTest {
     private static final Instant FILLED_AT = NOW.plusSeconds(60);
     private static final PlanDetails LIMIT = new PlanDetails(
             EntryType.LIMIT, NOW.plus(Duration.ofDays(7)), null, null, null, AnalysisTimeframe.ONE_HOUR);
+    private static final PlanDetails STOP =
+            new PlanDetails(EntryType.STOP, NOW.plus(Duration.ofDays(7)), null, null, null, AnalysisTimeframe.ONE_HOUR);
     private static final PlanDetails MARKET =
             new PlanDetails(EntryType.MARKET, null, null, null, null, AnalysisTimeframe.ONE_HOUR);
 
@@ -148,14 +155,15 @@ class MatchingRaceTest {
     }
 
     @Test
-    void NSF07_theBooksStart_fromTheActiveLimitPlansOnly() {
+    void NSF07_theBooksStart_fromTheActiveLimitAndStopPlans() {
         UUID limit = activePlan(LIMIT);
+        UUID stop = activePlan(STOP);
         UUID market = activePlan(MARKET);
         UUID draft = inTransaction(() -> plans.save(draft(LIMIT))).getId();
 
         assertThat(matching.activeEntries())
                 .extracting(TrackedEntry::planId)
-                .contains(limit)
+                .contains(limit, stop)
                 .doesNotContain(market, draft);
         assertThat(matching.activeEntries())
                 .filteredOn(entry -> entry.planId().equals(limit))
@@ -165,6 +173,98 @@ class MatchingRaceTest {
                     assertThat(entry.entryPrice()).isEqualByComparingTo("100");
                     assertThat(entry.activatedAt()).isEqualTo(NOW);
                 });
+    }
+
+    @Test
+    void BR68_anActivePlan_isInvalidatedOnce_withItsReasonAndInstant() {
+        UUID id = activePlan(STOP);
+
+        assertThat(matching.invalidate(invalidation(id))).isTrue();
+        assertThat(matching.invalidate(invalidation(id)))
+                .as("a second invalidation finds nothing ACTIVE")
+                .isFalse();
+        assertThat(matching.fill(fill(id, FILLED_AT))).as("nor does a fill").isFalse();
+
+        TradingPlan invalidated = plan(id);
+        assertThat(invalidated.getStatus()).isEqualTo(PlanStatus.INVALIDATED);
+        assertThat(invalidated.getInvalidatedAt()).isEqualTo(FILLED_AT);
+        assertThat(invalidated.getInvalidationReason()).isEqualTo(InvalidationReason.STOP_LOSS_REACHED);
+        assertThat(invalidated.getExecutedAt()).isNull();
+    }
+
+    /** D-111 M3: a fill and an invalidation of the same plan, say one of them a late retry, never both land. */
+    @RepeatedTest(20)
+    void BR68_aFillAndAnInvalidationOfTheSamePlan_haveExactlyOneWinner() throws Exception {
+        UUID id = activePlan(STOP);
+        Invalidation invalidation = invalidation(id);
+
+        List<Boolean> won = race(() -> matching.fill(fill(id, FILLED_AT)), () -> matching.invalidate(invalidation));
+
+        assertThat(won).containsExactlyInAnyOrder(true, false);
+        TradingPlan after = plan(id);
+        if (won.getFirst()) {
+            assertThat(after.getStatus()).isEqualTo(PlanStatus.EXECUTED);
+            assertThat(after.getInvalidatedAt()).isNull();
+        } else {
+            assertThat(after.getStatus()).isEqualTo(PlanStatus.INVALIDATED);
+            assertThat(after.getExecutedAt()).isNull();
+        }
+    }
+
+    /** A cancel and an invalidation: the loser is a cancel refused with MSG43 or an invalidation that changes nothing. */
+    @RepeatedTest(20)
+    void BR68_aCancelAndAnInvalidationOfTheSamePlan_haveExactlyOneWinner() throws Exception {
+        UUID id = activePlan(LIMIT);
+        Invalidation invalidation = invalidation(id);
+
+        List<Boolean> won = race(() -> matching.invalidate(invalidation), () -> {
+            try {
+                tradingPlans.cancel(SEEDED_ACCOUNT, id);
+                return true;
+            } catch (IllegalPlanStateException lost) {
+                assertThat(lost.errorCode().messageCode()).isEqualTo("MSG43");
+                assertThat(lost.status()).isEqualTo(PlanStatus.INVALIDATED);
+                return false;
+            }
+        });
+
+        assertThat(won).containsExactlyInAnyOrder(true, false);
+        assertThat(plan(id).getStatus()).isEqualTo(won.getFirst() ? PlanStatus.INVALIDATED : PlanStatus.CANCELLED);
+    }
+
+    /**
+     * An expiry (NSF-09; its sweep is T-046) loads the plan under its row lock and saves it EXPIRED, as a cancel does;
+     * against an invalidation exactly one of them changes the plan.
+     */
+    @RepeatedTest(20)
+    void BR68_anExpiryAndAnInvalidationOfTheSamePlan_haveExactlyOneWinner() throws Exception {
+        UUID id = activePlan(LIMIT);
+        Invalidation invalidation = invalidation(id);
+        Instant afterExpiry = NOW.plus(Duration.ofDays(8));
+
+        List<Boolean> won = race(() -> matching.invalidate(invalidation), () -> {
+            try {
+                return inTransaction(() -> {
+                    TradingPlan plan = plans.findForUpdate(id, SEEDED_ACCOUNT).orElseThrow();
+                    plan.expire(afterExpiry);
+                    plans.save(plan);
+                    return true;
+                });
+            } catch (IllegalPlanStateException lost) {
+                assertThat(lost.status()).isEqualTo(PlanStatus.INVALIDATED);
+                return false;
+            }
+        });
+
+        assertThat(won).containsExactlyInAnyOrder(true, false);
+        TradingPlan after = plan(id);
+        if (won.getFirst()) {
+            assertThat(after.getStatus()).isEqualTo(PlanStatus.INVALIDATED);
+            assertThat(after.getExpiredAt()).isNull();
+        } else {
+            assertThat(after.getStatus()).isEqualTo(PlanStatus.EXPIRED);
+            assertThat(after.getInvalidatedAt()).isNull();
+        }
     }
 
     @RepeatedTest(20)
@@ -240,16 +340,69 @@ class MatchingRaceTest {
         TradingPlan plan = plan(id);
         return new TradingPlanActivated(
                 id,
+                plan.getUserId(),
                 plan.getMarket(),
                 pair,
                 plan.getDirection(),
                 plan.getEntryType(),
                 plan.getEntryPrice(),
+                plan.getStopLoss(),
+                plan.getTakeProfit(),
+                plan.getInvalidationPrice(),
                 plan.getActivatedAt());
     }
 
+    /** Runs both together, released at once by a barrier, and answers whether each changed the plan, in order. */
+    private static List<Boolean> race(Callable<Boolean> first, Callable<Boolean> second) throws Exception {
+        CyclicBarrier together = new CyclicBarrier(2);
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            Future<Boolean> one = pool.submit(() -> {
+                together.await();
+                return first.call();
+            });
+            Future<Boolean> two = pool.submit(() -> {
+                together.await();
+                return second.call();
+            });
+            return List.of(one.get(), two.get());
+        }
+    }
+
+    /** The stop loss of a STOP plan, or the take profit of a LIMIT plan, reached at {@link #FILLED_AT}. */
+    private Invalidation invalidation(UUID id) {
+        TradingPlan plan = plan(id);
+        TrackedEntry entry = new TrackedEntry(
+                id,
+                SEEDED_ACCOUNT,
+                plan.getMarket(),
+                pair,
+                plan.getDirection(),
+                plan.getEntryType(),
+                plan.getEntryPrice(),
+                plan.getStopLoss(),
+                plan.getTakeProfit(),
+                plan.getInvalidationPrice(),
+                NOW);
+        InvalidationReason reason = plan.getEntryType() == EntryType.STOP
+                ? InvalidationReason.STOP_LOSS_REACHED
+                : InvalidationReason.TAKE_PROFIT_REACHED;
+        return new Invalidation(entry, reason, FILLED_AT);
+    }
+
     private static Fill fill(UUID id, Instant at) {
-        return new Fill(id, new BigDecimal("100"), at);
+        TrackedEntry entry = new TrackedEntry(
+                id,
+                SEEDED_ACCOUNT,
+                MarketType.FUTURES,
+                UUID.randomUUID(),
+                Direction.LONG,
+                EntryType.LIMIT,
+                new BigDecimal("100"),
+                new BigDecimal("95"),
+                new BigDecimal("110"),
+                null,
+                NOW);
+        return new Fill(entry, LiquidityRole.MAKER, new BigDecimal("100"), at);
     }
 
     private UUID activePlan(PlanDetails details) {

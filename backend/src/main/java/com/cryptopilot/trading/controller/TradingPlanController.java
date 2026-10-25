@@ -150,7 +150,7 @@ public class TradingPlanController {
     @ApiResponse(
             responseCode = "400",
             description =
-                    "MSG01, MSG15, MSG16: the plan no longer passes the calculation, its invalidation price is no longer on the far side of the current price, or its STOP is already triggered")
+                    "MSG01, MSG15, MSG16: the plan no longer passes the calculation, its invalidation price is no longer on the far side of the current price, its STOP is already triggered (entryPrice), or the last price has already reached its stop loss (STOP) or take profit (LIMIT)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: Futures plans are not in the caller's plan")
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller, or the pair is not enabled")
@@ -171,7 +171,7 @@ public class TradingPlanController {
     @ApiResponse(responseCode = "404", description = "MSG41: no such plan of the caller")
     @ApiResponse(
             responseCode = "409",
-            description = "MSG43: the plan is executed, cancelled or expired, or changed concurrently")
+            description = "MSG43: the plan is executed, cancelled, expired or invalidated, or changed concurrently")
     @PostMapping("/{id}/cancel")
     public TradingPlanResponse cancel(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
         return plans.cancel(callerOf(caller), id);

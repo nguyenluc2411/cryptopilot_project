@@ -25,7 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
  * The trading plans. {@link TradingPlan} is the aggregate root, so its warnings are saved and deleted through it and
  * have no repository of their own.
  *
- * <p>Rule: BR-31, BR-32; NSF-07; TECHNICAL_DESIGN 5.5; D-23.
+ * <p>Rule: BR-31, BR-32, BR-68; NSF-07; TECHNICAL_DESIGN 5.5; D-23.
  */
 public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
 
@@ -116,11 +116,16 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
             + " where p.id = :id and p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE")
     int invalidateIfActive(UUID id, Instant at, InvalidationReason reason, Instant now);
 
-    /** The entries of every ACTIVE LIMIT plan, for the matching books. */
+    /**
+     * Every waiting plan, for the matching books: the ACTIVE LIMIT and STOP plans with their entry and invalidation
+     * levels. A STOP plan activated before the engine knew STOP entries is among them, so it is picked up at the next
+     * start (BR-33, BR-68).
+     */
     @Transactional(readOnly = true)
-    @Query("select new com.cryptopilot.trading.model.TrackedEntry(p.id, p.market, p.pairId, p.direction, p.entryPrice,"
-            + " p.activatedAt)"
+    @Query("select new com.cryptopilot.trading.model.TrackedEntry(p.id, p.userId, p.market, p.pairId, p.direction,"
+            + " p.entryType, p.entryPrice, p.stopLoss, p.takeProfit, p.invalidationPrice, p.activatedAt)"
             + " from TradingPlan p where p.status = com.cryptopilot.trading.model.enums.PlanStatus.ACTIVE"
-            + " and p.entryType = com.cryptopilot.trading.model.enums.EntryType.LIMIT")
-    List<TrackedEntry> findActiveLimitEntries();
+            + " and p.entryType in (com.cryptopilot.trading.model.enums.EntryType.LIMIT,"
+            + " com.cryptopilot.trading.model.enums.EntryType.STOP)")
+    List<TrackedEntry> findActiveWaitingEntries();
 }

@@ -27,9 +27,15 @@ import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
+import com.cryptopilot.trading.model.Fill;
+import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanListQuery;
+import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.InvalidationReason;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
+import com.cryptopilot.trading.service.MatchingService;
 import com.cryptopilot.trading.service.TradingPlanService;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -105,6 +111,9 @@ class TradingPlanApiTest {
 
     @Autowired
     private TradingPlanService service;
+
+    @Autowired
+    private MatchingService matching;
 
     @Autowired
     private EntityManagerFactory emf;
@@ -446,6 +455,33 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.status").value("DRAFT"));
     }
 
+    /**
+     * D-63, D-111 M3: a plan the matching engine invalidated frees its slot, so a FREE Trader at three ACTIVE plans
+     * activates a fourth. Open positions count against the same limit, but none exists before T-048.
+     */
+    @Test
+    void BR62_anInvalidatedPlan_freesItsSlot_andAFourthPlanActivates() throws Exception {
+        UUID trader = trader();
+        List<String> active = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            active.add(id(
+                    as(trader, post(PLANS), spotLimit("100", "95", "110", true)).andExpect(status().isCreated())));
+        }
+        String fourth = id(as(trader, post(PLANS), spotLimit("100", "95", "110", false)));
+        as(trader, post(PLANS + "/" + fourth + "/activate"), null).andExpect(status().isConflict());
+
+        assertThat(matching.invalidate(new Invalidation(
+                        waiting(active.getFirst()), InvalidationReason.TAKE_PROFIT_REACHED, Instant.now())))
+                .isTrue();
+
+        as(trader, post(PLANS + "/" + fourth + "/activate"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+        as(trader, get(PLANS + "/" + active.getFirst()), null)
+                .andExpect(jsonPath("$.status").value("INVALIDATED"))
+                .andExpect(jsonPath("$.invalidationReason").value("TAKE_PROFIT_REACHED"));
+    }
+
     @Test
     void BR62_aProTrader_hasNoLimitOfActivePlans() throws Exception {
         UUID trader = trader();
@@ -744,11 +780,52 @@ class TradingPlanApiTest {
     }
 
     /**
+     * BR-36, D-112 R6: a STOP the engine triggers is stored in the same compare-and-set as a LIMIT fill, at its stop
+     * moved by {@code SLIPPAGE_BPS} against the Trader (10 bps: 100 to 100.10, rounded to the tick), as TAKER, at the
+     * open time of the candle that triggered it; the journal record of T-048a starts from these columns. The setting is
+     * changed through the admin endpoint, so the setting reader's cache is evicted as it would be in use.
+     */
+    @Test
+    void BR36_aStopTheEngineTriggers_isStoredAtTheSlippedPrice_asTaker_atItsCandle() throws Exception {
+        lastPrice("99");
+        String id = id(as(trader(), post(PLANS), spotStop("{\"activate\": true}"))
+                .andExpect(jsonPath("$.status").value("ACTIVE")));
+        Instant candle = Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(60);
+        UUID admin = account(UserRole.ADMIN);
+        Map<String, Object> audit = sql.sql(
+                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
+                .query()
+                .singleRow();
+        changeSetting(admin, "SLIPPAGE_BPS", "10");
+        try {
+            assertThat(matching.fill(new Fill(waiting(id), LiquidityRole.TAKER, new BigDecimal("100"), candle)))
+                    .isTrue();
+        } finally {
+            changeSetting(admin, "SLIPPAGE_BPS", "0");
+            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
+                    .params(audit.get("updated_by"), audit.get("updated_at"))
+                    .update();
+            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
+        }
+
+        assertFill(id, "100.10", "TAKER");
+        assertThat(sql.sql("select executed_at from trading_plan where plan_id = ?")
+                        .param(UUID.fromString(id))
+                        .query(Timestamp.class)
+                        .single()
+                        .toInstant())
+                .isEqualTo(candle);
+    }
+
+    /**
      * D-111 E2/E3 (TP-0 closes the gap TP-A pinned): a Futures plan's invalidation price and a Futures STOP at
      * activation are checked against the Futures last price, the close of the latest 1-minute candle update, never
      * against the mark price. Mark 100 and last 103 are cached together: an invalidation price of 102 lies on the
      * entry's side of the last price (MSG16) though above the mark price; a LONG STOP at 101 is already triggered by
-     * the last price (MSG16) though not by the mark price. On the right side of the last price both are accepted.
+     * the last price (MSG16) though not by the mark price. On the right side of the last price both are accepted. The
+     * activation refusals of D-112 read the same price: a LONG LIMIT's take profit of 102 is reached by the last price
+     * (MSG16 on the take profit) though not by the mark price, and a LONG STOP's stop loss of 101, reached by the mark
+     * price only, is accepted.
      */
     @ParameterizedTest(name = "{0}")
     @CsvSource(
@@ -757,7 +834,9 @@ class TradingPlanApiTest {
                 "invalidation 102 below last 103 | LIMIT | \"invalidationPrice\": 102, \"activate\": false | 400 | invalidationPrice",
                 "invalidation 104 above last 103 | LIMIT | \"invalidationPrice\": 104, \"activate\": false | 201 |",
                 "STOP 101 triggered by last 103  | STOP  | \"activate\": true                             | 400 | entryPrice",
-                "STOP 104 not triggered by 103   | STOP  | \"activate\": true, \"entryPrice\": 104        | 201 |"
+                "STOP 104 not triggered by 103   | STOP  | \"activate\": true, \"entryPrice\": 104        | 201 |",
+                "TP 102 reached by last 103      | LIMIT | \"activate\": true, \"takeProfit\": 102        | 400 | takeProfit",
+                "SL 101 reached by mark 100 only | STOP  | \"activate\": true, \"entryPrice\": 104, \"stopLoss\": 101 | 201 |"
             })
     void D111_aFuturesPlan_isCheckedAgainstTheLastPrice_notTheMarkPrice(
             String name, String entryType, String extra, int httpStatus, String refusedField) throws Exception {
@@ -766,13 +845,15 @@ class TradingPlanApiTest {
         markPrice("100");
         lastPrice(MarketType.FUTURES, "103");
         String entryPrice = extra.contains("entryPrice") ? "" : " \"entryPrice\": 101,";
+        String stopLoss = extra.contains("stopLoss") ? "" : " \"stopLoss\": 95,";
+        String takeProfit = extra.contains("takeProfit") ? "" : " \"takeProfit\": 110,";
 
         ResultActions response = as(
                 trader,
                 post(PLANS),
                 "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
-                        + " \"entryType\": \"" + entryType + "\"," + entryPrice + " \"stopLoss\": 95,"
-                        + " \"takeProfit\": 110, \"leverage\": 5, " + extra + "}");
+                        + " \"entryType\": \"" + entryType + "\"," + entryPrice + stopLoss + takeProfit
+                        + " \"leverage\": 5, " + extra + "}");
 
         response.andExpect(status().is(httpStatus));
         if (refusedField != null) {
@@ -1003,6 +1084,15 @@ class TradingPlanApiTest {
                         BigDecimal.ONE,
                         at));
         prices.flush();
+    }
+
+    /** The plan as the matching engine rebuilds it from the database. */
+    private TrackedEntry waiting(String id) {
+        UUID planId = UUID.fromString(id);
+        return matching.activeEntries().stream()
+                .filter(entry -> entry.planId().equals(planId))
+                .findFirst()
+                .orElseThrow();
     }
 
     /** The plan's stored fill: its price and liquidity role. */

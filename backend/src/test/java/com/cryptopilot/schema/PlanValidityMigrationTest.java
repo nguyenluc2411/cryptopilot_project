@@ -188,7 +188,7 @@ class PlanValidityMigrationTest {
     }
 
     /**
-     * What the matching books load, read by {@link TradingPlanRepository#findActiveLimitEntries()} itself: the
+     * What the matching books load, read by {@link TradingPlanRepository#findActiveWaitingEntries()} itself: the
      * repository is built over a session on this test's database instead of the application's.
      */
     private List<TrackedEntry> activeLimitEntries() {
@@ -197,7 +197,7 @@ class PlanValidityMigrationTest {
                 sessions.withOptions().connection(dataSource.getConnection()).openSession()) {
             return new JpaRepositoryFactory(session)
                     .getRepository(TradingPlanRepository.class)
-                    .findActiveLimitEntries();
+                    .findActiveWaitingEntries();
         } catch (SQLException e) {
             throw new IllegalStateException(e);
         }
