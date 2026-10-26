@@ -124,7 +124,21 @@ class OpenApiDocsTest {
             "/api/v1/admin/academy/topics",
             "/api/v1/admin/academy/topics/{id}",
             "/api/v1/admin/academy/covers/upload-signature",
+            "/api/v1/posts/trending-coins",
+            "/api/v1/posts/{id}/vote",
+            "/api/v1/community/influencers",
             "/api/v1/community/members/{memberId}",
+            "/api/v1/community/members/{memberId}/follow",
+            "/api/v1/community/members/{memberId}/followers",
+            "/api/v1/community/members/{memberId}/following",
+            "/api/v1/community/members/{memberId}/block",
+            "/api/v1/community/blocks",
+            "/api/v1/community/members",
+            "/api/v1/comments/{id}/reports",
+            "/api/v1/admin/comment-reports-queue",
+            "/api/v1/admin/comment-reports-queue/{commentId}",
+            "/api/v1/admin/comment-reports-queue/{commentId}/decision",
+            "/api/v1/admin/comments/{id}/restore",
             "/api/v1/notifications",
             "/api/v1/notifications/unread-count",
             "/api/v1/notifications/{id}/read",
@@ -156,7 +170,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/news-articles/{id}/restore",
             "/api/v1/admin/news-articles/{id}/summarize");
 
-    private static final int OPERATIONS = 156;
+    private static final int OPERATIONS = 173;
 
     @Autowired
     private MockMvc mvc;

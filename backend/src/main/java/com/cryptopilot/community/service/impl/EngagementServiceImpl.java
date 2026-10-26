@@ -3,9 +3,11 @@ package com.cryptopilot.community.service.impl;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.community.dto.response.EngagementResponse;
+import com.cryptopilot.community.dto.response.VoteResponse;
 import com.cryptopilot.community.entity.ForumComment;
 import com.cryptopilot.community.entity.ForumPost;
 import com.cryptopilot.community.model.enums.EngagementAction;
+import com.cryptopilot.community.model.enums.PostSentiment;
 import com.cryptopilot.community.repository.EngagementRepository;
 import com.cryptopilot.community.repository.ForumCommentRepository;
 import com.cryptopilot.community.repository.ForumPostRepository;
@@ -30,13 +32,14 @@ public class EngagementServiceImpl implements EngagementService {
     private final EngagementRepository engagements;
     private final ForumPostRepository posts;
     private final ForumCommentRepository comments;
+    private final CommunityAccess access;
     private final Clock clock;
 
     @Override
     @Transactional
     public EngagementResponse onPost(UUID caller, UUID postId, EngagementAction action, boolean active) {
         ForumPost post = posts.findById(postId)
-                .filter(found -> found.isVisibleTo(caller))
+                .filter(found -> access.canSee(found, caller))
                 .orElseThrow(() -> new ResourceNotFoundException("Post", postId));
         if (active) {
             engagements.addToPost(UuidV7.next(), caller, post.getId(), action.name(), clock.instant());
@@ -48,11 +51,29 @@ public class EngagementServiceImpl implements EngagementService {
 
     @Override
     @Transactional
+    public VoteResponse vote(UUID caller, UUID postId, PostSentiment sentiment) {
+        ForumPost post = posts.findById(postId)
+                .filter(found -> access.canSee(found, caller))
+                .orElseThrow(() -> new ResourceNotFoundException("Post", postId));
+        if (sentiment == null) {
+            engagements.unvotePost(caller, post.getId());
+        } else {
+            engagements.votePost(UuidV7.next(), caller, post.getId(), sentiment.name(), clock.instant());
+        }
+        return new VoteResponse(
+                sentiment,
+                engagements.countByPostIdAndActionType(post.getId(), EngagementAction.BULLISH),
+                engagements.countByPostIdAndActionType(post.getId(), EngagementAction.BEARISH));
+    }
+
+    @Override
+    @Transactional
     public EngagementResponse likeComment(UUID caller, UUID commentId, boolean active) {
         ForumComment comment = comments.findById(commentId)
                 .filter(ForumComment::isPublished)
+                .filter(found -> access.canSee(found, caller))
                 .filter(found -> posts.findById(found.getPostId())
-                        .filter(post -> post.isVisibleTo(caller))
+                        .filter(post -> access.canSee(post, caller))
                         .isPresent())
                 .orElseThrow(() -> new ResourceNotFoundException("Comment", commentId));
         String like = EngagementAction.LIKE.name();

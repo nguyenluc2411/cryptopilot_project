@@ -29,8 +29,11 @@ public class CommunityMetrics implements AdminMetricSource {
     @Override
     public Map<String, Object> indicators(Instant from, Instant to, Instant now) {
         return sql.sql("""
-                        select (select count(*) from post_report where report_status in ('OPEN', 'REVIEWING'))
-                                   as open_reports,
+                        select (select count(*) from post_report
+                                 where report_status in ('OPEN', 'REVIEWING') and comment_id is null) as open_reports,
+                               (select count(*) from post_report
+                                 where report_status in ('OPEN', 'REVIEWING') and comment_id is not null)
+                                   as open_comment_reports,
                                (select count(*) from forum_post where created_at >= :from and created_at < :to)
                                    as posts,
                                (select count(*) from forum_comment where created_at >= :from and created_at < :to)
@@ -39,6 +42,7 @@ public class CommunityMetrics implements AdminMetricSource {
                 .param("to", Timestamp.from(to))
                 .query((row, index) -> Map.<String, Object>of(
                         "openReports", row.getLong("open_reports"),
+                        "openCommentReports", row.getLong("open_comment_reports"),
                         "newPosts", row.getLong("posts"),
                         "newComments", row.getLong("comments")))
                 .single();

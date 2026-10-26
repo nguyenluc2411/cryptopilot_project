@@ -50,6 +50,31 @@ public interface EngagementRepository extends Repository<Engagement, UUID> {
             @Param("action") String action,
             @Param("now") Instant now);
 
+    /**
+     * Records the member's Bullish or Bearish vote on a post, replacing the other one (D-99): one statement on the
+     * partial unique index of the votes, so two votes at once leave one row.
+     */
+    @Modifying
+    @Query(value = """
+                    insert into engagement (engagement_id, user_id, post_id, action_type, created_at, updated_at)
+                    values (:id, :userId, :postId, :vote, :now, :now)
+                    on conflict (user_id, post_id) where action_type in ('BULLISH', 'BEARISH')
+                    do update set action_type = excluded.action_type, updated_at = excluded.updated_at""", nativeQuery = true)
+    int votePost(
+            @Param("id") UUID id,
+            @Param("userId") UUID userId,
+            @Param("postId") UUID postId,
+            @Param("vote") String vote,
+            @Param("now") Instant now);
+
+    /** Takes the member's vote on a post back; 0 when there was none (D-99). */
+    @Modifying
+    @Query(
+            value = "delete from engagement where user_id = :userId and post_id = :postId"
+                    + " and action_type in ('BULLISH', 'BEARISH')",
+            nativeQuery = true)
+    int unvotePost(@Param("userId") UUID userId, @Param("postId") UUID postId);
+
     /** Takes the action back from a post; 0 when there was none. */
     @Modifying
     @Query(

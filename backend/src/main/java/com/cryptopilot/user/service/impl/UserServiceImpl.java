@@ -10,6 +10,7 @@ import com.cryptopilot.user.UserApi;
 import com.cryptopilot.user.UserSummary;
 import com.cryptopilot.user.entity.UserAccount;
 import com.cryptopilot.user.entity.UserProfile;
+import com.cryptopilot.user.event.AccountBanned;
 import com.cryptopilot.user.event.AccountSuspended;
 import com.cryptopilot.user.model.enums.AccountStatus;
 import com.cryptopilot.user.model.enums.Role;
@@ -248,6 +249,7 @@ public class UserServiceImpl implements UserService {
         account.ban();
         accounts.save(account);
         events.publishEvent(new AccountSuspended(userId, at));
+        events.publishEvent(new AccountBanned(userId, at));
         return true;
     }
 
@@ -265,6 +267,23 @@ public class UserServiceImpl implements UserService {
     @Transactional(readOnly = true)
     public List<UUID> activeAdministrators() {
         return accounts.findIdsOfActiveAdministrators();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isAdministrator(UUID userId) {
+        return accounts.findById(userId)
+                .filter(account -> account.getRole() == Role.ADMIN)
+                .isPresent();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<AuthorCard> searchMembers(String prefix, int limit) {
+        String pattern = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        return profiles.findTradersByNamePrefix(pattern, limit).stream()
+                .map(profile -> new AuthorCard(profile.getId(), profile.getDisplayName(), profile.getAvatarUrl()))
+                .toList();
     }
 
     @Override

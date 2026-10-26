@@ -16,7 +16,8 @@ import lombok.Getter;
  * A comment on a post, or a reply to one (UC-30). Replies are one level deep: a reply to a reply hangs on the comment
  * that started the thread, so a thread is a comment and its replies in the order they were written (D-98).
  *
- * <p>Deleting a comment sets {@link CommentStatus#DELETED} (BR-47); the row stays, so its replies keep their place.
+ * <p>Deleting a comment sets {@link CommentStatus#DELETED} (BR-47); the row stays, so its replies keep their place. A
+ * moderator hides a reported comment ({@link CommentStatus#HIDDEN}, restorable) or removes it (D-99).
  *
  * <p>Rule: UC-30; BR-47; SRS 3.7.3.
  */
@@ -71,10 +72,10 @@ public class ForumComment extends BaseEntity {
         return new ForumComment(parent.postId, authorId, thread, content);
     }
 
-    /** Replaces the text of a comment that is not deleted. */
+    /** Replaces the text of a published comment; a deleted or hidden one keeps its text. */
     public void edit(String content) {
-        if (isDeleted()) {
-            throw new IllegalStateException("comment " + getId() + " is deleted");
+        if (!isPublished()) {
+            throw new IllegalStateException("comment " + getId() + " is " + status);
         }
         this.content = requireContent(content);
     }
@@ -84,8 +85,32 @@ public class ForumComment extends BaseEntity {
         this.status = CommentStatus.DELETED;
     }
 
+    /** Hides a published comment for a moderation decision or a ban (D-99); any other comment is left as it is. */
+    public void hide() {
+        if (status == CommentStatus.PUBLISHED) {
+            this.status = CommentStatus.HIDDEN;
+        }
+    }
+
+    /** Removes the comment for a moderation decision (D-99): deleted for everyone, its text kept for Admin. */
+    public void remove() {
+        this.status = CommentStatus.DELETED;
+    }
+
+    /** Shows a hidden comment again (D-99). */
+    public void restore() {
+        if (status != CommentStatus.HIDDEN) {
+            throw new IllegalStateException("comment " + getId() + " is " + status + ", not hidden");
+        }
+        this.status = CommentStatus.PUBLISHED;
+    }
+
     public boolean isDeleted() {
         return status == CommentStatus.DELETED;
+    }
+
+    public boolean isHidden() {
+        return status == CommentStatus.HIDDEN;
     }
 
     /** Whether the comment is shown with its text: published, neither deleted nor hidden. */

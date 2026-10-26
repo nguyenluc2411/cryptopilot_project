@@ -210,6 +210,7 @@ forum_post,official_category,character varying,,,YES
 forum_post,post_id,uuid,,,NO
 forum_post,post_status,character varying,,,NO
 forum_post,post_type,character varying,,,NO
+forum_post,sentiment,character varying,,,YES
 forum_post,title,character varying,,,NO
 forum_post,updated_at,timestamp with time zone,,,NO
 forum_post,version,bigint,64,0,NO
@@ -396,11 +397,13 @@ post_media,updated_at,timestamp with time zone,,,NO
 post_media,version,bigint,64,0,NO
 post_media,width,integer,32,0,YES
 post_report,created_at,timestamp with time zone,,,NO
+post_report,comment_id,uuid,,,YES
 post_report,description,text,,,YES
 post_report,post_id,uuid,,,NO
 post_report,reason,character varying,,,NO
 post_report,report_id,uuid,,,NO
 post_report,report_status,character varying,,,NO
+post_report,reported_content,text,,,YES
 post_report,reporter_id,uuid,,,NO
 post_report,resolution_action,character varying,,,YES
 post_report,resolved_at,timestamp with time zone,,,YES
@@ -675,6 +678,13 @@ user_profile,trading_style,character varying,,,YES
 user_profile,updated_at,timestamp with time zone,,,NO
 user_profile,user_id,uuid,,,NO
 user_profile,version,bigint,64,0,NO
+user_relation,created_at,timestamp with time zone,,,NO
+user_relation,relation_id,uuid,,,NO
+user_relation,relation_type,character varying,,,NO
+user_relation,source_user_id,uuid,,,NO
+user_relation,target_user_id,uuid,,,NO
+user_relation,updated_at,timestamp with time zone,,,NO
+user_relation,version,bigint,64,0,NO
 user_subscription,created_at,timestamp with time zone,,,NO
 user_subscription,end_at,timestamp with time zone,,,NO
 user_subscription,order_id,uuid,,,NO

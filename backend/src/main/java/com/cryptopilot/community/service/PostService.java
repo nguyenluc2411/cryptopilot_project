@@ -8,6 +8,7 @@ import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.model.FeedFilter;
 import com.cryptopilot.community.model.enums.FeedTab;
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -15,8 +16,8 @@ import java.util.UUID;
  * exist (MSG41), and so does another Trader's post the caller tries to change. Implemented by
  * {@link com.cryptopilot.community.service.impl.PostServiceImpl}.
  *
- * <p>The reads take a {@code null} caller for a Guest, who sees what every Trader sees (D-99); the SAVED and MINE tabs
- * are a Trader's own and answer MSG44 to a Guest.
+ * <p>The reads take a {@code null} caller for a Guest, who sees what every Trader sees (D-99); the SAVED, MINE and
+ * FOLLOWING tabs are a Trader's own and answer MSG44 to a Guest.
  *
  * <p>Rule: UC-26, UC-27, UC-29; BR-47, BR-61; D-48, D-99.
  */
@@ -35,6 +36,12 @@ public interface PostService {
 
     /** How much the community talks about a coin (D-99); MSG41 for a coin that is not stored. */
     CoinDiscussionResponse coinDiscussion(String symbol);
+
+    /**
+     * The coins the published posts of the last seven days talk about most, the most posted about in the last day
+     * first (D-99): at most {@code limit}, 1 to 20, 10 when {@code null}.
+     */
+    List<CoinDiscussionResponse> trendingCoins(Integer limit);
 
     /** A post the caller may see (BR-47); MSG41 otherwise. */
     PostDetailResponse detail(UUID caller, UUID postId);

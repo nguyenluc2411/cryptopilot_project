@@ -4,6 +4,7 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.community.dto.request.PostRequest;
@@ -15,8 +16,11 @@ import com.cryptopilot.community.model.CoinDiscussion;
 import com.cryptopilot.community.model.FeedFilter;
 import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.FeedQuery;
+import com.cryptopilot.community.model.enums.EngagementAction;
 import com.cryptopilot.community.model.enums.FeedTab;
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import com.cryptopilot.community.model.enums.PostStatus;
+import com.cryptopilot.community.repository.EngagementRepository;
 import com.cryptopilot.community.repository.ForumPostRepository;
 import com.cryptopilot.community.repository.PostFeedRepository;
 import com.cryptopilot.community.service.PostService;
@@ -24,11 +28,14 @@ import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -37,7 +44,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The community use cases of a Trader.
  *
- * <p>Visibility follows BR-47 everywhere: a post is read through {@link ForumPost#isVisibleTo(UUID)} and changed only
+ * <p>Visibility follows BR-47 and D-125 everywhere: a post is read through {@link CommunityAccess} and changed only
  * through a lookup by its key <em>and</em> its author, so another Trader's post, a hidden post of someone else and a
  * deleted post all answer MSG41 — never "forbidden", which would confirm that the key exists.
  *
@@ -62,10 +69,17 @@ public class PostServiceImpl implements PostService {
 
     static final int SEARCH_MAX_LENGTH = 100;
 
+    /** How many coins the Trending list shows, and at most (D-99). */
+    static final int TRENDING_COINS_DEFAULT = 10;
+
+    static final int TRENDING_COINS_MAX = 20;
+
     private final ForumPostRepository posts;
     private final PostFeedRepository feeds;
     private final PostAssembler assembler;
     private final PostWriter writer;
+    private final EngagementRepository engagements;
+    private final CommunityAccess access;
     private final MarketApi market;
     private final Clock clock;
 
@@ -73,7 +87,7 @@ public class PostServiceImpl implements PostService {
     @Transactional(readOnly = true)
     public PageResponse<PostSummaryResponse> feed(
             UUID caller, FeedTab tab, FeedFilter filter, Integer page, Integer pageSize) {
-        if (caller == null && (tab == FeedTab.SAVED || tab == FeedTab.MINE)) {
+        if (caller == null && (tab == FeedTab.SAVED || tab == FeedTab.MINE || tab == FeedTab.FOLLOWING)) {
             throw new BusinessException(ErrorCode.AUTHENTICATION_REQUIRED, "the " + tab + " tab is a Trader's own");
         }
         PageRequest request = Paging.of(page, pageSize);
@@ -93,7 +107,8 @@ public class PostServiceImpl implements PostService {
             coinId = stored.get();
         }
         FeedQuery query = new FeedQuery(tab, coinId, filter.market(), filter.author(), text);
-        FeedPage found = feeds.feed(query, caller, clock.instant().minus(MOST_LIKED_WINDOW), request);
+        Instant now = clock.instant();
+        FeedPage found = feeds.feed(query, caller, now.minus(MOST_LIKED_WINDOW), now, request);
         return assembler.page(found, request, caller);
     }
 
@@ -127,10 +142,37 @@ public class PostServiceImpl implements PostService {
 
     @Override
     @Transactional(readOnly = true)
+    public List<CoinDiscussionResponse> trendingCoins(Integer limit) {
+        int size = limit == null ? TRENDING_COINS_DEFAULT : Math.clamp(limit, 1, TRENDING_COINS_MAX);
+        List<PostFeedRepository.TrendingCoin> trending = feeds.trendingCoins(clock.instant(), size);
+        Map<UUID, CoinListing> coins = market
+                .coins(trending.stream()
+                        .map(PostFeedRepository.TrendingCoin::coinId)
+                        .collect(Collectors.toSet()))
+                .stream()
+                .collect(Collectors.toMap(CoinListing::coinId, Function.identity()));
+        return trending.stream()
+                .filter(coin -> coins.containsKey(coin.coinId()))
+                .map(coin -> new CoinDiscussionResponse(
+                        coins.get(coin.coinId()).symbol(),
+                        coins.get(coin.coinId()).name(),
+                        coin.postsLastDay(),
+                        coin.postsLastWeek(),
+                        coin.postsLastWeek(),
+                        coin.lastPostAt()))
+                .toList();
+    }
+
+    @Override
+    @Transactional
     public PostDetailResponse detail(UUID caller, UUID postId) {
         ForumPost post = posts.findById(postId)
-                .filter(found -> found.isVisibleTo(caller))
+                .filter(found -> access.canSee(found, caller))
                 .orElseThrow(() -> notFound(postId));
+        // A signed-in member other than the author counts once as a view; a Guest is not counted (D-99).
+        if (caller != null && !caller.equals(post.getAuthorId()) && post.getStatus() == PostStatus.PUBLISHED) {
+            engagements.addToPost(UuidV7.next(), caller, post.getId(), EngagementAction.VIEW.name(), clock.instant());
+        }
         return assembler.detail(post, caller);
     }
 

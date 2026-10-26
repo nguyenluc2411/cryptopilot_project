@@ -6,6 +6,7 @@ import com.cryptopilot.admin.model.enums.AuditAction;
 import com.cryptopilot.admin.model.enums.AuditedEntity;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
@@ -81,14 +82,14 @@ public class ModerationServiceImpl implements ModerationService {
     public PageResponse<QueueItemResponse> queue(UUID moderator, Integer page, Integer pageSize) {
         PageRequest request = Paging.of(page, pageSize);
         Page<QueueEntry> entries = queue.queue(request);
-        List<UUID> ids = entries.map(QueueEntry::postId).toList();
+        List<UUID> ids = entries.map(QueueEntry::targetId).toList();
         Map<UUID, PostSummaryResponse> cards =
                 assembler.page(new FeedPage(ids, ids.size()), request, moderator).items().stream()
                         .collect(Collectors.toMap(PostSummaryResponse::id, Function.identity()));
         return PageResponse.of(
                 entries,
                 entry -> new QueueItemResponse(
-                        cards.get(entry.postId()),
+                        cards.get(entry.targetId()),
                         entry.reportCount(),
                         entry.reasons(),
                         entry.firstReportedAt(),
@@ -126,6 +127,10 @@ public class ModerationServiceImpl implements ModerationService {
     @Override
     @Transactional
     public ModerationDecisionResponse decide(UUID moderator, UUID postId, ModerationDecisionRequest request) {
+        if (request.action().commentOnly()) {
+            throw new FieldValidationException(
+                    request.action() + " decides a comment's reports, not a post's", Map.of("action", "MSG01"));
+        }
         ForumPost post = post(postId);
         List<PostReport> open = openReports(postId);
         Instant now = clock.instant();
@@ -164,6 +169,7 @@ public class ModerationServiceImpl implements ModerationService {
                         post.getId(),
                         Map.of("openReports", open.size()),
                         values("openReports", 0, post, request.note()));
+            case HIDE_COMMENT, REMOVE_COMMENT -> throw new IllegalStateException("refused above: " + action);
         }
         open.forEach(report -> report.resolve(moderator, action, now));
         reports.flush();
@@ -186,6 +192,9 @@ public class ModerationServiceImpl implements ModerationService {
         if (post.getStatus() != PostStatus.HIDDEN) {
             throw new BusinessException(
                     ErrorCode.POST_NOT_HIDDEN, "post " + postId + " is " + post.getStatus() + ", not hidden");
+        }
+        if (users.publicProfile(post.getAuthorId()).isEmpty()) {
+            throw new BusinessException(ErrorCode.AUTHOR_BANNED, "the author of post " + postId + " is banned");
         }
         post.restore();
         audit(
@@ -255,7 +264,8 @@ public class ModerationServiceImpl implements ModerationService {
     }
 
     private List<PostReport> openReports(UUID postId) {
-        List<PostReport> open = reports.findAllByPostIdAndStatusInOrderByCreatedAtAscIdAsc(postId, OPEN);
+        List<PostReport> open =
+                reports.findAllByPostIdAndCommentIdIsNullAndStatusInOrderByCreatedAtAscIdAsc(postId, OPEN);
         if (open.isEmpty()) {
             throw new ResourceNotFoundException("Open reports of post", postId);
         }

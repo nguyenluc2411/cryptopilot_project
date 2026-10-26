@@ -17,6 +17,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -57,7 +58,7 @@ public class PostController {
     @GetMapping
     public PageResponse<PostSummaryResponse> feed(
             @AuthenticationPrincipal Jwt caller,
-            @Parameter(description = "LATEST (default), MOST_LIKED (last 7 days), SAVED or MINE")
+            @Parameter(description = "LATEST (default), MOST_LIKED (last 7 days), SAVED, MINE or FOLLOWING")
                     @RequestParam(defaultValue = "LATEST")
                     FeedTab tab,
             @Parameter(description = "Only posts tagged with this coin symbol, e.g. BTC")
@@ -92,6 +93,13 @@ public class PostController {
     @GetMapping("/coins/{symbol}/discussion")
     public CoinDiscussionResponse coinDiscussion(@PathVariable String symbol) {
         return service.coinDiscussion(symbol);
+    }
+
+    @Operation(summary = "The coins the community talks about most this week, for the Trending list (D-99); public")
+    @ApiResponse(responseCode = "200", description = "Up to `limit` coins, the most posted about in the last day first")
+    @GetMapping("/trending-coins")
+    public List<CoinDiscussionResponse> trendingCoins(@RequestParam(required = false) Integer limit) {
+        return service.trendingCoins(limit);
     }
 
     @Operation(summary = "A post with its full text (SCR-25)")

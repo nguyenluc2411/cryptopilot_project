@@ -1,7 +1,9 @@
 package com.cryptopilot.community.service;
 
 import com.cryptopilot.community.dto.response.EngagementResponse;
+import com.cryptopilot.community.dto.response.VoteResponse;
 import com.cryptopilot.community.model.enums.EngagementAction;
+import com.cryptopilot.community.model.enums.PostSentiment;
 import java.util.UUID;
 
 /**
@@ -15,6 +17,9 @@ public interface EngagementService {
 
     /** Likes or saves a post, or takes the like or save back. */
     EngagementResponse onPost(UUID caller, UUID postId, EngagementAction action, boolean active);
+
+    /** Votes a post Bullish or Bearish, replacing an earlier vote, or takes the vote back with {@code null} (D-99). */
+    VoteResponse vote(UUID caller, UUID postId, PostSentiment sentiment);
 
     /** Likes a comment, or takes the like back. */
     EngagementResponse likeComment(UUID caller, UUID commentId, boolean active);

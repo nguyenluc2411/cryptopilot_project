@@ -9,6 +9,7 @@ package com.cryptopilot.admin.model.enums;
 public enum AuditedEntity {
     USER_ACCOUNT,
     FORUM_POST,
+    FORUM_COMMENT,
     CRYPTO_PAIR,
     LEVERAGE_BRACKET,
     SUBSCRIPTION_PACKAGE,

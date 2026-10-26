@@ -16,11 +16,12 @@ import java.util.UUID;
 import lombok.Getter;
 
 /**
- * A Trader's report that a post breaks the community rules (UC-33). A Trader reports a post once
- * ({@code uq_post_report_post_reporter}) and never their own (BR-46). A report is filed {@link ReportStatus#OPEN}; the
+ * A Trader's report that a post, or one comment of it, breaks the community rules (UC-33; comments since D-99, which
+ * widens D-14). A Trader reports a post once ({@code uq_post_report_post_reporter}) and each comment once
+ * ({@code uq_post_report_comment_reporter}), never their own (BR-46). A report is filed {@link ReportStatus#OPEN}; the
  * moderation queue reviews and resolves it (UC-43).
  *
- * <p>Rule: UC-33; BR-46; D-14 (only posts are reported); SRS 3.7.4.
+ * <p>Rule: UC-33; BR-46; D-14, D-99; SRS 3.7.4.
  */
 @Getter
 @Entity
@@ -33,6 +34,14 @@ public class PostReport extends BaseEntity {
 
     @Column(name = "post_id", nullable = false, updatable = false)
     private UUID postId;
+
+    /** The reported comment of the post, or {@code null} when the post itself is reported (D-99). */
+    @Column(name = "comment_id", updatable = false)
+    private UUID commentId;
+
+    /** The comment's text when it was reported, kept for the moderator whatever its author edits; {@code null} for a post. */
+    @Column(name = "reported_content", updatable = false)
+    private String reportedContent;
 
     @Column(name = "reporter_id", nullable = false, updatable = false)
     private UUID reporterId;
@@ -91,6 +100,10 @@ public class PostReport extends BaseEntity {
         }
         this.resolvedBy = Objects.requireNonNull(moderatorId, "moderatorId must not be null");
         this.resolutionAction = Objects.requireNonNull(action, "action must not be null");
+        if (isOfComment() ? action.postOnly() : action.commentOnly()) {
+            throw new IllegalArgumentException(
+                    action + " does not decide a report of a " + (isOfComment() ? "comment" : "post"));
+        }
         this.resolvedAt = Objects.requireNonNull(at, "at must not be null");
         this.status = ReportStatus.RESOLVED;
     }
@@ -98,5 +111,19 @@ public class PostReport extends BaseEntity {
     /** Files an OPEN report of a post; {@code description} is required for {@link ReportReason#OTHER}. */
     public static PostReport file(UUID postId, UUID reporterId, ReportReason reason, String description) {
         return new PostReport(postId, reporterId, reason, description);
+    }
+
+    /** Files an OPEN report of a comment, keeping its text as it is now (D-99). */
+    public static PostReport fileOnComment(
+            ForumComment comment, UUID reporterId, ReportReason reason, String description) {
+        PostReport report = new PostReport(comment.getPostId(), reporterId, reason, description);
+        report.commentId = comment.getId();
+        report.reportedContent = comment.getContent();
+        return report;
+    }
+
+    /** Whether this reports a comment rather than the post itself. */
+    public boolean isOfComment() {
+        return commentId != null;
     }
 }

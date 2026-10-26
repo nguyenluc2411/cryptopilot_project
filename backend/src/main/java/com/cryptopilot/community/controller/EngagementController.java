@@ -1,13 +1,16 @@
 package com.cryptopilot.community.controller;
 
 import com.cryptopilot.common.config.OpenApiConfig;
+import com.cryptopilot.community.dto.request.VoteRequest;
 import com.cryptopilot.community.dto.response.EngagementResponse;
+import com.cryptopilot.community.dto.response.VoteResponse;
 import com.cryptopilot.community.model.enums.EngagementAction;
 import com.cryptopilot.community.service.EngagementService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +19,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -24,7 +29,9 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>Rule: UC-31, UC-32; BR-45, BR-47; TECHNICAL_DESIGN 8.
  */
-@Tag(name = "Reactions", description = "Likes and saves of posts and comments (UC-31, UC-32). Trader.")
+@Tag(
+        name = "Reactions",
+        description = "Likes and saves of posts and comments (UC-31, UC-32), Bullish and Bearish votes (D-99). Trader.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -63,6 +70,24 @@ public class EngagementController {
     @DeleteMapping("/api/v1/posts/{id}/save")
     public EngagementResponse unsavePost(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
         return service.onPost(callerOf(caller), id, EngagementAction.SAVE, false);
+    }
+
+    @Operation(summary = "Vote a post Bullish or Bearish, replacing an earlier vote (D-99)")
+    @ApiResponse(responseCode = "200", description = "Voted, with the post's Bullish and Bearish votes")
+    @ApiResponse(responseCode = "400", description = "MSG01: no sentiment")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such post the caller may see")
+    @PutMapping("/api/v1/posts/{id}/vote")
+    public VoteResponse votePost(
+            @AuthenticationPrincipal Jwt caller, @PathVariable UUID id, @Valid @RequestBody VoteRequest request) {
+        return service.vote(callerOf(caller), id, request.sentiment());
+    }
+
+    @Operation(summary = "Take back the vote on a post (D-99); no vote is not an error")
+    @ApiResponse(responseCode = "200", description = "Not voted, with the post's Bullish and Bearish votes")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such post the caller may see")
+    @DeleteMapping("/api/v1/posts/{id}/vote")
+    public VoteResponse unvotePost(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
+        return service.vote(callerOf(caller), id, null);
     }
 
     @Operation(summary = "Like a comment (UC-31, BR-45)")

@@ -7,5 +7,14 @@ package com.cryptopilot.community.model.enums;
  */
 public enum EngagementAction {
     LIKE,
-    SAVE
+    SAVE,
+
+    /** A signed-in member other than the author opened the post; counted once per member (D-99). */
+    VIEW,
+
+    /** A reader votes the post bullish; at most one of BULLISH and BEARISH per member (D-99). */
+    BULLISH,
+
+    /** A reader votes the post bearish (D-99). */
+    BEARISH
 }

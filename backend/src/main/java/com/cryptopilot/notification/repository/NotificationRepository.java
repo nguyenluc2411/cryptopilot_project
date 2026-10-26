@@ -1,7 +1,9 @@
 package com.cryptopilot.notification.repository;
 
 import com.cryptopilot.notification.entity.Notification;
+import com.cryptopilot.notification.model.enums.NotificationType;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -69,6 +71,11 @@ public interface NotificationRepository extends Repository<Notification, UUID> {
     @Transactional(readOnly = true)
     Optional<Notification> findBySourceKey(String sourceKey);
 
+    /** The source keys that start with {@code prefix}, such as the mentions already told for one post. */
+    @Transactional(readOnly = true)
+    @Query("select n.sourceKey from Notification n where n.sourceKey like concat(:prefix, '%')")
+    List<String> findSourceKeysStartingWith(@Param("prefix") String prefix);
+
     /** One page of the user's notifications, the newest first. */
     @Transactional(readOnly = true)
     Page<Notification> findByUserIdOrderByCreatedAtDescIdDesc(UUID userId, Pageable page);
@@ -76,6 +83,10 @@ public interface NotificationRepository extends Repository<Notification, UUID> {
     /** One page of the user's unread notifications, the newest first. */
     @Transactional(readOnly = true)
     Page<Notification> findByUserIdAndReadFalseOrderByCreatedAtDescIdDesc(UUID userId, Pageable page);
+
+    /** Whether the user has an unread notification of this type about this object. */
+    @Transactional(readOnly = true)
+    boolean existsByUserIdAndTypeAndReferenceIdAndReadFalse(UUID userId, NotificationType type, UUID referenceId);
 
     /** How many of the user's notifications are unread: the number on the bell. */
     @Transactional(readOnly = true)

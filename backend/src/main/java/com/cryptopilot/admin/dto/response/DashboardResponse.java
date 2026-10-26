@@ -6,8 +6,8 @@ import java.util.Map;
 /**
  * The indicators of SCR-33 (UC-40). Counts named "new…", {@code paidOrders}, {@code revenue},
  * {@code revenueByPackage} and {@code aiQuestions} are of the period; the others are now: {@code totalUsers},
- * {@code activeUsers} (signed in during the last 7 days), {@code activeSubscriptions}, {@code openReports},
- * {@code latestCandle} (per market).
+ * {@code activeUsers} (signed in during the last 7 days), {@code activeSubscriptions}, {@code openReports} (of posts),
+ * {@code openCommentReports} (of comments, D-125), {@code latestCandle} (per market).
  *
  * <p>Rule: UC-40; SRS 3.11.1.
  *

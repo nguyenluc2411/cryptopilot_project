@@ -172,6 +172,7 @@ class DashboardApiTest {
                 .andExpect(jsonPath("$.indicators.activeUsers").exists())
                 .andExpect(jsonPath("$.indicators.activeSubscriptions").exists())
                 .andExpect(jsonPath("$.indicators.openReports").exists())
+                .andExpect(jsonPath("$.indicators.openCommentReports").exists())
                 .andExpect(jsonPath("$.indicators.latestCandle").exists());
         as(admin, get(ADMIN_API + "/dashboard")).andExpect(status().isOk());
     }

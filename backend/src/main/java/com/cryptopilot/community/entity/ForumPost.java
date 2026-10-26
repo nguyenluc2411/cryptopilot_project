@@ -2,6 +2,7 @@ package com.cryptopilot.community.entity;
 
 import com.cryptopilot.common.entity.BaseEntity;
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import com.cryptopilot.community.model.enums.PostSentiment;
 import com.cryptopilot.community.model.enums.PostStatus;
 import com.cryptopilot.community.model.enums.PostType;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -82,6 +83,11 @@ public class ForumPost extends BaseEntity {
     @Column(name = "post_status", nullable = false, length = 32)
     private PostStatus status;
 
+    /** The author's stance on the market (D-99), or {@code null} for none. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "sentiment", length = 16)
+    private PostSentiment sentiment;
+
     @ElementCollection
     @CollectionTable(name = "post_coin", joinColumns = @JoinColumn(name = "post_id"))
     @Column(name = "coin_id", nullable = false)
@@ -117,6 +123,11 @@ public class ForumPost extends BaseEntity {
         post.categorize(category);
         post.revise(title, content, marketType, coinIds);
         return post;
+    }
+
+    /** Marks the author's stance on the market, or clears it with {@code null} (D-99). */
+    public void lean(PostSentiment sentiment) {
+        this.sentiment = sentiment;
     }
 
     /** Changes what an official post is (D-99). */

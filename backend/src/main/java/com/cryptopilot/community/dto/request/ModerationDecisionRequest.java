@@ -9,7 +9,8 @@ import jakarta.validation.constraints.Size;
  *
  * <p>Rule: UC-43; SRS 3.11.3.
  *
- * @param action HIDE_POST, DISMISS, WARN_USER or BAN_USER
+ * @param action HIDE_POST or REMOVE_POST for a post, HIDE_COMMENT or REMOVE_COMMENT for a comment (D-99), or DISMISS,
+ *     WARN_USER or BAN_USER for either
  * @param note why, at most 500 characters, kept in the audit log; {@code null} for none
  */
 public record ModerationDecisionRequest(

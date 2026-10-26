@@ -2,6 +2,7 @@ package com.cryptopilot.notification.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -41,10 +42,10 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 /**
  * The notification centre (SRS 3.4.5, UC-15) and the community notifications that fill it (E-1): a comment tells the
- * post's author, a moderation decision the author and the reporters; the bell counts
+ * post's author, a follow the member followed, a moderation decision the author and the reporters; the bell counts
  * the unread ones, which are marked read one by one or all at once; NSF-17 deletes those older than 90 days.
  *
- * <p>Rule: UC-15; SRS 3.4.5, 3.7.3, 3.11.3; NSF-15, NSF-17.
+ * <p>Rule: UC-15; SRS 3.4.5, 3.7.3, 3.11.3; D-99; NSF-15, NSF-17.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -53,6 +54,7 @@ class NotificationApiTest {
 
     private static final String NOTIFICATIONS = "/api/v1/notifications";
     private static final String POSTS = "/api/v1/posts";
+    private static final String MEMBERS = "/api/v1/community/members/";
     private static final String QUEUE = "/api/v1/admin/reports-queue";
 
     @Autowired
@@ -78,6 +80,9 @@ class NotificationApiTest {
         for (UUID account : accounts) {
             sql.sql("delete from audit_log where user_id = ?").param(account).update();
             sql.sql("delete from post_report where reporter_id = ? or resolved_by = ?")
+                    .params(account, account)
+                    .update();
+            sql.sql("delete from user_relation where source_user_id = ? or target_user_id = ?")
                     .params(account, account)
                     .update();
             sql.sql("delete from forum_comment where author_id = ?")
@@ -123,12 +128,31 @@ class NotificationApiTest {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         PostCommented commented =
-                new PostCommented(UUID.randomUUID(), alice, UUID.randomUUID(), bob, null, Instant.now());
+                new PostCommented(UUID.randomUUID(), alice, UUID.randomUUID(), bob, null, null, Instant.now());
 
         community.commented(commented);
         community.commented(commented);
 
         assertThat(count(alice)).isEqualTo(1);
+    }
+
+    @Test
+    void D99_aFollow_tellsTheMemberFollowed_onceWhileUnread() throws Exception {
+        UUID alice = account(UserRole.TRADER, "Alice");
+        UUID bob = account(UserRole.TRADER, "Bob");
+
+        as(bob, post(MEMBERS + alice + "/follow")).andExpect(status().isOk());
+        awaitNotifications(alice, 1);
+        as(bob, delete(MEMBERS + alice + "/follow")).andExpect(status().isOk());
+        as(bob, post(MEMBERS + alice + "/follow")).andExpect(status().isOk());
+        awaitDelivered();
+
+        assertThat(count(alice)).isEqualTo(1);
+        as(alice, get(NOTIFICATIONS))
+                .andExpect(jsonPath("$.items[0].type").value("FOLLOW"))
+                .andExpect(jsonPath("$.items[0].content").value("Bob started following you."))
+                .andExpect(jsonPath("$.items[0].referenceType").value("MEMBER"))
+                .andExpect(jsonPath("$.items[0].referenceId").value(bob.toString()));
     }
 
     @Test

@@ -84,7 +84,8 @@ class BaselineSchemaTest {
             "academy_topic",
             "academy_article",
             "academy_term",
-            "academy_progress");
+            "academy_progress",
+            "user_relation");
 
     @Autowired
     private JdbcClient jdbc;
@@ -111,7 +112,7 @@ class BaselineSchemaTest {
     @Test
     void schema_holdsTheFiftyBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(50);
+        assertThat(BUSINESS_TABLES).hasSize(51);
     }
 
     @Test
@@ -244,7 +245,7 @@ class BaselineSchemaTest {
     @ValueSource(
             strings = {
                 "uq_watchlist_user_pair",
-                "uq_post_report_post_reporter",
+                "uq_user_relation_source_target",
                 "uq_trading_journal_plan",
                 "uq_user_subscription_order",
                 "uq_subscription_order_code",
@@ -262,6 +263,8 @@ class BaselineSchemaTest {
             strings = {
                 "uq_engagement_user_post",
                 "uq_engagement_user_comment",
+                "uq_post_report_post_reporter",
+                "uq_post_report_comment_reporter",
                 "uq_ai_configuration_active",
                 "uq_user_account_email_lower",
                 "idx_trading_plan_active",

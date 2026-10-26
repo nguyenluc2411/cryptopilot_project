@@ -83,7 +83,14 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.NEWS_SOURCE_IN_USE, "MSG43 409"),
             Map.entry(ErrorCode.NEWS_FEED_UNREADABLE, "MSG15 400"),
             Map.entry(ErrorCode.NEWS_SOURCE_CRAWLED_RECENTLY, "MSG50 429"),
-            Map.entry(ErrorCode.NEWS_SUMMARY_UNAVAILABLE, "MSG31 503"));
+            Map.entry(ErrorCode.NEWS_SUMMARY_UNAVAILABLE, "MSG31 503"),
+            Map.entry(ErrorCode.FOLLOW_SELF, "MSG43 409"),
+            Map.entry(ErrorCode.BLOCK_SELF, "MSG43 409"),
+            Map.entry(ErrorCode.RELATION_NOT_ALLOWED, "MSG43 409"),
+            Map.entry(ErrorCode.COMMENT_REPORT_OWN_COMMENT, "MSG43 409"),
+            Map.entry(ErrorCode.COMMENT_ALREADY_REPORTED, "MSG34 409"),
+            Map.entry(ErrorCode.COMMENT_NOT_HIDDEN, "MSG43 409"),
+            Map.entry(ErrorCode.AUTHOR_BANNED, "MSG43 409"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

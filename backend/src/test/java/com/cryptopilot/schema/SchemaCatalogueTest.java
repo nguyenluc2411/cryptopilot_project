@@ -45,6 +45,7 @@ class SchemaCatalogueTest {
             "engagement.comment_id -> forum_comment",
             "post_media.post_id -> forum_post",
             "post_report.post_id -> forum_post",
+            "post_report.comment_id -> forum_comment",
             "news_crawl_log.source_id -> news_source",
             "news_article_tag.article_id -> news_article",
             "news_article_tag.tag_id -> news_tag",

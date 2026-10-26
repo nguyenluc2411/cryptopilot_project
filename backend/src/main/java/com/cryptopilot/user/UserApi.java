@@ -218,4 +218,13 @@ public interface UserApi {
      * a news source that keeps failing (NSF-10). Locked and banned administrators are left out.
      */
     List<UUID> activeAdministrators();
+
+    /** Whether the account is an administrator's; {@code false} when there is no such account. */
+    boolean isAdministrator(UUID userId);
+
+    /**
+     * The Traders whose public name starts with {@code prefix}, case ignored, alphabetical, at most {@code limit}:
+     * the members a Trader may mention in a post or a comment (D-99). Banned accounts are left out.
+     */
+    List<AuthorCard> searchMembers(String prefix, int limit);
 }

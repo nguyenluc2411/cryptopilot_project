@@ -5,17 +5,18 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * A comment of SCR-25 with its replies. A deleted comment is listed only while it has replies, without its text or
- * author, so the client shows "Comment deleted" in its place (SRS 3.7.3).
+ * A comment of SCR-25 with its replies. A deleted or hidden comment is listed only while it has replies, without its
+ * text or author, so the client shows "Comment deleted" or "Comment hidden" in its place (SRS 3.7.3, D-99).
  *
  * <p>Rule: UC-30, UC-31; BR-45, BR-47; SRS 3.7.3.
  *
  * @param id the comment
  * @param postId the post
  * @param parentCommentId the comment that starts its thread, or {@code null} for a thread's first comment
- * @param author who wrote it; {@code null} when deleted
- * @param content the text; {@code null} when deleted
- * @param deleted whether its author deleted it
+ * @param author who wrote it; {@code null} when deleted or hidden
+ * @param content the text; {@code null} when deleted or hidden
+ * @param deleted whether its author deleted it, or a moderator removed it
+ * @param hidden whether a moderator hid it (D-99); listed, like a deleted one, only while it has replies
  * @param likeCount its likes
  * @param likedByMe whether the caller liked it
  * @param mine whether the caller wrote it, so the client offers Edit and Delete
@@ -30,6 +31,7 @@ public record CommentResponse(
         AuthorResponse author,
         String content,
         boolean deleted,
+        boolean hidden,
         long likeCount,
         boolean likedByMe,
         boolean mine,
