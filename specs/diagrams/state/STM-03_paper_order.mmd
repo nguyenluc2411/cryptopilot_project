@@ -1,0 +1,24 @@
+---
+title: STM-03 PAPER_ORDER trade_order.order_status (SDD Figure 33)
+---
+%% Source: paper/model/enums/OrderStatus.java, paper/entity/PaperOrder.java (inList, activate, reject, fill,
+%% completeFill, cancel, expire), paper/service/impl/SpotArrival.java and PaperOrderLists.java. Spot demo only.
+%% Since V47 the table is trade_order; the entity keeps the name PaperOrder.
+stateDiagram-v2
+    [*] --> NEW : place a Spot order (TR-02)
+    [*] --> PENDING_NEW : pending leg of an OTO or OTOCO group (TR-10)
+    PENDING_NEW --> NEW : working order of the group filled (TR-10, D-77)
+    PENDING_NEW --> REJECTED : free balance too low when placed (INSUFFICIENT_BALANCE)
+    PENDING_NEW --> CANCELED : group cancelled
+    NEW --> PARTIALLY_FILLED : part executed
+    NEW --> FILLED : executed in full, a MARKET order on arrival
+    PARTIALLY_FILLED --> PARTIALLY_FILLED : another part executed
+    PARTIALLY_FILLED --> FILLED : rest executed, or quote amount spent
+    NEW --> CANCELED : cancel by the Trader, or pair stopped trading (PAIR_NOT_TRADING)
+    PARTIALLY_FILLED --> CANCELED : cancel by the Trader, or pair stopped trading
+    NEW --> EXPIRED : IOC or FOK not fillable, LIMIT_MAKER would take, OCO partner executed
+    PARTIALLY_FILLED --> EXPIRED : rest not fillable under its time in force
+    FILLED --> [*]
+    CANCELED --> [*]
+    EXPIRED --> [*]
+    REJECTED --> [*]

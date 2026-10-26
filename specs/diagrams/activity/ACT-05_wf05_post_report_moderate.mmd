@@ -1,0 +1,63 @@
+---
+title: ACT-05 WF-05 Publish, report and moderate a post (SDD Figure 44)
+---
+%% Source: community/controller/PostController.java (UC-27, UC-29), MediaController.java, ReportController.java
+%% (UC-33, BR-46), ModerationController.java (UC-43), community/service/impl/ModerationServiceImpl.java,
+%% user/service/impl/UserServiceImpl.banForModeration, notification/job/CommunityNotificationListener.java.
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph A["Author (Trader)"]
+        a1(["Write a post: title, text, market, coins, media"])
+        a2["Upload media to the signed upload URL"]
+        a3["Read the moderation notification"]
+    end
+
+    subgraph R["Reporter (Trader)"]
+        r1["Report the post with a reason"]
+        r2["Read the outcome notification"]
+    end
+
+    subgraph C["CryptoPilot"]
+        c1["Issue a signed upload ticket; unattached files swept after 24 h (NSF-17)"]
+        c2["Store the post PUBLISHED (UC-27)"]
+        c3{"Not own post and not reported before? (BR-46)"}
+        c4["Refuse the report"]
+        c5["Store the report OPEN; the post enters the queue"]
+        c6["Reports become REVIEWING when Admin opens the post"]
+        c7{"Decision on all open reports (UC-43)"}
+        c8["DISMISS: post unchanged"]
+        c9["WARN_USER: post unchanged, author warned"]
+        c10["HIDE_POST: post HIDDEN"]
+        c11["REMOVE_POST: post DELETED for all but Admin, files kept as evidence (D-99)"]
+        c12["BAN_USER: post HIDDEN, author BANNED, sessions ended (BR-06)"]
+        c13["Reports RESOLVED; decision, hide and ban audited (BR-57)"]
+        c14["In-app notifications to the author and the reporters (PostModerated)"]
+        c15["Restore a hidden post: PUBLISHED again"]
+    end
+
+    subgraph D["Admin"]
+        d1["Open the moderation queue (SCR-36)"]
+        d2["Open a reported post"]
+        d3["Choose the action"]
+        d4["Restore a hidden post"]
+    end
+
+    subgraph M["Media storage (Cloudinary)"]
+        m1[("Stored images and videos")]
+    end
+
+    a1 --> c1 --> a2 --> m1
+    a2 --> c2
+    c2 --> r1 --> c3
+    c3 -- no --> c4
+    c3 -- yes --> c5 --> d1 --> d2 --> c6 --> d3 --> c7
+    c7 --> c8 --> c13
+    c7 --> c9 --> c13
+    c7 --> c10 --> c13
+    c7 --> c11 --> c13
+    c7 --> c12 --> c13
+    c13 --> c14
+    c14 --> a3
+    c14 --> r2
+    c10 --> d4 --> c15

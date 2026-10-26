@@ -1,0 +1,51 @@
+---
+title: ACT-03 WF-03 Demo (paper) trading (SDD Figure 42); dashed = planned, not built
+---
+%% Source after the #80 refactor (V47): paper/controller/PaperAccountController.java, PaperOrderController.java,
+%% PaperPnlController.java, paper/service/impl (PaperAccountServiceImpl, PaperOrderServiceImpl, SpotFilters,
+%% SpotArrival, PaperOrderLists, SpotSettlement), paper/job/PaperMatchingWorker.java, PaperEquitySnapshotJob.java,
+%% PairStopListener.java. Futures demo orders are "the next stage of TR-02" in PaperOrderServiceImpl: planned.
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph T["Trader"]
+        t1(["Open demo trading"])
+        t2["Move USDT between the Spot and Futures wallets"]
+        t3["Place a Spot order: MARKET, LIMIT, LIMIT_MAKER, stop, take profit, trailing, or an OCO, OTO, OTOCO group"]
+        t4["Cancel an order, a group, or all on a pair"]
+        t5["Read balances, orders, fills, ledger, P/L and daily equity"]
+        t6["Place a Futures demo order"]:::planned
+    end
+
+    subgraph C["CryptoPilot"]
+        c1["Open the wallets once with the virtual funds: INITIAL_GRANT ledger entries (Q-T5)"]
+        c2["Two TRANSFER ledger entries, once per clientTransferId"]
+        c3{"Exchange filters of the pair, open-order limits, free balance (TR-02)"}
+        c4["Refuse, never round"]
+        c5["Lock the balance; store order NEW, or PENDING_NEW for a pending leg (TR-10)"]
+        c6{"Matching engine on market trades and 1-minute candles (TR-05)"}
+        c7["Fill: order_fill, wallet_balance and wallet_ledger_entry updated; fee by liquidity"]
+        c8["Group rules: OCO partner expires; OTO, OTOCO pending legs placed or REJECTED"]
+        c9["IOC, FOK, LIMIT_MAKER that cannot rest: EXPIRED, balance released"]
+        c10["Release the locked balance; CANCELED"]
+        c11["Pair stopped trading: open orders CANCELED with PAIR_NOT_TRADING"]
+        c12["Daily equity snapshot at 00:00 UTC (TR-13)"]
+        c13["Futures demo matching and positions"]:::planned
+    end
+
+    subgraph B["Binance"]
+        b1[("Aggregated trades, best bid and ask, order book, 1-minute candles, symbol status")]
+    end
+
+    t1 --> c1 --> t2 --> c2
+    c1 --> t3 --> c3
+    c3 -- refused --> c4
+    c3 -- accepted --> c5 --> c6
+    b1 --> c6
+    c6 -- executes --> c7 --> c8
+    c6 -- cannot rest --> c9
+    c5 --> t4 --> c10
+    b1 --> c11
+    c7 --> t5
+    c12 --> t5
+    t1 -.-> t6 -.-> c13

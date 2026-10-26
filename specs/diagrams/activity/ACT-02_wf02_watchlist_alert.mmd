@@ -1,0 +1,45 @@
+---
+title: ACT-02 WF-02 Watchlist and alert (SDD Figure 41); dashed = planned, not built
+---
+%% Source: watchlist/controller (UC-12, UC-13, UC-14), watchlist/job/AlertEngine.java, IndicatorAlertJob.java,
+%% FundingRateAlertJob.java, OpenInterestAlertJob.java, AlertExpirySweepJob.java, watchlist/event/AlertTriggered.java.
+%% No module listens to AlertTriggered yet, so no notification of a triggered alert is sent: planned.
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph T["Trader"]
+        t1(["Browse the market"])
+        t2["Add a pair to the watchlist"]
+        t3["Create an alert: price, indicator, funding rate or open interest change"]
+        t4["Pause, resume, edit or delete an alert"]
+        t5["Receive the alert notification"]:::planned
+        t6["Open the pair and plan a trade (WF-01)"]
+    end
+
+    subgraph C["CryptoPilot"]
+        c1{"Within the watchlist limit? (UC-12, BR-15)"}
+        c2["Refuse: plan limit reached (MSG27)"]
+        c3{"Within ACTIVE_ALERT_MAX and the plan's alert features? (UC-13, BR-17)"}
+        c4["Store ACTIVE alert; a pair not watched is added to the watchlist (BR-16)"]
+        c5{"Alert engine evaluates the rule (NSF-06)"}
+        c6["Record the trigger: ONCE becomes TRIGGERED, other modes keep cooldown (BR-19)"]
+        c7["Publish AlertTriggered"]
+        c8["Write the in-app notification and email or push by the plan's channels (NSF-15)"]:::planned
+        c9["Expiry sweep: ACTIVE or PAUSED past expiry becomes EXPIRED (BR-19)"]
+    end
+
+    subgraph B["Binance"]
+        b1[("1-minute candle stream, closed candles, funding rate, open interest")]
+    end
+
+    t1 --> t2 --> c1
+    c1 -- no --> c2
+    c1 -- yes --> t3 --> c3
+    c3 -- no --> c2
+    c3 -- yes --> c4 --> c5
+    b1 --> c5
+    c5 -- condition met --> c6 --> c7
+    c7 -.-> c8 -.-> t5 -.-> t6
+    c5 -- not met --> c5
+    c4 --> t4
+    c4 --> c9

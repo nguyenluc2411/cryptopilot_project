@@ -1,0 +1,11 @@
+---
+title: STM-10 AI_MESSAGE message_status - planned - not implemented (SDD Figure 37)
+---
+%% Drawn from the SRS (section 3.9.1; UC-35; BR-50, BR-51). The code has the table, which the admin usage metrics read;
+%% no code writes a message yet.
+stateDiagram-v2
+    [*] --> PENDING : question asked within the daily quota, context snapshot stored (UC-35, BR-50, BR-51)
+    PENDING --> COMPLETED : answer received, one quota unit used (BR-50)
+    PENDING --> FAILED : AI Service error or 60 s timeout, no quota used (MSG31)
+    COMPLETED --> [*]
+    FAILED --> [*]

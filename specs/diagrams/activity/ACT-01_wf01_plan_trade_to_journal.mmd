@@ -1,0 +1,76 @@
+---
+title: ACT-01 WF-01 Plan a trade and follow it to the journal (SDD Figure 40); dashed = planned, not built
+---
+%% Source: market/controller (UC-10, UC-11), trading/controller/TradingPlanController.java (UC-16 to UC-21),
+%% trading/service/impl/TradingPlanServiceImpl.java, trading/job/MatchingWorker.java, trading/matching/ExitRule.java,
+%% trading/controller/PositionLevelController.java, journal/service/impl/PersistentTradeJournal.java,
+%% journal/controller (GET /api/v1/journal, added in #80), notification/job/PlanNotificationListener.java.
+%% The journal has no review edit and the Trader has no performance dashboard yet: both planned.
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph T["Trader"]
+        t1(["Open the analysis of a pair"])
+        t2["Enter direction, entry type, entry, stop loss, take profit, risk %, validity"]
+        t3{"Save as draft or activate?"}
+        t4{"Entry deviation asks for confirmation?"}
+        t5["Confirm the deviation"]
+        t6["Edit stop loss or take profit of the open position"]
+        t7["Close the position manually"]
+        t8["Read the journal list"]
+        t9["Write the review: lessons and mistakes"]:::planned
+        t10["Open the performance dashboard"]:::planned
+    end
+
+    subgraph C["CryptoPilot"]
+        c1["Indicators, setup score, support and resistance (UC-10, UC-11)"]
+        c2["Size the position, fees and liquidation; build warnings INFO, WARNING, BLOCKING (BR-25, BR-26)"]
+        c3["Store DRAFT with warnings (UC-16, UC-17)"]
+        c4{"Activation checks: no BLOCKING warning (MSG18), plan limits (BR-62), validity after now"}
+        c5{"Entry deviation in R (BR-69)"}
+        c6["Refuse activation"]
+        c7["ACTIVE: wait for the entry (UC-18)"]
+        c8{"MARKET, or LIMIT already reached?"}
+        c9{"On each closed 1-minute candle (NSF-07)"}
+        c10["EXECUTED: fill with fee by liquidity and slippage (BR-33, BR-36)"]
+        c11["CANCELLED (UC-19) / EXPIRED (NSF-09) / INVALIDATED (BR-68)"]
+        c12["Journal record OPEN in the fill transaction (BR-34)"]
+        c13["Store new levels and the level change (UC-21, BR-22, BR-28, BR-29)"]
+        c14{"Exit on last or mark price (BR-35)"}
+        c15["Journal CLOSED: exit TP, SL, LIQUIDATION or MANUAL; fees, funding, net P/L (BR-36, BR-37, BR-39)"]
+        c16["Correct late funding while incomplete (BR-37)"]
+        c17["In-app notification, pushed over WebSocket: expired, invalidated, withdrawn, position closed"]
+        c18["Journal list, latest entry first (SCR-20)"]
+    end
+
+    subgraph B["Binance"]
+        b1[("1-minute candles, last price, mark price, funding")]
+    end
+
+    t1 --> c1 --> t2 --> c2 --> t3
+    t3 -- draft --> c3
+    c3 -. later activate .-> c4
+    t3 -- activate --> c4
+    c4 -- refused --> c6
+    c4 -- passes --> c5
+    c5 -- within the confirm band --> t4
+    t4 -- yes --> t5 --> c7
+    c5 -- beyond the limit --> c6
+    c5 -- no deviation --> c7
+    c7 --> c8
+    c8 -- yes --> c10
+    c8 -- no --> c9
+    b1 --> c9
+    c9 -- entry reached --> c10
+    c9 -- cancel, expiry or invalidation --> c11 --> c17
+    c10 --> c12
+    c12 --> t6 --> c13 --> c14
+    c12 --> c14
+    c12 --> t7 --> c15
+    b1 --> c14
+    c14 -- TP, SL or liquidation --> c15
+    c15 --> c16
+    c15 --> c17
+    c15 --> t8 --> c18
+    c18 -.-> t9
+    c18 -.-> t10
