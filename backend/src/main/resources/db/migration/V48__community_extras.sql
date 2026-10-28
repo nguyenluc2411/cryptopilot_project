@@ -71,3 +71,15 @@ CREATE UNIQUE INDEX uq_engagement_post_vote ON engagement (user_id, post_id)
 ALTER TABLE forum_post ADD COLUMN sentiment varchar(16);
 ALTER TABLE forum_post ADD CONSTRAINT ck_forum_post_sentiment
     CHECK (sentiment IS NULL OR sentiment IN ('BULLISH', 'BEARISH'));
+
+-- A ban hides the member's published posts and comments (D-125); the members banned before this migration are hidden
+-- here the same way BannedMemberListener hides them from now on: HIDDEN, announcements left out.
+UPDATE forum_post
+   SET post_status = 'HIDDEN', updated_at = now(), version = version + 1
+ WHERE post_status = 'PUBLISHED'
+   AND NOT is_official
+   AND author_id IN (SELECT user_id FROM user_account WHERE account_status = 'BANNED');
+UPDATE forum_comment
+   SET comment_status = 'HIDDEN', updated_at = now(), version = version + 1
+ WHERE comment_status = 'PUBLISHED'
+   AND author_id IN (SELECT user_id FROM user_account WHERE account_status = 'BANNED');
