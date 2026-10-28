@@ -26,6 +26,7 @@ import com.cryptopilot.community.service.MemberService;
 import com.cryptopilot.user.AuthorCard;
 import com.cryptopilot.user.PublicProfile;
 import com.cryptopilot.user.UserApi;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.HashSet;
@@ -251,9 +252,11 @@ public class MemberServiceImpl implements MemberService {
     }
 
     // A follow checks that no block stands between the two and then inserts, while a block removes the follow back:
-    // without one lock per pair, a follow back committed beside a block would survive it.
+    // without one lock per pair, a follow back committed beside a block would survive it. The key is a name-based
+    // UUID of the two keys in order, so it is the same from either side and a member's other pairs do not wait.
     private void lockPair(UUID one, UUID other) {
-        lock.lock(PAIR_SCOPE, one.compareTo(other) < 0 ? one : other);
+        String pair = one.compareTo(other) < 0 ? one + "/" + other : other + "/" + one;
+        lock.lock(PAIR_SCOPE, UUID.nameUUIDFromBytes(pair.getBytes(StandardCharsets.UTF_8)));
     }
 
     private void requireTrader(UUID memberId, String what) {
