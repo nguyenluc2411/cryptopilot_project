@@ -28,7 +28,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * Member pages, following and blocking, as on CoinMarketCap Community (D-125). Anyone reads a page and its follower
- * lists; a Trader follows, blocks and looks members up to mention them. A member's posts are {@code GET /posts?author=}.
+ * lists; a Trader follows, blocks and looks members up to mention them. A member's posts are
+ * {@code GET /posts?author=}.
  *
  * <p>Rule: D-99.
  */

@@ -39,7 +39,10 @@ public class PostReport extends BaseEntity {
     @Column(name = "comment_id", updatable = false)
     private UUID commentId;
 
-    /** The comment's text when it was reported, kept for the moderator whatever its author edits; {@code null} for a post. */
+    /**
+     * The comment's text when it was reported, kept for the moderator whatever its author edits; {@code null} for a
+     * post (D-125).
+     */
     @Column(name = "reported_content", updatable = false)
     private String reportedContent;
 

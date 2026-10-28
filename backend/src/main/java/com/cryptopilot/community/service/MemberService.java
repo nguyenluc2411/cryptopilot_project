@@ -46,7 +46,9 @@ public interface MemberService {
      */
     EngagementResponse block(UUID caller, UUID memberId);
 
-    /** Stops blocking a member, answering that the caller does not block them and how many members the caller blocks. */
+    /**
+     * Stops blocking a member, answering that the caller does not block them and how many members the caller blocks.
+     */
     EngagementResponse unblock(UUID caller, UUID memberId);
 
     /**

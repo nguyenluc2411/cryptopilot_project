@@ -320,10 +320,13 @@ class CommunityRankingApiTest {
 
     private void taggedPost(UUID author, UUID coin, Instant at) {
         UUID id = UUID.randomUUID();
-        sql.sql("""
-                        insert into forum_post (post_id, author_id, title, content, post_type, post_status,
-                                                is_official, created_at, updated_at)
-                        values (?, ?, 'Tagged', 'text', 'TEXT', 'PUBLISHED', false, ?, ?)""").params(id, author, Timestamp.from(at), Timestamp.from(at)).update();
+        String insert = """
+                insert into forum_post (post_id, author_id, title, content, post_type, post_status, is_official,
+                                        created_at, updated_at)
+                values (?, ?, 'Tagged', 'text', 'TEXT', 'PUBLISHED', false, ?, ?)""";
+        sql.sql(insert)
+                .params(id, author, Timestamp.from(at), Timestamp.from(at))
+                .update();
         sql.sql("insert into post_coin (post_id, coin_id) values (?, ?)")
                 .params(id, coin)
                 .update();
@@ -344,10 +347,12 @@ class CommunityRankingApiTest {
     private UUID account(UserRole role, String displayName) {
         UUID id = UUID.randomUUID();
         Timestamp now = Timestamp.from(Instant.now());
-        sql.sql("""
-                        insert into user_account (user_id, email, password_hash, role, account_status, created_at,
-                                                  updated_at)
-                        values (?, ?, 'x', ?, 'ACTIVE', ?, ?)""").params(id, id + "@ranking.invalid", role.name(), now, now).update();
+        String insert = """
+                insert into user_account (user_id, email, password_hash, role, account_status, created_at, updated_at)
+                values (?, ?, 'x', ?, 'ACTIVE', ?, ?)""";
+        sql.sql(insert)
+                .params(id, id + "@ranking.invalid", role.name(), now, now)
+                .update();
         sql.sql("insert into user_profile (user_id, display_name, created_at, updated_at) values (?, ?, ?, ?)")
                 .params(id, displayName, now, now)
                 .update();

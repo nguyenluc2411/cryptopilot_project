@@ -177,10 +177,12 @@ public class PostFeedRepository {
                                  where e.post_id = p.post_id and e.action_type = 'LIKE') as likes,
                                (select count(*) from forum_comment c
                                  where c.post_id = p.post_id and c.comment_status = 'PUBLISHED'
-                                   and not exists (select 1 from user_relation b where b.relation_type = 'BLOCK'
-                                                     and ((b.source_user_id = :caller and b.target_user_id = c.author_id)
-                                                          or (b.source_user_id = c.author_id
-                                                              and b.target_user_id = :caller)))) as comments,
+                                   and not exists (
+                                       select 1 from user_relation b
+                                        where b.relation_type = 'BLOCK'
+                                          and ((b.source_user_id = :caller and b.target_user_id = c.author_id)
+                                               or (b.source_user_id = c.author_id and b.target_user_id = :caller)))
+                               ) as comments,
                                (select count(*) from engagement e
                                  where e.post_id = p.post_id and e.action_type = 'VIEW') as views,
                                (select count(*) from engagement e

@@ -56,7 +56,10 @@ public interface ForumCommentRepository extends Repository<ForumComment, UUID> {
                     + THREAD_SHOWN + NOT_BLOCKED)
     Page<ForumComment> findThreads(@Param("postId") UUID postId, @Param("viewer") UUID viewer, Pageable page);
 
-    /** The published replies in the threads of these comments, oldest first, without those of members in a block with the viewer. */
+    /**
+     * The published replies in the threads of these comments, oldest first, without those of members in a block with
+     * the viewer (D-125).
+     */
     @Transactional(readOnly = true)
     @Query("select c from ForumComment c where c.parentCommentId in :threads"
             + " and c.status = com.cryptopilot.community.model.enums.CommentStatus.PUBLISHED" + NOT_BLOCKED

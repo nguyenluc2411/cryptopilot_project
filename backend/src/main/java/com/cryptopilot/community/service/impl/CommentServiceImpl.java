@@ -36,11 +36,12 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The comment use cases of SCR-25.
  *
- * <p>Every comment is reached through its post, and the post through {@link CommunityAccess}: the comments of a post the
- * caller may not see, by BR-47 or because a block stands between the caller and its author, do not exist for the
- * caller (BR-47, D-125), and neither do the comments of a member in a block with the caller. A reply names a published comment of the same
- * post and joins its thread, one level deep (D-98). A deleted comment is listed only while a published reply still
- * hangs on it, without its text or author (SRS 3.7.3). A new comment is announced with {@link PostCommented}.
+ * <p>Every comment is reached through its post, and the post through {@link CommunityAccess}: the comments of a post
+ * the caller may not see, by BR-47 or because a block stands between the caller and its author, do not exist for the
+ * caller (BR-47, D-125), and neither do the comments of a member in a block with the caller. A reply names a published
+ * comment of the same post and joins its thread, one level deep (D-98). A deleted comment is listed only while a
+ * published reply still hangs on it, without its text or author (SRS 3.7.3). A new comment is announced with
+ * {@link PostCommented}.
  *
  * <p>Rule: UC-30, UC-31; BR-45, BR-47; SRS 3.7.3; D-98.
  */
