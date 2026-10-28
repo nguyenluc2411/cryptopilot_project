@@ -193,7 +193,7 @@ public class ModerationServiceImpl implements ModerationService {
             throw new BusinessException(
                     ErrorCode.POST_NOT_HIDDEN, "post " + postId + " is " + post.getStatus() + ", not hidden");
         }
-        if (users.publicProfile(post.getAuthorId()).isEmpty()) {
+        if (users.isBanned(post.getAuthorId())) {
             throw new BusinessException(ErrorCode.AUTHOR_BANNED, "the author of post " + postId + " is banned");
         }
         post.restore();

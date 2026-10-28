@@ -279,6 +279,14 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional(readOnly = true)
+    public boolean isBanned(UUID userId) {
+        return accounts.findById(userId)
+                .filter(account -> account.getAccountStatus() == AccountStatus.BANNED)
+                .isPresent();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<AuthorCard> searchMembers(String prefix, int limit) {
         String pattern = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
         return profiles.findTradersByNamePrefix(pattern, limit).stream()

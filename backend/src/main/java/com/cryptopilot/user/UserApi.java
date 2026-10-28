@@ -223,6 +223,12 @@ public interface UserApi {
     boolean isAdministrator(UUID userId);
 
     /**
+     * Whether the account is BANNED (BR-05); {@code false} when there is no such account, and for an account without a
+     * profile, which {@link #publicProfile} leaves out for another reason (D-125).
+     */
+    boolean isBanned(UUID userId);
+
+    /**
      * The Traders whose public name starts with {@code prefix}, case ignored, alphabetical, at most {@code limit}:
      * the members a Trader may mention in a post or a comment (D-99). Banned accounts are left out.
      */

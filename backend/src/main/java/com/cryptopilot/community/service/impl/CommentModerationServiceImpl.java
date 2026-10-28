@@ -185,7 +185,7 @@ public class CommentModerationServiceImpl implements CommentModerationService {
                     ErrorCode.COMMENT_NOT_HIDDEN,
                     "comment " + commentId + " is " + comment.getStatus() + ", not hidden");
         }
-        if (users.publicProfile(comment.getAuthorId()).isEmpty()) {
+        if (users.isBanned(comment.getAuthorId())) {
             throw new BusinessException(ErrorCode.AUTHOR_BANNED, "the author of comment " + commentId + " is banned");
         }
         comment.restore();
