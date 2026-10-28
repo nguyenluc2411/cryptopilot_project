@@ -550,10 +550,13 @@ class CommunityExtrasApiTest {
     private UUID account(UserRole role, String displayName) {
         UUID id = UUID.randomUUID();
         Timestamp now = Timestamp.from(Instant.now());
-        sql.sql("""
-                        insert into user_account (user_id, email, password_hash, role, account_status, created_at,
-                                                  updated_at)
-                        values (?, ?, 'x', ?, 'ACTIVE', ?, ?)""").params(id, id + "@extras.invalid", role.name(), now, now).update();
+        String insert = """
+                insert into user_account (user_id, email, password_hash, role, account_status, created_at,
+                                          updated_at)
+                values (?, ?, 'x', ?, 'ACTIVE', ?, ?)""";
+        sql.sql(insert)
+                .params(id, id + "@extras.invalid", role.name(), now, now)
+                .update();
         sql.sql("insert into user_profile (user_id, display_name, created_at, updated_at) values (?, ?, ?, ?)")
                 .params(id, displayName, now, now)
                 .update();

@@ -312,20 +312,22 @@ class CommentModerationApiTest {
     private UUID insertPost(UUID author, String status) {
         UUID id = UUID.randomUUID();
         Timestamp now = Timestamp.from(Instant.now());
-        sql.sql("""
-                        insert into forum_post (post_id, author_id, title, content, post_type, post_status,
-                                                is_official, created_at, updated_at)
-                        values (?, ?, 'A post', 'text', 'TEXT', ?, false, ?, ?)""").params(id, author, status, now, now).update();
+        String insert = """
+                insert into forum_post (post_id, author_id, title, content, post_type, post_status,
+                                        is_official, created_at, updated_at)
+                values (?, ?, 'A post', 'text', 'TEXT', ?, false, ?, ?)""";
+        sql.sql(insert).params(id, author, status, now, now).update();
         return id;
     }
 
     private String insertComment(UUID author, UUID postId, String status) {
         UUID id = UUID.randomUUID();
         Timestamp now = Timestamp.from(Instant.now());
-        sql.sql("""
-                        insert into forum_comment (comment_id, post_id, author_id, content, comment_status,
-                                                   created_at, updated_at)
-                        values (?, ?, ?, 'A comment', ?, ?, ?)""").params(id, postId, author, status, now, now).update();
+        String insert = """
+                insert into forum_comment (comment_id, post_id, author_id, content, comment_status,
+                                           created_at, updated_at)
+                values (?, ?, ?, 'A comment', ?, ?, ?)""";
+        sql.sql(insert).params(id, postId, author, status, now, now).update();
         return id.toString();
     }
 
@@ -345,10 +347,11 @@ class CommentModerationApiTest {
     private UUID accountWithoutProfile() {
         UUID id = UUID.randomUUID();
         Timestamp now = Timestamp.from(Instant.now());
-        sql.sql("""
-                        insert into user_account (user_id, email, password_hash, role, account_status, created_at,
-                                                  updated_at)
-                        values (?, ?, 'x', 'TRADER', 'ACTIVE', ?, ?)""").params(id, id + "@moderation.invalid", now, now).update();
+        String insert = """
+                insert into user_account (user_id, email, password_hash, role, account_status, created_at,
+                                          updated_at)
+                values (?, ?, 'x', 'TRADER', 'ACTIVE', ?, ?)""";
+        sql.sql(insert).params(id, id + "@moderation.invalid", now, now).update();
         accounts.add(id);
         return id;
     }

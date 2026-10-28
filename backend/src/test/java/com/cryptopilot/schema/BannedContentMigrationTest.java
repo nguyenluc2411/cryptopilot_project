@@ -103,19 +103,21 @@ class BannedContentMigrationTest {
 
     private UUID insertAccount(String status) {
         UUID id = UUID.randomUUID();
-        jdbc.sql("""
-                        insert into user_account (user_id, email, password_hash, role, account_status, created_at,
-                                                  updated_at)
-                        values (?, ?, 'x', 'TRADER', ?, ?, ?)""").params(id, id + "@v48.invalid", status, AT, AT).update();
+        String insert = """
+                insert into user_account (user_id, email, password_hash, role, account_status, created_at,
+                                          updated_at)
+                values (?, ?, 'x', 'TRADER', ?, ?, ?)""";
+        jdbc.sql(insert).params(id, id + "@v48.invalid", status, AT, AT).update();
         return id;
     }
 
     private UUID insertPost(UUID author, String status) {
         UUID id = UUID.randomUUID();
-        jdbc.sql("""
-                        insert into forum_post (post_id, author_id, title, content, post_type, post_status,
-                                                is_official, created_at, updated_at)
-                        values (?, ?, 'Post', 'text', 'TEXT', ?, false, ?, ?)""").params(id, author, status, AT, AT).update();
+        String insert = """
+                insert into forum_post (post_id, author_id, title, content, post_type, post_status,
+                                        is_official, created_at, updated_at)
+                values (?, ?, 'Post', 'text', 'TEXT', ?, false, ?, ?)""";
+        jdbc.sql(insert).params(id, author, status, AT, AT).update();
         return id;
     }
 
