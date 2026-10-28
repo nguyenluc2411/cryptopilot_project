@@ -239,22 +239,28 @@ public class PostFeedRepository {
 
     /**
      * The coins the published posts of the last seven days talk about most, the most posted about in the last day
-     * first (D-125), as the Trending list of SCR-24 shows them, each with all its published posts as well.
+     * first (D-125), as the Trending list of SCR-24 shows them. The coins are ranked on the week's posts alone; all
+     * their published posts, however old, are then counted for the listed coins only, at most {@code limit} of them.
      */
     public List<TrendingCoin> trendingCoins(Instant now, int limit) {
         return sql.sql("""
-                        select c.coin_id,
-                               count(*) filter (where p.created_at >= :day) as day,
-                               count(*) filter (where p.created_at >= :week) as week,
-                               count(*) as total,
-                               max(p.created_at) as last_at
-                          from forum_post p
-                          join post_coin c on c.post_id = p.post_id
-                         where p.post_status = 'PUBLISHED'
-                         group by c.coin_id
-                        having count(*) filter (where p.created_at >= :week) > 0
-                         order by day desc, week desc, last_at desc, c.coin_id
-                         limit :limit""")
+                        with top as (
+                            select c.coin_id,
+                                   count(*) filter (where p.created_at >= :day) as day,
+                                   count(*) as week,
+                                   max(p.created_at) as last_at
+                              from forum_post p
+                              join post_coin c on c.post_id = p.post_id
+                             where p.post_status = 'PUBLISHED' and p.created_at >= :week
+                             group by c.coin_id
+                             order by day desc, week desc, last_at desc, c.coin_id
+                             limit :limit)
+                        select top.coin_id, top.day, top.week, top.last_at,
+                               (select count(*) from post_coin k
+                                  join forum_post q on q.post_id = k.post_id
+                                 where k.coin_id = top.coin_id and q.post_status = 'PUBLISHED') as total
+                          from top
+                         order by top.day desc, top.week desc, top.last_at desc, top.coin_id""")
                 .param("day", Timestamp.from(now.minus(Duration.ofDays(1))))
                 .param("week", Timestamp.from(now.minus(Duration.ofDays(7))))
                 .param("limit", limit)
