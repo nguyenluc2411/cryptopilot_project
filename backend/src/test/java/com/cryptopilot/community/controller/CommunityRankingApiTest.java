@@ -1,6 +1,7 @@
 package com.cryptopilot.community.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -10,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.community.model.AuthorStanding;
+import com.cryptopilot.community.repository.PostFeedRepository;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -19,6 +21,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -61,7 +64,12 @@ class CommunityRankingApiTest {
     @Autowired
     private JwtEncoder jwtEncoder;
 
+    @Autowired
+    private PostFeedRepository feeds;
+
     private final List<UUID> accounts = new ArrayList<>();
+
+    private final List<UUID> coins = new ArrayList<>();
 
     @AfterEach
     void removeRows() {
@@ -76,7 +84,13 @@ class CommunityRankingApiTest {
                     .update();
         }
         for (UUID account : accounts) {
+            sql.sql("delete from post_coin where post_id in (select post_id from forum_post where author_id = ?)")
+                    .param(account)
+                    .update();
             sql.sql("delete from forum_post where author_id = ?").param(account).update();
+        }
+        for (UUID coin : coins) {
+            sql.sql("delete from coin where coin_id = ?").param(coin).update();
         }
         for (UUID account : accounts) {
             sql.sql("delete from user_token where user_id = ?").param(account).update();
@@ -222,6 +236,52 @@ class CommunityRankingApiTest {
                 .andExpect(jsonPath("$.length()").value(org.hamcrest.Matchers.lessThanOrEqualTo(3)));
     }
 
+    @Test
+    void D125_trendingCoins_countTheWeekAndEveryPost_mostDiscussedOfTheDayFirst() throws Exception {
+        UUID alice = account(UserRole.TRADER, "Alice");
+        Instant now = Instant.now();
+        String suffix = Long.toString(System.nanoTime() % 1_000_000, 36).toUpperCase(Locale.ROOT);
+        UUID busy = coin("TA" + suffix);
+        UUID calm = coin("TB" + suffix);
+        UUID stale = coin("TC" + suffix);
+        // Busy: two posts today, one older than the week. Calm: one today, one three days old, three older ones.
+        taggedPost(alice, busy, now.minus(Duration.ofHours(2)));
+        taggedPost(alice, busy, now.minus(Duration.ofHours(3)));
+        taggedPost(alice, busy, now.minus(Duration.ofDays(10)));
+        taggedPost(alice, calm, now.minus(Duration.ofHours(1)));
+        taggedPost(alice, calm, now.minus(Duration.ofDays(3)));
+        for (int days = 8; days <= 10; days++) {
+            taggedPost(alice, calm, now.minus(Duration.ofDays(days)));
+        }
+        // Stale was talked about, but not this week.
+        taggedPost(alice, stale, now.minus(Duration.ofDays(9)));
+
+        List<PostFeedRepository.TrendingCoin> trending = feeds.trendingCoins(now, 1000).stream()
+                .filter(coin -> List.of(busy, calm, stale).contains(coin.coinId()))
+                .toList();
+        assertThat(trending)
+                .extracting(
+                        PostFeedRepository.TrendingCoin::coinId,
+                        PostFeedRepository.TrendingCoin::postsLastDay,
+                        PostFeedRepository.TrendingCoin::postsLastWeek,
+                        PostFeedRepository.TrendingCoin::totalPosts)
+                .containsExactly(tuple(busy, 2L, 2L, 3L), tuple(calm, 1L, 2L, 5L));
+
+        mvc.perform(get(POSTS + "/trending-coins?limit=20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.symbol == 'TA" + suffix + "')].postsLastDay")
+                        .value(2))
+                .andExpect(jsonPath("$[?(@.symbol == 'TA" + suffix + "')].postsLastWeek")
+                        .value(2))
+                .andExpect(jsonPath("$[?(@.symbol == 'TA" + suffix + "')].totalPosts")
+                        .value(3))
+                .andExpect(jsonPath("$[?(@.symbol == 'TB" + suffix + "')].postsLastWeek")
+                        .value(2))
+                .andExpect(jsonPath("$[?(@.symbol == 'TB" + suffix + "')].totalPosts")
+                        .value(5))
+                .andExpect(jsonPath("$[?(@.symbol == 'TC" + suffix + "')]").isEmpty());
+    }
+
     private List<String> ranks(ResultActions result) throws Exception {
         return JsonPath.read(result.andReturn().getResponse().getContentAsString(), "$[*].userId");
     }
@@ -234,6 +294,27 @@ class CommunityRankingApiTest {
                         .getResponse()
                         .getContentAsString(),
                 "$.id");
+    }
+
+    private UUID coin(String symbol) {
+        UUID id = UUID.randomUUID();
+        Timestamp now = Timestamp.from(Instant.now());
+        sql.sql("insert into coin (coin_id, symbol, coin_name, created_at, updated_at) values (?, ?, ?, ?, ?)")
+                .params(id, symbol, symbol, now, now)
+                .update();
+        coins.add(id);
+        return id;
+    }
+
+    private void taggedPost(UUID author, UUID coin, Instant at) {
+        UUID id = UUID.randomUUID();
+        sql.sql("""
+                        insert into forum_post (post_id, author_id, title, content, post_type, post_status,
+                                                is_official, created_at, updated_at)
+                        values (?, ?, 'Tagged', 'text', 'TEXT', 'PUBLISHED', false, ?, ?)""").params(id, author, Timestamp.from(at), Timestamp.from(at)).update();
+        sql.sql("insert into post_coin (post_id, coin_id) values (?, ?)")
+                .params(id, coin)
+                .update();
     }
 
     private ResultActions as(UUID user, MockHttpServletRequestBuilder request) throws Exception {

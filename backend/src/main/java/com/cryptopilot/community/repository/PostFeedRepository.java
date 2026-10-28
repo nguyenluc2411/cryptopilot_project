@@ -228,18 +228,20 @@ public class PostFeedRepository {
 
     /**
      * The coins the published posts of the last seven days talk about most, the most posted about in the last day
-     * first (D-99), as the Trending list of SCR-24 shows them.
+     * first (D-99), as the Trending list of SCR-24 shows them, each with all its published posts as well.
      */
     public List<TrendingCoin> trendingCoins(Instant now, int limit) {
         return sql.sql("""
                         select c.coin_id,
                                count(*) filter (where p.created_at >= :day) as day,
-                               count(*) as week,
+                               count(*) filter (where p.created_at >= :week) as week,
+                               count(*) as total,
                                max(p.created_at) as last_at
                           from forum_post p
                           join post_coin c on c.post_id = p.post_id
-                         where p.post_status = 'PUBLISHED' and p.created_at >= :week
+                         where p.post_status = 'PUBLISHED'
                          group by c.coin_id
+                        having count(*) filter (where p.created_at >= :week) > 0
                          order by day desc, week desc, last_at desc, c.coin_id
                          limit :limit""")
                 .param("day", Timestamp.from(now.minus(Duration.ofDays(1))))
@@ -249,6 +251,7 @@ public class PostFeedRepository {
                         row.getObject("coin_id", UUID.class),
                         row.getLong("day"),
                         row.getLong("week"),
+                        row.getLong("total"),
                         row.getTimestamp("last_at").toInstant()))
                 .list();
     }
@@ -353,8 +356,10 @@ public class PostFeedRepository {
      *
      * @param postsLastDay the published posts of the last day tagged with it
      * @param postsLastWeek those of the last seven days
+     * @param totalPosts all its published posts, however old
      */
-    public record TrendingCoin(UUID coinId, long postsLastDay, long postsLastWeek, Instant lastPostAt) {}
+    public record TrendingCoin(
+            UUID coinId, long postsLastDay, long postsLastWeek, long totalPosts, Instant lastPostAt) {}
 
     /** A member's published posts and the likes they received (D-99). */
     public MemberActivity memberActivity(UUID memberId) {

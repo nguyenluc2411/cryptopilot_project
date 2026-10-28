@@ -158,7 +158,7 @@ public class PostServiceImpl implements PostService {
                         coins.get(coin.coinId()).name(),
                         coin.postsLastDay(),
                         coin.postsLastWeek(),
-                        coin.postsLastWeek(),
+                        coin.totalPosts(),
                         coin.lastPostAt()))
                 .toList();
     }
