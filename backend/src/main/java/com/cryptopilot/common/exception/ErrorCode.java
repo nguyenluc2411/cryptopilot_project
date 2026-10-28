@@ -361,6 +361,39 @@ public enum ErrorCode {
     /** {@code MAX_NUM_ALGO_ORDERS}: as {@link #PAPER_MAX_NUM_ORDERS}, for the open stops of the pair. */
     PAPER_MAX_NUM_ALGO_ORDERS(HttpStatus.CONFLICT, "MSG43"),
 
+    /*
+     * Paper Futures (D-127). Each refusal also carries the exchange's own code and message in the problem detail
+     * (binanceCode, binanceMsg), so a client written against the exchange's API reads it the same way.
+     */
+
+    /** A leverage outside 1 … the pair's highest ({@code -4028}). 400 with MSG15, the text of a value not allowed. */
+    PAPER_LEVERAGE(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /**
+     * A lower leverage the open position cannot take: an isolated position's leverage is never lowered
+     * ({@code -4161}), a cross one only while the margin still covers it ({@code -2028}). Borrows MSG43 like
+     * {@link #PAPER_ORDER_WOULD_TAKE} (A-38). 409: the request is valid and the position refuses it.
+     */
+    PAPER_LEVERAGE_MARGIN(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The position would exceed the largest notional the leverage allows ({@code -2027}). Borrows MSG43 like
+     * {@link #PAPER_ORDER_WOULD_TAKE} (A-38). 409: a lower leverage or a smaller position is accepted.
+     */
+    PAPER_MAX_POSITION_AT_LEVERAGE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The margin type cannot change: it is already that type ({@code -4046}), or the pair has an open order
+     * ({@code -4047}) or a position ({@code -4048}). Borrows MSG43 like {@link #PAPER_ORDER_WOULD_TAKE} (A-38).
+     */
+    PAPER_MARGIN_TYPE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A cross liquidation of the account is running; orders and changes wait until it ends ({@code -2023}). Borrows
+     * MSG43 like {@link #PAPER_ORDER_WOULD_TAKE} (A-38). 409: the same request succeeds once the liquidation is over.
+     */
+    PAPER_USER_IN_LIQUIDATION(HttpStatus.CONFLICT, "MSG43"),
+
     /**
      * A file named for a post is not one the post may carry (BR-44): not uploaded, not the caller's, already attached
      * to another post, of a type or size outside the limits, a video too long, or a combination of files a post may
