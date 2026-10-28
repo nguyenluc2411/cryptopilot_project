@@ -68,7 +68,10 @@ public class MemberServiceImpl implements MemberService {
     /** Longest name prefix a mention search takes, the length of a display name. */
     static final int SEARCH_MAX_LENGTH = 50;
 
-    /** The scope of the lock a follow and a block take for a pair of members, keyed by the lower of the two ids. */
+    /**
+     * The scope of the lock a follow and a block take for a pair of members, keyed by both ids in order (see
+     * {@code lockPair}).
+     */
     static final String PAIR_SCOPE = "community-relation";
 
     private final UserApi users;

@@ -70,7 +70,11 @@ public class ModerationController {
     @ApiResponse(responseCode = "200", description = "Decided and audited; the author and reporters are told")
     @ApiResponse(responseCode = "400", description = "MSG01: no or an unknown action, or a note over 500 characters")
     @ApiResponse(responseCode = "404", description = "MSG41: no such post, or it has no open report")
-    @ApiResponse(responseCode = "409", description = "MSG39: BAN_USER on an administrator's post (BR-58)")
+    @ApiResponse(
+            responseCode = "409",
+            description =
+                    "MSG39: BAN_USER on an administrator's post (BR-58); MSG43 (`DATA_CONFLICT`): the post changed"
+                            + " meanwhile, e.g. hidden by a ban of its author just decided; deciding again succeeds")
     @PostMapping("/reports-queue/{postId}/decision")
     public ModerationDecisionResponse decide(
             @AuthenticationPrincipal Jwt caller,
@@ -125,7 +129,10 @@ public class ModerationController {
             responseCode = "400",
             description = "MSG01: no action, HIDE_POST or REMOVE_POST, or a note over 500 characters")
     @ApiResponse(responseCode = "404", description = "MSG41: no such comment, or it has no open report")
-    @ApiResponse(responseCode = "409", description = "MSG39: BAN_USER on an administrator's comment (BR-58)")
+    @ApiResponse(
+            responseCode = "409",
+            description = "MSG39: BAN_USER on an administrator's comment (BR-58); MSG43 (`DATA_CONFLICT`): the comment"
+                    + " changed meanwhile, e.g. hidden by a ban of its author just decided; deciding again succeeds")
     @PostMapping("/comment-reports-queue/{commentId}/decision")
     public CommentModerationDecisionResponse decideComment(
             @AuthenticationPrincipal Jwt caller,

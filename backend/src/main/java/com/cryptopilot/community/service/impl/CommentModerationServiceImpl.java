@@ -56,6 +56,11 @@ import org.springframework.transaction.annotation.Transactional;
  * content; WARN_USER and DISMISS leave it as it is. The decision and its effects are written to the audit log in the
  * same transaction (BR-57), and {@link CommentModerated} tells the author and the reporters after it commits.
  *
+ * <p>A ban hides the author's other content after it commits (D-98). A decision on another of their comments taken
+ * while that runs may lose the comment's optimistic lock and answer {@code DATA_CONFLICT} (409); nothing is changed,
+ * and deciding again succeeds. This is accepted rather than locked against, as two moderators deciding the same
+ * comment are answered the same way.
+ *
  * <p>Rule: UC-43; BR-06, BR-57, BR-58; SRS 3.11.3; D-98, D-125.
  */
 @Service
