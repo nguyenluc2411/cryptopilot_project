@@ -1,4 +1,4 @@
--- D-99, CoinMarketCap Community: what one member chose about another. A Trader follows members and reads their posts
+-- D-125, CoinMarketCap Community: what one member chose about another. A Trader follows members and reads their posts
 -- in the Following tab, or blocks a member, whose posts and comments they then no longer see and who can no longer
 -- follow them, comment on their posts or reply to their comments. One row per direction: following and blocking the
 -- same member exclude each other.
@@ -21,14 +21,14 @@ CREATE TABLE user_relation (
 CREATE INDEX idx_user_relation_target ON user_relation (target_user_id, relation_type, created_at DESC);
 CREATE INDEX idx_user_relation_source ON user_relation (source_user_id, relation_type, created_at DESC);
 
--- A member is told about a new follower and about being mentioned (D-99), beside comments, replies and moderation.
+-- A member is told about a new follower and about being mentioned (D-125), beside comments, replies and moderation.
 ALTER TABLE notification DROP CONSTRAINT ck_notification_type;
 ALTER TABLE notification
     ADD CONSTRAINT ck_notification_type
         CHECK (notification_type IN ('ALERT', 'PLAN', 'MODERATION', 'SUBSCRIPTION', 'COMMENT', 'SYSTEM', 'FOLLOW',
                                      'MENTION'));
 
--- A report is of a post, or of one comment of that post (D-99). The comment's text is kept as it was reported, so an
+-- A report is of a post, or of one comment of that post (D-125). The comment's text is kept as it was reported, so an
 -- edit after the report does not change what the moderator reviews.
 ALTER TABLE post_report ADD COLUMN comment_id uuid;
 ALTER TABLE post_report ADD COLUMN reported_content text;
@@ -56,9 +56,9 @@ ALTER TABLE post_report ADD CONSTRAINT ck_post_report_action_fits_target CHECK (
     OR (comment_id IS NOT NULL AND resolution_action NOT IN ('HIDE_POST', 'REMOVE_POST'))
 );
 
--- A signed-in member other than the author opening a post counts once as a view of it (D-99).
+-- A signed-in member other than the author opening a post counts once as a view of it (D-125).
 ALTER TABLE engagement DROP CONSTRAINT ck_engagement_action_type;
--- A reader votes a post Bullish or Bearish, as on CoinMarketCap Community (D-99): one vote per member and post, which
+-- A reader votes a post Bullish or Bearish, as on CoinMarketCap Community (D-125): one vote per member and post, which
 -- a new vote replaces.
 ALTER TABLE engagement ADD CONSTRAINT ck_engagement_action_type
     CHECK (action_type IN ('LIKE', 'SAVE', 'VIEW', 'BULLISH', 'BEARISH'));
@@ -67,7 +67,7 @@ ALTER TABLE engagement ADD CONSTRAINT ck_engagement_view_of_post
 CREATE UNIQUE INDEX uq_engagement_post_vote ON engagement (user_id, post_id)
     WHERE action_type IN ('BULLISH', 'BEARISH');
 
--- The author marks a post Bullish or Bearish when writing it (D-99); most posts mark nothing.
+-- The author marks a post Bullish or Bearish when writing it (D-125); most posts mark nothing.
 ALTER TABLE forum_post ADD COLUMN sentiment varchar(16);
 ALTER TABLE forum_post ADD CONSTRAINT ck_forum_post_sentiment
     CHECK (sentiment IS NULL OR sentiment IN ('BULLISH', 'BEARISH'));

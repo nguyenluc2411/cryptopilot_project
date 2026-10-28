@@ -9,11 +9,11 @@ import com.cryptopilot.community.dto.response.ModeratedCommentResponse;
 import java.util.UUID;
 
 /**
- * The moderation of reported comments (D-99), beside that of posts ({@link ModerationService}): a queue of comments
+ * The moderation of reported comments (D-125), beside that of posts ({@link ModerationService}): a queue of comments
  * with open reports, a case per comment, one decision for all its open reports, and restoring a hidden comment.
  * Implemented by {@link com.cryptopilot.community.service.impl.CommentModerationServiceImpl}.
  *
- * <p>Rule: UC-43; BR-57, BR-58; SRS 3.11.3; D-99.
+ * <p>Rule: UC-43; BR-57, BR-58; SRS 3.11.3; D-125.
  */
 public interface CommentModerationService {
 

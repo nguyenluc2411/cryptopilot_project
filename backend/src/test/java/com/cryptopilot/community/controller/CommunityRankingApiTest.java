@@ -42,10 +42,10 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
- * What SCR-24 shows as CoinMarketCap Community does (D-99): the author's Bullish or Bearish stance, the readers' votes,
- * the For You tab, how an author counts beside their name, Top Influencers and the Trending coins.
+ * What SCR-24 shows as CoinMarketCap Community does (D-125): the author's Bullish or Bearish stance, the readers'
+ * votes, the For You tab, how an author counts beside their name, Top Influencers and the Trending coins.
  *
- * <p>Rule: D-99.
+ * <p>Rule: D-125.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -100,7 +100,7 @@ class CommunityRankingApiTest {
     }
 
     @Test
-    void D99_theAuthorMarksAStance_andReadersVoteOnce_aNewVoteReplacingTheOld() throws Exception {
+    void D125_theAuthorMarksAStance_andReadersVoteOnce_aNewVoteReplacingTheOld() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         UUID carol = account(UserRole.TRADER, "Carol");
@@ -149,7 +149,7 @@ class CommunityRankingApiTest {
     }
 
     @Test
-    void D99_aPostShowsHowItsAuthorCounts_andWhetherTheReaderFollowsThem() throws Exception {
+    void D125_aPostShowsHowItsAuthorCounts_andWhetherTheReaderFollowsThem() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         String id = newPost(alice, "Alice's post", "text");
@@ -172,7 +172,7 @@ class CommunityRankingApiTest {
     }
 
     @Test
-    void D99_topInfluencers_rankByInfluenceOrDepth_andLeaveOutABlock() throws Exception {
+    void D125_topInfluencers_rankByInfluenceOrDepth_andLeaveOutABlock() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         UUID carol = account(UserRole.TRADER, "Carol");
@@ -209,7 +209,7 @@ class CommunityRankingApiTest {
     }
 
     @Test
-    void D99_forYou_putsTheMostDiscussedRecentPostFirst_andOnlyThisWeeks() throws Exception {
+    void D125_forYou_putsTheMostDiscussedRecentPostFirst_andOnlyThisWeeks() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         String quiet = newPost(alice, "Quiet post", "text");
@@ -237,7 +237,7 @@ class CommunityRankingApiTest {
     }
 
     @Test
-    void D99_trendingCoins_isPublic_andAnswersAtMostTheLimit() throws Exception {
+    void D125_trendingCoins_isPublic_andAnswersAtMostTheLimit() throws Exception {
         mvc.perform(get(POSTS + "/trending-coins?limit=3"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(org.hamcrest.Matchers.lessThanOrEqualTo(3)));

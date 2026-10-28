@@ -7,9 +7,9 @@ import com.cryptopilot.community.model.enums.PostSentiment;
  *
  * @param likes the likes of the post
  * @param comments its published comments
- * @param views the signed-in members other than the author who opened it, each once (D-99)
- * @param bullish the readers who voted it Bullish (D-99)
- * @param bearish the readers who voted it Bearish (D-99)
+ * @param views the signed-in members other than the author who opened it, each once (D-125)
+ * @param bullish the readers who voted it Bullish (D-125)
+ * @param bearish the readers who voted it Bearish (D-125)
  * @param likedByCaller whether the caller liked it
  * @param savedByCaller whether the caller saved it
  * @param callerVote how the caller voted it, or {@code null}

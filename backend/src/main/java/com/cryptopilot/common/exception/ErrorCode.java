@@ -467,29 +467,29 @@ public enum ErrorCode {
      */
     NEWS_SUMMARY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG31"),
 
-    /** A member cannot follow themselves (D-99). Borrows MSG43 (A-38). 409: the target refuses the request. */
+    /** A member cannot follow themselves (D-125). Borrows MSG43 (A-38). 409: the target refuses the request. */
     FOLLOW_SELF(HttpStatus.CONFLICT, "MSG43"),
 
-    /** A member cannot block themselves (D-99). Borrows MSG43 (A-38). 409: the target refuses the request. */
+    /** A member cannot block themselves (D-125). Borrows MSG43 (A-38). 409: the target refuses the request. */
     BLOCK_SELF(HttpStatus.CONFLICT, "MSG43"),
 
     /**
-     * The member cannot be followed, blocked or answered by the caller (D-99): an administrator, or a member one of
+     * The member cannot be followed, blocked or answered by the caller (D-125): an administrator, or a member one of
      * the two blocks. Borrows MSG43 (A-38). 409: the relation between the two refuses the request.
      */
     RELATION_NOT_ALLOWED(HttpStatus.CONFLICT, "MSG43"),
 
-    /** A Trader cannot report their own comment (D-99). Borrows MSG43 (A-38). 409: the target refuses it. */
+    /** A Trader cannot report their own comment (D-125). Borrows MSG43 (A-38). 409: the target refuses it. */
     COMMENT_REPORT_OWN_COMMENT(HttpStatus.CONFLICT, "MSG43"),
 
-    /** The Trader already reported this comment (D-99, as BR-46 for posts). MSG34. 409: the report exists. */
+    /** The Trader already reported this comment (D-125, as BR-46 for posts). MSG34. 409: the report exists. */
     COMMENT_ALREADY_REPORTED(HttpStatus.CONFLICT, "MSG34"),
 
-    /** Only a hidden comment can be restored (D-99). Borrows MSG43 (A-38). 409: the comment's status refuses it. */
+    /** Only a hidden comment can be restored (D-125). Borrows MSG43 (A-38). 409: the comment's status refuses it. */
     COMMENT_NOT_HIDDEN(HttpStatus.CONFLICT, "MSG43"),
 
     /**
-     * A post or comment of a banned member stays hidden (D-99): a ban is final (BR-05), so restoring their content
+     * A post or comment of a banned member stays hidden (D-125): a ban is final (BR-05), so restoring their content
      * would bring a banned member back into the community. Borrows MSG43 (A-38). 409: the author refuses it.
      */
     AUTHOR_BANNED(HttpStatus.CONFLICT, "MSG43");

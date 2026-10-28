@@ -11,11 +11,11 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The members of the community (D-99, CoinMarketCap Community): public pages, following and blocking. A member who
- * does not exist, has no profile or is banned answers MSG41. Implemented by
+ * The members of the community (D-99, D-125, CoinMarketCap Community): public pages, following and blocking. A
+ * member who does not exist, has no profile or is banned answers MSG41. Implemented by
  * {@link com.cryptopilot.community.service.impl.MemberServiceImpl}.
  *
- * <p>Rule: D-48, D-99.
+ * <p>Rule: D-48, D-99, D-125.
  */
 public interface MemberService {
 
@@ -65,7 +65,7 @@ public interface MemberService {
     PageResponse<AuthorResponse> blocked(UUID caller, Integer page, Integer pageSize);
 
     /**
-     * The Traders whose name starts with {@code prefix}, to mention in a post or a comment (D-99): at most ten,
+     * The Traders whose name starts with {@code prefix}, to mention in a post or a comment (D-125): at most ten,
      * alphabetical, without the caller and the members either of the two blocks.
      *
      * @throws com.cryptopilot.common.exception.FieldValidationException MSG15 when {@code prefix} is not 1 to 50
@@ -74,14 +74,14 @@ public interface MemberService {
     List<AuthorResponse> search(UUID caller, String prefix);
 
     /**
-     * The members who count most in the community (D-99), by influence or analytical depth, INFLUENCE when
+     * The members who count most in the community (D-125), by influence or analytical depth, INFLUENCE when
      * {@code null}: at most {@code limit}, 1 to 20, 10 when {@code null}. Members in a block with the caller are left
      * out; a Guest is {@code null}.
      */
     List<InfluencerResponse> influencers(UUID caller, InfluencerRank rank, Integer limit);
 
     /**
-     * Takes a banned member out of the community (D-99): hides their published posts and comments and drops their
+     * Takes a banned member out of the community (D-125): hides their published posts and comments and drops their
      * follows and blocks. Changes nothing the second time.
      */
     void removeBanned(UUID memberId, Instant bannedAt);

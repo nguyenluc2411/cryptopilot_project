@@ -14,7 +14,7 @@ import java.util.UUID;
  *
  * @param content 1 to 2 000 characters
  * @param parentCommentId the comment replied to, or {@code null} for a new thread; ignored on an edit
- * @param mentions the members the text mentions (D-99), at most 10, each told once; {@code null} for none
+ * @param mentions the members the text mentions (D-125), at most 10, each told once; {@code null} for none
  */
 public record CommentRequest(
         @NotBlank(message = "MSG01") @Size(max = 2_000, message = "MSG01")

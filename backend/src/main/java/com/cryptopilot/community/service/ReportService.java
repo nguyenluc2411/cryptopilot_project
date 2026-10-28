@@ -22,7 +22,7 @@ public interface ReportService {
 
     /**
      * Files an OPEN report of a published comment, of a post the caller may see, that the caller did not write
-     * (D-99). The comment's text is kept with the report.
+     * (D-125). The comment's text is kept with the report.
      *
      * @throws com.cryptopilot.common.exception.BusinessException MSG41 for a comment the caller may not see, MSG34
      *     ({@code COMMENT_ALREADY_REPORTED}) when the caller already reported it, {@code COMMENT_REPORT_OWN_COMMENT}

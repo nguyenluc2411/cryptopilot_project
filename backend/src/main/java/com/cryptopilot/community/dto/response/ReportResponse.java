@@ -10,7 +10,7 @@ import java.util.UUID;
  *
  * @param id the report
  * @param postId the reported post, or the post of the reported comment
- * @param commentId the reported comment, or {@code null} when the post itself is reported (D-99)
+ * @param commentId the reported comment, or {@code null} when the post itself is reported (D-125)
  * @param reason the reason chosen
  * @param description the description, or {@code null}
  * @param status OPEN

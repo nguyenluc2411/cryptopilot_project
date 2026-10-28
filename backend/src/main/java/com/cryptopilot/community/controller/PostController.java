@@ -95,7 +95,7 @@ public class PostController {
         return service.coinDiscussion(symbol);
     }
 
-    @Operation(summary = "The coins the community talks about most this week, for the Trending list (D-99); public")
+    @Operation(summary = "The coins the community talks about most this week, for the Trending list (D-125); public")
     @ApiResponse(responseCode = "200", description = "Up to `limit` coins, the most posted about in the last day first")
     @GetMapping("/trending-coins")
     public List<CoinDiscussionResponse> trendingCoins(@RequestParam(required = false) Integer limit) {

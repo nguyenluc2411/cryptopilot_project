@@ -1,10 +1,10 @@
 package com.cryptopilot.community.model.enums;
 
 /**
- * What one member chose about another (D-99). Stored in {@code user_relation.relation_type}; one per direction, so a
+ * What one member chose about another (D-125). Stored in {@code user_relation.relation_type}; one per direction, so a
  * member either follows or blocks another, never both.
  *
- * <p>Rule: D-99.
+ * <p>Rule: D-125.
  */
 public enum RelationType {
 

@@ -17,7 +17,7 @@ import lombok.Getter;
  * that started the thread, so a thread is a comment and its replies in the order they were written (D-98).
  *
  * <p>Deleting a comment sets {@link CommentStatus#DELETED} (BR-47); the row stays, so its replies keep their place. A
- * moderator hides a reported comment ({@link CommentStatus#HIDDEN}, restorable) or removes it (D-99).
+ * moderator hides a reported comment ({@link CommentStatus#HIDDEN}, restorable) or removes it (D-125).
  *
  * <p>Rule: UC-30; BR-47; SRS 3.7.3.
  */
@@ -85,19 +85,19 @@ public class ForumComment extends BaseEntity {
         this.status = CommentStatus.DELETED;
     }
 
-    /** Hides a published comment for a moderation decision or a ban (D-99); any other comment is left as it is. */
+    /** Hides a published comment for a moderation decision or a ban (D-125); any other comment is left as it is. */
     public void hide() {
         if (status == CommentStatus.PUBLISHED) {
             this.status = CommentStatus.HIDDEN;
         }
     }
 
-    /** Removes the comment for a moderation decision (D-99): deleted for everyone, its text kept for Admin. */
+    /** Removes the comment for a moderation decision (D-125): deleted for everyone, its text kept for Admin. */
     public void remove() {
         this.status = CommentStatus.DELETED;
     }
 
-    /** Shows a hidden comment again (D-99). */
+    /** Shows a hidden comment again (D-125). */
     public void restore() {
         if (status != CommentStatus.HIDDEN) {
             throw new IllegalStateException("comment " + getId() + " is " + status + ", not hidden");

@@ -42,12 +42,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Member pages, following and blocking (D-99). Each change is one idempotent statement, so a repeated or concurrent
- * click keeps one row; a new follow publishes {@link UserFollowed} for the notification of the member followed. A
- * banned member is gone from the community: no page, no new followers. Administrators speak through official posts,
- * which the Following tab leaves out, so they are neither followed nor blocked.
+ * Member pages, following and blocking (D-99, D-125). Each change is one idempotent statement, so a repeated or
+ * concurrent click keeps one row; a new follow publishes {@link UserFollowed} for the notification of the member
+ * followed. A banned member is gone from the community: no page, no new followers. Administrators speak through
+ * official posts, which the Following tab leaves out, so they are neither followed nor blocked.
  *
- * <p>Rule: D-99.
+ * <p>Rule: D-99, D-125.
  */
 @Service
 @RequiredArgsConstructor
@@ -59,7 +59,7 @@ public class MemberServiceImpl implements MemberService {
     /** Most members a mention search answers. */
     static final int SEARCH_LIMIT = 10;
 
-    /** How many members Top Influencers lists, and at most (D-99). */
+    /** How many members Top Influencers lists, and at most (D-125). */
     static final int INFLUENCERS_DEFAULT = 10;
 
     static final int INFLUENCERS_MAX = 20;

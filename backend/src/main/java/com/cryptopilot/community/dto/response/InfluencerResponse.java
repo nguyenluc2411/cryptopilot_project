@@ -3,7 +3,7 @@ package com.cryptopilot.community.dto.response;
 import java.util.UUID;
 
 /**
- * One row of the Top Influencers list of SCR-24 (D-99).
+ * One row of the Top Influencers list of SCR-24 (D-125).
  *
  * @param userId the member
  * @param displayName their name, or {@code null} for an account without a profile

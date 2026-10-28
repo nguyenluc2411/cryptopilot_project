@@ -9,11 +9,11 @@ import org.springframework.stereotype.Component;
 
 /**
  * Who may see what in the community. A post follows BR-47 ({@link ForumPost#isVisibleTo(UUID)}), and a block works
- * both ways (D-121): when either of two members blocks the other, neither sees the other's posts and comments, even
+ * both ways (D-125): when either of two members blocks the other, neither sees the other's posts and comments, even
  * through a direct link, and neither likes, saves, reports, comments on or replies to them. What a member may not see
  * answers MSG41, as if it did not exist, so a block is not revealed. A Guest blocks nobody.
  *
- * <p>Rule: BR-47; D-99, D-121.
+ * <p>Rule: BR-47; D-99, D-125.
  */
 @Component
 @RequiredArgsConstructor

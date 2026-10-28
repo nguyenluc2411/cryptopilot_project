@@ -4,10 +4,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A member started following another (D-99). Published in the transaction that recorded it, for the notification of
+ * A member started following another (D-125). Published in the transaction that recorded it, for the notification of
  * the member followed, which the in-app notification task delivers.
  *
- * <p>Rule: D-99; NSF-15.
+ * <p>Rule: D-125; NSF-15.
  *
  * @param followerId who follows
  * @param followeeId who is followed, the one to tell

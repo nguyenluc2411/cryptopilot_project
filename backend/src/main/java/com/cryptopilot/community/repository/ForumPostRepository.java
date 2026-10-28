@@ -42,7 +42,7 @@ public interface ForumPostRepository extends Repository<ForumPost, UUID> {
     void flush();
 
     /**
-     * Hides every published post of a member, when the member is banned (D-99); their announcements, which a
+     * Hides every published post of a member, when the member is banned (D-125); their announcements, which a
      * Trader never has, are left out. How many it hid.
      */
     @Modifying

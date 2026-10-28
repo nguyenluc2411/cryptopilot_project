@@ -53,7 +53,7 @@ public class ModerationQueueRepository {
         return new PageImpl<>(entries, page, total);
     }
 
-    /** One page of the comment queue (D-99): one row per comment with open reports, reported longest ago first. */
+    /** One page of the comment queue (D-125): one row per comment with open reports, reported longest ago first. */
     public Page<QueueEntry> commentQueue(Pageable page) {
         List<QueueEntry> entries = sql.sql("""
                         select comment_id, count(*) as reports, array_agg(distinct reason) as reasons,

@@ -69,7 +69,7 @@ public class PostServiceImpl implements PostService {
 
     static final int SEARCH_MAX_LENGTH = 100;
 
-    /** How many coins the Trending list shows, and at most (D-99). */
+    /** How many coins the Trending list shows, and at most (D-125). */
     static final int TRENDING_COINS_DEFAULT = 10;
 
     static final int TRENDING_COINS_MAX = 20;
@@ -169,7 +169,7 @@ public class PostServiceImpl implements PostService {
         ForumPost post = posts.findById(postId)
                 .filter(found -> access.canSee(found, caller))
                 .orElseThrow(() -> notFound(postId));
-        // A signed-in member other than the author counts once as a view; a Guest is not counted (D-99).
+        // A signed-in member other than the author counts once as a view; a Guest is not counted (D-125).
         if (caller != null && !caller.equals(post.getAuthorId()) && post.getStatus() == PostStatus.PUBLISHED) {
             engagements.addToPost(UuidV7.next(), caller, post.getId(), EngagementAction.VIEW.name(), clock.instant());
         }

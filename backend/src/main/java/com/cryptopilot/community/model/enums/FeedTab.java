@@ -11,7 +11,7 @@ public enum FeedTab {
     LATEST,
 
     /**
-     * For You: the published posts of the last seven days, the most discussed of late first (D-99). Likes, votes,
+     * For You: the published posts of the last seven days, the most discussed of late first (D-125). Likes, votes,
      * comments and views raise a post; age lowers it.
      */
     TRENDING,
@@ -25,6 +25,6 @@ public enum FeedTab {
     /** The caller's own posts, hidden ones included, newest first. */
     MINE,
 
-    /** The published posts of the members the caller follows, newest first (D-99). */
+    /** The published posts of the members the caller follows, newest first (D-125). */
     FOLLOWING
 }

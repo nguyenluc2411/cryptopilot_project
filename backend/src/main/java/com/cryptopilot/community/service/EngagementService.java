@@ -18,7 +18,7 @@ public interface EngagementService {
     /** Likes or saves a post, or takes the like or save back. */
     EngagementResponse onPost(UUID caller, UUID postId, EngagementAction action, boolean active);
 
-    /** Votes a post Bullish or Bearish, replacing an earlier vote, or takes the vote back with {@code null} (D-99). */
+    /** Votes a post Bullish or Bearish, replacing an earlier vote, or takes the vote back with {@code null} (D-125). */
     VoteResponse vote(UUID caller, UUID postId, PostSentiment sentiment);
 
     /** Likes a comment, or takes the like back. */

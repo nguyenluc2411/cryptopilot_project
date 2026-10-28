@@ -29,13 +29,13 @@ public enum AuditAction {
     /** An administrator showed a hidden news article again (T-080b). */
     NEWS_ARTICLE_RESTORED,
 
-    /** A moderator hid a reported comment (D-99, HIDE_COMMENT or BAN_USER). */
+    /** A moderator hid a reported comment (D-125, HIDE_COMMENT or BAN_USER). */
     COMMENT_HIDDEN,
 
-    /** A moderator removed a reported comment (D-99, REMOVE_COMMENT). */
+    /** A moderator removed a reported comment (D-125, REMOVE_COMMENT). */
     COMMENT_REMOVED,
 
-    /** A moderator showed a hidden comment again (D-99). */
+    /** A moderator showed a hidden comment again (D-125). */
     COMMENT_RESTORED,
     /** A configuration row added: a pair, a leverage bracket, a package, a news source or an AI configuration. */
     CONFIGURATION_CREATED,

@@ -11,9 +11,9 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * The gateway to the violation reports of posts and of their comments (D-99).
+ * The gateway to the violation reports of posts and of their comments (D-125).
  *
- * <p>Rule: UC-33; BR-46; D-99.
+ * <p>Rule: UC-33; BR-46; D-99, D-125.
  */
 public interface PostReportRepository extends Repository<PostReport, UUID> {
 
@@ -21,7 +21,7 @@ public interface PostReportRepository extends Repository<PostReport, UUID> {
     @Transactional(readOnly = true)
     boolean existsByPostIdAndCommentIdIsNullAndReporterId(UUID postId, UUID reporterId);
 
-    /** Whether the Trader already reported the comment (D-99). */
+    /** Whether the Trader already reported the comment (D-125). */
     @Transactional(readOnly = true)
     boolean existsByCommentIdAndReporterId(UUID commentId, UUID reporterId);
 
@@ -30,7 +30,7 @@ public interface PostReportRepository extends Repository<PostReport, UUID> {
     List<PostReport> findAllByPostIdAndCommentIdIsNullAndStatusInOrderByCreatedAtAscIdAsc(
             UUID postId, Collection<ReportStatus> statuses);
 
-    /** The reports of a comment with one of these statuses, oldest first (D-99). */
+    /** The reports of a comment with one of these statuses, oldest first (D-125). */
     @Transactional(readOnly = true)
     List<PostReport> findAllByCommentIdAndStatusInOrderByCreatedAtAscIdAsc(
             UUID commentId, Collection<ReportStatus> statuses);

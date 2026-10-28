@@ -16,12 +16,12 @@ import java.util.UUID;
 import lombok.Getter;
 
 /**
- * A Trader's report that a post, or one comment of it, breaks the community rules (UC-33; comments since D-99, which
+ * A Trader's report that a post, or one comment of it, breaks the community rules (UC-33; comments since D-125, which
  * widens D-14). A Trader reports a post once ({@code uq_post_report_post_reporter}) and each comment once
  * ({@code uq_post_report_comment_reporter}), never their own (BR-46). A report is filed {@link ReportStatus#OPEN}; the
  * moderation queue reviews and resolves it (UC-43).
  *
- * <p>Rule: UC-33; BR-46; D-14, D-99; SRS 3.7.4.
+ * <p>Rule: UC-33; BR-46; D-14, D-99, D-125; SRS 3.7.4.
  */
 @Getter
 @Entity
@@ -35,7 +35,7 @@ public class PostReport extends BaseEntity {
     @Column(name = "post_id", nullable = false, updatable = false)
     private UUID postId;
 
-    /** The reported comment of the post, or {@code null} when the post itself is reported (D-99). */
+    /** The reported comment of the post, or {@code null} when the post itself is reported (D-125). */
     @Column(name = "comment_id", updatable = false)
     private UUID commentId;
 
@@ -113,7 +113,7 @@ public class PostReport extends BaseEntity {
         return new PostReport(postId, reporterId, reason, description);
     }
 
-    /** Files an OPEN report of a comment, keeping its text as it is now (D-99). */
+    /** Files an OPEN report of a comment, keeping its text as it is now (D-125). */
     public static PostReport fileOnComment(
             ForumComment comment, UUID reporterId, ReportReason reason, String description) {
         PostReport report = new PostReport(comment.getPostId(), reporterId, reason, description);

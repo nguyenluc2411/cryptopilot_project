@@ -16,7 +16,7 @@ import java.util.UUID;
  *
  * @param id the post
  * @param author who wrote it
- * @param authorStanding how the author counts in the community (D-99)
+ * @param authorStanding how the author counts in the community (D-125)
  * @param title the title
  * @param content the full text
  * @param postType TEXT or VIDEO
@@ -24,14 +24,14 @@ import java.util.UUID;
  * @param official whether it is an announcement (BR-61)
  * @param officialCategory what an official post is; {@code null} for a Trader's post
  * @param status PUBLISHED, or HIDDEN when the caller is its author (BR-47)
- * @param sentiment the author's stance, Bullish or Bearish, or {@code null} (D-99)
+ * @param sentiment the author's stance, Bullish or Bearish, or {@code null} (D-125)
  * @param coins the symbols it is tagged with, alphabetical
  * @param media its images or its video, in order
  * @param likeCount its likes
  * @param commentCount its published comments
- * @param viewCount the signed-in members other than the author who opened it, each once (D-99)
- * @param bullishCount the readers who voted it Bullish (D-99)
- * @param bearishCount the readers who voted it Bearish (D-99)
+ * @param viewCount the signed-in members other than the author who opened it, each once (D-125)
+ * @param bullishCount the readers who voted it Bullish (D-125)
+ * @param bearishCount the readers who voted it Bearish (D-125)
  * @param myVote how the caller voted it, or {@code null}
  * @param likedByMe whether the caller liked it
  * @param savedByMe whether the caller saved it

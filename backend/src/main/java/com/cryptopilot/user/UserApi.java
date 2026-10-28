@@ -230,7 +230,7 @@ public interface UserApi {
 
     /**
      * The Traders whose public name starts with {@code prefix}, case ignored, alphabetical, at most {@code limit}:
-     * the members a Trader may mention in a post or a comment (D-99). Banned accounts are left out.
+     * the members a Trader may mention in a post or a comment (D-125). Banned accounts are left out.
      */
     List<AuthorCard> searchMembers(String prefix, int limit);
 }

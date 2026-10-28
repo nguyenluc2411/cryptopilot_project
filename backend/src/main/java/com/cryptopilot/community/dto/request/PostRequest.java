@@ -25,8 +25,8 @@ import java.util.UUID;
  * @param media the uploaded files in the order they are shown: up to 4 images or 1 video (BR-44); {@code null} for
  *     none. On an edit, the files of the post not named again are deleted
  * @param officialCategory what an announcement is, ANNOUNCEMENT when absent (D-99); a Trader's post has none
- * @param mentions the members the text mentions (D-99), at most 10, each told once; {@code null} for none
- * @param sentiment the author's stance on the market, Bullish or Bearish (D-99); {@code null} for none
+ * @param mentions the members the text mentions (D-125), at most 10, each told once; {@code null} for none
+ * @param sentiment the author's stance on the market, Bullish or Bearish (D-125); {@code null} for none
  */
 public record PostRequest(
         @NotBlank(message = "MSG01") @Size(min = 5, max = 150, message = "MSG01")

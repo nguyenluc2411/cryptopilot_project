@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  * processor delivers the event again; the notifications already written are not written twice. Orchestration only:
  * the rules are in {@link CommunityNotificationService}.
  *
- * <p>Rule: SRS 3.7.3, 3.11.3; D-98, D-99; NSF-15.
+ * <p>Rule: SRS 3.7.3, 3.11.3; D-98, D-99, D-125; NSF-15.
  *
  * <p>Reference: Richardson, C. (2018). <i>Microservices Patterns</i>. Manning, ch. 3 (Transactional Outbox).
  */

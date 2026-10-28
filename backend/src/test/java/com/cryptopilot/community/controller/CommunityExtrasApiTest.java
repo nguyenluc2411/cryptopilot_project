@@ -39,11 +39,11 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
- * What makes the community a forum beyond the registered topic (D-99): blocking a member, mentioning members, replies
+ * What makes the community a forum beyond the registered topic (D-125): blocking a member, mentioning members, replies
  * told to the comment's author, post views, reporting and moderating comments, and a banned member taken out of the
  * community.
  *
- * <p>Rule: D-99; UC-43; BR-05, BR-57; SRS 3.11.3.
+ * <p>Rule: D-125; UC-43; BR-05, BR-57; SRS 3.11.3.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -94,7 +94,7 @@ class CommunityExtrasApiTest {
     // ---- blocking ---------------------------------------------------------------------------
 
     @Test
-    void D99_aBlock_worksBothWays_evenThroughADirectLink_andOnlyTheBlockerSeesTheOthersPage() throws Exception {
+    void D125_aBlock_worksBothWays_evenThroughADirectLink_andOnlyTheBlockerSeesTheOthersPage() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         UUID carol = account(UserRole.TRADER, "Carol");
@@ -156,7 +156,7 @@ class CommunityExtrasApiTest {
     }
 
     @Test
-    void D99_inABlock_neitherCommentsOnTheOthersPosts_norRepliesToTheirComments_norSeesTheirComments()
+    void D125_inABlock_neitherCommentsOnTheOthersPosts_norRepliesToTheirComments_norSeesTheirComments()
             throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
@@ -198,7 +198,7 @@ class CommunityExtrasApiTest {
     }
 
     @Test
-    void D99_nobodyBlocksThemselves_norFollowsOrBlocksAnAdministrator_andUnfollowingNobodyIsFine() throws Exception {
+    void D125_nobodyBlocksThemselves_norFollowsOrBlocksAnAdministrator_andUnfollowingNobodyIsFine() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID admin = account(UserRole.ADMIN, "Moderator");
 
@@ -217,7 +217,7 @@ class CommunityExtrasApiTest {
     // ---- mentions and replies ---------------------------------------------------------------
 
     @Test
-    void D99_theMentionSearch_findsTraders_withoutTheCaller_administrators_orBlockedMembers() throws Exception {
+    void D125_theMentionSearch_findsTraders_withoutTheCaller_administrators_orBlockedMembers() throws Exception {
         String tag = "Zq" + UUID.randomUUID().toString().substring(0, 6);
         UUID alice = account(UserRole.TRADER, tag + " Alice");
         UUID bob = account(UserRole.TRADER, tag + " Bob");
@@ -235,7 +235,7 @@ class CommunityExtrasApiTest {
     }
 
     @Test
-    void D99_aMention_tellsTheMembersMentioned_once_andLeavesOutTheAuthorAndBlockers() throws Exception {
+    void D125_aMention_tellsTheMembersMentioned_once_andLeavesOutTheAuthorAndBlockers() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         UUID carol = account(UserRole.TRADER, "Carol");
@@ -273,7 +273,7 @@ class CommunityExtrasApiTest {
     }
 
     @Test
-    void D99_aReply_tellsTheAuthorOfTheCommentRepliedTo() throws Exception {
+    void D125_aReply_tellsTheAuthorOfTheCommentRepliedTo() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         UUID carol = account(UserRole.TRADER, "Carol");
@@ -292,7 +292,7 @@ class CommunityExtrasApiTest {
     // ---- views ------------------------------------------------------------------------------
 
     @Test
-    void D99_aPostsViews_countEachSignedInReaderOnce_butNeitherTheAuthorNorAGuest() throws Exception {
+    void D125_aPostsViews_countEachSignedInReaderOnce_butNeitherTheAuthorNorAGuest() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         UUID carol = account(UserRole.TRADER, "Carol");
@@ -310,7 +310,7 @@ class CommunityExtrasApiTest {
     // ---- comment reports and their moderation -----------------------------------------------
 
     @Test
-    void D99_aComment_isReportedOnce_neverByItsAuthor_andTheReportKeepsItsText() throws Exception {
+    void D125_aComment_isReportedOnce_neverByItsAuthor_andTheReportKeepsItsText() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         UUID admin = account(UserRole.ADMIN, "Moderator");
@@ -346,7 +346,7 @@ class CommunityExtrasApiTest {
     }
 
     @Test
-    void D99_hidingAComment_showsAPlaceholderWhileItHasReplies_tellsTheAuthorAndReporter_andCanBeUndone()
+    void D125_hidingAComment_showsAPlaceholderWhileItHasReplies_tellsTheAuthorAndReporter_andCanBeUndone()
             throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
@@ -390,7 +390,7 @@ class CommunityExtrasApiTest {
     }
 
     @Test
-    void D99_aPostsDecision_refusesCommentActions_andCommentReportsStayOutOfThePostQueue() throws Exception {
+    void D125_aPostsDecision_refusesCommentActions_andCommentReportsStayOutOfThePostQueue() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         UUID admin = account(UserRole.ADMIN, "Moderator");
@@ -407,7 +407,7 @@ class CommunityExtrasApiTest {
     // ---- bans -------------------------------------------------------------------------------
 
     @Test
-    void D99_banningForAComment_hidesTheMembersPostsAndComments_andDropsTheirFollowsAndBlocks() throws Exception {
+    void D125_banningForAComment_hidesTheMembersPostsAndComments_andDropsTheirFollowsAndBlocks() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
         UUID carol = account(UserRole.TRADER, "Carol");
@@ -455,7 +455,7 @@ class CommunityExtrasApiTest {
     }
 
     @Test
-    void D99_editingAPostAgain_tellsAtMostTenMembersOfItsMentions() throws Exception {
+    void D125_editingAPostAgain_tellsAtMostTenMembersOfItsMentions() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         List<UUID> members = new ArrayList<>();
         for (int i = 0; i < 11; i++) {

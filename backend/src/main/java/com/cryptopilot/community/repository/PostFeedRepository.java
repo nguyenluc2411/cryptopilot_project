@@ -163,7 +163,7 @@ public class PostFeedRepository {
 
     /**
      * The like, comment, view and vote counts of these posts and whether the caller liked, saved or voted each
-     * (BR-45, D-99); the comments of members in a block with the caller are not counted, as they are not listed
+     * (BR-45, D-99, D-125); the comments of members in a block with the caller are not counted, as they are not listed
      * (D-125).
      */
     public Map<UUID, PostEngagement> engagement(Collection<UUID> postIds, UUID caller) {
@@ -237,7 +237,7 @@ public class PostFeedRepository {
 
     /**
      * The coins the published posts of the last seven days talk about most, the most posted about in the last day
-     * first (D-99), as the Trending list of SCR-24 shows them, each with all its published posts as well.
+     * first (D-125), as the Trending list of SCR-24 shows them, each with all its published posts as well.
      */
     public List<TrendingCoin> trendingCoins(Instant now, int limit) {
         return sql.sql("""
@@ -265,7 +265,7 @@ public class PostFeedRepository {
                 .list();
     }
 
-    /** How each of these members counts in the community (D-99); a member who published nothing is left out. */
+    /** How each of these members counts in the community (D-125); a member who published nothing is left out. */
     public Map<UUID, AuthorStanding> standings(Collection<UUID> memberIds, UUID caller, Instant now) {
         Map<UUID, AuthorStanding> result = new HashMap<>();
         if (memberIds.isEmpty()) {
@@ -280,7 +280,7 @@ public class PostFeedRepository {
     }
 
     /**
-     * The members who count most in the community, by influence or by analytical depth (D-99), leaving out those in a
+     * The members who count most in the community, by influence or by analytical depth (D-125), leaving out those in a
      * block with the caller; administrators publish official posts only and so are never listed.
      */
     public List<Ranked> influencers(InfluencerRank rank, UUID caller, Instant now, int limit) {
@@ -356,11 +356,11 @@ public class PostFeedRepository {
                 .list();
     }
 
-    /** A member and how they count (D-99). */
+    /** A member and how they count (D-125). */
     public record Ranked(UUID memberId, AuthorStanding standing) {}
 
     /**
-     * A coin of the Trending list (D-99).
+     * A coin of the Trending list (D-125).
      *
      * @param postsLastDay the published posts of the last day tagged with it
      * @param postsLastWeek those of the last seven days

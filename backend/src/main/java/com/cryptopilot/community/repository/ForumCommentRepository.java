@@ -63,7 +63,7 @@ public interface ForumCommentRepository extends Repository<ForumComment, UUID> {
             + " order by c.createdAt asc, c.id asc")
     List<ForumComment> findReplies(@Param("threads") Collection<UUID> threads, @Param("viewer") UUID viewer);
 
-    /** Hides every published comment of a member, when the member is banned (D-99); how many it hid. */
+    /** Hides every published comment of a member, when the member is banned (D-125); how many it hid. */
     @Modifying
     @Query(
             value = "update forum_comment set comment_status = 'HIDDEN', updated_at = :now, version = version + 1"

@@ -5,7 +5,7 @@ import com.cryptopilot.community.model.enums.ResolutionAction;
 import java.util.UUID;
 
 /**
- * What a moderation decision on a comment did (D-99).
+ * What a moderation decision on a comment did (D-125).
  *
  * @param commentId the comment
  * @param action the decision

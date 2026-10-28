@@ -31,7 +31,8 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @Tag(
         name = "Reactions",
-        description = "Likes and saves of posts and comments (UC-31, UC-32), Bullish and Bearish votes (D-99). Trader.")
+        description =
+                "Likes and saves of posts and comments (UC-31, UC-32), Bullish and Bearish votes (D-125). Trader.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -72,7 +73,7 @@ public class EngagementController {
         return service.onPost(callerOf(caller), id, EngagementAction.SAVE, false);
     }
 
-    @Operation(summary = "Vote a post Bullish or Bearish, replacing an earlier vote (D-99)")
+    @Operation(summary = "Vote a post Bullish or Bearish, replacing an earlier vote (D-125)")
     @ApiResponse(responseCode = "200", description = "Voted, with the post's Bullish and Bearish votes")
     @ApiResponse(responseCode = "400", description = "MSG01: no sentiment")
     @ApiResponse(responseCode = "404", description = "MSG41: no such post the caller may see")
@@ -82,7 +83,7 @@ public class EngagementController {
         return service.vote(callerOf(caller), id, request.sentiment());
     }
 
-    @Operation(summary = "Take back the vote on a post (D-99); no vote is not an error")
+    @Operation(summary = "Take back the vote on a post (D-125); no vote is not an error")
     @ApiResponse(responseCode = "200", description = "Not voted, with the post's Bullish and Bearish votes")
     @ApiResponse(responseCode = "404", description = "MSG41: no such post the caller may see")
     @DeleteMapping("/api/v1/posts/{id}/vote")

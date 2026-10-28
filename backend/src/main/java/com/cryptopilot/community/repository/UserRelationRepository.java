@@ -15,10 +15,10 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Who follows or blocks whom (D-99). Each change is one statement, so a repeated or concurrent click keeps one row or
+ * Who follows or blocks whom (D-125). Each change is one statement, so a repeated or concurrent click keeps one row or
  * none and never fails.
  *
- * <p>Rule: D-99.
+ * <p>Rule: D-125.
  */
 public interface UserRelationRepository extends Repository<UserRelation, UUID> {
 
@@ -104,7 +104,7 @@ public interface UserRelationRepository extends Repository<UserRelation, UUID> {
     @Transactional(readOnly = true)
     long countBySourceUserIdAndType(UUID sourceUserId, RelationType type);
 
-    /** One page of a member's followers the viewer may see (no block either way, D-121), the most recent first. */
+    /** One page of a member's followers the viewer may see (no block either way, D-125), the most recent first. */
     @Transactional(readOnly = true)
     @Query("select r from UserRelation r where r.targetUserId = :member"
             + " and r.type = com.cryptopilot.community.model.enums.RelationType.FOLLOW"
@@ -115,7 +115,7 @@ public interface UserRelationRepository extends Repository<UserRelation, UUID> {
             + " order by r.createdAt desc, r.id desc")
     Page<UserRelation> findFollowersSeenBy(@Param("member") UUID member, @Param("viewer") UUID viewer, Pageable page);
 
-    /** One page of the members a member follows that the viewer may see (D-121), the most recent first. */
+    /** One page of the members a member follows that the viewer may see (D-125), the most recent first. */
     @Transactional(readOnly = true)
     @Query("select r from UserRelation r where r.sourceUserId = :member"
             + " and r.type = com.cryptopilot.community.model.enums.RelationType.FOLLOW"

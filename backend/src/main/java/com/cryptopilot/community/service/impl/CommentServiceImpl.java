@@ -132,7 +132,7 @@ public class CommentServiceImpl implements CommentService {
 
     private ForumComment owned(UUID caller, UUID commentId) {
         return comments.findByIdAndAuthorId(commentId, caller)
-                // A hidden comment is kept as moderation saw it (D-99).
+                // A hidden comment is kept as moderation saw it (D-125).
                 .filter(ForumComment::isPublished)
                 .filter(comment -> posts.findById(comment.getPostId())
                         .filter(post -> access.canSee(post, caller))

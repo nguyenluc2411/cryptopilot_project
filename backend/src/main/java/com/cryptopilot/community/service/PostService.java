@@ -39,7 +39,7 @@ public interface PostService {
 
     /**
      * The coins the published posts of the last seven days talk about most, the most posted about in the last day
-     * first (D-99): at most {@code limit}, 1 to 20, 10 when {@code null}.
+     * first (D-125): at most {@code limit}, 1 to 20, 10 when {@code null}.
      */
     List<CoinDiscussionResponse> trendingCoins(Integer limit);
 

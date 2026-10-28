@@ -109,7 +109,7 @@ class MemberApiTest {
     }
 
     @Test
-    void D99_aMemberIsFollowedOnce_andCanBeUnfollowed() throws Exception {
+    void D125_aMemberIsFollowedOnce_andCanBeUnfollowed() throws Exception {
         UUID alice = trader("Alice");
         UUID bob = trader("Bob");
 
@@ -132,7 +132,7 @@ class MemberApiTest {
     }
 
     @Test
-    void D99_twoFollowsAtOnce_leaveOneRow() throws Exception {
+    void D125_twoFollowsAtOnce_leaveOneRow() throws Exception {
         UUID alice = trader("Alice");
         UUID bob = trader("Bob");
         CountDownLatch start = new CountDownLatch(1);
@@ -157,7 +157,7 @@ class MemberApiTest {
     }
 
     @Test
-    void D99_theFollowingTab_showsThePostsOfFollowedMembers_toTheirFollowerOnly() throws Exception {
+    void D125_theFollowingTab_showsThePostsOfFollowedMembers_toTheirFollowerOnly() throws Exception {
         UUID alice = trader("Alice");
         UUID carol = trader("Carol");
         UUID bob = trader("Bob");
@@ -174,7 +174,7 @@ class MemberApiTest {
     }
 
     @Test
-    void D99_nobodyFollowsThemselves_noneFollowsABannedMember_andABannedMemberHasNoPage() throws Exception {
+    void D125_nobodyFollowsThemselves_noneFollowsABannedMember_andABannedMemberHasNoPage() throws Exception {
         UUID alice = trader("Alice");
         UUID bob = trader("Bob");
 

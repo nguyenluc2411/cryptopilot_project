@@ -27,14 +27,15 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Member pages, following and blocking, as on CoinMarketCap Community (D-99). Anyone reads a page and its follower
+ * Member pages, following and blocking, as on CoinMarketCap Community (D-125). Anyone reads a page and its follower
  * lists; a Trader follows, blocks and looks members up to mention them. A member's posts are {@code GET /posts?author=}.
  *
  * <p>Rule: D-99.
  */
 @Tag(
         name = "Members",
-        description = "Public member pages, following and blocking (D-99). Guest reads, Trader follows and blocks.")
+        description =
+                "Public member pages, following and blocking (D-99, D-125). Guest reads, Trader follows and blocks.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -137,7 +138,7 @@ public class MemberController {
         return service.search(callerOf(caller), q);
     }
 
-    @Operation(summary = "The members who count most in the community, for Top Influencers (D-99); public")
+    @Operation(summary = "The members who count most in the community, for Top Influencers (D-125); public")
     @ApiResponse(responseCode = "200", description = "Up to `limit` members, by influence or analytical depth")
     @GetMapping("/api/v1/community/influencers")
     public List<InfluencerResponse> influencers(

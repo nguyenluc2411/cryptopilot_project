@@ -83,7 +83,7 @@ public class ForumPost extends BaseEntity {
     @Column(name = "post_status", nullable = false, length = 32)
     private PostStatus status;
 
-    /** The author's stance on the market (D-99), or {@code null} for none. */
+    /** The author's stance on the market (D-125), or {@code null} for none. */
     @Enumerated(EnumType.STRING)
     @Column(name = "sentiment", length = 16)
     private PostSentiment sentiment;
@@ -125,7 +125,7 @@ public class ForumPost extends BaseEntity {
         return post;
     }
 
-    /** Marks the author's stance on the market, or clears it with {@code null} (D-99). */
+    /** Marks the author's stance on the market, or clears it with {@code null} (D-125). */
     public void lean(PostSentiment sentiment) {
         this.sentiment = sentiment;
     }

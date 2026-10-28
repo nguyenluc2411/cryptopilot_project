@@ -1,7 +1,7 @@
 package com.cryptopilot.community.model;
 
 /**
- * How much a member counts in the community, as CoinMarketCap Community ranks its influencers (D-99). Both scores are
+ * How much a member counts in the community, as CoinMarketCap Community ranks its influencers (D-125). Both scores are
  * computed from what the community already records; nothing is stored for them.
  *
  * <ul>

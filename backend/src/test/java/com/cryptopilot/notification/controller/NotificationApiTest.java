@@ -45,7 +45,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * post's author, a follow the member followed, a moderation decision the author and the reporters; the bell counts
  * the unread ones, which are marked read one by one or all at once; NSF-17 deletes those older than 90 days.
  *
- * <p>Rule: UC-15; SRS 3.4.5, 3.7.3, 3.11.3; D-99; NSF-15, NSF-17.
+ * <p>Rule: UC-15; SRS 3.4.5, 3.7.3, 3.11.3; D-99, D-125; NSF-15, NSF-17.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -137,7 +137,7 @@ class NotificationApiTest {
     }
 
     @Test
-    void D99_aFollow_tellsTheMemberFollowed_onceWhileUnread() throws Exception {
+    void D125_aFollow_tellsTheMemberFollowed_onceWhileUnread() throws Exception {
         UUID alice = account(UserRole.TRADER, "Alice");
         UUID bob = account(UserRole.TRADER, "Bob");
 

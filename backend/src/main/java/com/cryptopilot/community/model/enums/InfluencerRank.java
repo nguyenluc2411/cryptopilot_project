@@ -1,9 +1,9 @@
 package com.cryptopilot.community.model.enums;
 
 /**
- * The two orders of the Top Influencers list (D-99), named as CoinMarketCap Community names them.
+ * The two orders of the Top Influencers list (D-125), named as CoinMarketCap Community names them.
  *
- * <p>Rule: D-99.
+ * <p>Rule: D-125.
  */
 public enum InfluencerRank {
 

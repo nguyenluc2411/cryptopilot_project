@@ -12,12 +12,12 @@ import java.util.UUID;
 import lombok.Getter;
 
 /**
- * One member following or blocking another (D-99, CoinMarketCap Community): one row per direction
+ * One member following or blocking another (D-125, CoinMarketCap Community): one row per direction
  * ({@code uq_user_relation_source_target}), never about oneself ({@code ck_user_relation_not_self}). Written by
  * {@link com.cryptopilot.community.repository.UserRelationRepository} with single idempotent statements, so this
  * entity is read only.
  *
- * <p>Rule: D-99.
+ * <p>Rule: D-125.
  */
 @Getter
 @Entity

@@ -50,13 +50,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * The moderation of reported comments (D-99), shaped like that of posts. All open reports of a comment are decided
+ * The moderation of reported comments (D-125), shaped like that of posts. All open reports of a comment are decided
  * together: HIDE_COMMENT hides it (restorable), REMOVE_COMMENT deletes it for everyone but Admin, BAN_USER hides it and
  * bans its author, which ends every session of the author (BR-06) and, through the ban, hides the rest of their
  * content; WARN_USER and DISMISS leave it as it is. The decision and its effects are written to the audit log in the
  * same transaction (BR-57), and {@link CommentModerated} tells the author and the reporters after it commits.
  *
- * <p>Rule: UC-43; BR-06, BR-57, BR-58; SRS 3.11.3; D-98, D-99.
+ * <p>Rule: UC-43; BR-06, BR-57, BR-58; SRS 3.11.3; D-98, D-125.
  */
 @Service
 @RequiredArgsConstructor

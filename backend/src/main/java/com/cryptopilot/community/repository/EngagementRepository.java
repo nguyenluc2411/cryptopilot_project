@@ -51,7 +51,7 @@ public interface EngagementRepository extends Repository<Engagement, UUID> {
             @Param("now") Instant now);
 
     /**
-     * Records the member's Bullish or Bearish vote on a post, replacing the other one (D-99): one statement on the
+     * Records the member's Bullish or Bearish vote on a post, replacing the other one (D-125): one statement on the
      * partial unique index of the votes, so two votes at once leave one row.
      */
     @Modifying
@@ -67,7 +67,7 @@ public interface EngagementRepository extends Repository<Engagement, UUID> {
             @Param("vote") String vote,
             @Param("now") Instant now);
 
-    /** Takes the member's vote on a post back; 0 when there was none (D-99). */
+    /** Takes the member's vote on a post back; 0 when there was none (D-125). */
     @Modifying
     @Query(
             value = "delete from engagement where user_id = :userId and post_id = :postId"

@@ -6,10 +6,10 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * A moderator decided the open reports of a comment (D-99): the comment's author and each reporter are told, as for a
+ * A moderator decided the open reports of a comment (D-125): the comment's author and each reporter are told, as for a
  * post (SRS 3.11.3). Published inside the decision's transaction and delivered after it commits (D-98).
  *
- * <p>Rule: UC-43; SRS 3.11.3; D-98, D-99.
+ * <p>Rule: UC-43; SRS 3.11.3; D-98, D-125.
  *
  * @param commentId the comment
  * @param postId its post, the one to open

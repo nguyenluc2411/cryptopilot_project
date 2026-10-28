@@ -5,10 +5,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A reported comment as the moderation console shows it (D-99): its current text and status whatever they are, and
+ * A reported comment as the moderation console shows it (D-125): its current text and status whatever they are, and
  * the post it belongs to.
  *
- * <p>Rule: UC-43; BR-47 (Admin sees hidden and deleted content); D-99.
+ * <p>Rule: UC-43; BR-47 (Admin sees hidden and deleted content); D-125.
  *
  * @param id the comment
  * @param postId its post

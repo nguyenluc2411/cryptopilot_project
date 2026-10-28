@@ -7,10 +7,10 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * A reported comment as a moderator opens it (D-99): the comment as it is now and its open reports, each with the
+ * A reported comment as a moderator opens it (D-125): the comment as it is now and its open reports, each with the
  * text the comment had when it was reported.
  *
- * <p>Rule: UC-43; BR-47; D-99.
+ * <p>Rule: UC-43; BR-47; D-125.
  *
  * @param comment the comment
  * @param reports its OPEN and REVIEWING reports, oldest first

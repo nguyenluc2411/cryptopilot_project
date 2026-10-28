@@ -36,7 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Dismissed reports are told to the reporters only: the post did not change, and the author learns nothing from
  * hearing it was reported.
  *
- * <p>Rule: SRS 3.7.3, 3.11.3; UC-30, UC-43; D-99; NSF-15.
+ * <p>Rule: SRS 3.7.3, 3.11.3; UC-30, UC-43; D-99, D-125; NSF-15.
  */
 @Service
 @RequiredArgsConstructor
@@ -45,7 +45,7 @@ public class CommunityNotificationServiceImpl implements CommunityNotificationSe
     /** The name shown for a member whose profile cannot be read. */
     static final String SOMEONE = "A member";
 
-    /** Most members one post or comment tells of a mention, whatever its edits (D-99). */
+    /** Most members one post or comment tells of a mention, whatever its edits (D-125). */
     static final int MENTIONS_PER_TEXT = 10;
 
     /** The scope of the lock under which the mentions of one post or comment are counted and written. */

@@ -13,12 +13,12 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 /**
- * The mentions of a post or a comment (D-99). The client picks the members from the mention search and sends their
+ * The mentions of a post or a comment (D-125). The client picks the members from the mention search and sends their
  * keys; the text only shows their names. A key that does not stand for a Trader the author may reach is left out
  * rather than refused, because the member may have been banned or have blocked the author since the client listed
  * them: unknown and banned accounts, administrators, the author, and members either of the two blocks.
  *
- * <p>Rule: D-99.
+ * <p>Rule: D-125.
  */
 @Component
 @RequiredArgsConstructor

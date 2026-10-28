@@ -22,11 +22,11 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The report dialog of SCR-27 (UC-33) for posts and comments (D-99), Trader only.
+ * The report dialog of SCR-27 (UC-33) for posts and comments (D-125), Trader only.
  *
  * <p>Rule: UC-33; BR-46; SRS 3.7.4; TECHNICAL_DESIGN 8.
  */
-@Tag(name = "Reports", description = "Violation reports of posts and comments (UC-33, D-99). Trader.")
+@Tag(name = "Reports", description = "Violation reports of posts and comments (UC-33, D-125). Trader.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -50,7 +50,7 @@ public class ReportController {
         return service.report(UUID.fromString(caller.getSubject()), id, request);
     }
 
-    @Operation(summary = "Report a comment that breaks the community rules (D-99)")
+    @Operation(summary = "Report a comment that breaks the community rules (D-125)")
     @ApiResponse(responseCode = "201", description = "Filed OPEN with the comment's text; the client shows MSG34")
     @ApiResponse(responseCode = "400", description = "MSG01: no reason, or OTHER without a description")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")

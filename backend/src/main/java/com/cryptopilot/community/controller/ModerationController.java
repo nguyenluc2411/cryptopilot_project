@@ -99,7 +99,7 @@ public class ModerationController {
         return service.restore(callerOf(caller), id);
     }
 
-    @Operation(summary = "The comments with open reports, reported longest ago first (D-99)")
+    @Operation(summary = "The comments with open reports, reported longest ago first (D-125)")
     @ApiResponse(responseCode = "200", description = "One row per comment, with its reports counted and their reasons")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @GetMapping("/comment-reports-queue")
@@ -108,7 +108,7 @@ public class ModerationController {
         return comments.queue(page, pageSize);
     }
 
-    @Operation(summary = "Open a reported comment; its OPEN reports become REVIEWING (D-99)")
+    @Operation(summary = "Open a reported comment; its OPEN reports become REVIEWING (D-125)")
     @ApiResponse(
             responseCode = "200",
             description = "The comment as it is now, and each open report with the text it had")
@@ -119,7 +119,7 @@ public class ModerationController {
         return comments.open(callerOf(caller), commentId);
     }
 
-    @Operation(summary = "Decide all open reports of a comment (D-99)")
+    @Operation(summary = "Decide all open reports of a comment (D-125)")
     @ApiResponse(responseCode = "200", description = "Decided and audited; the author and reporters are told")
     @ApiResponse(
             responseCode = "400",
@@ -134,7 +134,7 @@ public class ModerationController {
         return comments.decide(callerOf(caller), commentId, request);
     }
 
-    @Operation(summary = "Show a hidden comment again (D-99)")
+    @Operation(summary = "Show a hidden comment again (D-125)")
     @ApiResponse(responseCode = "200", description = "Published again and audited")
     @ApiResponse(responseCode = "404", description = "MSG41: no such comment")
     @ApiResponse(
