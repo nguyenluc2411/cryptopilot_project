@@ -1,0 +1,25 @@
+{
+  "demo": [
+    { "bracketNo": 1, "notionalFloor": "0", "notionalCap": "50000", "maxLeverage": 125, "maintenanceMarginRate": "0.004", "maintenanceAmount": "0" },
+    { "bracketNo": 2, "notionalFloor": "50000", "notionalCap": "600000", "maxLeverage": 100, "maintenanceMarginRate": "0.005", "maintenanceAmount": "50" },
+    { "bracketNo": 3, "notionalFloor": "600000", "notionalCap": "3000000", "maxLeverage": 75, "maintenanceMarginRate": "0.0065", "maintenanceAmount": "950" },
+    { "bracketNo": 4, "notionalFloor": "3000000", "notionalCap": "12000000", "maxLeverage": 50, "maintenanceMarginRate": "0.01", "maintenanceAmount": "11450" }
+  ],
+  "demoNoAmounts": [
+    { "bracketNo": 1, "notionalFloor": "0", "notionalCap": "50000", "maxLeverage": 125, "maintenanceMarginRate": "0.004", "maintenanceAmount": null },
+    { "bracketNo": 2, "notionalFloor": "50000", "notionalCap": "600000", "maxLeverage": 100, "maintenanceMarginRate": "0.005", "maintenanceAmount": null },
+    { "bracketNo": 3, "notionalFloor": "600000", "notionalCap": "3000000", "maxLeverage": 75, "maintenanceMarginRate": "0.0065", "maintenanceAmount": null }
+  ],
+  "eth5": [
+    { "bracketNo": 1, "notionalFloor": "0", "notionalCap": "10000000", "maxLeverage": 50, "maintenanceMarginRate": "0.005", "maintenanceAmount": "0" }
+  ],
+  "flat25": [
+    { "bracketNo": 1, "notionalFloor": "0", "notionalCap": "10000000", "maxLeverage": 20, "maintenanceMarginRate": "0.025", "maintenanceAmount": "0" }
+  ],
+  "binanceEth": [
+    { "bracketNo": 1, "notionalFloor": "0", "notionalCap": "100000000", "maxLeverage": 5, "maintenanceMarginRate": "0.10", "maintenanceAmount": "135365" }
+  ],
+  "binanceBtc": [
+    { "bracketNo": 1, "notionalFloor": "0", "notionalCap": "100000000", "maxLeverage": 10, "maintenanceMarginRate": "0.025", "maintenanceAmount": "16300" }
+  ]
+}
