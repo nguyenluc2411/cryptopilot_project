@@ -78,7 +78,7 @@ public class MemberController {
     @Operation(summary = "Block a member: no more follows either way, and their posts and comments are hidden")
     @ApiResponse(responseCode = "200", description = "Blocking, with how many members the caller blocks")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "404", description = "MSG41: no such member, banned, or blocking the caller")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such member, or banned")
     @ApiResponse(
             responseCode = "409",
             description = "MSG43: the caller's own account (`BLOCK_SELF`); an administrator (`RELATION_NOT_ALLOWED`)")

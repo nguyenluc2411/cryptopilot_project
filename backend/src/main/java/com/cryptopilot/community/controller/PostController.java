@@ -58,7 +58,9 @@ public class PostController {
     @GetMapping
     public PageResponse<PostSummaryResponse> feed(
             @AuthenticationPrincipal Jwt caller,
-            @Parameter(description = "LATEST (default), MOST_LIKED (last 7 days), SAVED, MINE or FOLLOWING")
+            @Parameter(
+                            description = "LATEST (default), TRENDING (For You: last 7 days, most discussed of late"
+                                    + " first), MOST_LIKED (last 7 days), SAVED, MINE or FOLLOWING")
                     @RequestParam(defaultValue = "LATEST")
                     FeedTab tab,
             @Parameter(description = "Only posts tagged with this coin symbol, e.g. BTC")
@@ -102,7 +104,10 @@ public class PostController {
         return service.trendingCoins(limit);
     }
 
-    @Operation(summary = "A post with its full text (SCR-25)")
+    @Operation(
+            summary = "A post with its full text (SCR-25)",
+            description = "Records one VIEW of the post when the caller is a signed-in member other than its author and"
+                    + " the post is published; each member counts once, a Guest is not counted (D-125).")
     @ApiResponse(responseCode = "200", description = "The post")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such post the caller may see (BR-47)")
