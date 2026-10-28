@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.billing.model.enums.PlanTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.SetupScoreReading;
@@ -15,6 +16,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.support.FixedClockConfig;
+import com.cryptopilot.support.PlanTraders;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -47,6 +49,8 @@ import org.springframework.test.web.servlet.MockMvc;
  * one stored candle it equals the score the analysis API answers a Trader of the same preset, on Spot and on Futures;
  * a missing component gives a {@code null} score; neither a row of the candle still forming nor one of an older candle is read.
  *
+ * <p>The Futures analysis needs a plan with {@code FUTURES_ANALYSIS} (D-60), so its Trader is on PRO.
+ *
  * <p>The application's clock is fixed ({@link FixedClockConfig}). The read runs outside a caller's transaction, so the
  * rows are committed and removed after each test.
  *
@@ -73,17 +77,20 @@ class ClosedCandleSetupScoreTest {
     private MarketApi market;
 
     private final List<UUID> traders = new ArrayList<>();
+    private PlanTraders plans;
     private UUID pair;
     private String symbol;
 
     @BeforeEach
     void enablePair() {
+        plans = new PlanTraders(sql, jwtEncoder, FixedClockConfig.NOW);
         symbol = "SS" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
         pair = new MarketTestData(sql, FixedClockConfig.NOW).pair(symbol, true, true, "TRADING", "TRADING", 0);
     }
 
     @AfterEach
     void removeRows() {
+        plans.clear();
         for (UUID trader : traders) {
             sql.sql("delete from user_profile where user_id = ?").param(trader).update();
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
@@ -106,6 +113,9 @@ class ClosedCandleSetupScoreTest {
         Instant closed = latestClosedOpen(timeframe);
         store(type, timeframe, closed, "75", "50", "40", "60", "30");
         UUID trader = trader(tradingStyle);
+        if (type == MarketType.FUTURES) {
+            plans.subscribe(trader, PlanTier.PRO);
+        }
 
         String body = mvc.perform(get("/api/v1/analysis/" + type.name().toLowerCase() + "/" + symbol)
                         .param("tf", timeframe)

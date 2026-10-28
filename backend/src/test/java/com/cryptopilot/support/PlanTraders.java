@@ -34,6 +34,7 @@ public final class PlanTraders {
     private final JwtEncoder jwtEncoder;
     private final Instant now;
     private final List<UUID> accounts = new ArrayList<>();
+    private final List<UUID> subscribers = new ArrayList<>();
 
     /**
      * @param now the application's instant, which the subscriptions and tokens are written around
@@ -53,18 +54,35 @@ public final class PlanTraders {
         return bearer(trader);
     }
 
-    /** Removes every Trader written here with their orders and subscriptions. */
+    /**
+     * Puts a Trader written elsewhere on a paid tier, as {@link #bearer(PlanTier)} does; {@link #clear()} removes the
+     * order and subscription and leaves the account to its writer.
+     */
+    public void subscribe(UUID trader, PlanTier tier) {
+        subscribe(trader, MONTHLY_PACKAGES.get(tier));
+        subscribers.add(trader);
+    }
+
+    /** Removes every Trader written here, and every order and subscription written here, Traders' or not. */
     public void clear() {
+        for (UUID subscriber : subscribers) {
+            removeSubscriptions(subscriber);
+        }
         for (UUID account : accounts) {
-            sql.sql("""
-                            delete from user_subscription
-                             where order_id in (select order_id from subscription_order where user_id = ?)""").param(account).update();
-            sql.sql("delete from subscription_order where user_id = ?")
-                    .param(account)
-                    .update();
+            removeSubscriptions(account);
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
+        subscribers.clear();
         accounts.clear();
+    }
+
+    private void removeSubscriptions(UUID trader) {
+        sql.sql("""
+                        delete from user_subscription
+                         where order_id in (select order_id from subscription_order where user_id = ?)""").param(trader).update();
+        sql.sql("delete from subscription_order where user_id = ?")
+                .param(trader)
+                .update();
     }
 
     private UUID account() {
