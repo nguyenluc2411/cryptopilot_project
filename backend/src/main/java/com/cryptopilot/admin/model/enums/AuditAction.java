@@ -18,7 +18,7 @@ public enum AuditAction {
     POST_REMOVED,
     REPORTS_DISMISSED,
 
-    /** A moderator warned the author of a reported post (UC-43, WARN_USER). */
+    /** A moderator warned the author of a reported post or comment (UC-43, WARN_USER). */
     USER_WARNED,
     /**
      * A configuration row added: a pair, a leverage bracket, a package, a news source, an AI configuration, or Academy
@@ -28,6 +28,15 @@ public enum AuditAction {
     NEWS_ARTICLE_HIDDEN,
     /** An administrator showed a hidden news article again (T-080b). */
     NEWS_ARTICLE_RESTORED,
+
+    /** A moderator hid a reported comment (D-125, HIDE_COMMENT or BAN_USER). */
+    COMMENT_HIDDEN,
+
+    /** A moderator removed a reported comment (D-125, REMOVE_COMMENT). */
+    COMMENT_REMOVED,
+
+    /** A moderator showed a hidden comment again (D-125). */
+    COMMENT_RESTORED,
     /** A configuration row added: a pair, a leverage bracket, a package, a news source or an AI configuration. */
     CONFIGURATION_CREATED,
     /** A configuration row or a system setting changed, Academy content included (T-114). */

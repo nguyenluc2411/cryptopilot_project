@@ -1,11 +1,15 @@
 package com.cryptopilot.community.repository;
 
 import com.cryptopilot.community.entity.ForumPost;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -36,4 +40,15 @@ public interface ForumPostRepository extends Repository<ForumPost, UUID> {
 
     /** Sends pending statements, so a constraint answers where the caller can read it. */
     void flush();
+
+    /**
+     * Hides every published post of a member, when the member is banned (D-125); their announcements, which a
+     * Trader never has, are left out. How many it hid.
+     */
+    @Modifying
+    @Query(
+            value = "update forum_post set post_status = 'HIDDEN', updated_at = :now, version = version + 1"
+                    + " where author_id = :author and post_status = 'PUBLISHED' and not is_official",
+            nativeQuery = true)
+    int hideAllOf(@Param("author") UUID author, @Param("now") Instant now);
 }

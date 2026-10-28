@@ -6,8 +6,10 @@ import com.cryptopilot.community.dto.response.AuthorResponse;
 import com.cryptopilot.community.dto.response.MediaResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
+import com.cryptopilot.community.dto.response.StandingResponse;
 import com.cryptopilot.community.entity.ForumPost;
 import com.cryptopilot.community.entity.PostMedia;
+import com.cryptopilot.community.model.AuthorStanding;
 import com.cryptopilot.community.model.FeedPage;
 import com.cryptopilot.community.model.PostEngagement;
 import com.cryptopilot.community.repository.ForumPostRepository;
@@ -17,6 +19,7 @@ import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.user.AuthorCard;
 import com.cryptopilot.user.UserApi;
+import java.time.Clock;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -50,6 +53,7 @@ public class PostAssembler {
     private final PostMediaRepository media;
     private final UserApi users;
     private final MarketApi market;
+    private final Clock clock;
 
     /**
      * The coin keys of the symbols a form names, each a coin a listed pair trades; a symbol that is not is refused
@@ -83,6 +87,8 @@ public class PostAssembler {
         Map<UUID, AuthorCard> authors =
                 authors(ordered.stream().map(ForumPost::getAuthorId).toList());
         Map<UUID, PostEngagement> engagement = feeds.engagement(page.postIds(), caller);
+        Map<UUID, AuthorStanding> standings = feeds.standings(
+                ordered.stream().map(ForumPost::getAuthorId).collect(Collectors.toSet()), caller, clock.instant());
         Map<UUID, MediaResponse> covers = new HashMap<>();
         for (PostMedia file : media.findAllByPostIdInOrderBySortOrderAsc(page.postIds())) {
             covers.putIfAbsent(file.getPostId(), media(file));
@@ -91,6 +97,7 @@ public class PostAssembler {
                 .map(post -> summary(
                         post,
                         authors.get(post.getAuthorId()),
+                        standing(standings.get(post.getAuthorId())),
                         coins(tags.getOrDefault(post.getId(), Set.of()), symbols),
                         covers.get(post.getId()),
                         engagement.getOrDefault(post.getId(), PostEngagement.NONE)))
@@ -103,9 +110,12 @@ public class PostAssembler {
         Map<UUID, String> symbols = symbols(post.getCoinIds());
         PostEngagement counts =
                 feeds.engagement(List.of(post.getId()), caller).getOrDefault(post.getId(), PostEngagement.NONE);
+        AuthorStanding standing = feeds.standings(List.of(post.getAuthorId()), caller, clock.instant())
+                .get(post.getAuthorId());
         return new PostDetailResponse(
                 post.getId(),
                 author(post.getAuthorId(), authors(List.of(post.getAuthorId())).get(post.getAuthorId())),
+                standing(standing),
                 post.getTitle(),
                 post.getContent(),
                 post.getPostType(),
@@ -113,12 +123,17 @@ public class PostAssembler {
                 post.isOfficial(),
                 post.getOfficialCategory(),
                 post.getStatus(),
+                post.getSentiment(),
                 coins(post.getCoinIds(), symbols),
                 media.findAllByPostIdOrderBySortOrderAsc(post.getId()).stream()
                         .map(PostAssembler::media)
                         .toList(),
                 counts.likes(),
                 counts.comments(),
+                counts.views(),
+                counts.bullish(),
+                counts.bearish(),
+                counts.callerVote(),
                 counts.likedByCaller(),
                 counts.savedByCaller(),
                 post.getAuthorId().equals(caller),
@@ -127,10 +142,16 @@ public class PostAssembler {
     }
 
     private PostSummaryResponse summary(
-            ForumPost post, AuthorCard author, List<String> coins, MediaResponse cover, PostEngagement counts) {
+            ForumPost post,
+            AuthorCard author,
+            StandingResponse standing,
+            List<String> coins,
+            MediaResponse cover,
+            PostEngagement counts) {
         return new PostSummaryResponse(
                 post.getId(),
                 author(post.getAuthorId(), author),
+                standing,
                 post.getTitle(),
                 excerpt(post.getContent()),
                 post.getPostType(),
@@ -138,10 +159,15 @@ public class PostAssembler {
                 post.isOfficial(),
                 post.getOfficialCategory(),
                 post.getStatus(),
+                post.getSentiment(),
                 coins,
                 cover,
                 counts.likes(),
                 counts.comments(),
+                counts.views(),
+                counts.bullish(),
+                counts.bearish(),
+                counts.callerVote(),
                 counts.likedByCaller(),
                 counts.savedByCaller(),
                 post.getCreatedAt(),
@@ -167,6 +193,11 @@ public class PostAssembler {
                 file.getWidth(),
                 file.getHeight(),
                 file.getDurationSeconds());
+    }
+
+    private static StandingResponse standing(AuthorStanding standing) {
+        AuthorStanding found = standing == null ? AuthorStanding.NONE : standing;
+        return new StandingResponse(found.influence(), found.followers(), found.followedByCaller());
     }
 
     private static AuthorResponse author(UUID userId, AuthorCard card) {

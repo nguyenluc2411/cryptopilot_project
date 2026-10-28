@@ -9,14 +9,22 @@ import java.util.UUID;
  * transaction that stored the comment and is delivered after it commits (D-98). A listener decides itself not to
  * notify an author of their own comment.
  *
- * <p>Rule: UC-30; SRS 3.7.3; NSF-15; D-98.
+ * <p>Rule: UC-30; SRS 3.7.3; NSF-15; D-98, D-99, D-125.
  *
  * @param postId the post
  * @param postAuthorId who wrote the post, the one to tell
  * @param commentId the new comment
  * @param commenterId who wrote it
  * @param threadId the comment that starts its thread, or {@code null} when it starts one
+ * @param repliedToAuthorId who wrote the comment replied to, told as well (D-125), or {@code null} for a comment that
+ *     starts a thread
  * @param commentedAt when it was published
  */
 public record PostCommented(
-        UUID postId, UUID postAuthorId, UUID commentId, UUID commenterId, UUID threadId, Instant commentedAt) {}
+        UUID postId,
+        UUID postAuthorId,
+        UUID commentId,
+        UUID commenterId,
+        UUID threadId,
+        UUID repliedToAuthorId,
+        Instant commentedAt) {}

@@ -17,6 +17,7 @@ import com.cryptopilot.user.dto.response.AdminUserDetailResponse;
 import com.cryptopilot.user.dto.response.AdminUserSummaryResponse;
 import com.cryptopilot.user.entity.UserAccount;
 import com.cryptopilot.user.entity.UserProfile;
+import com.cryptopilot.user.event.AccountBanned;
 import com.cryptopilot.user.event.AccountSuspended;
 import com.cryptopilot.user.model.AccountRow;
 import com.cryptopilot.user.model.enums.AccountStatus;
@@ -179,6 +180,9 @@ public class AccountAdminServiceImpl implements AccountAdminService {
         if (endsSessions) {
             Instant now = clock.instant();
             events.publishEvent(new AccountSuspended(account.getId(), now));
+            if (action == AuditAction.ACCOUNT_BANNED) {
+                events.publishEvent(new AccountBanned(account.getId(), now));
+            }
         }
         return detail(account);
     }

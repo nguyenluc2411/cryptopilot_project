@@ -53,6 +53,7 @@ public class PostWriter {
     private final PostReportRepository reports;
     private final PostAssembler assembler;
     private final MediaRules rules;
+    private final MentionResolver mentions;
     private final ApplicationEventPublisher events;
     private final TransactionOperations transactions;
 
@@ -77,9 +78,11 @@ public class PostWriter {
                             coins)
                     : ForumPost.publish(author, request.title(), request.content(), request.marketType(), coins);
             post.carry(typeOf(files));
+            post.lean(request.sentiment());
             posts.save(post);
             write(post, files, Map.of());
             flush(files);
+            mentions.mention(post.getId(), null, author, request.mentions());
             return assembler.detail(post, author);
         });
     }
@@ -115,8 +118,10 @@ public class PostWriter {
                 post.categorize(categoryOf(request));
             }
             post.carry(typeOf(files));
+            post.lean(request.sentiment());
             write(post, files, current);
             flush(files);
+            mentions.mention(post.getId(), null, post.getAuthorId(), request.mentions());
             return assembler.detail(post, caller);
         });
     }

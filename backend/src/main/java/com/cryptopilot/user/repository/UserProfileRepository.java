@@ -5,7 +5,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -54,6 +56,20 @@ public interface UserProfileRepository extends Repository<UserProfile, UUID> {
     /** The profiles of these accounts; an account without one is left out. */
     @Transactional(readOnly = true)
     List<UserProfile> findAllByIdIn(Collection<UUID> userIds);
+
+    /**
+     * The profiles of Traders that are not banned whose name starts with {@code prefix}, case ignored, alphabetical.
+     * {@code prefix} is a LIKE pattern whose own wildcards the caller has escaped.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+                    select p.* from user_profile p
+                      join user_account a on a.user_id = p.user_id
+                     where a.role = 'TRADER' and a.account_status <> 'BANNED'
+                       and p.display_name ilike :prefix || '%' escape '\\'
+                     order by lower(p.display_name), p.user_id
+                     limit :limit""", nativeQuery = true)
+    List<UserProfile> findTradersByNamePrefix(@Param("prefix") String prefix, @Param("limit") int limit);
 
     /**
      * Writes a profile.

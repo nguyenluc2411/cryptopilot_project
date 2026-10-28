@@ -1,6 +1,7 @@
 package com.cryptopilot.community.dto.request;
 
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import com.cryptopilot.community.model.enums.PostSentiment;
 import com.cryptopilot.market.model.enums.MarketType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -8,6 +9,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 /**
  * The form of SCR-26: a new post, or the new content of an existing one (UC-27, UC-29, UC-44). Leading and trailing
@@ -23,6 +25,8 @@ import java.util.Locale;
  * @param media the uploaded files in the order they are shown: up to 4 images or 1 video (BR-44); {@code null} for
  *     none. On an edit, the files of the post not named again are deleted
  * @param officialCategory what an announcement is, ANNOUNCEMENT when absent (D-99); a Trader's post has none
+ * @param mentions the members the text mentions (D-125), at most 10, each told once; {@code null} for none
+ * @param sentiment the author's stance on the market, Bullish or Bearish (D-125); {@code null} for none
  */
 public record PostRequest(
         @NotBlank(message = "MSG01") @Size(min = 5, max = 150, message = "MSG01")
@@ -34,7 +38,9 @@ public record PostRequest(
         MarketType marketType,
         @Size(max = 5, message = "MSG01") List<@NotNull(message = "MSG01") String> coins,
         List<@NotNull(message = "MSG01") @Valid MediaRequest> media,
-        OfficialCategory officialCategory) {
+        OfficialCategory officialCategory,
+        @Size(max = 10, message = "MSG01") List<@NotNull(message = "MSG01") UUID> mentions,
+        PostSentiment sentiment) {
 
     public PostRequest {
         title = title == null ? null : title.strip();
@@ -46,10 +52,22 @@ public record PostRequest(
                         .distinct()
                         .toList();
         media = media == null ? List.of() : media;
+        mentions = mentions == null ? List.of() : mentions.stream().distinct().toList();
+    }
+
+    /** A post with these fields that mentions nobody. */
+    public PostRequest(
+            String title,
+            String content,
+            MarketType marketType,
+            List<String> coins,
+            List<MediaRequest> media,
+            OfficialCategory officialCategory) {
+        this(title, content, marketType, coins, media, officialCategory, List.of(), null);
     }
 
     /** A post with these fields and no media. */
     public PostRequest(String title, String content, MarketType marketType, List<String> coins) {
-        this(title, content, marketType, coins, List.of(), null);
+        this(title, content, marketType, coins, List.of(), null, List.of(), null);
     }
 }

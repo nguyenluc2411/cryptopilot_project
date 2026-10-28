@@ -17,6 +17,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -57,7 +58,9 @@ public class PostController {
     @GetMapping
     public PageResponse<PostSummaryResponse> feed(
             @AuthenticationPrincipal Jwt caller,
-            @Parameter(description = "LATEST (default), MOST_LIKED (last 7 days), SAVED or MINE")
+            @Parameter(
+                            description = "LATEST (default), TRENDING (For You: last 7 days, most discussed of late"
+                                    + " first), MOST_LIKED (last 7 days), SAVED, MINE or FOLLOWING")
                     @RequestParam(defaultValue = "LATEST")
                     FeedTab tab,
             @Parameter(description = "Only posts tagged with this coin symbol, e.g. BTC")
@@ -94,7 +97,17 @@ public class PostController {
         return service.coinDiscussion(symbol);
     }
 
-    @Operation(summary = "A post with its full text (SCR-25)")
+    @Operation(summary = "The coins the community talks about most this week, for the Trending list (D-125); public")
+    @ApiResponse(responseCode = "200", description = "Up to `limit` coins, the most posted about in the last day first")
+    @GetMapping("/trending-coins")
+    public List<CoinDiscussionResponse> trendingCoins(@RequestParam(required = false) Integer limit) {
+        return service.trendingCoins(limit);
+    }
+
+    @Operation(
+            summary = "A post with its full text (SCR-25)",
+            description = "Records one VIEW of the post when the caller is a signed-in member other than its author and"
+                    + " the post is published; each member counts once, a Guest is not counted (D-125).")
     @ApiResponse(responseCode = "200", description = "The post")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such post the caller may see (BR-47)")

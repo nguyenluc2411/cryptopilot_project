@@ -44,7 +44,7 @@ public interface PostMediaRepository extends Repository<PostMedia, UUID> {
              where p.id = m.postId and m.storagePublicId in :keys
                and (p.status <> com.cryptopilot.community.model.enums.PostStatus.DELETED
                     or exists (select r.id from PostReport r
-                                where r.postId = p.id
+                                where r.postId = p.id and r.commentId is null
                                   and (r.status in (com.cryptopilot.community.model.enums.ReportStatus.OPEN,
                                                     com.cryptopilot.community.model.enums.ReportStatus.REVIEWING)
                                        or r.resolutionAction in (

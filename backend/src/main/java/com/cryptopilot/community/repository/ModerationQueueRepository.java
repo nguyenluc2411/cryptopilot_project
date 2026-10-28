@@ -33,7 +33,7 @@ public class ModerationQueueRepository {
                         select post_id, count(*) as reports, array_agg(distinct reason) as reasons,
                                min(created_at) as first_at, max(created_at) as last_at
                           from post_report
-                         where report_status in ('OPEN', 'REVIEWING')
+                         where report_status in ('OPEN', 'REVIEWING') and comment_id is null
                          group by post_id
                          order by min(created_at), post_id
                          limit :limit offset :offset""")
@@ -46,8 +46,34 @@ public class ModerationQueueRepository {
                         row.getTimestamp("first_at").toInstant(),
                         row.getTimestamp("last_at").toInstant()))
                 .list();
-        long total = sql.sql(
-                        "select count(distinct post_id) from post_report where report_status in ('OPEN', 'REVIEWING')")
+        long total = sql.sql("select count(distinct post_id) from post_report"
+                        + " where report_status in ('OPEN', 'REVIEWING') and comment_id is null")
+                .query(Long.class)
+                .single();
+        return new PageImpl<>(entries, page, total);
+    }
+
+    /** One page of the comment queue (D-125): one row per comment with open reports, reported longest ago first. */
+    public Page<QueueEntry> commentQueue(Pageable page) {
+        List<QueueEntry> entries = sql.sql("""
+                        select comment_id, count(*) as reports, array_agg(distinct reason) as reasons,
+                               min(created_at) as first_at, max(created_at) as last_at
+                          from post_report
+                         where report_status in ('OPEN', 'REVIEWING') and comment_id is not null
+                         group by comment_id
+                         order by min(created_at), comment_id
+                         limit :limit offset :offset""")
+                .param("limit", page.getPageSize())
+                .param("offset", page.getOffset())
+                .query((row, index) -> new QueueEntry(
+                        row.getObject("comment_id", UUID.class),
+                        row.getLong("reports"),
+                        reasons(row.getArray("reasons")),
+                        row.getTimestamp("first_at").toInstant(),
+                        row.getTimestamp("last_at").toInstant()))
+                .list();
+        long total = sql.sql("select count(distinct comment_id) from post_report"
+                        + " where report_status in ('OPEN', 'REVIEWING') and comment_id is not null")
                 .query(Long.class)
                 .single();
         return new PageImpl<>(entries, page, total);

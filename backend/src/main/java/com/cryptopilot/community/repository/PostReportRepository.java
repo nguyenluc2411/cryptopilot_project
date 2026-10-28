@@ -11,19 +11,29 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * The gateway to the violation reports of posts.
+ * The gateway to the violation reports of posts and of their comments (D-125).
  *
- * <p>Rule: UC-33; BR-46.
+ * <p>Rule: UC-33; BR-46; D-99, D-125.
  */
 public interface PostReportRepository extends Repository<PostReport, UUID> {
 
-    /** Whether the Trader already reported the post (BR-46). */
+    /** Whether the Trader already reported the post itself (BR-46). */
     @Transactional(readOnly = true)
-    boolean existsByPostIdAndReporterId(UUID postId, UUID reporterId);
+    boolean existsByPostIdAndCommentIdIsNullAndReporterId(UUID postId, UUID reporterId);
 
-    /** The reports of a post with one of these statuses, oldest first. */
+    /** Whether the Trader already reported the comment (D-125). */
     @Transactional(readOnly = true)
-    List<PostReport> findAllByPostIdAndStatusInOrderByCreatedAtAscIdAsc(UUID postId, Collection<ReportStatus> statuses);
+    boolean existsByCommentIdAndReporterId(UUID commentId, UUID reporterId);
+
+    /** The reports of a post itself, not of its comments, with one of these statuses, oldest first. */
+    @Transactional(readOnly = true)
+    List<PostReport> findAllByPostIdAndCommentIdIsNullAndStatusInOrderByCreatedAtAscIdAsc(
+            UUID postId, Collection<ReportStatus> statuses);
+
+    /** The reports of a comment with one of these statuses, oldest first (D-125). */
+    @Transactional(readOnly = true)
+    List<PostReport> findAllByCommentIdAndStatusInOrderByCreatedAtAscIdAsc(
+            UUID commentId, Collection<ReportStatus> statuses);
 
     /**
      * Whether the post has a report not decided yet or decided against it (HIDE_POST, REMOVE_POST, BAN_USER): its
@@ -32,7 +42,7 @@ public interface PostReportRepository extends Repository<PostReport, UUID> {
     @Transactional(readOnly = true)
     @Query("""
             select count(r) > 0 from PostReport r
-             where r.postId = :postId
+             where r.postId = :postId and r.commentId is null
                and (r.status in (com.cryptopilot.community.model.enums.ReportStatus.OPEN,
                                  com.cryptopilot.community.model.enums.ReportStatus.REVIEWING)
                     or r.resolutionAction in (com.cryptopilot.community.model.enums.ResolutionAction.HIDE_POST,

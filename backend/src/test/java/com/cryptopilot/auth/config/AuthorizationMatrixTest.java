@@ -230,7 +230,9 @@ class AuthorizationMatrixTest {
                     "/api/v1/posts/00000000-0000-0000-0000-000000000001",
                     "/api/v1/posts/00000000-0000-0000-0000-000000000001/comments",
                     "/api/v1/posts/coins/BTC/discussion",
-                    "/api/v1/community/members/00000000-0000-0000-0000-000000000001"
+                    "/api/v1/community/members/00000000-0000-0000-0000-000000000001",
+                    "/api/v1/community/members/00000000-0000-0000-0000-000000000001/followers",
+                    "/api/v1/community/members/00000000-0000-0000-0000-000000000001/following"
                 })
         void D99_theCommunityReads_admitAGuest(String path) throws Exception {
             assertAdmitted(mvc.perform(get(path)));
