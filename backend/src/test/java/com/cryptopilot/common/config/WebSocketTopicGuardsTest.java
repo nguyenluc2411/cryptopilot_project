@@ -61,6 +61,26 @@ class WebSocketTopicGuardsTest {
                 .hasMessageContaining("not a public market topic");
     }
 
+    /** Without a guard for it, a topic outside the public market data is refused, never let through. */
+    @Test
+    void D126_aTopicWithoutItsGuard_isRefused() {
+        assertThatThrownBy(() -> WebSocketConfig.requireAllowed(
+                        StompCommand.SUBSCRIBE, "/topic/analysis.SPOT.BTCUSDT.1h", TRADER, List.of()))
+                .isInstanceOf(MessageDeliveryException.class)
+                .hasMessageContaining("not a public market topic");
+    }
+
+    /** A wildcard is not a destination of the public rule, so it cannot reach a guarded topic through the broker. */
+    @Test
+    void D126_aWildcardSubscription_isRefused() {
+        for (String pattern : List.of("/topic/**", "/topic/*", "/topic/kline.SPOT.*.1h", "/topic/GUARDED.x")) {
+            assertThatThrownBy(() ->
+                            WebSocketConfig.requireAllowed(StompCommand.SUBSCRIBE, pattern, TRADER, List.of(GUARDED)))
+                    .as(pattern)
+                    .hasMessageContaining("not a public market topic");
+        }
+    }
+
     @Test
     void D126_aSendToAGovernedTopic_isStillRefused() {
         assertThatThrownBy(() ->

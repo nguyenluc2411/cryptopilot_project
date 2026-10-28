@@ -108,7 +108,13 @@ class AnalysisTopicGuardTest {
                 "/topic/analysis.spot.BTCUSDT.1h",
                 "/topic/analysis.SPOT.BTCUSDT",
                 "/topic/analysis.SPOT.BTCUSDT.1h.score",
-                "/topic/analysis.SPOT.BTC.USDT.1h"
+                "/topic/analysis.SPOT.BTC.USDT.1h",
+                "/topic/analysis.MARGIN.BTCUSDT.1h",
+                "/topic/analysis.SPOT.*.1h",
+                "/topic/analysis.SPOT.BTCUSDT.*",
+                "/topic/analysis.**",
+                "/topic/analysis.SPOT.BTCUSDT.1h.components.x",
+                "/topic/analysis.SPOT.BTCUSDT.1h.COMPONENTS"
             })
     void D126_anotherDestinationUnderThePrefix_isRefused(String destination) {
         assertThatThrownBy(() -> guard.requireAllowed(destination, caller("TRADER")))
