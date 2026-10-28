@@ -20,6 +20,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -159,7 +160,8 @@ class CommunityRankingApiTest {
         as(alice, post(POSTS + "/" + id + "/comments"), "{\"content\": \"Thanks\"}")
                 .andExpect(status().isCreated());
 
-        double expected = new AuthorStanding(1, 1, 1, 1, 0, 0, 0, true).influence();
+        // 40 ln 2 + 25 ln 2 + 15 ln 2 + 10 ln 2 = 62.383.
+        double expected = 62.38;
         as(bob, get(POSTS + "/" + id))
                 .andExpect(jsonPath("$.authorStanding.influenceScore").value(expected))
                 .andExpect(jsonPath("$.authorStanding.followers").value(1))
@@ -193,6 +195,11 @@ class CommunityRankingApiTest {
                         .value("Alice"));
         List<String> byDepth = ranks(mvc.perform(get(INFLUENCERS + "?rank=DEPTH&limit=20")));
         assertThat(byDepth).containsSubsequence(bob.toString(), alice.toString());
+        // The order the database chose is the order of the scores AuthorStanding computes.
+        assertThat(scores(mvc.perform(get(INFLUENCERS + "?limit=20")), "influenceScore"))
+                .isSortedAccordingTo(Comparator.reverseOrder());
+        assertThat(scores(mvc.perform(get(INFLUENCERS + "?rank=DEPTH&limit=20")), "depthScore"))
+                .isSortedAccordingTo(Comparator.reverseOrder());
 
         as(bob, post(MEMBERS + carol + "/block")).andExpect(status().isOk());
         as(carol, get(INFLUENCERS + "?limit=20"))
@@ -280,6 +287,11 @@ class CommunityRankingApiTest {
                 .andExpect(jsonPath("$[?(@.symbol == 'TB" + suffix + "')].totalPosts")
                         .value(5))
                 .andExpect(jsonPath("$[?(@.symbol == 'TC" + suffix + "')]").isEmpty());
+    }
+
+    private static List<Double> scores(ResultActions result, String field) throws Exception {
+        List<Number> scores = JsonPath.read(result.andReturn().getResponse().getContentAsString(), "$[*]." + field);
+        return scores.stream().map(Number::doubleValue).toList();
     }
 
     private List<String> ranks(ResultActions result) throws Exception {

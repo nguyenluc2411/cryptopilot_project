@@ -46,6 +46,15 @@ public class PostFeedRepository {
     /** Stands for a Guest in the queries that ask what the caller liked or saved: no account has this key. */
     private static final UUID NOBODY = new UUID(0L, 0L);
 
+    // AuthorStanding.influence() and depth() in SQL, over the columns of the query in ranked().
+    private static final String INFLUENCE_SCORE = AuthorStanding.INFLUENCE_FOLLOWERS + " * ln(1 + coalesce(f.n, 0))"
+            + " + " + AuthorStanding.INFLUENCE_LIKES + " * ln(1 + coalesce(l.n, 0))"
+            + " + " + AuthorStanding.INFLUENCE_COMMENTS + " * ln(1 + coalesce(c.n, 0))"
+            + " + " + AuthorStanding.INFLUENCE_POSTS + " * ln(1 + a.posts)";
+    private static final String DEPTH_SCORE = AuthorStanding.DEPTH_DEEP_POSTS + " * ln(1 + a.deep)"
+            + " + " + AuthorStanding.DEPTH_LIKES + " * ln(1 + coalesce(l.n, 0))"
+            + " + " + AuthorStanding.DEPTH_COMMENTS + " * ln(1 + coalesce(c.n, 0))";
+
     private final JdbcClient sql;
 
     /**
@@ -282,15 +291,14 @@ public class PostFeedRepository {
                 : " and not exists (select 1 from user_relation b where b.relation_type = 'BLOCK'"
                         + " and ((b.source_user_id = :caller and b.target_user_id = a.author_id)"
                         + " or (b.source_user_id = a.author_id and b.target_user_id = :caller)))";
-        String order = (rank == InfluencerRank.DEPTH
-                        ? "50 * ln(1 + a.deep) + 20 * ln(1 + coalesce(l.n, 0)) + 10 * ln(1 + coalesce(c.n, 0))"
-                        : "40 * ln(1 + coalesce(f.n, 0)) + 25 * ln(1 + coalesce(l.n, 0))"
-                                + " + 15 * ln(1 + coalesce(c.n, 0)) + 10 * ln(1 + a.posts)")
-                + " desc, a.author_id limit :limit";
+        String order =
+                (rank == InfluencerRank.DEPTH ? DEPTH_SCORE : INFLUENCE_SCORE) + " desc, a.author_id limit :limit";
         return ranked(filter, order, caller, now, params);
     }
 
-    // One query for both the standing of given members and the ranked lists, so the two never disagree.
+    // The standing of given members and the ranked lists are read by one query, and a list is ordered by the scores of
+    // AuthorStanding, written in SQL from the same weights. The order uses the unrounded score, so two members whose
+    // two-decimal scores are equal are listed by key.
     private List<Ranked> ranked(String filter, String order, UUID caller, Instant now, Map<String, Object> extra) {
         Map<String, Object> params = new HashMap<>(extra);
         params.put("caller", caller == null ? NOBODY : caller);

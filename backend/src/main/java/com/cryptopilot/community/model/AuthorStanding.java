@@ -36,17 +36,40 @@ public record AuthorStanding(
     /** A member who has published nothing and whom nobody follows. */
     public static final AuthorStanding NONE = new AuthorStanding(0, 0, 0, 0, 0, 0, 0, false);
 
+    /** The weight of the followers in the influence score. */
+    public static final int INFLUENCE_FOLLOWERS = 40;
+
+    /** The weight of the likes received in the influence score. */
+    public static final int INFLUENCE_LIKES = 25;
+
+    /** The weight of the comments of others received in the influence score. */
+    public static final int INFLUENCE_COMMENTS = 15;
+
+    /** The weight of the published posts in the influence score. */
+    public static final int INFLUENCE_POSTS = 10;
+
+    /** The weight of the posts with media or a long text in the analytical depth score. */
+    public static final int DEPTH_DEEP_POSTS = 50;
+
+    /** The weight of the likes received in the analytical depth score. */
+    public static final int DEPTH_LIKES = 20;
+
+    /** The weight of the comments of others received in the analytical depth score. */
+    public static final int DEPTH_COMMENTS = 10;
+
     /** The influence score, two decimals. */
     public double influence() {
-        return round(40 * Math.log1p(followers)
-                + 25 * Math.log1p(likes)
-                + 15 * Math.log1p(comments)
-                + 10 * Math.log1p(posts));
+        return round(INFLUENCE_FOLLOWERS * Math.log1p(followers)
+                + INFLUENCE_LIKES * Math.log1p(likes)
+                + INFLUENCE_COMMENTS * Math.log1p(comments)
+                + INFLUENCE_POSTS * Math.log1p(posts));
     }
 
     /** The analytical depth score, two decimals. */
     public double depth() {
-        return round(50 * Math.log1p(deepPosts) + 20 * Math.log1p(likes) + 10 * Math.log1p(comments));
+        return round(DEPTH_DEEP_POSTS * Math.log1p(deepPosts)
+                + DEPTH_LIKES * Math.log1p(likes)
+                + DEPTH_COMMENTS * Math.log1p(comments));
     }
 
     private static double round(double score) {
