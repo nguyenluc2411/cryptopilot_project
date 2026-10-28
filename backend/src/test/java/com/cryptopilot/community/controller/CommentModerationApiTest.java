@@ -1,6 +1,7 @@
 package com.cryptopilot.community.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -12,6 +13,7 @@ import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -187,6 +189,8 @@ class CommentModerationApiTest {
         report(alice, second);
 
         decide(admin, first, "BAN_USER").andExpect(jsonPath("$.authorBanned").value(true));
+        // The ban hides Bob's other comments after it commits (D-98); deciding before that may meet the change.
+        await().atMost(Duration.ofSeconds(10)).until(() -> "HIDDEN".equals(commentStatus(second)));
         decide(admin, second, "BAN_USER")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.authorBanned").value(false))
