@@ -94,6 +94,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     private final PaperBalanceRepository balances;
     private final PaperLedgerEntryRepository ledger;
     private final PaperWallets wallets;
+    private final FuturesMargins futuresMargins;
     private final UserLock lock;
     private final PaperAccountProperties properties;
     private final MarketApi market;
@@ -205,12 +206,34 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         }
         String key = request.clientTransferId() == null ? UuidV7.next().toString() : request.clientTransferId();
         // A transfer is its two entries: they share its id and its key (D-117).
+        if (request.from() == WalletType.FUTURES) {
+            requireWithdrawable(account, coin, request.amount());
+        }
         Ref ref = Ref.transfer(UuidV7.next(), key);
         wallets.debit(account, request.from(), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
         wallets.credit(account, other(request.from()), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
         PaperLedgerEntry debit = ledger.findTransfer(account.userId(), key)
                 .orElseThrow(() -> new IllegalStateException("transfer " + key + " was not written"));
         return new RecordedTransfer(transferOf(debit, coin.symbol()), true);
+    }
+
+    /**
+     * What leaves the Futures wallet is at most its {@code maxWithdrawAmount}: neither the margin its positions and
+     * open orders need nor unrealized profit leaves the account (TR-18, plan 4.7). Without a mark price of a pair with a
+     * position it cannot be known, and the transfer is refused ({@code MARKET_PRICE_UNAVAILABLE}).
+     */
+    private void requireWithdrawable(PaperAccount account, CoinListing coin, BigDecimal amount) {
+        BigDecimal withdrawable =
+                futuresMargins.crossState(account.userId(), null).margin().maxWithdrawAmount();
+        if (amount.compareTo(withdrawable) > 0) {
+            throw new BusinessException(
+                    ErrorCode.PAPER_INSUFFICIENT_BALANCE,
+                    "FUTURES " + coin.symbol() + " can transfer out at most " + withdrawable.toPlainString() + ", "
+                            + amount.toPlainString() + " asked",
+                    coin.symbol(),
+                    amount.toPlainString(),
+                    withdrawable.toPlainString());
+        }
     }
 
     /** The wallet a transfer out of {@code from} enters: the Spot and the Futures wallet trade places. */

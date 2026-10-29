@@ -54,11 +54,12 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 /**
  * Paper Futures orders end to end, on the database: placement with the exchange's refusals and codes, execution on
  * arrival against the Futures book, a waiting order filled by the engine, and what each fill does to the one-way
- * position, the Futures wallet, the isolated wallet and its audit rows.
+ * position, the Futures wallet, the isolated wallet and its audit rows; then the positions and the account read at
+ * the mark, and the transfer out limited by what can be withdrawn.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-18; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -643,6 +644,105 @@ class FuturesOrderApiTest {
 
         assertThat(statusOf(id)).isEqualTo("EXPIRED");
         assertThat(openPositions(trader)).isZero();
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Positions and the account at the mark
+    // ------------------------------------------------------------------------------------------
+
+    /** Plan 4.5, example 1: Long 0.1 at 60,000, 10x, a wallet of 600, MMR 0.4 %: liquidated at 54,216.87. */
+    @Test
+    void TR18_anIsolatedLong_showsItsLiquidationPrice_marginAndMarginRatio() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+
+        as(trader, get(FUTURES + "/positionRisk").param("symbol", symbol), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].positionAmt").value(numeric("0.1")))
+                .andExpect(jsonPath("$[0].entryPrice").value(numeric("60000")))
+                .andExpect(jsonPath("$[0].breakEvenPrice").value(numeric("60000")))
+                .andExpect(jsonPath("$[0].markPrice").value(numeric("60000")))
+                .andExpect(jsonPath("$[0].liquidationPrice").value(numeric("54216.9")))
+                .andExpect(jsonPath("$[0].isolatedWallet").value(numeric("600")))
+                .andExpect(jsonPath("$[0].isolatedMargin").value(numeric("600")))
+                .andExpect(jsonPath("$[0].notional").value(numeric("6000")))
+                .andExpect(jsonPath("$[0].positionInitialMargin").value(numeric("600")))
+                .andExpect(jsonPath("$[0].maintMargin").value(numeric("24")))
+                .andExpect(jsonPath("$[0].marginRatio").value(numeric("0.04")))
+                .andExpect(jsonPath("$[0].marginType").value("ISOLATED"))
+                .andExpect(jsonPath("$[0].leverage").value(10))
+                .andExpect(jsonPath("$[0].marginAsset").value("USDT"));
+
+        mark("59000");
+        as(trader, get(FUTURES + "/positionRisk"), null)
+                .andExpect(jsonPath("$[0].unRealizedProfit").value(numeric("-100")))
+                .andExpect(jsonPath("$[0].isolatedMargin").value(numeric("500")))
+                .andExpect(jsonPath("$[0].notional").value(numeric("5900")))
+                .andExpect(jsonPath("$[0].liquidationPrice").value(numeric("54216.9")));
+        // The isolated wallet is outside the cross wallet, and its loss does not reach the cross side.
+        as(trader, get(FUTURES + "/account"), null)
+                .andExpect(jsonPath("$.totalWalletBalance").value(numeric("5000")))
+                .andExpect(jsonPath("$.totalCrossWalletBalance").value(numeric("4400")))
+                .andExpect(jsonPath("$.totalUnrealizedProfit").value(numeric("-100")))
+                .andExpect(jsonPath("$.totalMarginBalance").value(numeric("4900")))
+                .andExpect(jsonPath("$.availableBalance").value(numeric("4400")))
+                .andExpect(jsonPath("$.maxWithdrawAmount").value(numeric("4400")));
+    }
+
+    @Test
+    void TR18_aCrossPosition_movesTheAvailableBalance_andTheTransferOutIsLimitedByIt() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        place(trader, limit("BUY", "GTC", "90", "1")).andExpect(status().isOk());
+
+        mark("110");
+        // 20x: a position margin of 5.5 at 110, an order margin of 4.5, a profit of 10 that cannot leave.
+        as(trader, get(FUTURES + "/account"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalPositionInitialMargin").value(numeric("5.5")))
+                .andExpect(jsonPath("$.totalOpenOrderInitialMargin").value(numeric("4.5")))
+                .andExpect(jsonPath("$.totalInitialMargin").value(numeric("10")))
+                .andExpect(jsonPath("$.totalMaintMargin").value(numeric("0.44")))
+                .andExpect(jsonPath("$.totalCrossUnPnl").value(numeric("10")))
+                .andExpect(jsonPath("$.availableBalance").value(numeric("5000")))
+                .andExpect(jsonPath("$.maxWithdrawAmount").value(numeric("4990")))
+                .andExpect(jsonPath("$.assets[0].asset").value("USDT"))
+                .andExpect(jsonPath("$.positions[0].symbol").value(symbol))
+                .andExpect(jsonPath("$.positions[0].initialMargin").value(numeric("10")));
+        as(trader, get(FUTURES + "/positionRisk"), null)
+                .andExpect(jsonPath("$[0].liquidationPrice").value(numeric("0")))
+                .andExpect(jsonPath("$[0].bidNotional").value(numeric("90")))
+                .andExpect(jsonPath("$[0].openOrderInitialMargin").value(numeric("4.5")));
+        as(trader, get(FUTURES + "/balance"), null)
+                .andExpect(jsonPath("$[0].balance").value(numeric("5000")))
+                .andExpect(jsonPath("$[0].maxWithdrawAmount").value(numeric("4990")));
+
+        as(trader, post("/api/v1/paper/transfers"), """
+                        {"asset": "USDT", "from": "FUTURES", "amount": "4990.01"}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PAPER_INSUFFICIENT_BALANCE"));
+        as(trader, post("/api/v1/paper/transfers"), """
+                        {"asset": "USDT", "from": "FUTURES", "amount": "4990"}""").andExpect(status().isCreated());
+        assertThat(wallet(trader)).isEqualByComparingTo("10");
+    }
+
+    @Test
+    void TR18_withoutAPosition_theAccountIsItsWallet() throws Exception {
+        UUID trader = trader(true);
+
+        as(trader, get(FUTURES + "/positionRisk"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        as(trader, get(FUTURES + "/account"), null)
+                .andExpect(jsonPath("$.totalWalletBalance").value(numeric("5000")))
+                .andExpect(jsonPath("$.availableBalance").value(numeric("5000")))
+                .andExpect(jsonPath("$.marginRatio").value(numeric("0")))
+                .andExpect(jsonPath("$.positions.length()").value(0));
     }
 
     // ------------------------------------------------------------------------------------------
