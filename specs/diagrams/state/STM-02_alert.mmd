@@ -1,10 +1,10 @@
 ---
-title: STM-02 ALERT alert_status (SDD Figure 32)
+title: STM-02 ALERT alert_status (SDD Figure 33)
 ---
 %% Source: watchlist/model/enums/AlertStatus.java (transition table), watchlist/entity/Alert.java,
 %% watchlist/repository/AlertRepository.java (trigger and expiry updates), watchlist/job/AlertExpirySweepJob.java.
 stateDiagram-v2
-    [*] --> ACTIVE : create alert within ACTIVE_ALERT_MAX (UC-13, BR-16, BR-17)
+    [*] --> ACTIVE : create alert within ACTIVE_ALERT_MAX (UC-24, BR-16, BR-17)
     ACTIVE --> PAUSED : pause (SRS 3.4.3)
     PAUSED --> ACTIVE : resume within ACTIVE_ALERT_MAX (SRS 3.4.3, BR-17)
     ACTIVE --> ACTIVE : fires in ONCE_PER_BAR or EVERY_TIME mode, cooldown kept (NSF-06, BR-19)

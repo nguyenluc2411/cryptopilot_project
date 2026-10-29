@@ -1,10 +1,10 @@
 ---
-title: STM-06 SUBSCRIPTION_ORDER order_status - planned - not implemented (SDD Figure 35)
+title: STM-06 SUBSCRIPTION_ORDER order_status - planned - not implemented (SDD Figure 36)
 ---
 %% Drawn from the SRS (sections 3.10.2, 3.10.3; NSF-12, NSF-13; BR-53, BR-54). The code has the table and reads it
 %% for metrics; no code creates an order or calls a payment gateway yet.
 stateDiagram-v2
-    [*] --> PENDING : purchase a package, 15-minute expiry (UC-38, BR-54, BR-56)
+    [*] --> PENDING : purchase a package, 15-minute expiry (UC-34, BR-54, BR-56)
     PENDING --> PAID : IPN or reconciliation success, signature and amount verified (NSF-12, NSF-13, BR-53)
     PENDING --> FAILED : gateway failure result (NSF-12)
     PENDING --> EXPIRED : confirmed unpaid after its expiry (NSF-13)

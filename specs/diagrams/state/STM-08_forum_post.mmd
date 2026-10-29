@@ -1,13 +1,13 @@
 ---
-title: STM-08 FORUM_POST post_status (SDD Figure 38)
+title: STM-08 FORUM_POST post_status (SDD Figure 39)
 ---
 %% Source: community/model/enums/PostStatus.java, community/entity/ForumPost.java (hide, restore, remove, delete),
-%% community/service/impl/ModerationServiceImpl.java (UC-43), PostServiceImpl.java (UC-27, UC-29).
+%% community/service/impl/ModerationServiceImpl.java (UC-40), PostServiceImpl.java (UC-26).
 stateDiagram-v2
-    [*] --> PUBLISHED : publish (UC-27)
-    PUBLISHED --> PUBLISHED : edit (UC-29), report, or moderation WARN_USER or DISMISS
-    PUBLISHED --> HIDDEN : moderation HIDE_POST or BAN_USER (UC-43, BR-47)
-    HIDDEN --> PUBLISHED : Admin restores (UC-43)
-    PUBLISHED --> DELETED : author deletes (UC-29, BR-47), or moderation REMOVE_POST (UC-43, D-99)
-    HIDDEN --> DELETED : author deletes, or moderation REMOVE_POST (UC-43)
+    [*] --> PUBLISHED : publish (UC-26)
+    PUBLISHED --> PUBLISHED : edit (UC-26), report, or moderation WARN_USER or DISMISS
+    PUBLISHED --> HIDDEN : moderation HIDE_POST or BAN_USER (UC-40, BR-47)
+    HIDDEN --> PUBLISHED : Admin restores (UC-40)
+    PUBLISHED --> DELETED : author deletes (UC-26, BR-47), or moderation REMOVE_POST (UC-40, D-99)
+    HIDDEN --> DELETED : author deletes, or moderation REMOVE_POST (UC-40)
     DELETED --> [*] : shown to Admin only

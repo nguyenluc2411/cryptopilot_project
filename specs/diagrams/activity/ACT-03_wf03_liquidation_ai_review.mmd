@@ -1,0 +1,42 @@
+---
+title: ACT-03 WF-03 Liquidation and AI post-mortem (SDD Figure 44); dashed = designed, not built
+---
+%% Source: trading/matching/ExitRule.java (liquidation by mark price, BR-35), trading/calculator/TradeResultCalculator.java
+%% (clearance fee, BR-36), journal/repository/TradingJournalRepository.java (closeIfOpen),
+%% notification/job/PlanNotificationListener.java (PositionClosed). AI review: SRS 3.9 (UC-30, UC-31), designed.
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph T["Trader"]
+        t1(["Hold an open Futures position, possibly without a stop loss"])
+        t2["Read the liquidation notification on web and mobile"]
+        t3["Open the journal entry: close reason LIQUIDATION (UC-21)"]
+        t4["Ask the AI to explain the loss (UC-30, UC-31)"]:::planned
+    end
+
+    subgraph C["CryptoPilot (liquidation engine, NSF-07)"]
+        c1{"Mark price reaches the liquidation price? (BR-35)"}
+        c2["Position stays open; nothing is sent"]
+        c3["Close at the liquidation price; clearance fee; margin lost (BR-27, BR-36)"]
+        c4["Journal CLOSED, reason LIQUIDATION, net P/L (BR-38)"]
+        c5["In-app notification MSG24, pushed over WebSocket"]
+        c6["Push to the mobile app (NSF-15)"]:::planned
+        c7["Verify the package and the daily quota (UC-33, BR-50)"]:::planned
+        c8["Build the context: leverage, stop loss, liquidation, trade facts; no personal data (BR-51)"]:::planned
+        c9["Guarded answer with the disclaimer, no buy/sell directive (UC-32, BR-51)"]:::planned
+    end
+
+    subgraph B["Binance USD-M Futures"]
+        b1[("Mark price stream")]
+    end
+
+    subgraph L["AI Service and LLM Provider"]
+        l1[("LLM Provider (configurable)")]:::planned
+    end
+
+    t1 --> c1
+    b1 --> c1
+    c1 -- no --> c2
+    c1 -- yes --> c3 --> c4 --> c5 --> t2 --> t3
+    c5 -.-> c6
+    t3 -.-> t4 -.-> c7 -.-> c8 -.-> l1 -.-> c9 -.-> t4

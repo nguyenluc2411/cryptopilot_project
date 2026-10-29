@@ -1,0 +1,50 @@
+---
+title: ACT-02 WF-02 Futures trade from plan to TP/SL and journal (SDD Figure 43); dashed = designed, not built
+---
+%% Source: market/controller/MarketController.java and AnalysisController.java (UC-11, gate FUTURES_ANALYSIS),
+%% trading/calculator/LiquidationCalculator.java (BR-27, BR-28), trading/service/impl/TradingPlanServiceImpl.java,
+%% trading/matching/ExitRule.java, journal/job/FundingCorrectionJob.java, notification/job/PlanNotificationListener.java.
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph T["Trader (PRO or PREMIUM)"]
+        t1(["Open the Futures analysis of a pair (UC-11)"])
+        t2["Create a Futures plan: direction, entry, SL, TP, risk %, leverage (UC-13)"]
+        t3["Activate the plan (UC-14)"]
+        t4["Edit SL or TP of the open position, or close it (UC-19)"]
+        t5["Read the notification and the journal (UC-21)"]
+        t6["Open the performance dashboard (UC-22)"]:::planned
+    end
+
+    subgraph C["CryptoPilot"]
+        c0{"Plan includes Futures analysis? (UC-33, BR-62)"}
+        c1["Refuse with the upgrade prompt (MSG29)"]
+        c2["Mark price, funding rate, open interest, long/short ratio, setup score with dominant side"]
+        c3["Size the position, isolated margin = notional / leverage, liquidation price (UC-17, BR-26, BR-27)"]
+        c4{"Liquidation reached before the stop loss? (BR-28)"}
+        c5["BLOCKING SL_BEYOND_LIQUIDATION: activation refused, plan stays DRAFT (MSG18)"]
+        c6["ACTIVE, then EXECUTED on the entry fill; journal OPEN (BR-33, BR-34)"]
+        c7["Settle funding at each funding time (NSF-08, BR-37)"]
+        c8{"Exit: TP or SL on the last price, liquidation on the mark price (BR-35)"}
+        c9["Journal CLOSED: realized P/L, fees, funding, net P/L (BR-36, BR-38)"]
+        c10["In-app notification of the closed position (MSG23)"]
+        c11["Margin locked in the Futures wallet and returned with the P/L (D-117)"]:::planned
+        c12["Statistics by coin, strategy and market (BR-42)"]:::planned
+    end
+
+    subgraph B["Binance USD-M Futures"]
+        b1[("Mark price, funding, 1-minute candles")]
+    end
+
+    t1 --> c0
+    c0 -- no --> c1
+    c0 -- yes --> c2 --> t2 --> c3 --> c4
+    c4 -- yes --> c5
+    c4 -- no --> t3 --> c6
+    b1 --> c6
+    c6 -.-> c11
+    c6 --> c7 --> c8
+    b1 --> c8
+    c6 --> t4 --> c8
+    c8 -- level reached or manual close --> c9 --> c10 --> t5
+    c9 -.-> c12 -.-> t6

@@ -1,0 +1,44 @@
+---
+title: ACT-04 WF-04 Purchase and activate a package (SDD Figure 45); dashed = designed, not built
+---
+%% Source: billing/service/impl/EntitlementServiceImpl.java (effective plan, UC-33), V11 and V28 packages.
+%% Orders, MoMo, IPN and subscriptions: SRS 3.10 and SDD 3.6, designed.
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph A["Admin"]
+        a1(["Create or edit a package: tier, price, duration, limits (UC-42)"])
+    end
+
+    subgraph T["Trader"]
+        t1(["Meet a locked feature or a limit"])
+        t2["Compare FREE, PRO and PREMIUM and choose a package (UC-34, UC-35)"]:::planned
+        t3["Pay or cancel on the MoMo page"]:::planned
+        t4["See the payment result (SCR-31)"]:::planned
+    end
+
+    subgraph C["CryptoPilot"]
+        c1["Store the package; edits apply to new orders only (BR-56); audited (BR-57)"]
+        c2{"Effective plan allows the action? (UC-33, BR-62)"}
+        c3["Refuse with the upgrade prompt (MSG29) or the limit (MSG27)"]
+        c4["Create SUBSCRIPTION_ORDER PENDING, 15-minute expiry, order type NEW, RENEW, UPGRADE or DOWNGRADE (BR-54, BR-55)"]:::planned
+        c5{"IPN: valid signature, same amount, order PENDING? (UC-36, BR-53)"}:::planned
+        c6["Reject and audit; subscription unchanged"]:::planned
+        c7["PAID: subscription ACTIVE or SCHEDULED, upgrade replaces (BR-55, BR-63); receipt email"]:::planned
+        c8["FAILED: features stay locked (MSG36)"]:::planned
+        c9["Reconcile PENDING orders every 5 minutes; expire unpaid ones (NSF-13)"]:::planned
+    end
+
+    subgraph M["MoMo (sandbox)"]
+        m1[("Payment page, IPN, status query")]:::planned
+    end
+
+    a1 --> c1
+    t1 --> c2
+    c2 -- yes --> t1
+    c2 -- no --> c3
+    c3 -.-> t2 -.-> c4 -.-> t3 -.-> m1 -.-> c5
+    c5 -. invalid .-> c6
+    c5 -. paid .-> c7 -.-> t4
+    c5 -. failed or cancelled .-> c8 -.-> t4
+    c9 -.-> m1

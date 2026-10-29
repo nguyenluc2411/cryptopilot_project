@@ -1,0 +1,61 @@
+---
+title: ACT-08 WF-08 Community content - publish, report and moderate (SDD Figure 49)
+---
+%% Source: community/controller/PostController.java (UC-26, UC-29), MediaController.java, ReportController.java
+%% (UC-28, BR-46), ModerationController.java (UC-40), community/service/impl/ModerationServiceImpl.java,
+%% user admin endpoints lock, unlock, ban (UC-37, BR-06), notification/job/CommunityNotificationListener.java.
+flowchart TB
+    subgraph A["Trader A (author)"]
+        a1(["Write a post: title, text, coin tags, market type, images or a video (UC-26, UC-29)"])
+        a2["Read the moderation notification"]
+    end
+
+    subgraph B["Trader B (reporter)"]
+        b1["Report the post with a reason (UC-28)"]
+        b2["Read the outcome notification"]
+    end
+
+    subgraph G["Guest"]
+        g1["Read published posts and comments (UC-06)"]
+    end
+
+    subgraph C["CryptoPilot"]
+        c1{"Video attached: plan allows video and the month's video posts are left? (UC-33, BR-43, BR-62)"}
+        c2["Refuse the video (MSG29 or MSG27); a text post is allowed"]
+        c3["Signed upload ticket; files checked; unattached files swept after 24 h (NSF-17)"]
+        c4["Post PUBLISHED (MSG33)"]
+        c5{"Own post or already reported? (BR-46)"}
+        c6["Refuse the report (MSG34)"]
+        c7["Report OPEN; the post enters the queue; REVIEWING when Admin opens it"]
+        c8{"Decision (UC-40)"}
+        c9["DISMISS or WARN_USER: post unchanged"]
+        c10["HIDE_POST: HIDDEN; REMOVE_POST: DELETED, media kept as evidence (BR-47)"]
+        c11["BAN_USER: post HIDDEN, author BANNED, sessions ended (BR-06)"]
+        c12["Reports RESOLVED; decision audited (BR-57); notifications to author and reporters"]
+        c13["Account LOCKED or BANNED cannot log in (BR-06); unlock returns it to ACTIVE"]
+        c14["Non-admin token on the moderation API: 403, nothing changes"]
+    end
+
+    subgraph D["Admin"]
+        d1["Open the moderation queue (SCR-36)"]
+        d2["Lock, unlock or ban the account with a reason (UC-37, MSG39)"]
+    end
+
+    subgraph M["Media Storage (Cloudinary)"]
+        m1[("Images and videos")]
+    end
+
+    a1 --> c1
+    c1 -- no --> c2
+    c1 -- yes or no video --> c3 --> m1
+    c3 --> c4 --> g1
+    c4 --> b1 --> c5
+    c5 -- yes --> c6
+    c5 -- no --> c7 --> d1 --> c8
+    c8 --> c9 --> c12
+    c8 --> c10 --> c12
+    c8 --> c11 --> c12
+    c12 --> a2
+    c12 --> b2
+    d1 --> d2 --> c13
+    b1 -. calls the moderation API .-> c14

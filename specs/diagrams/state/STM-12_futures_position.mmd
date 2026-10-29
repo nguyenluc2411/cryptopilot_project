@@ -1,0 +1,15 @@
+---
+title: STM-12 Simulated Futures position (trading_journal of a Futures plan, SDD Figure 35)
+---
+%% Source: since V47 a simulated Futures position is a trading plan and its journal record (D-117):
+%% journal/repository/TradingJournalRepository.java (closeIfOpen, changeLevelsIfOpen), trading/matching/ExitRule.java,
+%% trading/model/enums/CloseReason.java, trading/calculator/LiquidationCalculator.java, journal/job/FundingCorrectionJob.java.
+stateDiagram-v2
+    [*] --> OPEN : Futures plan EXECUTED, isolated margin is the notional divided by the leverage (BR-26, BR-34)
+    note left of OPEN : while open, funding is settled (NSF-08) and SL or TP can be changed (UC-19)
+    OPEN --> CLOSED : TP or SL on the last price (UC-50, BR-35)
+    OPEN --> CLOSED : MANUAL close at the last price (UC-19, BR-39)
+    OPEN --> LIQUIDATED : mark price reaches the liquidation price, margin lost, clearance fee (BR-27, BR-35, BR-36)
+    note right of LIQUIDATED : stored as CLOSED with close reason LIQUIDATION
+    CLOSED --> [*] : net P/L is realized P/L less fees plus funding (BR-38)
+    LIQUIDATED --> [*]

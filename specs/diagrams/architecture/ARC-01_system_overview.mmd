@@ -1,5 +1,5 @@
 ---
-title: ARC-01 System overview (SDD Figure 1); dashed = planned, no code yet
+title: ARC-01 Backend modules, data stores and external systems (SDD Figure 2); dashed = planned, no code yet
 ---
 %% Source: backend/src/main/java/com/cryptopilot (one package per Spring Modulith module), backend/pom.xml,
 %% ai-service/src, deploy/docker-compose.dev.yml, the client packages of market, news, community, academy and
@@ -47,10 +47,10 @@ flowchart LR
     subgraph External["External systems"]
         binance[("Binance REST and WebSocket streams")]
         rss[("News sources: RSS")]
-        llm[("LLM provider: Gemini")]
+        llm[("LLM provider (configurable)")]
         cloud[("Cloudinary: post media, academy covers")]
         smtp[("SMTP email")]
-        gateway[("VNPay, MoMo")]:::planned
+        gateway[("MoMo")]:::planned
         fcm[("Push notification service")]:::planned
     end
 

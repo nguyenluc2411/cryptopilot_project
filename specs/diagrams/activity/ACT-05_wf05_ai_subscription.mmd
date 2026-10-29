@@ -1,0 +1,41 @@
+---
+title: ACT-05 WF-05 Consult the AI under a governed subscription (SDD Figure 46); dashed = designed, not built
+---
+%% Source: SRS 3.9, 3.10.4 and SDD 3.7 (designed); ai-service (news summaries only, implemented);
+%% billing/service/impl/EntitlementServiceImpl.java (AI_CHAT_DAILY quota of the effective plan).
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph A["Admin"]
+        a1(["Activate an AI configuration: model, prompt templates, disclaimer (UC-41)"]):::planned
+    end
+
+    subgraph T["Trader"]
+        t1(["Ask the AI about a coin or a plan (UC-30)"]):::planned
+        t2["Read the answer with the disclaimer"]:::planned
+        t3["Renew the package (UC-35, WF-04)"]:::planned
+    end
+
+    subgraph C["CryptoPilot"]
+        c1{"Effective plan has the AI Assistant and quota left? (UC-33, BR-50)"}
+        c2["Refuse: MSG29 (no AI on the plan) or MSG30 (quota used); old conversations stay readable (BR-52)"]:::planned
+        c3["Store the question PENDING with the context snapshot, no personal data (BR-51)"]:::planned
+        c4["Guard the answer: disclaimer present, no buy/sell directive (UC-32, BR-51)"]:::planned
+        c5["COMPLETED uses one quota unit; FAILED or timeout uses none (MSG31)"]:::planned
+        c6["Hourly lifecycle: subscription EXPIRED at its end time, plan falls back to FREE (UC-51, BR-64)"]:::planned
+    end
+
+    subgraph S["Scheduler"]
+        s1[("Hourly job (NSF-14)")]:::planned
+    end
+
+    subgraph L["AI Service and LLM Provider"]
+        l1[("LLM Provider (configurable)")]:::planned
+    end
+
+    a1 -.-> c4
+    t1 -.-> c1
+    c1 -. no .-> c2
+    c1 -. yes .-> c3 -.-> l1 -.-> c4 -.-> c5 -.-> t2
+    s1 -.-> c6 -.-> c1
+    c2 -.-> t3 -.-> c1

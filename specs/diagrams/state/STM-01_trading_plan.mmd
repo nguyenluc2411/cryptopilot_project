@@ -1,17 +1,17 @@
 ---
-title: STM-01 TRADING_PLAN plan_status (SDD Figure 30)
+title: STM-01 TRADING_PLAN plan_status (SDD Figure 31)
 ---
 %% Source: trading/model/enums/PlanStatus.java (transition table), trading/entity/TradingPlan.java,
 %% trading/service/impl/TradingPlanServiceImpl.java, MatchingServiceImpl.java, TradingPlanRepository.expireIfActive.
 stateDiagram-v2
-    [*] --> DRAFT : save as draft (UC-16)
-    DRAFT --> DRAFT : edit draft (UC-17)
-    DRAFT --> ACTIVE : activate with no BLOCKING warning, within limits and validity (UC-18, BR-31, BR-62, BR-69)
+    [*] --> DRAFT : save as draft (UC-13)
+    DRAFT --> DRAFT : edit draft (UC-13)
+    DRAFT --> ACTIVE : activate with no BLOCKING warning, within limits and validity (UC-14, BR-31, BR-62, BR-75)
     DRAFT --> CANCELLED : cancel (UC-19)
     ACTIVE --> EXECUTED : entry filled on a 1-minute candle, or MARKET and reached LIMIT at activation (NSF-07, BR-33)
     ACTIVE --> CANCELLED : cancel (UC-19), or market disabled (BR-59)
     ACTIVE --> EXPIRED : expiry passed before the fill (NSF-09)
-    ACTIVE --> INVALIDATED : invalidation level reached before the entry (BR-68)
+    ACTIVE --> INVALIDATED : invalidation level reached before the entry (BR-74)
     EXECUTED --> [*] : position continues in TRADING_JOURNAL (STM-05)
     CANCELLED --> [*]
     EXPIRED --> [*]

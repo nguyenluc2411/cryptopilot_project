@@ -1,0 +1,46 @@
+---
+title: ACT-07 WF-07 Automated news aggregation (SDD Figure 48)
+---
+%% Source: news/controller (UC-12, UC-44), news/job/NewsCrawlJob.java and NewsSummaryJob.java (UC-52, NSF-10, NSF-11),
+%% news/service/impl (CrawlService, UrlNormalizer, TitleNormalizer, CoinTagger, NewsSummaryServiceImpl,
+%% NewsArticleAdminServiceImpl), notification/job/NewsNotificationListener.java (NewsSourceFailing).
+flowchart TB
+    subgraph A["Admin"]
+        a1(["Add an RSS source with its crawl interval, at least 15 minutes (UC-44, BR-49)"])
+        a2["Read the crawl log; hide, restore or re-summarize an article"]
+    end
+
+    subgraph C["CryptoPilot"]
+        c1["Test fetch of the feed URL before saving"]
+        c2["Crawl each active source when its interval has elapsed (UC-52, NSF-10)"]
+        c3{"Feed reachable?"}
+        c4["Write the crawl log FAILED; other sources go on; Admin notified after 5 failures in a row"]
+        c5{"Same URL hash, or same title hash within 48 h? (BR-48)"}
+        c6["Discard the item"]
+        c7["Store the article: title, link, time, excerpt; tag coins, first coin in the title is primary"]
+        c8["Ask the AI Service for a summary and a sentiment (NSF-11)"]
+        c9{"Summary returned?"}
+        c10["SUMMARIZED"]
+        c11["PENDING again, FAILED after 3 attempts (D-128)"]
+        c12["News feed and coin detail list the published articles; AI summary and sentiment on PRO and PREMIUM (UC-12)"]
+    end
+
+    subgraph X["External systems"]
+        x1[("RSS news sources")]
+        x2[("AI Service and LLM Provider")]
+    end
+
+    subgraph R["Trader"]
+        r1["Read the news feed or the news of a coin"]
+    end
+
+    a1 --> c1 --> x1
+    c2 --> x1 --> c3
+    c3 -- no --> c4 --> a2
+    c3 -- yes --> c5
+    c5 -- yes --> c6
+    c5 -- no --> c7 --> c8 --> x2 --> c9
+    c9 -- yes --> c10 --> c12
+    c9 -- no --> c11 --> c8
+    c7 --> c12 --> r1
+    a2 --> c12

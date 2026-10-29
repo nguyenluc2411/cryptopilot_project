@@ -1,11 +1,11 @@
 ---
-title: STM-09 POST_REPORT report_status (SDD Figure 39)
+title: STM-09 POST_REPORT report_status (SDD Figure 40)
 ---
 %% Source: community/model/enums/ReportStatus.java, community/entity/PostReport.java (review, resolve),
 %% community/service/impl/ModerationServiceImpl.java, ReportServiceImpl.java.
 stateDiagram-v2
-    [*] --> OPEN : report a post (UC-33, BR-46)
-    OPEN --> REVIEWING : Admin opens the reported post (UC-43)
-    OPEN --> RESOLVED : decision on the post (UC-43)
-    REVIEWING --> RESOLVED : decision on the post (UC-43)
+    [*] --> OPEN : report a post (UC-28, BR-46)
+    OPEN --> REVIEWING : Admin opens the reported post (UC-40)
+    OPEN --> RESOLVED : decision on the post (UC-40)
+    REVIEWING --> RESOLVED : decision on the post (UC-40)
     RESOLVED --> [*] : DISMISS, WARN_USER, HIDE_POST, REMOVE_POST or BAN_USER recorded and audited (BR-57)

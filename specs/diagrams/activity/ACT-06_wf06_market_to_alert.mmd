@@ -1,0 +1,48 @@
+---
+title: ACT-06 WF-06 Market discovery to triggered alert (SDD Figure 47); dashed = designed, not built
+---
+%% Source: market/controller/MarketController.java (UC-03 to UC-05), admin pair management (UC-38, BR-59),
+%% auth/controller/AuthController.java (UC-01, UC-02), watchlist/service/impl (UC-23, UC-24, BR-15 to BR-20),
+%% watchlist/job (alert engines, NSF-06), market stream supervisor (NSF-03 reconnect with back-off).
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph A["Admin"]
+        a1(["Enable or disable pairs and markets (UC-38)"])
+        a2["Watch API health and ingestion status (UC-46)"]:::planned
+    end
+
+    subgraph G["Guest, then Trader"]
+        g1(["Browse the market overview and search pairs (UC-03, UC-04)"])
+        g2["Open a coin detail, basic chart (UC-05)"]
+        g3["Register, verify the email, log in (UC-02, UC-01)"]
+        g4["Add the pair to the watchlist (UC-23)"]
+        g5["Create a price or indicator alert (UC-24)"]
+        g6["Receive the alert notification on web and mobile (UC-25)"]:::planned
+        g7["Re-arm the alert by editing it (UC-24)"]
+    end
+
+    subgraph C["CryptoPilot"]
+        c1["List only enabled pairs and markets (BR-07); a disabled pair disappears from the overview and search"]
+        c2{"Within the watchlist and alert limits and features of the plan? (UC-33, BR-15, BR-17)"}
+        c3["Refuse (MSG27 limit, MSG29 indicator alert on FREE)"]
+        c4["Alert ACTIVE; a pair not yet watched is added first (BR-16)"]
+        c5{"Alert engine: condition met? (UC-49, NSF-06, BR-18, BR-20)"}
+        c6["Record the trigger; ONCE becomes TRIGGERED, others keep their cooldown (BR-19)"]
+        c7["Write the in-app notification, email and push by the plan's channels (NSF-15)"]:::planned
+        c8["Stream lost: reconnect with back-off 1 s to 60 s, backfill the gap (NSF-02, NSF-03)"]
+    end
+
+    subgraph B["Binance"]
+        b1[("Ticker, 1-minute candles, closed candles, funding, open interest")]
+    end
+
+    a1 --> c1 --> g1 --> g2 --> g3 --> g4 --> c2
+    c2 -- no --> c3
+    c2 -- yes --> g5 --> c4 --> c5
+    b1 --> c5
+    c5 -- yes --> c6
+    c6 -.-> c7 -.-> g6
+    c6 --> g7 --> c4
+    b1 --> c8 --> c5
+    c8 -.-> a2

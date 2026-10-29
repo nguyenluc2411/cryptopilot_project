@@ -1,0 +1,59 @@
+---
+title: ACT-01 WF-01 Analyze, plan and execute a spot trade (SDD Figure 42); dashed = designed, not built
+---
+%% Source: market/controller (UC-05, UC-10), trading/controller/TradingPlanController.java (UC-13, UC-14, UC-19),
+%% trading/service/impl/TradingPlanServiceImpl.java, trading/job/MatchingWorker.java, paper/service/impl
+%% (PaperOrderService, SpotArrival, SpotSettlement; UC-15, UC-20), journal/service/impl/PersistentTradeJournal.java.
+flowchart TB
+    classDef planned fill:#ffffff,stroke:#888888,stroke-dasharray:5 5,color:#666666
+
+    subgraph T["Trader"]
+        t1(["Open the coin detail of a Spot pair (UC-05)"])
+        t2["Read indicators, S/R and setup score (UC-10)"]
+        t3{"Trade with a plan or place a direct order?"}
+        t4["Enter entry type, entry, stop loss, take profit, risk % (UC-13)"]
+        t5{"Save as draft or activate? (UC-14)"}
+        t6["Place a direct demo order: limit, market, stop, OCO (UC-15)"]
+        t7["Confirm a soft warning or an entry deviation"]
+        t8["Read the journal and the demo wallet (UC-20, UC-21)"]
+    end
+
+    subgraph C["CryptoPilot"]
+        c1["Validate the trading rules (UC-16): price order BR-22, ranges BR-30, Spot LONG only BR-21"]
+        c2["Calculate quantity, R/R and maximum loss (UC-17, BR-23, BR-24)"]
+        c3["Raise warnings INFO, WARNING, BLOCKING (UC-18, BR-25, BR-29)"]
+        c4["Store DRAFT with warnings"]
+        c5{"BLOCKING warning, plan limit (BR-62) or entry deviation over the limit?"}
+        c6["Refuse activation (MSG18, MSG27, MSG52)"]
+        c7["ACTIVE: wait for the entry; MARKET or a reached LIMIT fills at once (BR-33)"]
+        c8["EXECUTED: fill with the fee by liquidity role (BR-36); journal OPEN, source SIMULATED (BR-34)"]
+        c9["Exit at take profit or stop loss on the last price; journal CLOSED with net P/L (BR-35, BR-38)"]
+        c10["Plan fill also writes a trade order and wallet ledger entries (D-117)"]:::planned
+        c11{"Free balance, exchange filters and order limits? (BR-70)"}
+        c12["Refuse the order: Rejected, balance unchanged (MSG01, MSG15, MSG43)"]
+        c13["Lock the funds; match against the live order book (BR-71)"]
+        c14["Fill: fee (BR-72), balances and ledger in one transaction (BR-69)"]
+    end
+
+    subgraph E["Matching engines (NSF-07, NSF-19)"]
+        e1[("1-minute candles, last price, trades and order book of the pair")]
+    end
+
+    t1 --> t2 --> t3
+    t3 -- plan --> t4 --> c1 --> c2 --> c3 --> t5
+    t5 -- draft --> c4
+    t5 -- activate --> c5
+    c4 -. later .-> c5
+    c5 -- yes --> c6
+    c5 -- soft warning or deviation to confirm --> t7 --> c7
+    c5 -- no --> c7
+    e1 --> c7
+    c7 -- entry reached --> c8
+    c8 -.-> c10
+    e1 --> c9
+    c8 --> c9 --> t8
+    t3 -- direct order --> t6 --> c11
+    c11 -- no --> c12
+    c11 -- yes --> c13
+    e1 --> c13
+    c13 --> c14 --> t8

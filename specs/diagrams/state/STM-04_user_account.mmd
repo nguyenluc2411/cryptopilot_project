@@ -1,13 +1,13 @@
 ---
-title: STM-04 USER_ACCOUNT account_status (SDD Figure 29)
+title: STM-04 USER_ACCOUNT account_status (SDD Figure 30)
 ---
 %% Source: user/model/enums/AccountStatus.java, user/entity/UserAccount.java (lock, unlock, ban),
-%% user/service/impl/AccountAdminServiceImpl.java (UC-42), UserServiceImpl.banForModeration (UC-43 BAN_USER).
+%% user/service/impl/AccountAdminServiceImpl.java (UC-37), UserServiceImpl.banForModeration (UC-40 BAN_USER).
 %% The 15-minute sign-in lockout after failed logins is a counter on the account, not a status.
 stateDiagram-v2
-    [*] --> ACTIVE : register (UC-01)
-    ACTIVE --> LOCKED : Admin locks, sessions ended (UC-42, BR-05, BR-06)
-    LOCKED --> ACTIVE : Admin unlocks (UC-42, BR-05)
-    ACTIVE --> BANNED : Admin bans (UC-42) or moderation BAN_USER (UC-43), sessions ended (BR-06)
-    LOCKED --> BANNED : Admin bans (UC-42, BR-06)
+    [*] --> ACTIVE : register (UC-02)
+    ACTIVE --> LOCKED : Admin locks, sessions ended (UC-37, BR-05, BR-06)
+    LOCKED --> ACTIVE : Admin unlocks (UC-37, BR-05)
+    ACTIVE --> BANNED : Admin bans (UC-37) or moderation BAN_USER (UC-40), sessions ended (BR-06)
+    LOCKED --> BANNED : Admin bans (UC-37, BR-06)
     BANNED --> [*] : permanent

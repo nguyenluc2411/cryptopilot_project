@@ -37,7 +37,7 @@ OUTPUT = ROOT / "specs" / "diagrams" / "erd"
 AREAS: dict[str, tuple[str, str, list[str]]] = {
     "ERD-01": (
         "identity and platform",
-        "SDD Figure 3 (identity, configuration and audit part)",
+        "SDD Figure 3",
         ["user_account", "user_profile", "user_token", "user_device", "audit_log", "system_setting",
          "event_publication"],
     ),
@@ -61,14 +61,14 @@ AREAS: dict[str, tuple[str, str, list[str]]] = {
     ),
     "ERD-05": (
         "community, news and academy",
-        "SDD Figure 7 (community and news part); the Academy tables are new since the SDD",
-        ["forum_post", "forum_comment", "post_media", "post_coin", "post_report", "engagement", "news_source",
+        "SDD Figure 7",
+        ["forum_post", "user_relation", "forum_comment", "post_media", "post_coin", "post_report", "engagement", "news_source",
          "news_article", "news_article_coin", "news_article_tag", "news_tag", "news_crawl_log", "academy_topic",
          "academy_article", "academy_term", "academy_progress"],
     ),
     "ERD-06": (
         "AI and billing",
-        "SDD Figure 3 (subscription part) and Figure 7 (AI Assistant part)",
+        "SDD Figure 8",
         ["subscription_package", "subscription_order", "user_subscription", "ai_configuration", "ai_conversation",
          "ai_message"],
     ),

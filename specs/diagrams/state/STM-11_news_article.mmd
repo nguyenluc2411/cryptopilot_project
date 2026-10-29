@@ -1,0 +1,18 @@
+---
+title: STM-11 NEWS_ARTICLE article status (SDD Figure 41)
+---
+%% Source: news/model/enums/NewsArticleStatus.java (derived from the row: summary, summary_attempts, hidden_at),
+%% news/service/impl/CrawlService (BR-48 duplicates), NewsSummaryServiceImpl.java (NSF-11, D-128),
+%% NewsArticleAdminServiceImpl.java (hide, restore, summarize). A duplicate item is never stored.
+stateDiagram-v2
+    [*] --> Discarded : feed item with a known URL hash, or the same title hash within 48 h (BR-48)
+    Discarded --> [*]
+    [*] --> PENDING : new item stored with its coin tags (UC-52, NSF-10)
+    PENDING --> SUMMARIZED : AI summary and sentiment stored (NSF-11)
+    PENDING --> FAILED : no summary after 3 attempts (D-128)
+    FAILED --> PENDING : Admin asks for a new summary
+    PENDING --> HIDDEN : Admin hides the article
+    SUMMARIZED --> HIDDEN : Admin hides the article
+    FAILED --> HIDDEN : Admin hides the article
+    HIDDEN --> PENDING : Admin restores, no summary yet
+    HIDDEN --> SUMMARIZED : Admin restores, summary kept
