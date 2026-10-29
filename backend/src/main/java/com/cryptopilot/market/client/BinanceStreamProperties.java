@@ -62,11 +62,15 @@ public record BinanceStreamProperties(
         @NotNull @Valid @DefaultValue Trading trading) {
 
     /**
-     * The streams of the trading screen and the paper engine, on Spot (TR-03): {@code <symbol>@aggTrade},
-     * {@code <symbol>@bookTicker} and {@code <symbol>@depth<levels>@100ms}, on top of the six of NSF-03. Futures is
-     * not streamed this way yet.
+     * The streams of the trading screen and the paper engine (TR-03, TR-38): {@code <symbol>@aggTrade},
+     * {@code <symbol>@bookTicker} and {@code <symbol>@depth<levels>@100ms}, on top of the six of NSF-03. On Futures
+     * the exchange serves the trades under the {@code /market} route and the best bid and ask and the depth under
+     * {@code /public} only (checked live on 2026-10-29), so those two go on connections of their own.
      *
      * @param enabled whether the Spot pairs carry these streams at all
+     * @param futures whether the Futures pairs carry them
+     * @param futuresPublicUrl the futures stream host with the {@code /public} route, e.g.
+     *     {@code wss://fstream.binance.com/public}
      * @param depthLevels how many levels of each side the depth stream carries: 5, 10 or 20, as Binance offers
      * @param maxAge the oldest best bid and ask or depth served as current; Binance pushes them as they change, and
      *     the depth every 100 ms, so an older one means a lost stream
@@ -74,6 +78,11 @@ public record BinanceStreamProperties(
      */
     public record Trading(
             @DefaultValue("true") boolean enabled,
+            @DefaultValue("true") boolean futures,
+
+            @NotNull @DefaultValue("wss://fstream.binance.com/public")
+            URI futuresPublicUrl,
+
             @Min(5) @Max(20) @DefaultValue("20") int depthLevels,
             @NotNull @DefaultValue("10s") Duration maxAge,
             @Min(1) @Max(1000) @DefaultValue("50") int recentTrades) {

@@ -158,7 +158,13 @@ class TradingMarketDataTest {
                 Duration.ofMinutes(2),
                 4,
                 10000,
-                new BinanceStreamProperties.Trading(true, 20, Duration.ofSeconds(10), recentTrades));
+                new BinanceStreamProperties.Trading(
+                        true,
+                        true,
+                        URI.create("wss://fstream.binance.com/public"),
+                        20,
+                        Duration.ofSeconds(10),
+                        recentTrades));
     }
 
     private static MinuteKline minute(UUID pairId, Instant openTime, String close, boolean closed) {

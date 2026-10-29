@@ -28,10 +28,11 @@ import tools.jackson.databind.json.JsonMapper;
  *   <li>futures {@code <symbol>@markPrice@1s} — mark price, index price and the predicted funding rate.
  * </ul>
  *
- * <p>Six streams per pair and market (D-43; {@code kline_1m} added by T-043). A Spot pair carries three more when
- * {@code trading} is enabled (TR-03): {@code <symbol>@aggTrade} (each trade, for the paper engine and the trades
- * panel), {@code <symbol>@bookTicker} (best bid and ask as they change) and {@code <symbol>@depth20@100ms} (the top
- * levels of the order book).
+ * <p>Six streams per pair and market (D-43; {@code kline_1m} added by T-043). A pair carries three more when
+ * {@code trading} is enabled for its market (TR-03, TR-38): {@code <symbol>@aggTrade} (each trade, for the paper
+ * engine and the trades panel), {@code <symbol>@bookTicker} (best bid and ask as they change) and
+ * {@code <symbol>@depth20@100ms} (the top levels of the order book). On Futures the last two are {@code /public}
+ * streams and go on connections of their own ({@link #publicStreamsFor}); the rest are {@code /market} streams.
  *
  * <p>Public market streams only: no listen key, no user data stream, no API key (BR-09).
  *
@@ -80,19 +81,39 @@ public final class BinanceStreamClient implements AutoCloseable {
     }
 
     /**
-     * The streams this client opens for one pair on one venue: the six of NSF-03 and, on Spot when {@code trading} is
-     * enabled, the three of TR-03.
+     * The streams this client opens for one pair on one venue's main connections: the six of NSF-03 and, when
+     * {@code trading} is enabled for the venue, the three of TR-03 on Spot or the trades alone on Futures.
      */
     public List<String> streamsFor(BinanceVenue venue, String symbol) {
         List<String> streams = new ArrayList<>(streamsOf(venue, symbol));
-        BinanceStreamProperties.Trading trading = properties.trading();
-        if (venue == BinanceVenue.SPOT && trading.enabled()) {
-            String s = symbol.toLowerCase(Locale.ROOT);
+        String s = symbol.toLowerCase(Locale.ROOT);
+        if (tradingOn(venue)) {
             streams.add(s + "@aggTrade");
-            streams.add(s + "@bookTicker");
-            streams.add(s + "@depth" + trading.depthLevels() + "@100ms");
+        }
+        if (venue == BinanceVenue.SPOT && tradingOn(venue)) {
+            streams.addAll(bookStreams(s));
         }
         return List.copyOf(streams);
+    }
+
+    /**
+     * The streams of one pair the venue serves under the {@code /public} route only: the best bid and ask and the
+     * depth of a Futures pair when its trading streams are enabled (TR-38); none on Spot, whose host has no routes.
+     */
+    public List<String> publicStreamsFor(BinanceVenue venue, String symbol) {
+        if (venue == BinanceVenue.SPOT || !tradingOn(venue)) {
+            return List.of();
+        }
+        return bookStreams(symbol.toLowerCase(Locale.ROOT));
+    }
+
+    private boolean tradingOn(BinanceVenue venue) {
+        BinanceStreamProperties.Trading trading = properties.trading();
+        return venue == BinanceVenue.SPOT ? trading.enabled() : trading.futures();
+    }
+
+    private List<String> bookStreams(String s) {
+        return List.of(s + "@bookTicker", s + "@depth" + properties.trading().depthLevels() + "@100ms");
     }
 
     /** The most streams one connection carries. */
@@ -105,6 +126,21 @@ public final class BinanceStreamClient implements AutoCloseable {
             BinanceVenue venue, String name, List<String> streams, BinanceStreamShard.Listener listener) {
         URI base = venue == BinanceVenue.SPOT ? properties.spotUrl() : properties.futuresUrl();
         return new BinanceStreamShard(name, base, streams, http, parser, timer, properties, backoff, clock, listener);
+    }
+
+    /** A connection for streams of {@link #publicStreamsFor}, on the Futures {@code /public} route, not yet started. */
+    public BinanceStreamShard publicShard(String name, List<String> streams, BinanceStreamShard.Listener listener) {
+        return new BinanceStreamShard(
+                name,
+                properties.trading().futuresPublicUrl(),
+                streams,
+                http,
+                parser,
+                timer,
+                properties,
+                backoff,
+                clock,
+                listener);
     }
 
     /** Stops the timer and the HTTP client. Shards still open are aborted with it. */

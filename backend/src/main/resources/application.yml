@@ -331,6 +331,10 @@ cryptopilot:
         # TR-03: each Spot pair also streams @aggTrade, @bookTicker and @depth20@100ms for the paper engine and the
         # trading screen: nine streams a pair instead of six.
         enabled: true
+        # TR-38: each Futures pair streams them too: @aggTrade under /market, @bookTicker and @depth20@100ms under
+        # /public, the only route that serves them (checked live 2026-10-29).
+        futures: true
+        futures-public-url: wss://fstream.binance.com/public
         depth-levels: 20
         # A best bid and ask or depth older than this is not served as current (a lost stream).
         max-age: 10s

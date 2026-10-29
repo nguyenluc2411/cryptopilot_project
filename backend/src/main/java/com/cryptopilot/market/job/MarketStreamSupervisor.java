@@ -35,6 +35,7 @@ import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -56,7 +57,8 @@ import org.springframework.stereotype.Component;
  * 7.1 step 1), a pair's streams never split across two. The pairs are read again after every symbol
  * synchronisation of the market and every {@code refreshInterval}; when the set has changed, that market's
  * connections are replaced, and a pair no longer streamed is dropped from the latest prices (BR-07). An unchanged
- * set touches nothing.
+ * set touches nothing. A Futures pair's best bid and ask and depth (TR-38) go on connections of their own, on the
+ * exchange's {@code /public} route; everything else of the market shares the {@code /market} ones.
  *
  * <h2>Routing, without blocking a reader</h2>
  *
@@ -202,19 +204,33 @@ public class MarketStreamSupervisor {
         BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
         BinanceStreamShard.Listener listener = new Router(market, bySymbol);
         List<BinanceStreamShard> shards = new ArrayList<>();
+        pack(
+                targets,
+                target -> streams.streamsFor(venue, target.symbol()),
+                batch -> shards.add(streams.shard(venue, market + "-" + shards.size(), batch, listener)));
+        // TR-38: the Futures best bid and ask and depth are served under /public only, on connections of their own.
+        pack(
+                targets,
+                target -> streams.publicStreamsFor(venue, target.symbol()),
+                batch -> shards.add(streams.publicShard(market + "-PUBLIC-" + shards.size(), batch, listener)));
+        return shards;
+    }
+
+    /** Packs the streams of the targets into batches of at most one connection's, a pair's never split. */
+    private void pack(
+            List<StreamTarget> targets, Function<StreamTarget, List<String>> namesOf, Consumer<List<String>> open) {
         List<String> batch = new ArrayList<>();
         for (StreamTarget target : targets) {
-            List<String> names = streams.streamsFor(venue, target.symbol());
-            if (batch.size() + names.size() > streams.maxStreamsPerConnection()) {
-                shards.add(streams.shard(venue, market + "-" + shards.size(), batch, listener));
+            List<String> names = namesOf.apply(target);
+            if (!batch.isEmpty() && batch.size() + names.size() > streams.maxStreamsPerConnection()) {
+                open.accept(batch);
                 batch = new ArrayList<>();
             }
             batch.addAll(names);
         }
         if (!batch.isEmpty()) {
-            shards.add(streams.shard(venue, market + "-" + shards.size(), batch, listener));
+            open.accept(batch);
         }
-        return shards;
     }
 
     /** What one market streams now. */

@@ -17,7 +17,10 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>The payload's event type decides the reading: {@code kline}, {@code 24hrTicker}, {@code markPriceUpdate} and
  * {@code aggTrade}. The Spot {@code bookTicker} and partial {@code depth} payloads carry no event type, so the stream
  * name decides those: {@code <symbol>@bookTicker} and {@code <symbol>@depth<levels>[@100ms]}; they carry no event
- * time either, and the instant this server read them stands for it (TR-03). Any other event — a {@code serverShutdown} notice, a subscription answer, a type
+ * time either, and the instant this server read them stands for it (TR-03). Their Futures counterparts carry an event
+ * type, {@code bookTicker} and {@code depthUpdate}, and the depth's levels under {@code b} and {@code a} with its last
+ * update id under {@code u} (TR-38, read from the live streams on 2026-10-29); they are stamped with the read instant
+ * too, as the age of a book is judged by when it reached this server. Any other event — a {@code serverShutdown} notice, a subscription answer, a type
  * the exchange adds later — is not an error and yields nothing; the connection's own handling covers a
  * shutdown. A message of a known type that is not the documented shape (a decimal that is not a string, a
  * missing field, an interval this system never asked for) is {@link IllegalArgumentException}: one bad frame
@@ -31,8 +34,8 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * <p>Reference: Binance. <i>WebSocket Streams for Binance</i> (Spot), "Kline/Candlestick Streams" and
  * "Individual Symbol Ticker Streams", "Aggregate Trade Streams", "Individual Symbol Book Ticker Streams" and "Partial
- * Book Depth Streams"; <i>USDⓈ-M Futures</i>, "Kline/Candlestick Streams" and "Mark Price
- * Stream".
+ * Book Depth Streams"; <i>USDⓈ-M Futures</i>, "Kline/Candlestick Streams", "Mark Price Stream", "Aggregate Trade
+ * Streams", "Individual Symbol Book Ticker Streams" and "Partial Book Depth Streams".
  */
 public final class BinanceStreamParser {
 
@@ -72,6 +75,8 @@ public final class BinanceStreamParser {
                 case "24hrTicker" -> Optional.of(ticker(data));
                 case "markPriceUpdate" -> Optional.of(markPrice(data));
                 case "aggTrade" -> Optional.of(aggTrade(data));
+                case "bookTicker" -> Optional.of(futuresBookTicker(data));
+                case "depthUpdate" -> Optional.of(futuresDepth(data));
                 case "" -> byStreamName(root.path("stream").asString(""), data);
                 default -> Optional.empty();
             };
@@ -134,6 +139,26 @@ public final class BinanceStreamParser {
                 BinanceResponseParser.count(data.required("lastUpdateId")),
                 levels(data.required("bids")),
                 levels(data.required("asks")),
+                clock.instant());
+    }
+
+    private StreamMessage futuresBookTicker(JsonNode data) {
+        return new StreamMessage.BookTickerMessage(
+                symbol(data),
+                BinanceResponseParser.count(data.required("u")),
+                BinanceResponseParser.decimal(data.required("b")),
+                BinanceResponseParser.decimal(data.required("B")),
+                BinanceResponseParser.decimal(data.required("a")),
+                BinanceResponseParser.decimal(data.required("A")),
+                clock.instant());
+    }
+
+    private StreamMessage futuresDepth(JsonNode data) {
+        return new StreamMessage.DepthMessage(
+                symbol(data),
+                BinanceResponseParser.count(data.required("u")),
+                levels(data.required("b")),
+                levels(data.required("a")),
                 clock.instant());
     }
 
