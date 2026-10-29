@@ -162,6 +162,20 @@ public class CryptoPair extends BaseEntity {
     @Column(name = "futures_min_notional", precision = 28, scale = 8)
     private BigDecimal futuresMinNotional;
 
+    /** {@code PERCENT_PRICE} of Futures: a BUY's price at most the mark times this (TR-39). */
+    @Column(name = "futures_multiplier_up", precision = 28, scale = 12)
+    private BigDecimal futuresMultiplierUp;
+
+    /** {@code PERCENT_PRICE} of Futures: a SELL's price at least the mark times this (TR-39). */
+    @Column(name = "futures_multiplier_down", precision = 28, scale = 12)
+    private BigDecimal futuresMultiplierDown;
+
+    @Column(name = "futures_max_num_orders")
+    private Integer futuresMaxNumOrders;
+
+    @Column(name = "futures_max_num_algo_orders")
+    private Integer futuresMaxNumAlgoOrders;
+
     /** The highest leverage an administrator allows, or {@code null} when futures is not enabled. */
     @Column(name = "max_leverage")
     private Integer maxLeverage;
@@ -242,6 +256,11 @@ public class CryptoPair extends BaseEntity {
                 this.futuresTickSize = filters.tickSize();
                 this.futuresStepSize = filters.stepSize();
                 this.futuresMinNotional = filters.minNotional();
+                SymbolRules rules = filters.rules();
+                this.futuresMultiplierUp = rules.bidMultiplierUp();
+                this.futuresMultiplierDown = rules.askMultiplierDown();
+                this.futuresMaxNumOrders = rules.maxNumOrders();
+                this.futuresMaxNumAlgoOrders = rules.maxNumAlgoOrders();
             }
         }
     }
@@ -253,7 +272,7 @@ public class CryptoPair extends BaseEntity {
     public Optional<PairFilters> filters(MarketType market) {
         return switch (Objects.requireNonNull(market, "market must not be null")) {
             case SPOT -> filtersOf(spotTickSize, spotStepSize, spotMinNotional, spotRules());
-            case FUTURES -> filtersOf(futuresTickSize, futuresStepSize, futuresMinNotional, SymbolRules.NONE);
+            case FUTURES -> filtersOf(futuresTickSize, futuresStepSize, futuresMinNotional, futuresRules());
         };
     }
 
@@ -278,6 +297,34 @@ public class CryptoPair extends BaseEntity {
         this.spotMaxTrailingBelowDelta = rules.maxTrailingBelowDelta();
         this.spotMaxNumOrders = rules.maxNumOrders();
         this.spotMaxNumAlgoOrders = rules.maxNumAlgoOrders();
+    }
+
+    /**
+     * The Futures rules kept (TR-39): {@code PERCENT_PRICE}, one pair of multipliers for both sides, and the caps on
+     * open orders; the other Futures filters are not kept.
+     */
+    private SymbolRules futuresRules() {
+        return new SymbolRules(
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                futuresMultiplierUp,
+                futuresMultiplierDown,
+                futuresMultiplierUp,
+                futuresMultiplierDown,
+                null,
+                null,
+                null,
+                null,
+                futuresMaxNumOrders,
+                futuresMaxNumAlgoOrders);
     }
 
     private SymbolRules spotRules() {

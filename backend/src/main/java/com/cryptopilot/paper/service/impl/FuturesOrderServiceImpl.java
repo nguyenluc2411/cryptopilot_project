@@ -178,6 +178,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             }
             SpotFilters.requireNotional(filters, valuedAt.multiply(request.quantity()), false, "quantity");
         }
+        requirePercentPrice(filters, request, mark, book);
         if (request.withTpSl()) {
             requireTpSl(filters, request, request.price() != null ? request.price() : mark != null ? mark : last);
         }
@@ -536,6 +537,54 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         feed.futuresOrder(account, order);
         events.publishEvent(new PaperOrderCanceled(order.getId()));
         tpSl.settle(account, order, at);
+    }
+
+    /**
+     * {@code PERCENT_PRICE} of Futures (TR-39, plan 5.1): a BUY at most the mark times {@code multiplierUp}
+     * ({@code -4016}), a SELL at least the mark times {@code multiplierDown} ({@code -4024}); a MARKET order is judged
+     * by the best price of the book it takes ({@code -4131}). Without a mark, or a book for a MARKET order, nothing is
+     * checked: the order is then refused or valued by the stale-mark rules.
+     */
+    private static void requirePercentPrice(
+            PairFilters filters, FuturesOrderRequest request, BigDecimal mark, Optional<SpotArrival.Book> book) {
+        if (mark == null) {
+            return;
+        }
+        boolean buy = request.side() == OrderSide.BUY;
+        BigDecimal multiplier =
+                buy ? filters.rules().bidMultiplierUp() : filters.rules().askMultiplierDown();
+        if (multiplier == null) {
+            return;
+        }
+        boolean marketOrder = request.type() == OrderType.MARKET;
+        BigDecimal price = marketOrder
+                ? book.map(found -> found.levels().getFirst().price()).orElse(null)
+                : request.price();
+        if (price == null) {
+            return;
+        }
+        BigDecimal bound = mark.multiply(multiplier);
+        if (buy ? price.compareTo(bound) <= 0 : price.compareTo(bound) >= 0) {
+            return;
+        }
+        String limit = bound.stripTrailingZeros().toPlainString();
+        throw marketOrder
+                ? new FuturesRejection(
+                        ErrorCode.PAPER_PERCENT_PRICE,
+                        -4131,
+                        "The counterparty's best price does not meet the PERCENT_PRICE filter limit.",
+                        "price",
+                        price,
+                        limit,
+                        buy ? SpotFilters.MAX : SpotFilters.MIN)
+                : new FuturesRejection(
+                        ErrorCode.PAPER_PERCENT_PRICE,
+                        buy ? -4016 : -4024,
+                        "Limit price can't be " + (buy ? "higher" : "lower") + " than " + limit + ".",
+                        "price",
+                        price,
+                        limit,
+                        buy ? SpotFilters.MAX : SpotFilters.MIN);
     }
 
     /** Whether an order of {@code side} on {@code positionSide} closes a hedge-mode side (TR-14b). */

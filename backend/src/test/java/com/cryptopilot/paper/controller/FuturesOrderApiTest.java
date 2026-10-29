@@ -314,6 +314,34 @@ class FuturesOrderApiTest {
         assertThat(openPositions(trader)).isZero();
     }
 
+    /**
+     * TR-39 (plan 5.1): with PERCENT_PRICE 1.05 / 0.95 and the mark at 100, a BUY LIMIT above 105 and a SELL LIMIT
+     * below 95 are refused, as is a MARKET BUY whose best ask is above 105; at the bound the order is taken.
+     */
+    @Test
+    void TR39_percentPrice_keepsALimitPriceNearTheMark_andAMarketOrderOffAFarBook() throws Exception {
+        sql.sql("update crypto_pair set futures_multiplier_up = 1.05, futures_multiplier_down = 0.95 where pair_id = ?")
+                .param(pair)
+                .update();
+        UUID trader = trader(true);
+
+        place(trader, limit("BUY", "GTC", "105.1", "1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PAPER_PERCENT_PRICE"))
+                .andExpect(jsonPath("$.binanceCode").value(-4016));
+        place(trader, limit("SELL", "GTC", "94.9", "1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.binanceCode").value(-4024));
+        place(trader, limit("BUY", "GTC", "95", "1")).andExpect(status().isOk());
+        place(trader, limit("SELL", "GTC", "105", "1")).andExpect(status().isOk());
+
+        depth(List.of(level("105.5", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.binanceCode").value(-4131));
+        place(trader, market("SELL", "1")).andExpect(status().isOk());
+    }
+
     @Test
     void TR15_aKeySentAgain_returnsTheOrderPlaced_andAKeyReusedForAnotherOrder_isAConflict() throws Exception {
         UUID trader = trader(true);
