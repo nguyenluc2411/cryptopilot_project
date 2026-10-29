@@ -334,6 +334,34 @@ class OpenApiDocsTest {
         }
     }
 
+    /**
+     * D-60: the futures metrics name the bearer scheme and document MSG44 and MSG29; the analysis documents MSG29 and
+     * describes {@code componentsLocked}; the futures stats stay public and say which blocks need the plan.
+     */
+    @Test
+    void D60_theGatedOperations_documentThePlanTheyNeed() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        assertThat(securityOf(body, "/api/v1/market/futures/{symbol}/metrics", "get"))
+                .containsExactly(OpenApiConfig.BEARER);
+        Map<String, Map<String, Object>> metrics =
+                JsonPath.read(body, "$.paths['/api/v1/market/futures/{symbol}/metrics'].get.responses");
+        assertThat((String) metrics.get("401").get("description")).contains("MSG44");
+        assertThat((String) metrics.get("403").get("description")).contains("MSG29");
+        Map<String, Map<String, Object>> analysis =
+                JsonPath.read(body, "$.paths['/api/v1/analysis/{market}/{symbol}'].get.responses");
+        assertThat((String) analysis.get("403").get("description")).contains("MSG29");
+        assertThat((String) JsonPath.read(body, "$.paths['/api/v1/analysis/{market}/{symbol}'].get.description"))
+                .contains("componentsLocked");
+        assertThat((String)
+                        JsonPath.read(body, "$.components.schemas.AnalysisResponse.properties.componentsLocked.type"))
+                .isEqualTo("boolean");
+        assertThat(securityOf(body, "/api/v1/market/futures/{symbol}/stats", "get"))
+                .isEmpty();
+        assertThat((String) JsonPath.read(body, "$.paths['/api/v1/market/futures/{symbol}/stats'].get.description"))
+                .contains("FUTURES_ANALYSIS");
+    }
+
     /** D-65: the unconfirmed switch to AGGRESSIVE is documented as the 400 of MSG48, like every validation error. */
     @Test
     void D65_theRiskProfileChoice_documentsMsg48UnderBadRequest() throws Exception {

@@ -22,12 +22,14 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * The computed analysis of SCR-10 and SCR-11 (UC-10, UC-11): indicators, support and resistance, component scores and
  * the setup score of the caller's preset. Trader only — the filter chain keeps {@code /api/v1/analysis/**} out of the
- * public market data (SRS 3.1.3).
+ * public market data (SRS 3.1.3). The Futures analysis needs a plan with {@code FUTURES_ANALYSIS} and the component
+ * scores a plan with {@code SCORE_COMPONENTS} (D-60).
  *
  * <p>Times are ISO 8601 in UTC and decimals are strings (TECHNICAL_DESIGN 8). A value that cannot be computed yet is
  * {@code null}.
  *
- * <p>Rule: UC-10, UC-11, BR-07, BR-08, BR-12, BR-13, BR-14; SRS 3.1.3, 3.3.2; TECHNICAL_DESIGN 7.4 and 8; D-53.
+ * <p>Rule: UC-10, UC-11, BR-07, BR-08, BR-12, BR-13, BR-14, BR-62; SRS 3.1.3, 3.3.2, CR-08; TECHNICAL_DESIGN 7.4 and
+ * 8; D-53, D-60.
  */
 @Tag(
         name = "Analysis",
@@ -41,9 +43,15 @@ public class AnalysisController {
     private final AnalysisService analysis;
 
     /** The latest analysis of a series and the setup score of the caller's preset (UC-10, UC-11). */
-    @Operation(summary = "Latest analysis of a pair and the setup score of the caller's preset (UC-10, UC-11)")
+    @Operation(
+            summary = "Latest analysis of a pair and the setup score of the caller's preset (UC-10, UC-11)",
+            description = "Without SCORE_COMPONENTS in the caller's plan, componentsLocked is true and both components"
+                    + " and setupScore.components are null; the total score is still answered (CR-08, D-60).")
     @ApiResponse(responseCode = "200", description = "The analysis; values not computable yet are null")
     @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(
+            responseCode = "403",
+            description = "MSG29: Futures analysis on a plan without FUTURES_ANALYSIS; MSG43: not a Trader")
     @ApiResponse(
             responseCode = "404",
             description = "MSG41: no pair with that symbol is enabled on that market (BR-07)")
