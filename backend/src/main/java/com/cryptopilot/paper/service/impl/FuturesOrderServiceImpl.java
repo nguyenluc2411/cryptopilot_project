@@ -282,6 +282,32 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
 
     @Override
     @Transactional(readOnly = true)
+    public List<FuturesOrderResponse> forceOrders(
+            UUID userId, String symbol, Instant startTime, Instant endTime, Integer limit) {
+        requireFutures(userId);
+        TimeBounds.requireOrdered(startTime, endTime);
+        UUID pairId = symbol == null ? null : margins.pair(symbol).pairId();
+        int size = forceLimitOf(limit);
+        Instant from = TimeBounds.fromOrEarliest(startTime);
+        Instant to = TimeBounds.toOrLatest(endTime);
+        PageRequest page = PageRequest.of(0, MAX_LIMIT);
+        List<PaperOrder> found = (pairId == null
+                        ? orders.search(userId, MarketType.FUTURES, EnumSet.allOf(OrderStatus.class), from, to, page)
+                        : orders.searchPair(
+                                userId, pairId, MarketType.FUTURES, EnumSet.allOf(OrderStatus.class), from, to, page))
+                .getContent().stream()
+                        .filter(order -> order.getClientOrderId().startsWith(FuturesLiquidation.AUTOCLOSE))
+                        .limit(size)
+                        .toList();
+        Map<UUID, String> symbols =
+                symbolsOf(found.stream().map(PaperOrder::getPairId).toList());
+        return found.stream()
+                .map(order -> PaperResponses.futuresOrder(order, symbols.get(order.getPairId())))
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<FuturesTradeResponse> userTrades(
             UUID userId, String symbol, Instant startTime, Instant endTime, Integer limit) {
         requireFutures(userId);
@@ -561,6 +587,16 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             market.pairListings(Set.copyOf(pairIds)).forEach(pair -> symbols.put(pair.pairId(), pair.symbol()));
         }
         return symbols;
+    }
+
+    private static int forceLimitOf(Integer limit) {
+        if (limit == null) {
+            return 50;
+        }
+        if (limit < 1 || limit > 100) {
+            throw new FieldValidationException("limit must be 1 to 100", Map.of("limit", "MSG15"));
+        }
+        return limit;
     }
 
     private static int limitOf(Integer limit) {

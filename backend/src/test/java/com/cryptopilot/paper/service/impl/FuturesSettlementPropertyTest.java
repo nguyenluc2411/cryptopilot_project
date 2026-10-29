@@ -16,6 +16,7 @@ import com.cryptopilot.paper.dto.request.FuturesMarginTypeRequest;
 import com.cryptopilot.paper.dto.request.FuturesOrderRequest;
 import com.cryptopilot.paper.dto.request.FuturesPositionMarginRequest;
 import com.cryptopilot.paper.dto.request.TransferRequest;
+import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.MarginType;
@@ -52,7 +53,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * The money invariants of paper Futures (plan 4.3, 14.2) on the database: random sequences of what a Trader and the
- * market do, through the services as the API calls them, each followed by a check of every invariant. Two pairs, one
+ * market do, through the services as the API calls them, liquidations included, each followed by a check of every invariant. Two pairs, one
  * starting cross and one isolated at 50x; marks that drift and often jump by up to 40 %, so losses beyond an isolated
  * wallet and a cross wallet below zero happen (no liquidation exists yet to stop them). A refusal of the exchange's
  * rules is a valid outcome of a step; any other failure fails the sequence.
@@ -65,7 +66,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  *       order's executed quantity is the sum of its fills.
  * </ul>
  *
- * <p>Rule: TR-16, TR-17, TR-18; D-127.
+ * <p>Rule: TR-16, TR-17, TR-18, TR-22; D-127.
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
@@ -230,8 +231,13 @@ class FuturesSettlementPropertyTest {
             WalletType from = random.nextBoolean() ? WalletType.FUTURES : WalletType.SPOT;
             BigDecimal amount = BigDecimal.valueOf(1 + random.nextInt(3000));
             attempt(() -> paper.transfer(trader, new TransferRequest("USDT", from, amount, null)));
-        } else {
+        } else if (action < 97) {
             attempt(() -> orders.cancelAll(trader, symbol));
+        } else {
+            // The engine's check at the current mark: liquidates what that mark reaches, nothing else.
+            for (LiquidationLevel level : matching.liquidationLevels(trader, pairs.get(pair))) {
+                attempt(() -> matching.liquidate(level, marks.get(pair), Instant.now()));
+            }
         }
     }
 

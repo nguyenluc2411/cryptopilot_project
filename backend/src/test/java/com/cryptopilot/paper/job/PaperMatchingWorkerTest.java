@@ -27,12 +27,14 @@ import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
+import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.LimitFillMode;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.MutableTestClock;
@@ -738,6 +740,25 @@ class PaperMatchingWorkerTest {
         verify(matching, timeout(WAIT))
                 .trigger(onMark, MINUTE_1.plusSeconds(1), new BigDecimal("95"), FillSource.LIVE, null);
         verify(matching, never()).trigger(eq(onLast), any(), any(), any(), any());
+    }
+
+    /** TR-22: a mark reaching a liquidation level liquidates it; one the database no longer bears out is read again. */
+    @Test
+    void TR22_aMarkReachingALevel_liquidatesIt_andAStaleLevelIsReadAgain() {
+        UUID trader = UUID.randomUUID();
+        LiquidationLevel reached =
+                new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("95"));
+        LiquidationLevel short_ =
+                new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.SHORT, new BigDecimal("120"));
+        when(matching.liquidationLevels()).thenReturn(List.of(reached, short_));
+        when(matching.liquidate(any(), any(), any())).thenReturn(false);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("94"), MINUTE_1));
+
+        verify(matching, timeout(WAIT)).liquidate(reached, new BigDecimal("94"), MINUTE_1);
+        verify(matching, timeout(WAIT)).liquidationLevels(trader, PAIR);
+        verify(matching, never()).liquidate(eq(short_), any(), any());
     }
 
     @Test

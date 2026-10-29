@@ -22,11 +22,13 @@ import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.dto.response.FuturesAccountResponse;
 import com.cryptopilot.paper.dto.response.FuturesOrderUpdateResponse;
+import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -72,11 +74,11 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * position, the Futures wallet, the isolated wallet and its audit rows; then the positions and the account read at
  * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes;
  * what each committed change pushes on the Trader's Futures queues; what a stale mark price refuses; and the
- * conditional orders, placed, triggered and ended.
+ * conditional orders, placed, triggered and ended; and the liquidation of isolated positions.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-20, TR-22a, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-20, TR-22, TR-22a, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -1312,6 +1314,90 @@ class FuturesOrderApiTest {
                 new BigDecimal(price),
                 FillSource.LIVE,
                 null);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Liquidation of isolated positions
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Plan 4.12, example 1: Long 0.1 at 60,000, 10x, a wallet of 600, liquidated at 54,216.9: a loss of 578.31 and a
+     * clearance fee of what is left, 21.69 (less than 1.25 % of the notional): the Trader loses the 600, no more.
+     */
+    @Test
+    void TR22_anIsolatedLong_isLiquidatedAtItsPrice_andLosesExactlyItsWallet() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+        String waiting = id(place(trader, limit("BUY", "GTC", "55000", "0.1")).andExpect(status().isOk()));
+        UUID positionId = (UUID) position(trader).get("position_id");
+
+        mark("56000");
+        assertThat(liquidate(trader, positionId, "56000")).isFalse();
+        assertThat(liquidate(trader, positionId, "54216.9")).isTrue();
+
+        Map<String, Object> closed = sql.sql("select * from futures_position where position_id = ?")
+                .param(positionId)
+                .query()
+                .singleRow();
+        assertThat(closed.get("close_reason")).isEqualTo("LIQUIDATION");
+        assertThat((BigDecimal) closed.get("realized_pnl_amount")).isEqualByComparingTo("-578.31");
+        assertThat((BigDecimal) closed.get("liquidation_fee_amount")).isEqualByComparingTo("21.69");
+        assertThat(wallet(trader)).isEqualByComparingTo("4400");
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+        assertThat(sql.sql("""
+                                select count(*) from wallet_ledger_entry
+                                 where user_id = ? and entry_type = 'INSURANCE_COVER'""").param(trader).query(Long.class).single()).isZero();
+        assertThat(statusOf(waiting)).isEqualTo("CANCELED");
+        as(trader, get(FUTURES + "/forceOrders"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].status").value("FILLED"))
+                .andExpect(jsonPath("$[0].avgPrice").value(numeric("54216.9")))
+                .andExpect(jsonPath("$[0].reduceOnly").value(true));
+        String clientId = JsonPath.read(
+                as(trader, get(FUTURES + "/forceOrders").param("symbol", symbol), null)
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString(),
+                "$[0].clientOrderId");
+        assertThat(clientId).startsWith("autoclose-");
+        as(trader, get(FUTURES + "/forceOrders").param("limit", "101"), null).andExpect(status().isBadRequest());
+    }
+
+    /** A mark past the bankruptcy price: the loss beyond the wallet is an insurance cover, no fee is left to take. */
+    @Test
+    void TR22_aMarkPastTheBankruptcyPrice_leavesTheCrossWalletWhole() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+        UUID positionId = (UUID) position(trader).get("position_id");
+
+        assertThat(liquidate(trader, positionId, "50000")).isTrue();
+
+        // Lost 1,000 on a wallet of 600: 400 covered.
+        assertThat(wallet(trader)).isEqualByComparingTo("4400");
+        assertThat(sql.sql("""
+                                select amount from wallet_ledger_entry
+                                 where user_id = ? and entry_type = 'INSURANCE_COVER'""").param(trader).query(BigDecimal.class).single()).isEqualByComparingTo("400");
+        Map<String, Object> adjustment = sql.sql("""
+                        select amount, ref_type from futures_margin_adjustment
+                         where position_id = ? and adjustment_type = 'LIQUIDATION'""").param(positionId).query().singleRow();
+        assertThat((BigDecimal) adjustment.get("amount")).isEqualByComparingTo("-600");
+        assertThat(adjustment.get("ref_type")).isEqualTo("LEDGER");
+        assertThat(liquidate(trader, positionId, "40000")).isFalse();
+    }
+
+    /** The engine liquidates a position the way the matching service does it for a mark that reached its level. */
+    private boolean liquidate(UUID trader, UUID positionId, String mark) {
+        return matching.liquidate(
+                new LiquidationLevel(positionId, trader, pair, PositionDirection.LONG, new BigDecimal("54216.9")),
+                new BigDecimal(mark),
+                Instant.now());
     }
 
     /** A mark the exchange produced longer ago than mark-max-age (5 s): the cache holds it, but it is not current. */

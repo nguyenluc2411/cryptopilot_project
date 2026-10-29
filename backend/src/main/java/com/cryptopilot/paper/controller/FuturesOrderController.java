@@ -146,6 +146,22 @@ public class FuturesOrderController {
         return futures.allOrders(callerOf(caller), symbol, startTime, endTime, limit);
     }
 
+    @Operation(summary = "The Trader's liquidation orders, newest first. Binance: GET /fapi/v1/forceOrders")
+    @ApiResponse(responseCode = "200", description = "The liquidation orders (clientOrderId autoclose-…)")
+    @ApiResponse(responseCode = "400", description = "MSG15: limit outside 1 … 100, or startTime after endTime")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
+    @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
+    @GetMapping("/forceOrders")
+    public List<FuturesOrderResponse> forceOrders(
+            @AuthenticationPrincipal Jwt caller,
+            @Parameter(description = "The pair; every pair when absent") @RequestParam(required = false) String symbol,
+            @Parameter(description = "Placed at or after, ISO-8601") @RequestParam(required = false) Instant startTime,
+            @Parameter(description = "Placed before, ISO-8601") @RequestParam(required = false) Instant endTime,
+            @Parameter(description = "1 to 100; 50 when absent") @RequestParam(required = false) Integer limit) {
+        return futures.forceOrders(callerOf(caller), symbol, startTime, endTime, limit);
+    }
+
     @Operation(summary = "The latest trades of a pair, oldest first. Binance: GET /fapi/v1/userTrades")
     @ApiResponse(
             responseCode = "200",

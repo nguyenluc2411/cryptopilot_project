@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.service;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
@@ -28,6 +29,19 @@ public interface PaperMatchingService {
 
     /** Every Futures conditional order that waits for the mark price to trigger it (TR-20). */
     List<TriggerOrder> markTriggerOrders();
+
+    /** The liquidation levels of every open isolated Futures position (TR-22). */
+    List<LiquidationLevel> liquidationLevels();
+
+    /** The liquidation levels of one Trader's open isolated Futures positions on one pair, as they are now (TR-22). */
+    List<LiquidationLevel> liquidationLevels(UUID userId, UUID pairId);
+
+    /**
+     * Liquidates the position of the level under its Trader's lock if the mark still reaches it (TR-22).
+     *
+     * @return whether it was liquidated; {@code false} for a level the database no longer bears out
+     */
+    boolean liquidate(LiquidationLevel level, BigDecimal mark, Instant at);
 
     /**
      * Triggers a stop limit or a trailing stop the last price reached, under its Trader's lock, if it still waits: it

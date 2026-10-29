@@ -226,6 +226,14 @@ public class FuturesPosition extends BaseEntity {
         }
     }
 
+    /** Adds the clearance fee its liquidation took (TR-22). */
+    public void addLiquidationFee(BigDecimal fee) {
+        if (fee.signum() < 0) {
+            throw new IllegalArgumentException("a liquidation fee is not negative, was " + fee.toPlainString());
+        }
+        liquidationFeeAmount = liquidationFeeAmount.add(fee);
+    }
+
     /** Sets the leverage of the open position; the caller checked it against the brackets and the margin. */
     public void changeLeverage(int leverage) {
         if (leverage < 1) {

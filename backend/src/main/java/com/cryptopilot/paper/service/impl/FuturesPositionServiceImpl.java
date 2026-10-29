@@ -20,6 +20,7 @@ import com.cryptopilot.paper.dto.response.FuturesPositionMarginResponse;
 import com.cryptopilot.paper.entity.FuturesAccountConfig;
 import com.cryptopilot.paper.entity.FuturesMarginAdjustment;
 import com.cryptopilot.paper.entity.FuturesPosition;
+import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.exception.FuturesRejection;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.MarginAdjustmentType;
@@ -47,6 +48,7 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -96,6 +98,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     private final MarketApi market;
     private final EntitlementApi entitlements;
     private final PaperUserFeed feed;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional
@@ -174,6 +177,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
                 null));
         margins.recordChange(account);
         feed.futuresAccount(trader);
+        events.publishEvent(new FuturesAccountChanged(userId, pair.pairId()));
         return new FuturesPositionMarginResponse(
                 amount, 200, MODIFIED, request.type(), position.getIsolatedWalletAmount());
     }

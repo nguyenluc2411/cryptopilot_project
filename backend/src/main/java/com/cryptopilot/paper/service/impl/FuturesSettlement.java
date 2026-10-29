@@ -12,6 +12,7 @@ import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperLedgerEntry;
 import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.model.IsolatedCashFlow;
 import com.cryptopilot.paper.model.PaperAccount;
@@ -147,7 +148,82 @@ class FuturesSettlement {
             coverCrossDeficit(account, userId, position, usdt);
         }
         margins.recordChange(margins.accountConfig(userId));
+        events.publishEvent(new FuturesAccountChanged(userId, order.getPairId()));
         return executed;
+    }
+
+    /**
+     * Liquidates an isolated position (TR-22, plan 4.12): the system's MARKET order closes all of it at the mark that
+     * reached it, the clearance fee is {@code min(notional × rate, what the wallet has left)}, and the realised loss
+     * and the fee are one closing event of the isolated cash-flow rule (A): the cross wallet never pays for it, and a
+     * loss beyond the wallet is an insurance cover. The orders of the pair were cancelled by the caller.
+     *
+     * @param order the stored system MARKET order, reduce-only, of the position's size
+     * @param feeRate the liquidation clearance fee rate (D-97)
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    void liquidate(
+            PaperAccount account,
+            PaperOrder order,
+            FuturesPosition position,
+            BigDecimal mark,
+            BigDecimal feeRate,
+            Instant at) {
+        CoinListing usdt = margins.usdt();
+        BigDecimal quantity = position.getQuantity();
+        BigDecimal realized = FuturesMarginMath.applyFill(
+                        position.signedQuantity(), position.getEntryPrice(), order.getSide(), quantity, mark)
+                .realizedPnl();
+        BigDecimal wallet = position.getIsolatedWalletAmount();
+        BigDecimal fee = FuturesMarginMath.liquidationFee(
+                quantity.multiply(mark), feeRate, wallet.add(realized).max(BigDecimal.ZERO));
+        PaperFill fill = fills.save(PaperFill.futures(
+                order,
+                execution(mark, quantity, Liquidity.TAKER, FillSource.LIVE, at, usdt),
+                position.getId(),
+                realized));
+        feed.futuresFill(account, order, fill);
+        Ref byFill = Ref.to(LedgerRefType.FILL, fill.getId());
+        if (realized.signum() != 0) {
+            wallets.changeFutures(account, usdt, realized, LedgerEntryType.REALIZED_PNL, byFill);
+        }
+        if (fee.signum() > 0) {
+            wallets.changeFutures(account, usdt, fee.negate(), LedgerEntryType.LIQUIDATION_FEE, byFill);
+        }
+        IsolatedCashFlow flow = FuturesMarginMath.closeFlow(wallet, quantity, quantity, realized, fee);
+        PaperLedgerEntry cover = null;
+        if (flow.insuranceCover().signum() > 0) {
+            cover = wallets.changeFutures(
+                    account,
+                    usdt,
+                    flow.insuranceCover(),
+                    LedgerEntryType.INSURANCE_COVER,
+                    Ref.to(LedgerRefType.POSITION, position.getId()));
+        }
+        if (flow.isolatedWalletChange().signum() != 0) {
+            position.adjustIsolatedWallet(flow.isolatedWalletChange());
+            adjustments.save(
+                    cover == null
+                            ? FuturesMarginAdjustment.of(
+                                    position,
+                                    MarginAdjustmentType.LIQUIDATION,
+                                    flow.isolatedWalletChange(),
+                                    MarginAdjustmentRefType.FILL,
+                                    fill.getId())
+                            : FuturesMarginAdjustment.of(
+                                    position,
+                                    MarginAdjustmentType.LIQUIDATION,
+                                    flow.isolatedWalletChange(),
+                                    MarginAdjustmentRefType.LEDGER,
+                                    cover.getId()));
+        }
+        position.reduce(quantity, mark, realized, PositionCloseReason.LIQUIDATION, at);
+        position.addLiquidationFee(fee);
+        order.fill(quantity, mark, Rounding.toAmount(mark.multiply(quantity)), at);
+        feed.futuresOrder(account, order);
+        trimReduceOnly(account, order.getPairId(), at);
+        margins.recordChange(margins.accountConfig(account.userId()));
+        events.publishEvent(new FuturesAccountChanged(account.userId(), order.getPairId()));
     }
 
     /** The part of a fill that reduces or closes the position, and the isolated cash flow it makes. */

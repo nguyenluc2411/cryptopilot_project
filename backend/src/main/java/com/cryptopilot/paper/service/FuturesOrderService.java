@@ -43,6 +43,15 @@ public interface FuturesOrderService {
     List<FuturesOrderResponse> allOrders(UUID userId, String symbol, Instant startTime, Instant endTime, Integer limit);
 
     /**
+     * The liquidation orders of the Trader, of one pair or of all, placed in {@code [startTime, endTime)}, newest
+     * first (TR-22). Binance: {@code GET /fapi/v1/forceOrders}.
+     *
+     * @param limit how many, 1 to 100; 50 when absent
+     */
+    List<FuturesOrderResponse> forceOrders(
+            UUID userId, String symbol, Instant startTime, Instant endTime, Integer limit);
+
+    /**
      * The latest fills of the pair traded in {@code [startTime, endTime)}, oldest first.
      *
      * @param limit how many, 1 to 1000; 500 when absent

@@ -5,6 +5,7 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
@@ -39,12 +40,13 @@ import org.springframework.transaction.annotation.Transactional;
  * A stop limit or a trailing stop the price triggered is triggered the same way, under the lock, and only once.
  *
  * <p>A Futures order's fill is applied to the Trader's position by {@link FuturesSettlement} (TR-16), and a Futures
- * conditional order the price triggered places the order it carries through {@link FuturesTrigger} (TR-20).
+ * conditional order the price triggered places the order it carries through {@link FuturesTrigger} (TR-20). An
+ * isolated position a mark reached is liquidated through {@link FuturesLiquidation} (TR-22).
  *
  * <p>An order of a Spot pair the system no longer trades, stopped by the exchange or disabled by an administrator, is
  * cancelled instead ({@code PAIR_NOT_TRADING}), by the cancellation the pair's stop runs.
  *
- * <p>Rule: TR-02, TR-09, TR-11, TR-16, TR-20; NSF-01, NSF-07; Q-T6.
+ * <p>Rule: TR-02, TR-09, TR-11, TR-16, TR-20, TR-22; NSF-01, NSF-07; Q-T6.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -57,6 +59,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final SpotSettlement settlement;
     private final FuturesSettlement futuresSettlement;
     private final FuturesTrigger futuresTrigger;
+    private final FuturesLiquidation liquidation;
     private final SpotStopTrigger stopTrigger;
     private final PaperOrderLists lists;
     private final PairStopCancellation pairStops;
@@ -141,6 +144,27 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     @Transactional(readOnly = true)
     public List<TriggerOrder> markTriggerOrders() {
         return orders.findAwaitingMarkTrigger(OrderStatus.OPEN);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LiquidationLevel> liquidationLevels() {
+        return liquidation.levels();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LiquidationLevel> liquidationLevels(UUID userId, UUID pairId) {
+        return liquidation.levels(userId, pairId);
+    }
+
+    @Override
+    @Transactional
+    public boolean liquidate(LiquidationLevel level, BigDecimal mark, Instant at) {
+        PaperAccount account = accounts.findByUserId(level.userId())
+                .orElseThrow(() -> new IllegalStateException("account " + level.userId() + " is not stored"));
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.userId());
+        return liquidation.liquidate(account, level.positionId(), mark, at);
     }
 
     @Override

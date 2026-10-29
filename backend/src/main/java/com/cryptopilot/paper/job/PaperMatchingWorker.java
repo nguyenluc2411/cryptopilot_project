@@ -11,13 +11,16 @@ import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
+import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperOrderAwaitingMarkTrigger;
 import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
+import com.cryptopilot.paper.matching.LiquidationBook;
 import com.cryptopilot.paper.matching.PaperOrderBook;
 import com.cryptopilot.paper.matching.PaperOrderBook.BookKey;
 import com.cryptopilot.paper.matching.TriggerBook;
+import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.PriceRange;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
@@ -177,6 +180,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     /** The Futures conditional orders on the mark price (TR-20); owned like {@link #book}. */
     private final TriggerBook markTriggers = new TriggerBook();
 
+    /** The liquidation levels of the isolated Futures positions (TR-22); owned like {@link #book}. */
+    private final LiquidationBook liquidations = new LiquidationBook();
+
     /** The latest live trades of each pair the consumer matched, earliest first; owned like {@link #book}. */
     private final Map<BookKey, Deque<PriceRange.Print>> recentTrades = new HashMap<>();
 
@@ -240,6 +246,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
         // A mark trigger missed while the engine was down waits for the next mark; replaying marks is TR-42.
         matching.markTriggerOrders().forEach(markTriggers::track);
+        matching.liquidationLevels().forEach(liquidations::track);
         if (properties.replay().enabled()) {
             oldest.forEach((key, placedAt) -> startupReplay(key, placedAt));
         }
@@ -445,6 +452,17 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
     }
 
+    /**
+     * A committed change of a Trader's position or isolated wallet on a pair: its liquidation levels are read again on
+     * the consumer thread, which alone owns the book (TR-22, plan 9.6).
+     */
+    @TransactionalEventListener
+    public void onAccountChanged(FuturesAccountChanged event) {
+        if (running) {
+            queue.offer(new Command.AccountChanged(event.userId(), event.pairId()));
+        }
+    }
+
     /** A cancelled order leaves the book. */
     @TransactionalEventListener
     public void onCanceled(PaperOrderCanceled event) {
@@ -485,6 +503,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                 forgetIfIdle(key);
             }
             case Command.TrackMarkTrigger track -> markTriggers.track(track.order());
+            case Command.AccountChanged changed -> refreshLevels(changed.userId(), changed.pairId());
             case Command.Mark markKey -> {
                 MarkPrice mark = marks.remove(markKey.key());
                 if (mark != null) {
@@ -674,8 +693,39 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
     }
 
-    /** Triggers the conditional orders a mark price reached, earliest placed first (TR-20). */
+    /**
+     * A mark price of a Futures pair: first the conditional orders it reached, earliest placed first (TR-20), then the
+     * isolated positions whose liquidation price it reached, the furthest first (TR-22). A stop above a long's
+     * liquidation price is on the mark's way down before it, so it goes first (plan 8.4); a position it closed is then
+     * found closed and not liquidated.
+     */
     private void onMark(BookKey key, MarkPrice mark) {
+        triggerOnMark(key, mark);
+        for (LiquidationLevel level : liquidations.reached(key.pairId(), mark.price())) {
+            try {
+                if (!matching.liquidate(level, mark.price(), mark.eventTime())) {
+                    refreshLevels(level.userId(), level.pairId());
+                }
+            } catch (RuntimeException failure) {
+                log.warn(
+                        "TR-22 liquidation of position {} failed; it is tried at the next mark: {}",
+                        level.positionId(),
+                        failure.toString());
+            }
+        }
+    }
+
+    /** Reads the Trader's liquidation levels on the pair again, as the database holds them now. */
+    private void refreshLevels(UUID userId, UUID pairId) {
+        try {
+            liquidations.replace(userId, pairId, matching.liquidationLevels(userId, pairId));
+        } catch (RuntimeException failure) {
+            log.warn("TR-22 liquidation levels of user {} on {} not read: {}", userId, pairId, failure.toString());
+        }
+    }
+
+    /** Triggers the conditional orders a mark price reached, earliest placed first (TR-20). */
+    private void triggerOnMark(BookKey key, MarkPrice mark) {
         PriceRange range = PriceRange.ofPrints(
                 key.market(),
                 key.pairId(),
@@ -1087,6 +1137,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
         /** Read the pair's latest mark price (TR-20). */
         record Mark(BookKey key) implements Command {}
+
+        /** Read a Trader's liquidation levels on a pair again (TR-22). */
+        record AccountChanged(UUID userId, UUID pairId) implements Command {}
 
         record Untrack(UUID orderId) implements Command {}
 
