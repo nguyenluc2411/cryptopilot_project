@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
@@ -21,6 +22,9 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.dto.response.FuturesAccountResponse;
+import com.cryptopilot.paper.dto.response.FuturesAlgoOrderResponse;
+import com.cryptopilot.paper.dto.response.FuturesConfigUpdateResponse;
+import com.cryptopilot.paper.dto.response.FuturesMarginCallResponse;
 import com.cryptopilot.paper.dto.response.FuturesOrderUpdateResponse;
 import com.cryptopilot.paper.job.FuturesFundingJob;
 import com.cryptopilot.paper.model.CrossAccount;
@@ -28,6 +32,7 @@ import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
+import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.PositionDirection;
@@ -145,7 +150,16 @@ class FuturesOrderApiTest {
 
     @AfterEach
     void removeRows() {
+        // The risk notices (TR-43) are written after the commit: wait for them before the Traders go.
+        await().atMost(Duration.ofSeconds(10))
+                .until(() -> sql.sql("select count(*) from event_publication"
+                                        + " where listener_id like '%FuturesNotificationListener%'"
+                                        + " and completion_date is null")
+                                .query(Long.class)
+                                .single()
+                        == 0);
         for (UUID trader : traders) {
+            sql.sql("delete from notification where user_id = ?").param(trader).update();
             for (String table : List.of(
                     "futures_margin_adjustment",
                     "order_fill",
@@ -2012,6 +2026,106 @@ class FuturesOrderApiTest {
 
         assertThat(openPositions(trader)).isOne();
         assertThat(position(trader).get("position_side")).isEqualTo("SHORT");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Settings, conditional orders and margin calls on the user queues (TR-43)
+    // ------------------------------------------------------------------------------------------
+
+    /** A settings change goes on futures.config, a conditional order on futures.algo and never on futures.orders. */
+    @Test
+    void TR43_aSettingsChange_andAConditionalOrder_arePushedOnTheirOwnQueues() throws Exception {
+        UUID trader = trader(true);
+        clearInvocations(broker);
+
+        leverage(trader, 10);
+        FuturesConfigUpdateResponse leverage = (FuturesConfigUpdateResponse) single(trader, "/queue/futures.config");
+        assertThat(leverage.symbol()).isEqualTo(symbol);
+        assertThat(leverage.leverage()).isEqualTo(10);
+        clearInvocations(broker);
+        positionMode(trader, true).andExpect(status().isOk());
+        FuturesConfigUpdateResponse mode = (FuturesConfigUpdateResponse) single(trader, "/queue/futures.config");
+        assertThat(mode.dualSidePosition()).isTrue();
+        assertThat(mode.symbol()).isNull();
+        positionMode(trader, false).andExpect(status().isOk());
+
+        clearInvocations(broker);
+        String id = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "95", "quantity": "1", "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+
+        FuturesAlgoOrderResponse algo = (FuturesAlgoOrderResponse) single(trader, "/queue/futures.algo");
+        assertThat(algo.algoId()).hasToString(id);
+        assertThat(algo.algoStatus()).isEqualTo("NEW");
+        verify(broker, never())
+                .convertAndSendToUser(eq(trader.toString()), eq("/queue/futures.orders"), any(Object.class));
+    }
+
+    /**
+     * Plan 4.10: an isolated long of 0.1 at 60,000 with a wallet of 600 gets a margin call once
+     * {@code 0.1 × mark × 0.4 % / (600 + 0.1 × (mark − 60,000))} reaches 80 %: at 54,271.4 or below. The engine
+     * watches that price beside the liquidation price; the call goes on futures.marginCall and in a notice, and the
+     * liquidation that follows is told too.
+     */
+    @Test
+    void TR43_anIsolatedPositionPastTheRatio_getsAMarginCall_andTheLiquidationANotice() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+        UUID positionId = (UUID) position(trader).get("position_id");
+
+        assertThat(matching.liquidationLevels(trader, pair)).singleElement().satisfies(level -> {
+            assertThat(level.price()).isEqualByComparingTo("54216.9");
+            assertThat(level.marginCallPrice()).isEqualByComparingTo("54271.4");
+        });
+        clearInvocations(broker);
+        assertThat(matching.marginCall(trader, positionId, new BigDecimal("56000"), Instant.now()))
+                .isFalse();
+        verify(broker, never())
+                .convertAndSendToUser(eq(trader.toString()), eq("/queue/futures.marginCall"), any(Object.class));
+
+        assertThat(matching.marginCall(trader, positionId, new BigDecimal("54250"), Instant.now()))
+                .isTrue();
+
+        FuturesMarginCallResponse call = (FuturesMarginCallResponse) single(trader, "/queue/futures.marginCall");
+        assertThat(call.symbol()).isEqualTo(symbol);
+        // 21.7 / 25
+        assertThat(call.marginRatio()).isEqualByComparingTo("0.868");
+        assertThat(liquidate(trader, positionId, "54216.9")).isTrue();
+        await().atMost(Duration.ofSeconds(10)).until(() -> notices(trader).size() == 2);
+        assertThat(notices(trader)).containsExactlyInAnyOrder("Margin call", "Position liquidated");
+    }
+
+    /** Plan 4.10: the cross positions together get a margin call once their ratio reaches 80 %, below liquidation. */
+    @Test
+    void TR43_crossPositionsPastTheRatio_getAMarginCall() throws Exception {
+        UUID trader = trader(true);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+
+        // 0.1 × 20,000 × 0.4 % = 8 over 5,000 − 4,000 = 1,000: no call.
+        mark("20000");
+        assertThat(matching.marginCall(trader, null, null, Instant.now())).isFalse();
+        // 4.018 over 4.5: 89 %, not yet liquidated (at 10,040.16).
+        mark("10045");
+        clearInvocations(broker);
+        assertThat(matching.marginCall(trader, null, null, Instant.now())).isTrue();
+
+        FuturesMarginCallResponse call = (FuturesMarginCallResponse) single(trader, "/queue/futures.marginCall");
+        assertThat(call.symbol()).isNull();
+        assertThat(call.marginType()).isEqualTo(MarginType.CROSSED);
+        assertThat(call.marginBalance()).isEqualByComparingTo("4.5");
+        await().atMost(Duration.ofSeconds(10)).until(() -> notices(trader).contains("Margin call"));
+    }
+
+    private List<String> notices(UUID trader) {
+        return sql.sql("select title from notification where user_id = ? and notification_type = 'FUTURES'")
+                .param(trader)
+                .query(String.class)
+                .list();
     }
 
     private ResultActions positionMode(UUID trader, boolean dual) throws Exception {

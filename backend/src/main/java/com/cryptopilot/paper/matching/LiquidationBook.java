@@ -61,6 +61,17 @@ public final class LiquidationBook {
         return reached;
     }
 
+    /** The levels of the pair whose margin call price the mark reached, but not their liquidation price (TR-43). */
+    public List<LiquidationLevel> marginCalls(UUID pairId, BigDecimal mark) {
+        Map<UUID, LiquidationLevel> pair = levels.get(key(pairId));
+        if (pair == null) {
+            return List.of();
+        }
+        return pair.values().stream()
+                .filter(level -> level.marginCallReachedBy(mark))
+                .toList();
+    }
+
     /** Whether any level of the pair is watched. */
     public boolean hasLevels(UUID pairId) {
         return levels.containsKey(key(pairId));

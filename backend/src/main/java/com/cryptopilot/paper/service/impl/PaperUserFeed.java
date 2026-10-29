@@ -6,6 +6,8 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.paper.dto.response.BalanceUpdateResponse;
 import com.cryptopilot.paper.dto.response.FuturesAccountResponse;
+import com.cryptopilot.paper.dto.response.FuturesConfigUpdateResponse;
+import com.cryptopilot.paper.dto.response.FuturesMarginCallResponse;
 import com.cryptopilot.paper.dto.response.FuturesOrderUpdateResponse;
 import com.cryptopilot.paper.dto.response.FuturesTradeResponse;
 import com.cryptopilot.paper.entity.PaperBalance;
@@ -38,7 +40,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * on {@code /user/queue/balances}, in that order, once the transaction has committed. A paper Futures order is pushed
  * with the fills the transaction made on {@code /user/queue/futures.orders}, and the Futures account the transaction
  * changed on {@code /user/queue/futures.account}, as the exchange's {@code ORDER_TRADE_UPDATE} and
- * {@code ACCOUNT_UPDATE} (TR-41); the Spot queues never carry a Futures order or fill.
+ * {@code ACCOUNT_UPDATE} (TR-41); the Spot queues never carry a Futures order or fill. A Futures conditional order goes
+ * on {@code /user/queue/futures.algo} instead ({@code ALGO_UPDATE}), a change of the settings on
+ * {@code /user/queue/futures.config} ({@code ACCOUNT_CONFIG_UPDATE}) and a margin call on
+ * {@code /user/queue/futures.marginCall} ({@code MARGIN_CALL}) (TR-43).
  *
  * <h2>Only what was committed</h2>
  *
@@ -54,7 +59,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *
  * <p>Runs inside the caller's transaction. Outside one there is nothing to wait for, so nothing is noted.
  *
- * <p>Rule: TR-08, TR-41; TECHNICAL_DESIGN 9.
+ * <p>Rule: TR-08, TR-41, TR-43; TECHNICAL_DESIGN 9.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -74,6 +79,15 @@ public class PaperUserFeed {
 
     /** The queue of the paper Futures account, after a change of its wallet, a position or an order. */
     static final String FUTURES_ACCOUNT = "/queue/futures.account";
+
+    /** The queue of each paper Futures conditional order whose state changed (TR-43). */
+    static final String FUTURES_ALGO = "/queue/futures.algo";
+
+    /** The queue of each change of the paper Futures settings (TR-43). */
+    static final String FUTURES_CONFIG = "/queue/futures.config";
+
+    /** The queue of the paper Futures margin calls (TR-43). */
+    static final String FUTURES_MARGIN_CALL = "/queue/futures.marginCall";
 
     /** The key the changes noted in a transaction are bound to. */
     private static final Object PENDING = new Object();
@@ -113,8 +127,25 @@ public class PaperUserFeed {
     void futuresOrder(PaperAccount account, PaperOrder order) {
         Pending pending = pending();
         if (pending != null) {
-            pending.futuresOrders.put(order.getId(), new Owned<>(account.userId(), order));
+            (order.isConditional() ? pending.futuresAlgos : pending.futuresOrders)
+                    .put(order.getId(), new Owned<>(account.userId(), order));
             pending.futuresAccounts.add(account.userId());
+        }
+    }
+
+    /** Notes a change of the Trader's Futures settings (TR-43). */
+    void futuresConfig(UUID userId, FuturesConfigUpdateResponse change) {
+        Pending pending = pending();
+        if (pending != null) {
+            pending.direct.add(new Message(userId, FUTURES_CONFIG, change));
+        }
+    }
+
+    /** Notes a margin call of the Trader (TR-43). */
+    void marginCall(UUID userId, FuturesMarginCallResponse call) {
+        Pending pending = pending();
+        if (pending != null) {
+            pending.direct.add(new Message(userId, FUTURES_MARGIN_CALL, call));
         }
     }
 
@@ -173,6 +204,9 @@ public class PaperUserFeed {
             pending.futuresOrders
                     .values()
                     .forEach(owned -> pairIds.add(owned.row().getPairId()));
+            pending.futuresAlgos
+                    .values()
+                    .forEach(owned -> pairIds.add(owned.row().getPairId()));
             pending.fills.values().forEach(owned -> pairIds.add(owned.row().getPairId()));
             Map<UUID, String> symbols = pairIds.isEmpty()
                     ? Map.of()
@@ -218,6 +252,14 @@ public class PaperUserFeed {
                         FUTURES_ORDERS,
                         new FuturesOrderUpdateResponse(PaperResponses.futuresOrder(owned.row(), symbol), trades)));
             });
+            pending.futuresAlgos
+                    .values()
+                    .forEach(owned -> messages.add(new Message(
+                            owned.userId(),
+                            FUTURES_ALGO,
+                            PaperResponses.futuresAlgo(
+                                    owned.row(), symbols.get(owned.row().getPairId()), null))));
+            messages.addAll(pending.direct);
             for (UUID userId : pending.futuresAccounts) {
                 futuresAccount(userId).ifPresent(body -> messages.add(new Message(userId, FUTURES_ACCOUNT, body)));
             }
@@ -273,6 +315,8 @@ public class PaperUserFeed {
         private final Map<BalanceKey, Owned<Moved>> balances = new LinkedHashMap<>();
         private final Map<UUID, Owned<PaperOrder>> futuresOrders = new LinkedHashMap<>();
         private final Map<UUID, Owned<PaperFill>> futuresFills = new LinkedHashMap<>();
+        private final Map<UUID, Owned<PaperOrder>> futuresAlgos = new LinkedHashMap<>();
+        private final List<Message> direct = new ArrayList<>();
         private final Set<UUID> futuresAccounts = new LinkedHashSet<>();
         private List<Message> messages = List.of();
     }

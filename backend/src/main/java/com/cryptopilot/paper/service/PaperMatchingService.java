@@ -54,6 +54,15 @@ public interface PaperMatchingService {
      */
     Optional<UUID> liquidateCross(UUID userId, UUID pairId, Instant at);
 
+    /**
+     * Sends a margin call if the margin ratio holds on the database now (TR-43): of the isolated position, or of the
+     * Trader's cross positions together when {@code positionId} is {@code null}.
+     *
+     * @param mark the mark of the isolated position's pair; unused for the cross positions
+     * @return whether a call was sent
+     */
+    boolean marginCall(UUID userId, UUID positionId, BigDecimal mark, Instant at);
+
     /** The Traders whose cross liquidation started at or before {@code at} and still runs (TR-23). */
     List<UUID> liquidatingSince(Instant at);
 

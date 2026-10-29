@@ -66,6 +66,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final FuturesTrigger futuresTrigger;
     private final FuturesLiquidation liquidation;
     private final FuturesCrossLiquidation crossLiquidation;
+    private final FuturesMarginCalls marginCalls;
     private final FuturesAccountConfigRepository accountConfigs;
     private final FuturesOrderLists futuresTpSl;
     private final SpotStopTrigger stopTrigger;
@@ -186,6 +187,14 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         }
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         return crossLiquidation.step(account.get(), pairId, at);
+    }
+
+    @Override
+    @Transactional
+    public boolean marginCall(UUID userId, UUID positionId, BigDecimal mark, Instant at) {
+        return accounts.findByUserId(userId)
+                .map(account -> marginCalls.call(account, positionId, mark, at))
+                .orElse(false);
     }
 
     @Override

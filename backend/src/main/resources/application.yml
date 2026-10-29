@@ -372,6 +372,10 @@ cryptopilot:
       # TR-23, plan 9.3: a cross liquidation still running after this is judged again and resumed by a safety job,
       # which runs this often (and once at start).
       liquidation-max-duration: 30s
+      # TR-43, plan 4.10: a margin call at this margin ratio (maintenance over margin balance), at most once per
+      # cooldown for a position or a cross account.
+      margin-call-ratio: 0.8
+      margin-call-cooldown: 30m
     account:
       # TR-04, Q-T5: the virtual funds a paper account is opened with, granted once; there is no reset. Keys in lower
       # case, the form an environment variable binds to, so CRYPTOPILOT_PAPER_ACCOUNT_SPOTGRANT_USDT replaces usdt

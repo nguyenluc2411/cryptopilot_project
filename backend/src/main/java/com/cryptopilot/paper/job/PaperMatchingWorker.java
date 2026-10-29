@@ -154,6 +154,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * so it closes in its turn, at that pair's mark. A liquidation still running after {@code liquidation-max-duration},
  * or at start, is resumed by {@link #resumeLiquidations()}.
  *
+ * <p>The same screening asks for a margin call (TR-43): of an isolated position whose margin call price the mark
+ * reached, and of a Trader whose cross margin ratio is at or above {@code margin-call-ratio}; each at most once per
+ * {@code margin-call-cooldown}, kept in memory, so a restart may call once more.
+ *
  * <p>Rule: TR-02, TR-05, TR-09, TR-11, TR-23, TR-42; NSF-07; Q-T1, Q-T6, Q-T8; A-04; D-77, D-78; ADR-011.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
@@ -228,6 +232,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     /** The Traders with a cross position on each pair (TR-23); owned like {@link #book}. */
     private final Map<UUID, Set<UUID>> crossHolders = new HashMap<>();
+
+    /** When a margin call was last sent, by isolated position or by cross Trader (TR-43); owned like {@link #book}. */
+    private final Map<UUID, Instant> marginCalledAt = new HashMap<>();
 
     /** The latest mark of each Futures pair, live or replayed (TR-23); owned like {@link #book}. */
     private final Map<UUID, BigDecimal> latestMarks = new HashMap<>();
@@ -814,8 +821,30 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                         failure.toString());
             }
         }
+        for (LiquidationLevel level : liquidations.marginCalls(key.pairId(), mark.price())) {
+            marginCall(level.userId(), level.positionId(), mark.price(), at);
+        }
         latestMarks.put(key.pairId(), mark.price());
         screenCross(key.pairId(), at);
+    }
+
+    /**
+     * Asks for a margin call of an isolated position, or of a Trader's cross positions when {@code positionId} is
+     * {@code null}, unless one was sent within {@code margin-call-cooldown} (TR-43).
+     */
+    private void marginCall(UUID userId, UUID positionId, BigDecimal mark, Instant at) {
+        UUID key = positionId != null ? positionId : userId;
+        Instant last = marginCalledAt.get(key);
+        if (last != null && at.isBefore(last.plus(futures.marginCallCooldown()))) {
+            return;
+        }
+        try {
+            if (matching.marginCall(userId, positionId, mark, at)) {
+                marginCalledAt.put(key, at);
+            }
+        } catch (RuntimeException failure) {
+            log.warn("TR-43 margin call of user {} not sent: {}", userId, failure.toString());
+        }
     }
 
     /**
@@ -829,27 +858,38 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
         for (UUID userId : List.copyOf(holders)) {
             CrossAccount account = crossAccounts.get(userId);
-            if (account != null && crossDue(account)) {
+            Optional<BigDecimal[]> margin = account == null ? Optional.empty() : crossMargin(account);
+            if (margin.isEmpty()) {
+                continue;
+            }
+            BigDecimal balance = margin.get()[0];
+            BigDecimal maintenance = margin.get()[1];
+            if (balance.compareTo(maintenance) <= 0) {
                 crossStep(userId, pairId, at);
+            } else if (maintenance.compareTo(balance.multiply(futures.marginCallRatio())) >= 0) {
+                marginCall(userId, null, null, at);
             }
         }
     }
 
-    /** Whether the snapshot is at or past liquidation at the latest marks; not while a pair of it has no mark yet. */
-    private boolean crossDue(CrossAccount account) {
+    /**
+     * The snapshot's cross margin balance and maintenance margin at the latest marks, in that order; empty while a pair
+     * of it has no mark yet.
+     */
+    private Optional<BigDecimal[]> crossMargin(CrossAccount account) {
         BigDecimal balance = account.crossWalletBalance();
         BigDecimal maintenance = BigDecimal.ZERO;
         for (CrossAccount.Leg leg : account.legs()) {
             BigDecimal mark = latestMarks.get(leg.pairId());
             if (mark == null || leg.tiers().isEmpty()) {
-                return false;
+                return Optional.empty();
             }
             balance = balance.add(
                     FuturesMarginMath.unrealizedPnl(leg.direction(), leg.quantity(), leg.entryPrice(), mark));
             maintenance = maintenance.add(FuturesMarginMath.liquidationMaintenance(
                     leg.tiers(), leg.quantity().multiply(mark)));
         }
-        return balance.compareTo(maintenance) <= 0;
+        return Optional.of(new BigDecimal[] {balance, maintenance});
     }
 
     /**

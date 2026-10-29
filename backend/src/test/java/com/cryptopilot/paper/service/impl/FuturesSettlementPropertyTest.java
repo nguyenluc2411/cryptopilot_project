@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.market.MarketTestData;
@@ -134,6 +135,15 @@ class FuturesSettlementPropertyTest {
     @AfterEach
     void removeRows() {
         if (trader != null) {
+            // The liquidation notices (TR-43) are written after the commit: wait for them before the Trader goes.
+            await().atMost(Duration.ofSeconds(10))
+                    .until(() -> sql.sql("select count(*) from event_publication"
+                                            + " where listener_id like '%FuturesNotificationListener%'"
+                                            + " and completion_date is null")
+                                    .query(Long.class)
+                                    .single()
+                            == 0);
+            sql.sql("delete from notification where user_id = ?").param(trader).update();
             for (String table : List.of(
                     "futures_margin_adjustment",
                     "order_fill",

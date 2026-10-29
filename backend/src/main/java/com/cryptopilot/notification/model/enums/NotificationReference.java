@@ -16,5 +16,8 @@ public enum NotificationReference {
     NEWS_SOURCE,
 
     /** A member's page, for a follow (D-125). */
-    MEMBER
+    MEMBER,
+
+    /** A paper Futures position (TR-43). */
+    FUTURES_POSITION
 }

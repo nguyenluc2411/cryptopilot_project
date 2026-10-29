@@ -26,6 +26,9 @@ import org.springframework.validation.annotation.Validated;
  *     algo documentation; a setting in case it changes)
  * @param liquidationMaxDuration how long a cross liquidation may run before the safety job judges the account again
  *     and resumes it (plan 9.3); also how often that job runs
+ * @param marginCallRatio the margin ratio, maintenance margin over margin balance, at which a margin call is sent
+ *     (plan 4.10: the exchange publishes none; 80 % is the level it advises acting at)
+ * @param marginCallCooldown how long after a margin call the same position, or the same cross account, gets none
  */
 @Validated
 @ConfigurationProperties(prefix = "cryptopilot.paper.futures")
@@ -40,4 +43,12 @@ public record PaperFuturesProperties(
 
         @NotNull @DecimalMin("0.1") @DefaultValue("20") BigDecimal maxCallbackRate,
 
-        @NotNull @DefaultValue("30s") Duration liquidationMaxDuration) {}
+        @NotNull @DefaultValue("30s") Duration liquidationMaxDuration,
+
+        @NotNull
+        @DecimalMin(value = "0", inclusive = false)
+        @DecimalMax(value = "1", inclusive = false)
+        @DefaultValue("0.8")
+        BigDecimal marginCallRatio,
+
+        @NotNull @DefaultValue("30m") Duration marginCallCooldown) {}

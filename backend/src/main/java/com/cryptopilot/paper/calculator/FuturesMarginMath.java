@@ -111,6 +111,22 @@ public final class FuturesMarginMath {
     }
 
     /**
+     * The brackets with each maintenance margin rate and amount divided by {@code ratio}: the liquidation price solved
+     * with them is where the margin ratio reaches {@code ratio}, the margin call price (TR-43, plan 4.10).
+     */
+    public static List<LeverageTier> scaledMaintenance(List<LeverageTier> tiers, BigDecimal ratio) {
+        return withMaintenanceAmounts(tiers).stream()
+                .map(tier -> new LeverageTier(
+                        tier.bracketNo(),
+                        tier.notionalFloor(),
+                        tier.notionalCap(),
+                        tier.maxLeverage(),
+                        Rounding.divide(tier.maintenanceMarginRate(), ratio),
+                        Rounding.divide(tier.maintenanceAmount(), ratio)))
+                .toList();
+    }
+
+    /**
      * The maintenance margin a liquidation is judged by: {@code |notional| × MMR − cum} of the notional's bracket, the
      * brackets' maintenance amounts filled in, the largest bracket's above every cap; not rounded.
      *

@@ -3,12 +3,14 @@ package com.cryptopilot.paper.service.impl;
 import com.cryptopilot.admin.SystemSettingApi;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairListing;
+import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.entity.FuturesAccountConfig;
 import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.event.FuturesAccountChanged;
+import com.cryptopilot.paper.event.FuturesRiskNotice;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.PaperAccount;
@@ -157,6 +159,20 @@ class FuturesCrossLiquidation {
                 new CrossAccount(userId, margins.futuresWallet(userId).subtract(isolated), legs));
     }
 
+    /**
+     * The cross margin balance and maintenance margin of the Trader at the latest marks (TR-43); empty without cross
+     * positions or while a pair of them has no mark.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    Optional<CrossMargin> crossMargin(UUID userId) {
+        return judge(userId)
+                .filter(judgement -> judgement.firstToClose() != null)
+                .map(judgement -> new CrossMargin(judgement.marginBalance(), judgement.maintenance()));
+    }
+
+    /** The cross margin balance, cross wallet plus cross unrealized profit, and the cross maintenance margin. */
+    record CrossMargin(BigDecimal marginBalance, BigDecimal maintenance) {}
+
     /** The Trader's cross positions at their latest marks; empty when one of them has no mark at all. */
     private Optional<Judgement> judge(UUID userId) {
         List<FuturesPosition> open = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN);
@@ -222,6 +238,17 @@ class FuturesCrossLiquidation {
                 judgement.unrealized().subtract(judgement.unrealizedByPosition().get(position.getId()));
         settlement.liquidateCross(
                 account, order, position, mark, settings.decimal(FuturesLiquidation.CLEARANCE_FEE), others, at);
+        events.publishEvent(new FuturesRiskNotice(
+                account.userId(),
+                FuturesRiskNotice.Kind.LIQUIDATION,
+                market.tradablePair(position.getPairId(), MarketType.FUTURES)
+                        .map(TradablePair::symbol)
+                        .orElse(null),
+                MarginType.CROSSED.name(),
+                position.getId(),
+                mark,
+                null,
+                at));
         log.info("TR-23 cross position {} of user {} liquidated at mark {}", position.getId(), account.userId(), mark);
     }
 

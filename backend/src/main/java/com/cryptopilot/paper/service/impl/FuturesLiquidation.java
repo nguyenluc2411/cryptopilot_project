@@ -7,8 +7,10 @@ import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
+import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.event.FuturesRiskNotice;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.PaperAccount;
@@ -82,6 +84,7 @@ class FuturesLiquidation {
     private final MarketApi market;
     private final SystemSettingApi settings;
     private final ApplicationEventPublisher events;
+    private final PaperFuturesProperties futures;
 
     /** The levels of every open isolated position, which the engine starts watching from. */
     @Transactional(propagation = Propagation.MANDATORY)
@@ -135,6 +138,17 @@ class FuturesLiquidation {
                 position.getQuantity(),
                 true));
         settlement.liquidate(account, order, position, mark, settings.decimal(CLEARANCE_FEE), at);
+        events.publishEvent(new FuturesRiskNotice(
+                account.userId(),
+                FuturesRiskNotice.Kind.LIQUIDATION,
+                market.tradablePair(position.getPairId(), MarketType.FUTURES)
+                        .map(TradablePair::symbol)
+                        .orElse(null),
+                MarginType.ISOLATED.name(),
+                position.getId(),
+                mark,
+                null,
+                at));
         log.info(
                 "TR-22 isolated position {} of user {} liquidated at mark {}",
                 position.getId(),
@@ -159,6 +173,7 @@ class FuturesLiquidation {
                 .map(TradablePair::filters)
                 .map(PairFilters::tickSize)
                 .orElse(FINEST_TICK);
+        List<LeverageTier> tiers = market.leverageBrackets(position.getPairId());
         BigDecimal price = FuturesMarginMath.liquidationPrice(
                 position.getDirection(),
                 position.getQuantity(),
@@ -166,10 +181,25 @@ class FuturesLiquidation {
                 position.getIsolatedWalletAmount(),
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
-                market.leverageBrackets(position.getPairId()),
+                tiers,
+                tick);
+        // Where MM / (IW + uPnL) reaches the ratio: the liquidation price with the maintenance margin over the ratio.
+        BigDecimal marginCall = FuturesMarginMath.liquidationPrice(
+                position.getDirection(),
+                position.getQuantity(),
+                position.getEntryPrice(),
+                position.getIsolatedWalletAmount(),
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                FuturesMarginMath.scaledMaintenance(tiers, futures.marginCallRatio()),
                 tick);
         return new LiquidationLevel(
-                position.getId(), position.getUserId(), position.getPairId(), position.getDirection(), price);
+                position.getId(),
+                position.getUserId(),
+                position.getPairId(),
+                position.getDirection(),
+                price,
+                marginCall);
     }
 
     /** The maintenance margin by the notional's bracket, the largest bracket's above every cap. */

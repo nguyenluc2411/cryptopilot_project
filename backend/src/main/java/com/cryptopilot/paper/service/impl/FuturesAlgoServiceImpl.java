@@ -94,13 +94,14 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     private final EntitlementApi entitlements;
     private final ApplicationEventPublisher events;
     private final FuturesOrderLists tpSl;
+    private final PaperUserFeed feed;
     private final Clock clock;
     private final PaperFuturesProperties futures;
 
     @Override
     @Transactional
     public FuturesAlgoOrderResponse place(UUID userId, FuturesAlgoOrderRequest request) {
-        requireFutures(userId);
+        PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesAccountConfig accountConfig = margins.accountConfig(userId);
         if (accountConfig.liquidating()) {
@@ -181,6 +182,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
                                 request.reducing(),
                                 request.closing()));
         events.publishEvent(FuturesTrigger.awaiting(order));
+        feed.futuresOrder(account, order);
         return PaperResponses.futuresAlgo(order, pair.symbol(), null);
     }
 
@@ -445,6 +447,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     /** Cancels a waiting conditional order; the engine stops watching it after the commit. */
     private void cancelWaiting(PaperAccount account, PaperOrder order, Instant at) {
         order.cancel(at);
+        feed.futuresOrder(account, order);
         events.publishEvent(new PaperOrderCanceled(order.getId()));
         tpSl.settle(account, order, at);
     }

@@ -14,6 +14,7 @@ import com.cryptopilot.paper.dto.request.FuturesLeverageRequest;
 import com.cryptopilot.paper.dto.request.FuturesMarginTypeRequest;
 import com.cryptopilot.paper.dto.request.FuturesPositionModeRequest;
 import com.cryptopilot.paper.dto.response.FuturesAccountConfigResponse;
+import com.cryptopilot.paper.dto.response.FuturesConfigUpdateResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageBracketResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageResponse;
 import com.cryptopilot.paper.dto.response.FuturesPositionModeResponse;
@@ -34,6 +35,7 @@ import com.cryptopilot.paper.repository.PaperOrderRepository;
 import com.cryptopilot.paper.service.FuturesConfigService;
 import com.cryptopilot.paper.service.impl.FuturesMargins.FuturesPair;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -73,6 +75,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     private final MarketApi market;
     private final EntitlementApi entitlements;
     private final PaperUserFeed feed;
+    private final Clock clock;
 
     @Override
     @Transactional
@@ -122,6 +125,8 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
         }
         config.changePositionMode(request.dualSidePosition());
         margins.recordChange(config);
+        feed.futuresConfig(
+                userId, new FuturesConfigUpdateResponse(null, null, null, request.dualSidePosition(), clock.instant()));
         return new FuturesPositionModeResponse(config.isDualSidePosition());
     }
 
@@ -176,6 +181,8 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
         }
         config.changeLeverage(leverage);
         symbolConfigs.save(config);
+        feed.futuresConfig(
+                userId, new FuturesConfigUpdateResponse(pair.symbol(), leverage, null, null, clock.instant()));
         return new FuturesLeverageResponse(pair.symbol(), leverage, maxNotional);
     }
 
@@ -203,6 +210,9 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
                     ErrorCode.PAPER_MARGIN_TYPE, -4048, "Margin type cannot be changed if there exists position.");
         }
         config.changeMarginType(request.marginType());
+        feed.futuresConfig(
+                userId,
+                new FuturesConfigUpdateResponse(pair.symbol(), null, request.marginType(), null, clock.instant()));
         return response(pair.symbol(), pair.tiers(), symbolConfigs.save(config));
     }
 

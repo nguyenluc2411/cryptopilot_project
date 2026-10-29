@@ -80,7 +80,9 @@ class PaperMatchingWorkerTest {
             new BigDecimal("0.01"),
             new BigDecimal("0.05"),
             new BigDecimal("20"),
-            Duration.ofSeconds(30));
+            Duration.ofSeconds(30),
+            new BigDecimal("0.8"),
+            Duration.ofMinutes(30));
 
     private final PaperMatchingService matching = mock(PaperMatchingService.class);
     private final MarketApi market = mock(MarketApi.class);
@@ -948,6 +950,52 @@ class PaperMatchingWorkerTest {
 
         verify(matching, timeout(WAIT)).liquidatingSince(MINUTE_2.minusSeconds(30));
         verify(matching, timeout(WAIT).times(2)).liquidateCross(trader, PAIR, MINUTE_2);
+    }
+
+    /**
+     * TR-43: a mark past an isolated position's margin call price, short of its liquidation price, asks for a margin
+     * call, once per cooldown; a mark that reaches the liquidation price liquidates instead.
+     */
+    @Test
+    void TR43_aMarkPastTheMarginCallPrice_asksForACall_oncePerCooldown() {
+        UUID trader = UUID.randomUUID();
+        LiquidationLevel level = new LiquidationLevel(
+                UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("94"), new BigDecimal("96"));
+        when(matching.liquidationLevels()).thenReturn(List.of(level));
+        when(matching.marginCall(any(), any(), any(), any())).thenReturn(true);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), MINUTE_1));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("95.5"), MINUTE_1.plusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("95"), MINUTE_1.plusSeconds(2)));
+
+        verify(matching, timeout(WAIT))
+                .marginCall(trader, level.positionId(), new BigDecimal("95.5"), MINUTE_1.plusSeconds(1));
+        verify(matching, after(200).times(1)).marginCall(any(), any(), any(), any());
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("95"), MINUTE_1.plus(Duration.ofMinutes(31))));
+        verify(matching, timeout(WAIT).times(2)).marginCall(any(), any(), any(), any());
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("93"), MINUTE_2.plus(Duration.ofMinutes(40))));
+        verify(matching, timeout(WAIT)).liquidate(eq(level), any(), any());
+        verify(matching, after(200).times(2)).marginCall(any(), any(), any(), any());
+    }
+
+    /** TR-43: a cross snapshot whose ratio reaches 80 %, short of liquidation, asks for a call of the cross positions. */
+    @Test
+    void TR43_aCrossSnapshotPastTheRatio_asksForACrossCall() {
+        UUID trader = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        when(matching.crossAccounts()).thenReturn(List.of(crossAccount(trader, other)));
+        when(matching.marginCall(any(), any(), any(), any())).thenReturn(true);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(other, new BigDecimal("100"), MINUTE_0));
+        // 5,000 + 0.1 × (10,045 − 60,000) = 4.5 against a maintenance of 4.018: 89 %.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("10045"), MINUTE_1));
+
+        verify(matching, timeout(WAIT)).marginCall(trader, null, null, MINUTE_1);
+        verify(matching, never()).liquidateCross(any(), any(), any());
     }
 
     private static CrossAccount crossAccount(UUID trader, UUID other) {
