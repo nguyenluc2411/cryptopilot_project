@@ -22,6 +22,7 @@ import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.dto.response.FuturesAccountResponse;
 import com.cryptopilot.paper.dto.response.FuturesOrderUpdateResponse;
+import com.cryptopilot.paper.job.FuturesFundingJob;
 import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
@@ -74,11 +75,11 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * position, the Futures wallet, the isolated wallet and its audit rows; then the positions and the account read at
  * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes;
  * what each committed change pushes on the Trader's Futures queues; what a stale mark price refuses; and the
- * conditional orders, placed, triggered and ended; and the liquidation of isolated positions.
+ * conditional orders, placed, triggered and ended; the liquidation of isolated positions; and funding.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-20, TR-22, TR-22a, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-20, TR-22, TR-22a, TR-24, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -115,6 +116,9 @@ class FuturesOrderApiTest {
 
     @Autowired
     private StringRedisTemplate redis;
+
+    @Autowired
+    private FuturesFundingJob funding;
 
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
@@ -164,6 +168,9 @@ class FuturesOrderApiTest {
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         trading.retainOnly(MarketType.FUTURES, List.of());
+        sql.sql("delete from funding_rate_history where pair_id = ?")
+                .param(pair)
+                .update();
         sql.sql("delete from leverage_bracket where pair_id = ?").param(pair).update();
         new MarketTestData(sql, Instant.now()).remove(pair);
         for (String coin : List.of("USDT", "BTC", "ETH", "BNB")) {
@@ -1398,6 +1405,90 @@ class FuturesOrderApiTest {
                 new LiquidationLevel(positionId, trader, pair, PositionDirection.LONG, new BigDecimal("54216.9")),
                 new BigDecimal(mark),
                 Instant.now());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Funding
+    // ------------------------------------------------------------------------------------------
+
+    /** A long pays a positive rate on its size at the settlement, once, however often the run goes. */
+    @Test
+    void TR24_aCrossLong_paysThePositiveRate_once() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        backdate(trader, Duration.ofHours(2));
+        settlement(Duration.ofHours(1), "0.0001", "100");
+
+        assertThat(funding.run()).isEqualTo(1);
+        assertThat(funding.run()).isZero();
+
+        // -1 x 1 x 100 x 0.0001
+        assertThat(wallet(trader)).isEqualByComparingTo("4999.99");
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+        assertThat((BigDecimal) position(trader).get("funding_amount")).isEqualByComparingTo("-0.01");
+        assertThat(sql.sql("""
+                                select ref_type from wallet_ledger_entry
+                                 where user_id = ? and entry_type = 'FUNDING_FEE'""").param(trader).query(String.class).single()).isEqualTo("FUNDING");
+    }
+
+    /**
+     * An isolated short takes funding in its wallet both ways (rule B): received, the wallet grows; paid beyond it, the
+     * wallet goes to zero and the rest is an insurance cover, never the cross wallet.
+     */
+    @Test
+    void TR24_anIsolatedShort_takesFundingInItsWallet_andAPaymentBeyondItIsCovered() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        depth(List.of(level("100.1", "5")), List.of(level("100", "5")));
+        place(trader, market("SELL", "2")).andExpect(status().isOk());
+        UUID positionId = (UUID) position(trader).get("position_id");
+        backdate(trader, Duration.ofHours(3));
+        settlement(Duration.ofHours(2), "0.01", "100");
+        settlement(Duration.ofHours(1), "-0.2", "100");
+
+        assertThat(funding.run()).isEqualTo(2);
+
+        // +2 into a wallet of 20, then -40 on 22: 18 covered.
+        assertThat((BigDecimal) position(trader).get("isolated_wallet_amount")).isEqualByComparingTo("0");
+        assertThat(wallet(trader)).isEqualByComparingTo("4980");
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+        assertThat(sql.sql("""
+                                select string_agg(amount::text, ',' order by created_at, adjustment_id)
+                                  from futures_margin_adjustment
+                                 where position_id = ? and adjustment_type = 'FUNDING'""").param(positionId).query(String.class).single()).isEqualTo("2.00000000,-22.00000000");
+    }
+
+    /** A position opened after a settlement owes nothing of it. */
+    @Test
+    void TR24_aPositionOpenedAfterTheSettlement_owesNothing() throws Exception {
+        UUID trader = trader(true);
+        settlement(Duration.ofMinutes(30), "0.0001", "100");
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+
+        assertThat(funding.run()).isZero();
+        assertThat(wallet(trader)).isEqualByComparingTo("5000");
+    }
+
+    /** Moves the Trader's positions and fills back in time, as if opened then. */
+    private void backdate(UUID trader, Duration ago) {
+        Timestamp then = Timestamp.from(Instant.now().minus(ago));
+        sql.sql("update futures_position set opened_at = ? where user_id = ?")
+                .params(then, trader)
+                .update();
+        sql.sql("update order_fill set traded_at = ? where user_id = ?")
+                .params(then, trader)
+                .update();
+    }
+
+    /** A funding settlement of the test pair, stored as the market stores it. */
+    private void settlement(Duration ago, String rate, String mark) {
+        sql.sql("""
+                        insert into funding_rate_history (pair_id, funding_time, funding_rate, mark_price)
+                        values (?, ?, ?, ?)""")
+                .params(pair, Timestamp.from(Instant.now().minus(ago)), new BigDecimal(rate), new BigDecimal(mark))
+                .update();
     }
 
     /** A mark the exchange produced longer ago than mark-max-age (5 s): the cache holds it, but it is not current. */

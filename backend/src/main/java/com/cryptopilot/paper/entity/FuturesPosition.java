@@ -226,6 +226,11 @@ public class FuturesPosition extends BaseEntity {
         }
     }
 
+    /** Adds a funding fee it paid (negative) or received (positive) (TR-24). */
+    public void addFunding(BigDecimal fee) {
+        fundingAmount = fundingAmount.add(fee);
+    }
+
     /** Adds the clearance fee its liquidation took (TR-22). */
     public void addLiquidationFee(BigDecimal fee) {
         if (fee.signum() < 0) {

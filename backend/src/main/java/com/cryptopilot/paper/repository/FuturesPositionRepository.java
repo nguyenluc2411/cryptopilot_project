@@ -3,6 +3,7 @@ package com.cryptopilot.paper.repository;
 import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.PositionStatus;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,6 +27,12 @@ public interface FuturesPositionRepository extends Repository<FuturesPosition, U
 
     /** Every position of every Trader in a status and margin type: the open isolated ones the engine watches. */
     List<FuturesPosition> findByPositionStatusAndMarginType(PositionStatus status, MarginType marginType);
+
+    /** Every position of every Trader in a status: the open ones whose funding is settled. */
+    List<FuturesPosition> findByPositionStatus(PositionStatus status);
+
+    /** Every position closed at or after an instant: a settlement before its close is still owed (TR-24). */
+    List<FuturesPosition> findByClosedAtGreaterThanEqual(Instant closedAt);
 
     FuturesPosition save(FuturesPosition position);
 }

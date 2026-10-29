@@ -2,6 +2,7 @@ package com.cryptopilot.paper.repository;
 
 import com.cryptopilot.paper.entity.PaperLedgerEntry;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
+import com.cryptopilot.paper.model.enums.LedgerRefType;
 import com.cryptopilot.paper.model.enums.WalletType;
 import java.time.Instant;
 import java.util.Collection;
@@ -64,6 +65,9 @@ public interface PaperLedgerEntryRepository extends Repository<PaperLedgerEntry,
     Optional<PaperLedgerEntry> findTransfer(UUID userId, String clientTransferId);
 
     /** Writes an entry. Not transactional here; the unit of work is the calling service's. */
+    /** Whether an entry of this type points at this reference: a funding fee already written (TR-24). */
+    boolean existsByRefTypeAndRefIdAndEntryType(LedgerRefType refType, UUID refId, LedgerEntryType entryType);
+
     PaperLedgerEntry save(PaperLedgerEntry entry);
 
     /**

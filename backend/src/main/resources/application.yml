@@ -394,6 +394,12 @@ cryptopilot:
       # until this time of the day.
       retry-interval: 5m
       retry-until: "23:55"
+    funding:
+      # TR-24, plan 9.4: the funding of every open (or lately closed) paper Futures position is settled from the stored
+      # settlements; idempotent per position and settlement. Off here, on in the dev and prod profiles.
+      enabled: false
+      interval: 1m
+      lookback: 2d
     grant-cost:
       # PT-R13: the granted coins that had no price at the opening get their cost once they have one. Off here, on in
       # the dev and prod profiles.
