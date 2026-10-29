@@ -414,6 +414,13 @@ public enum ErrorCode {
     PAPER_POSITION_SIDE(HttpStatus.BAD_REQUEST, "MSG15"),
 
     /**
+     * The margin of a position cannot change: it is a cross position ({@code -4049}), there is no position
+     * ({@code -4054}), or more is taken out than leaves the initial margin covered ({@code -4051}). Borrows MSG43 like
+     * {@link #PAPER_ORDER_WOULD_TAKE} (A-38). 409: the position refuses it.
+     */
+    PAPER_POSITION_MARGIN(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
      * A file named for a post is not one the post may carry (BR-44): not uploaded, not the caller's, already attached
      * to another post, of a type or size outside the limits, a video too long, or a combination of files a post may
      * not hold. MSG32; the message argument is the limit that applies, e.g. {@code 5 MB}. 400: the request names it.

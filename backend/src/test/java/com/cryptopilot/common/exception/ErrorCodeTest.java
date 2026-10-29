@@ -73,6 +73,7 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.PAPER_INSUFFICIENT_MARGIN, "MSG01 400"),
             Map.entry(ErrorCode.PAPER_REDUCE_ONLY_REJECTED, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_POSITION_SIDE, "MSG15 400"),
+            Map.entry(ErrorCode.PAPER_POSITION_MARGIN, "MSG43 409"),
             Map.entry(ErrorCode.MEDIA_INVALID, "MSG32 400"),
             Map.entry(ErrorCode.MEDIA_KEPT_AS_EVIDENCE, "MSG56 400"),
             Map.entry(ErrorCode.MEDIA_STORAGE_UNAVAILABLE, "MSG43 503"),

@@ -55,11 +55,11 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * Paper Futures orders end to end, on the database: placement with the exchange's refusals and codes, execution on
  * arrival against the Futures book, a waiting order filled by the engine, and what each fill does to the one-way
  * position, the Futures wallet, the isolated wallet and its audit rows; then the positions and the account read at
- * the mark, and the transfer out limited by what can be withdrawn.
+ * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-18; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -746,6 +746,136 @@ class FuturesOrderApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Margin of an isolated position, and closes
+    // ------------------------------------------------------------------------------------------
+
+    /** Plan 4.9: example 1 with 200 added, its liquidation price moves from 54,216.87 to 52,208.84. */
+    @Test
+    void TR17_marginAdded_toAnIsolatedPosition_movesItsLiquidationPriceAway_andCanBeTakenOutAgain() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+
+        positionMargin(trader, "200", 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.type").value(1))
+                .andExpect(jsonPath("$.isolatedWallet").value(numeric("800")));
+        as(trader, get(FUTURES + "/positionRisk"), null)
+                .andExpect(jsonPath("$[0].liquidationPrice").value(numeric("52208.9")));
+        as(trader, get(FUTURES + "/account"), null)
+                .andExpect(jsonPath("$.totalCrossWalletBalance").value(numeric("4200")));
+
+        // At 60,000 and 10x the position needs 600: 200 can come out, not 200.01.
+        positionMargin(trader, "200.01", 2)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_POSITION_MARGIN"))
+                .andExpect(jsonPath("$.binanceCode").value(-4051));
+        positionMargin(trader, "200", 2)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isolatedWallet").value(numeric("600")));
+        positionMargin(trader, "5000", 1)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.binanceCode").value(-2019));
+
+        as(trader, get(FUTURES + "/positionMargin/history").param("symbol", symbol), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].type").value(2))
+                .andExpect(jsonPath("$[0].amount").value(numeric("200")))
+                .andExpect(jsonPath("$[0].deltaType").value("USER_ADJUST"))
+                .andExpect(jsonPath("$[1].type").value(1));
+        as(
+                        trader,
+                        get(FUTURES + "/positionMargin/history")
+                                .param("symbol", symbol)
+                                .param("type", "1"),
+                        null)
+                .andExpect(jsonPath("$.length()").value(1));
+        as(
+                        trader,
+                        get(FUTURES + "/positionMargin/history")
+                                .param("symbol", symbol)
+                                .param("type", "3"),
+                        null)
+                .andExpect(status().isBadRequest());
+        assertThat(wallet(trader)).isEqualByComparingTo("5000");
+    }
+
+    @Test
+    void TR17_aCrossPosition_orNoPosition_hasNoMarginToChange() throws Exception {
+        UUID trader = trader(true);
+
+        positionMargin(trader, "10", 1)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-4054));
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        positionMargin(trader, "10", 1)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-4049));
+        positionMargin(trader, "-1", 1).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void TR17_aShareOfThePosition_isClosedByAReduceOnlyMarket_roundedDownToTheStep() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+
+        close(trader, """
+                        {"symbol": "%s", "type": "MARKET", "percent": 33.33}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].reduceOnly").value(true))
+                .andExpect(jsonPath("$[0].side").value("SELL"))
+                .andExpect(jsonPath("$[0].executedQty").value(numeric("0.333")));
+        assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("0.667");
+
+        close(trader, """
+                        {"symbol": "%s", "type": "LIMIT", "price": "120"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("NEW"))
+                .andExpect(jsonPath("$[0].origQty").value(numeric("0.667")));
+        close(trader, """
+                        {"symbol": "%s", "type": "LIMIT"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.price").value("MSG01"));
+        close(trader, """
+                        {"symbol": "%s", "type": "MARKET", "percent": 0.01}""".formatted(symbol)).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void TR17_closeAll_closesEveryPosition_andWithNoneThereIsNothingToClose() throws Exception {
+        UUID trader = trader(true);
+        close(trader, """
+                        {"type": "MARKET"}""")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        close(trader, """
+                        {"symbol": "%s", "type": "MARKET"}""".formatted(symbol))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-2022));
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("SELL", "2")).andExpect(status().isOk());
+
+        close(trader, """
+                        {"type": "MARKET"}""")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].side").value("BUY"))
+                .andExpect(jsonPath("$[0].status").value("FILLED"));
+
+        assertThat(openPositions(trader)).isZero();
+        close(trader, """
+                        {"type": "LIMIT", "price": "100"}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.symbol").value("MSG01"));
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
 
@@ -762,6 +892,15 @@ class FuturesOrderApiTest {
 
     private ResultActions place(UUID trader, String body) throws Exception {
         return as(trader, post(FUTURES + "/order"), body);
+    }
+
+    private ResultActions positionMargin(UUID trader, String amount, int type) throws Exception {
+        return as(trader, post(FUTURES + "/positionMargin"), """
+                {"symbol": "%s", "amount": "%s", "type": %d}""".formatted(symbol, amount, type));
+    }
+
+    private ResultActions close(UUID trader, String body) throws Exception {
+        return as(trader, post(FUTURES + "/closePosition"), body);
     }
 
     private void leverage(UUID trader, int leverage) throws Exception {
