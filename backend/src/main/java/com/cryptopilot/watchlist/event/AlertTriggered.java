@@ -13,9 +13,9 @@ import java.util.UUID;
  * written (SRS 3.4.4). Published inside the transaction that records the trigger, so a listener sees it only for a
  * trigger that committed.
  *
- * <p>The notification of MSG28 and its delivery on the chosen channels belong to NSF-15 (T-056), which listens to this
- * event; until it exists nobody does, and there is no JDBC event publication registry yet to keep the event across a
- * restart.
+ * <p>The notification of MSG28 and its delivery on the chosen channels belong to NSF-15: {@code notification} listens
+ * to this event, writes the in-app notification and mails it when asked (T-056, T-057). The event publication registry
+ * keeps an undelivered event until its listener completes.
  *
  * <p>Rule: NSF-06, BR-19, BR-20; SRS 3.4.4; TECHNICAL_DESIGN 7.9.
  *
