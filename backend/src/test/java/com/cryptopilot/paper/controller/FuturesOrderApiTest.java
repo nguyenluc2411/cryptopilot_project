@@ -1429,6 +1429,48 @@ class FuturesOrderApiTest {
                 .andExpect(jsonPath("$.algoStatus").value("FINISHED"));
     }
 
+    @Test
+    void TR20_anAlgoKeySentAgain_returnsTheOrderPlaced_andAKeyReusedForAnotherOrder_isAConflict() throws Exception {
+        UUID trader = trader(true);
+        String stop = """
+                {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                 "triggerPrice": "95", "quantity": "1", "workingType": "MARK_PRICE", "clientAlgoId": "sl-1"}""".formatted(symbol);
+        String trailing = """
+                {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "TRAILING_STOP_MARKET",
+                 "quantity": "1", "callbackRate": "1", "activatePrice": "105", "workingType": "MARK_PRICE",
+                 "clientAlgoId": "tr-1"}""".formatted(symbol);
+        place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "LIMIT", "price": "90", "quantity": "1",
+                         "newClientOrderId": "web-1"}""".formatted(symbol)).andExpect(status().isOk());
+
+        String stopId = algoId(algo(trader, stop).andExpect(status().isOk()));
+        algo(trader, stop)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.algoId").value(stopId));
+        algo(trader, stop.replace("\"95\"", "\"94\"")).andExpect(status().isConflict());
+        algo(trader, stop.replace("\"1\"", "\"2\"")).andExpect(status().isConflict());
+        String trailingId = algoId(algo(trader, trailing).andExpect(status().isOk()));
+        algo(trader, trailing)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.algoId").value(trailingId));
+        algo(trader, trailing.replace("\"callbackRate\": \"1\"", "\"callbackRate\": \"2\""))
+                .andExpect(status().isConflict());
+        // A key of an ordinary order names no conditional order.
+        algo(trader, stop.replace("sl-1", "web-1")).andExpect(status().isConflict());
+
+        as(trader, get(FUTURES + "/openAlgoOrders").param("symbol", symbol), null)
+                .andExpect(jsonPath("$.length()").value(2));
+        as(trader, get(FUTURES + "/algoOrder").param("symbol", symbol), null).andExpect(status().isBadRequest());
+        as(trader, get(FUTURES + "/algoOrder").param("symbol", symbol).param("clientAlgoId", "web-1"), null)
+                .andExpect(status().isNotFound());
+        as(trader, get(FUTURES + "/allAlgoOrders").param("symbol", symbol).param("limit", "1"), null)
+                .andExpect(jsonPath("$.length()").value(1));
+        as(trader, get(FUTURES + "/allAlgoOrders").param("symbol", symbol).param("limit", "0"), null)
+                .andExpect(status().isBadRequest());
+        as(trader, get(FUTURES + "/allAlgoOrders").param("symbol", symbol).param("limit", "1001"), null)
+                .andExpect(status().isBadRequest());
+    }
+
     private ResultActions algo(UUID trader, String body) throws Exception {
         return as(trader, post(FUTURES + "/algoOrder"), body);
     }
