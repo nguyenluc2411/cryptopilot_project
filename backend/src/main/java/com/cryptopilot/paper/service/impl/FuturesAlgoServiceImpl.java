@@ -89,6 +89,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     private final MarketApi market;
     private final EntitlementApi entitlements;
     private final ApplicationEventPublisher events;
+    private final FuturesOrderLists tpSl;
     private final Clock clock;
 
     @Override
@@ -155,7 +156,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     @Override
     @Transactional
     public FuturesAlgoOrderResponse cancel(UUID userId, String symbol, UUID algoId, String clientAlgoId) {
-        requireFutures(userId);
+        PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesPair pair = margins.pair(symbol);
         PaperOrder order = find(userId, pair, algoId, clientAlgoId);
@@ -163,21 +164,21 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
             throw new FuturesRejection(
                     ErrorCode.PAPER_ORDER_NOT_OPEN, -2011, "Unknown order sent.", order.getOrderStatus());
         }
-        cancelWaiting(order, clock.instant());
+        cancelWaiting(account, order, clock.instant());
         return PaperResponses.futuresAlgo(order, pair.symbol(), null);
     }
 
     @Override
     @Transactional
     public List<FuturesAlgoOrderResponse> cancelAll(UUID userId, String symbol) {
-        requireFutures(userId);
+        PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesPair pair = margins.pair(symbol);
         List<PaperOrder> open = margins.openConditionalOrders(userId).stream()
                 .filter(order -> order.getPairId().equals(pair.pairId()))
                 .toList();
         Instant now = clock.instant();
-        open.forEach(order -> cancelWaiting(order, now));
+        open.forEach(order -> cancelWaiting(account, order, now));
         return open.stream()
                 .map(order -> PaperResponses.futuresAlgo(order, pair.symbol(), null))
                 .toList();
@@ -374,9 +375,10 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     }
 
     /** Cancels a waiting conditional order; the engine stops watching it after the commit. */
-    private void cancelWaiting(PaperOrder order, Instant at) {
+    private void cancelWaiting(PaperAccount account, PaperOrder order, Instant at) {
         order.cancel(at);
         events.publishEvent(new PaperOrderCanceled(order.getId()));
+        tpSl.settle(account, order, at);
     }
 
     /** The Futures feature of the Trader's plan (Q-T10) and an opened paper account (MSG41). */

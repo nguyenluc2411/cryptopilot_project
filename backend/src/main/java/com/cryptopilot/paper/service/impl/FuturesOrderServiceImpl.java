@@ -33,6 +33,7 @@ import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.TimeInForce;
+import com.cryptopilot.paper.model.enums.WorkingType;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperFillRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -115,6 +116,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     private final FuturesMargins margins;
     private final FuturesSettlement settlement;
     private final FuturesArrival futuresArrival;
+    private final FuturesOrderLists tpSl;
     private final UserLock lock;
     private final MarketApi market;
     private final EntitlementApi entitlements;
@@ -179,6 +181,9 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                         book.map(found -> found.levels().getFirst().price()).orElseThrow(() -> priceUnavailable(pair));
             }
             SpotFilters.requireNotional(filters, valuedAt.multiply(request.quantity()), false, "quantity");
+        }
+        if (request.withTpSl()) {
+            requireTpSl(filters, request, request.price() != null ? request.price() : mark != null ? mark : last);
         }
         BigDecimal opening = request.reducing() ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
         if (opening.signum() > 0) {
@@ -343,15 +348,19 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         if (book.isEmpty()) {
             throw priceUnavailable(pair);
         }
-        PaperOrder order = orders.save(PaperOrder.futuresMarket(
-                account.userId(),
-                pair.pairId(),
-                key,
-                request.side(),
-                positionSide,
-                request.quantity(),
-                request.reducing()));
-        futuresArrival.market(account, order, book, clock.instant());
+        PaperOrder order = stored(
+                request,
+                PaperOrder.futuresMarket(
+                        account.userId(),
+                        pair.pairId(),
+                        key,
+                        request.side(),
+                        positionSide,
+                        request.quantity(),
+                        request.reducing()));
+        Instant now = clock.instant();
+        futuresArrival.market(account, order, book, now);
+        tpSl.settle(account, order, now);
         return order;
     }
 
@@ -380,18 +389,34 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         if ((timeInForce == TimeInForce.IOC || timeInForce == TimeInForce.FOK) && book.isEmpty()) {
             throw priceUnavailable(pair);
         }
-        PaperOrder order = orders.save(PaperOrder.futuresLimit(
-                account.userId(),
-                pair.pairId(),
-                key,
-                request.side(),
-                positionSide,
-                timeInForce,
-                request.price(),
-                request.quantity(),
-                request.reducing()));
-        futuresArrival.limit(account, order, book, clock.instant());
+        PaperOrder order = stored(
+                request,
+                PaperOrder.futuresLimit(
+                        account.userId(),
+                        pair.pairId(),
+                        key,
+                        request.side(),
+                        positionSide,
+                        timeInForce,
+                        request.price(),
+                        request.quantity(),
+                        request.reducing()));
+        Instant now = clock.instant();
+        futuresArrival.limit(account, order, book, now);
+        tpSl.settle(account, order, now);
         return order;
+    }
+
+    /** Stores a new order, grouped first with the take profit and stop loss it comes with, if any (plan 5.6). */
+    private PaperOrder stored(FuturesOrderRequest request, PaperOrder order) {
+        if (request.withTpSl()) {
+            tpSl.attach(
+                    order,
+                    request.takeProfitPrice(),
+                    request.stopLossPrice(),
+                    "MARK_PRICE".equals(request.tpSlWorkingType()) ? WorkingType.MARK_PRICE : WorkingType.LAST_PRICE);
+        }
+        return orders.save(order);
     }
 
     /**
@@ -459,6 +484,33 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         margins.requireFreshCrossMarks(userId, pair.pairId());
     }
 
+    /**
+     * A take profit and a stop loss on the pair's tick and on their own side of the order's price: above it for the
+     * take profit of a long and below for its stop loss, the other way round for a short; otherwise they would trigger
+     * as soon as the order executed.
+     */
+    private static void requireTpSl(PairFilters filters, FuturesOrderRequest request, BigDecimal reference) {
+        boolean buy = request.side() == OrderSide.BUY;
+        Map<String, String> errors = new LinkedHashMap<>();
+        if (request.takeProfitPrice() != null) {
+            SpotFilters.requirePrice(filters, request.takeProfitPrice(), "takeProfitPrice");
+            int side = request.takeProfitPrice().compareTo(reference);
+            if (reference != null && (buy ? side <= 0 : side >= 0)) {
+                errors.put("takeProfitPrice", "MSG15");
+            }
+        }
+        if (request.stopLossPrice() != null) {
+            SpotFilters.requirePrice(filters, request.stopLossPrice(), "stopLossPrice");
+            int side = request.stopLossPrice().compareTo(reference);
+            if (reference != null && (buy ? side >= 0 : side <= 0)) {
+                errors.put("stopLossPrice", "MSG15");
+            }
+        }
+        if (!errors.isEmpty()) {
+            throw new FieldValidationException("a take profit or stop loss on the wrong side of the order", errors);
+        }
+    }
+
     /** Whether a limit price reaches the best price of the other side. */
     private static boolean crosses(OrderSide side, BigDecimal limit, BigDecimal best) {
         return side == OrderSide.BUY ? limit.compareTo(best) >= 0 : limit.compareTo(best) <= 0;
@@ -487,6 +539,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         order.cancel(at);
         feed.futuresOrder(account, order);
         events.publishEvent(new PaperOrderCanceled(order.getId()));
+        tpSl.settle(account, order, at);
     }
 
     /**
@@ -529,6 +582,10 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         }
         if (request.priceMatch() != null && !request.priceMatch().equals("NONE")) {
             errors.put("priceMatch", "MSG15");
+        }
+        if (request.withTpSl() && request.reducing()) {
+            // A take profit or stop loss comes with an order that opens a position.
+            errors.put("reduceOnly", "MSG15");
         }
         if (!errors.isEmpty()) {
             throw new FieldValidationException(

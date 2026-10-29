@@ -90,6 +90,7 @@ class FuturesSettlement {
     private final MarketApi market;
     private final ApplicationEventPublisher events;
     private final PaperUserFeed feed;
+    private final FuturesOrderLists tpSl;
     private final EntityManager entityManager;
 
     /**
@@ -427,6 +428,9 @@ class FuturesSettlement {
     private void end(PaperAccount account, PaperOrder order, String reason, Instant at) {
         order.expire(reason, at);
         feed.futuresOrder(account, order);
+        if (order.isConditional()) {
+            tpSl.settle(account, order, at);
+        }
         events.publishEvent(new PaperOrderCanceled(order.getId()));
     }
 

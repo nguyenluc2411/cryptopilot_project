@@ -60,6 +60,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final FuturesSettlement futuresSettlement;
     private final FuturesTrigger futuresTrigger;
     private final FuturesLiquidation liquidation;
+    private final FuturesOrderLists futuresTpSl;
     private final SpotStopTrigger stopTrigger;
     private final PaperOrderLists lists;
     private final PairStopCancellation pairStops;
@@ -104,6 +105,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                     Liquidity.MAKER,
                     source,
                     tradedAt);
+            futuresTpSl.settle(account, order, tradedAt);
             log.info(
                     "TR-16 paper Futures order {} filled at {} ({}, {}): {}",
                     order.getId(),

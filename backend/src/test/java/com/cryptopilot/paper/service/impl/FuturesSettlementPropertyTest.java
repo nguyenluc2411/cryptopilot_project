@@ -365,6 +365,9 @@ class FuturesSettlementPropertyTest {
                 null,
                 null,
                 null,
+                null,
+                null,
+                null,
                 null);
     }
 

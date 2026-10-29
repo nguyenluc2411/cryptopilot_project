@@ -74,6 +74,7 @@ class FuturesTrigger {
     private final FuturesMargins margins;
     private final FuturesArrival arrival;
     private final PaperUserFeed feed;
+    private final FuturesOrderLists tpSl;
     private final MarketApi market;
     private final PaperFuturesProperties futures;
     private final ApplicationEventPublisher events;
@@ -207,6 +208,7 @@ class FuturesTrigger {
     private void end(PaperAccount account, PaperOrder conditional, OrderStatus status, String reason, Instant at) {
         conditional.endTrigger(status, reason, at);
         feed.futuresOrder(account, conditional);
+        tpSl.settle(account, conditional, at);
     }
 
     // fk_trade_order_pair keeps the pair of an order stored.

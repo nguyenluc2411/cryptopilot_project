@@ -152,6 +152,7 @@ class FuturesOrderApiTest {
                     "futures_symbol_config",
                     "futures_account_config",
                     "trade_order",
+                    "order_list",
                     "wallet_ledger_entry",
                     "wallet_balance",
                     "equity_snapshot")) {
@@ -1293,6 +1294,98 @@ class FuturesOrderApiTest {
         trigger(trader, id, OrderSide.BUY, TriggerCondition.AT_OR_ABOVE, "105");
 
         assertThat(statusOf(id)).isEqualTo("NEW");
+    }
+
+    /** Plan 5.6: an opening order's TP/SL is placed once it executed; one closing the position cancels the other. */
+    @Test
+    void TR20_aTakeProfitAndStopLoss_comeWithAnOpeningOrder_andOneCancelsTheOther() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "MARKET", "quantity": "1", "takeProfitPrice": "110",
+                         "stopLossPrice": "90", "tpSlWorkingType": "MARK_PRICE"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FILLED"));
+
+        String body = as(trader, get(FUTURES + "/openAlgoOrders"), null)
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].closePosition").value(true))
+                .andExpect(jsonPath("$[0].side").value("SELL"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        List<String> types = JsonPath.read(body, "$[*].orderType");
+        List<String> ids = JsonPath.read(body, "$[*].algoId");
+        String stopLoss = ids.get(types.indexOf("STOP_MARKET"));
+        String takeProfit = ids.get(types.indexOf("TAKE_PROFIT_MARKET"));
+
+        depth(List.of(level("90.1", "5")), List.of(level("90", "5")));
+        trigger(trader, stopLoss, OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "90");
+
+        assertThat(openPositions(trader)).isZero();
+        assertThat(statusOf(takeProfit)).isEqualTo("CANCELED");
+        as(trader, get(FUTURES + "/openAlgoOrders"), null)
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void TR20_theTpSlOfAWaitingOrder_waitsWithIt_goesWithItsCancel_andIsCheckedForItsSide() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "LIMIT", "price": "95", "quantity": "1",
+                         "takeProfitPrice": "94"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.takeProfitPrice").value("MSG15"));
+        place(trader, """
+                        {"symbol": "%s", "side": "SELL", "type": "MARKET", "quantity": "1", "reduceOnly": true,
+                         "stopLossPrice": "110"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.reduceOnly").value("MSG15"));
+        String id = id(place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "LIMIT", "price": "95", "quantity": "1",
+                         "takeProfitPrice": "105", "stopLossPrice": "90"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW")));
+
+        as(trader, get(FUTURES + "/openAlgoOrders"), null)
+                .andExpect(jsonPath("$.length()").value(0));
+        as(trader, delete(FUTURES + "/order").param("symbol", symbol).param("orderId", id), null)
+                .andExpect(status().isOk());
+
+        assertThat(sql.sql("""
+                                select count(*) from trade_order
+                                 where user_id = ? and order_type in ('TAKE_PROFIT_MARKET', 'STOP_MARKET')
+                                   and order_status = 'CANCELED'""").param(trader).query(Long.class).single()).isEqualTo(2);
+    }
+
+    /** A stop loss already met when its waiting order fills is not placed: it would trigger at once. */
+    @Test
+    void TR20_aStopLossAlreadyMetWhenItsOrderFills_isRejected() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String id = id(place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "LIMIT", "price": "95", "quantity": "1",
+                         "stopLossPrice": "94", "tpSlWorkingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        mark("93");
+
+        matching.fill(
+                new RestingOrder(
+                        UUID.fromString(id),
+                        trader,
+                        MarketType.FUTURES,
+                        pair,
+                        OrderSide.BUY,
+                        new BigDecimal("95"),
+                        Instant.now().minusSeconds(1)),
+                Instant.now(),
+                FillSource.LIVE);
+
+        assertThat(sql.sql("""
+                                select order_status || ':' || status_reason from trade_order
+                                 where user_id = ? and order_type = 'STOP_MARKET'""").param(trader).query(String.class).single()).isEqualTo("REJECTED:WOULD_TRIGGER");
     }
 
     private ResultActions algo(UUID trader, String body) throws Exception {

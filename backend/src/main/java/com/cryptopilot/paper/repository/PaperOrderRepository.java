@@ -128,7 +128,8 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     /** Every Futures conditional order that still waits for the mark price to trigger it (TR-20). */
     @Transactional(readOnly = true)
     @Query("select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
-            + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice, o.createdAt)"
+            + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice,"
+            + " coalesce(o.activatedAt, o.createdAt))"
             + " from PaperOrder o where o.orderStatus in :statuses and o.triggeredAt is null"
             + " and o.marketType = com.cryptopilot.market.model.enums.MarketType.FUTURES"
             + " and o.workingType = com.cryptopilot.paper.model.enums.WorkingType.MARK_PRICE")

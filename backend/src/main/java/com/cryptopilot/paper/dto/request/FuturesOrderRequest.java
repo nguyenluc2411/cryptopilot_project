@@ -39,6 +39,11 @@ import java.math.BigDecimal;
  * @param stopPrice a conditional order's trigger; refused here
  * @param priceMatch not simulated; refused unless absent or NONE
  * @param newOrderRespType ACK or RESULT; both answered with the order's state
+ * @param takeProfitPrice the trigger of a take profit placed for the whole position once this opening order has
+ *     executed, as the app's TP/SL box (plan 5.6); absent for none
+ * @param stopLossPrice likewise, the trigger of a stop loss
+ * @param tpSlWorkingType the price the take profit and stop loss watch: CONTRACT_PRICE (the last price, when absent)
+ *     or MARK_PRICE
  */
 public record FuturesOrderRequest(
         @NotBlank(message = "MSG01") @Size(max = 32, message = "MSG15")
@@ -71,7 +76,23 @@ public record FuturesOrderRequest(
 
         @Size(max = 32, message = "MSG15") String priceMatch,
 
-        @Pattern(regexp = "ACK|RESULT", message = "MSG15") String newOrderRespType) {
+        @Pattern(regexp = "ACK|RESULT", message = "MSG15") String newOrderRespType,
+
+        @DecimalMin(value = "0", inclusive = false, message = "MSG15")
+        @Digits(integer = 16, fraction = 12, message = "MSG15")
+        BigDecimal takeProfitPrice,
+
+        @DecimalMin(value = "0", inclusive = false, message = "MSG15")
+        @Digits(integer = 16, fraction = 12, message = "MSG15")
+        BigDecimal stopLossPrice,
+
+        @Pattern(regexp = "CONTRACT_PRICE|MARK_PRICE", message = "MSG15")
+        String tpSlWorkingType) {
+
+    /** Whether a take profit or a stop loss comes with the order. */
+    public boolean withTpSl() {
+        return takeProfitPrice != null || stopLossPrice != null;
+    }
 
     /** Whether the order may only make the position smaller. */
     public boolean reducing() {

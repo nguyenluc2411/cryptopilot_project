@@ -21,8 +21,10 @@ import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -63,6 +65,10 @@ class FuturesLiquidation {
 
     /** Why an order was cancelled: its position was liquidated. */
     static final String LIQUIDATION = "LIQUIDATION";
+
+    /** What a liquidation cancels: the working orders and the take profits and stop losses still pending. */
+    private static final Set<OrderStatus> CANCELLED_ON_LIQUIDATION =
+            EnumSet.of(OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED, OrderStatus.PENDING_NEW);
 
     /** The tick of a price column, for a pair whose filters are no longer read. */
     private static final BigDecimal FINEST_TICK = BigDecimal.ONE.movePointLeft(FuturesMarginMath.PRICE_SCALE);
@@ -140,7 +146,7 @@ class FuturesLiquidation {
     /** Cancels every open order of the Trader on the pair, conditional ones included. */
     private void cancelOrders(PaperAccount account, UUID pairId, Instant at) {
         for (PaperOrder order : orders.findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
-                account.userId(), pairId, MarketType.FUTURES, OrderStatus.OPEN)) {
+                account.userId(), pairId, MarketType.FUTURES, CANCELLED_ON_LIQUIDATION)) {
             order.cancel(LIQUIDATION, at);
             feed.futuresOrder(account, order);
             events.publishEvent(new PaperOrderCanceled(order.getId()));
