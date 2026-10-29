@@ -273,7 +273,7 @@ public class AnalysisServiceImpl implements AnalysisService {
         return value == null ? null : value.doubleValue();
     }
 
-    private static ComponentScoresResponse components(MarketType type, ComponentScores c) {
+    static ComponentScoresResponse components(MarketType type, ComponentScores c) {
         return type == MarketType.SPOT ? spot(c) : futures(c);
     }
 
@@ -290,7 +290,7 @@ public class AnalysisServiceImpl implements AnalysisService {
                         c.formulaVersion(), c.trend(), c.momentum(), c.volume(), c.level(), c.derivatives());
     }
 
-    private static IndicatorsResponse indicators(StoredIndicators r) {
+    static IndicatorsResponse indicators(StoredIndicators r) {
         return new IndicatorsResponse(
                 r.sma20(),
                 r.ema20(),
