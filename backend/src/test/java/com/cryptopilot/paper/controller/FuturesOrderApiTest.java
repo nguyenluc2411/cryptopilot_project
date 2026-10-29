@@ -49,6 +49,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -60,6 +61,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.ResultMatcher;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
@@ -67,11 +69,11 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * arrival against the Futures book, a waiting order filled by the engine, and what each fill does to the one-way
  * position, the Futures wallet, the isolated wallet and its audit rows; then the positions and the account read at
  * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes;
- * and what each committed change pushes on the Trader's Futures queues.
+ * what each committed change pushes on the Trader's Futures queues; and what a stale mark price refuses.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-22a, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -105,6 +107,9 @@ class FuturesOrderApiTest {
 
     @MockitoSpyBean
     private SimpMessageSendingOperations broker;
+
+    @Autowired
+    private StringRedisTemplate redis;
 
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
@@ -952,6 +957,187 @@ class FuturesOrderApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // A stale mark price (MARK_STALE)
+    // ------------------------------------------------------------------------------------------
+
+    /** 8.2.1 rules 1 and 2: on a stale pair, what opens risk at once waits, a waiting LIMIT and every close go on. */
+    @Test
+    void TR22a_onAStalePair_marketAndMarketableOpeningsWait_andClosesGoOn() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+
+        staleMark("100");
+
+        place(trader, market("BUY", "1"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MARKET_PRICE_UNAVAILABLE"));
+        place(trader, limit("BUY", "GTC", "100", "1")).andExpect(status().isServiceUnavailable());
+        place(trader, limit("BUY", "GTC", "95", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW"));
+        leverage(trader, 10, status().isServiceUnavailable());
+        // Closing never waits for the mark: valued at the book it takes.
+        place(trader, market("SELL", "0.5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FILLED"));
+        close(trader, """
+                        {"symbol": "%s", "type": "MARKET"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("FILLED"));
+        assertThat(openPositions(trader)).isZero();
+    }
+
+    /** 8.2.1 rule 3: while a pair of a cross position is stale, nothing opens risk elsewhere and nothing leaves. */
+    @Test
+    void TR22a_aStaleCrossPosition_holdsTransfersOut_andOpeningsOnOtherPairs() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String other = "FO" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
+        UUID otherPair = new MarketTestData(sql, Instant.now()).pair(other, true, true, "TRADING", "TRADING", 1);
+        try {
+            sql.sql("""
+                            update crypto_pair set futures_tick_size = 0.1, futures_step_size = 0.001,
+                                   futures_min_notional = 5
+                             where pair_id = ?""").param(otherPair).update();
+            sql.sql("""
+                            insert into leverage_bracket (pair_id, bracket_no, notional_floor, notional_cap, max_leverage,
+                                                          maintenance_margin_rate, maintenance_amount, updated_at)
+                            values (?, 1, 0, 3000000, 125, 0.004, 0, now())""").param(otherPair).update();
+            prices.record(
+                    MarketType.FUTURES,
+                    new MarkPriceMessage(
+                            other,
+                            new BigDecimal("50"),
+                            new BigDecimal("50"),
+                            BigDecimal.ZERO,
+                            Instant.now().plus(Duration.ofHours(1)),
+                            Instant.now().plusMillis(TICKS.incrementAndGet())));
+            prices.flush();
+
+            staleMark("100");
+
+            as(trader, post(FUTURES + "/order"), """
+                            {"symbol": "%s", "side": "BUY", "type": "LIMIT", "price": "40", "quantity": "1"}""".formatted(other)).andExpect(status().isServiceUnavailable());
+            as(trader, post("/api/v1/paper/transfers"), """
+                            {"asset": "USDT", "from": "FUTURES", "amount": "10"}""").andExpect(status().isServiceUnavailable());
+            as(trader, post("/api/v1/paper/transfers"), """
+                            {"asset": "USDT", "from": "SPOT", "amount": "10"}""").andExpect(status().isCreated());
+        } finally {
+            sql.sql("delete from leverage_bracket where pair_id = ?")
+                    .param(otherPair)
+                    .update();
+            sql.sql("delete from trade_order where pair_id = ?")
+                    .param(otherPair)
+                    .update();
+            new MarketTestData(sql, Instant.now()).remove(otherPair);
+        }
+    }
+
+    @Test
+    void TR22a_theMarginOfAPositionOnAStalePair_doesNotChange() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+
+        staleMark("100");
+
+        positionMargin(trader, "5", 1).andExpect(status().isServiceUnavailable());
+        positionMargin(trader, "1", 2).andExpect(status().isServiceUnavailable());
+    }
+
+    /**
+     * 8.2.1 rule 4: an isolated order filled while a cross position's pair is stale counts that position at its loss
+     * less 1 % of its notional. Here the plain free cash (2,900) would fund the 2,890, the conservative one (2,880) not.
+     */
+    @Test
+    void TR22a_anIsolatedFill_whileACrossPairIsStale_countsItConservatively() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "100")), List.of(level("99.9", "100")));
+        place(trader, market("BUY", "40")).andExpect(status().isOk());
+        String other = "FO" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
+        UUID otherPair = new MarketTestData(sql, Instant.now()).pair(other, true, true, "TRADING", "TRADING", 1);
+        try {
+            sql.sql("""
+                            update crypto_pair set futures_tick_size = 0.1, futures_step_size = 0.001,
+                                   futures_min_notional = 5
+                             where pair_id = ?""").param(otherPair).update();
+            sql.sql("""
+                            insert into leverage_bracket (pair_id, bracket_no, notional_floor, notional_cap, max_leverage,
+                                                          maintenance_margin_rate, maintenance_amount, updated_at)
+                            values (?, 1, 0, 3000000, 125, 0.004, 0, now())""").param(otherPair).update();
+            prices.record(
+                    MarketType.FUTURES,
+                    new MarkPriceMessage(
+                            other,
+                            new BigDecimal("50"),
+                            new BigDecimal("50"),
+                            BigDecimal.ZERO,
+                            Instant.now().plus(Duration.ofHours(1)),
+                            Instant.now().plusMillis(TICKS.incrementAndGet())));
+            prices.flush();
+            as(trader, post(FUTURES + "/leverage"), """
+                            {"symbol": "%s", "leverage": 10}""".formatted(other)).andExpect(status().isOk());
+            as(trader, post(FUTURES + "/marginType"), """
+                            {"symbol": "%s", "marginType": "ISOLATED"}""".formatted(other)).andExpect(status().isOk());
+            String id = id(as(trader, post(FUTURES + "/order"), """
+                            {"symbol": "%s", "side": "BUY", "type": "LIMIT", "price": "50", "quantity": "578"}""".formatted(other))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("NEW")));
+
+            // 40 long at 100, now 50 and stale: a loss of 2,000; the haircut 1 % of 2,000.
+            staleMark("50");
+            matching.fill(
+                    new RestingOrder(
+                            UUID.fromString(id),
+                            trader,
+                            MarketType.FUTURES,
+                            otherPair,
+                            OrderSide.BUY,
+                            new BigDecimal("50"),
+                            Instant.now().minusSeconds(1)),
+                    Instant.now(),
+                    FillSource.LIVE);
+
+            assertThat(statusOf(id)).isEqualTo("EXPIRED");
+            assertThat(sql.sql("select status_reason from trade_order where order_id = ?")
+                            .param(UUID.fromString(id))
+                            .query(String.class)
+                            .single())
+                    .isEqualTo("MARGIN_INSUFFICIENT");
+        } finally {
+            sql.sql("delete from futures_symbol_config where pair_id = ?")
+                    .param(otherPair)
+                    .update();
+            sql.sql("delete from leverage_bracket where pair_id = ?")
+                    .param(otherPair)
+                    .update();
+            sql.sql("delete from trade_order where pair_id = ?")
+                    .param(otherPair)
+                    .update();
+            new MarketTestData(sql, Instant.now()).remove(otherPair);
+        }
+    }
+
+    /** A mark the exchange produced longer ago than mark-max-age (5 s): the cache holds it, but it is not current. */
+    private void staleMark(String mark) {
+        redis.delete("px:FUTURES:" + symbol);
+        BigDecimal value = new BigDecimal(mark);
+        prices.record(
+                MarketType.FUTURES,
+                new MarkPriceMessage(
+                        symbol,
+                        value,
+                        value,
+                        BigDecimal.ZERO,
+                        Instant.now().plus(Duration.ofHours(1)),
+                        Instant.now().minusSeconds(30)));
+        prices.flush();
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
 
@@ -980,8 +1166,12 @@ class FuturesOrderApiTest {
     }
 
     private void leverage(UUID trader, int leverage) throws Exception {
+        leverage(trader, leverage, status().isOk());
+    }
+
+    private void leverage(UUID trader, int leverage, ResultMatcher expected) throws Exception {
         as(trader, post(FUTURES + "/leverage"), """
-                        {"symbol": "%s", "leverage": %d}""".formatted(symbol, leverage)).andExpect(status().isOk());
+                        {"symbol": "%s", "leverage": %d}""".formatted(symbol, leverage)).andExpect(expected);
     }
 
     private void isolated(UUID trader, int leverage) throws Exception {

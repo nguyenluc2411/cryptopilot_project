@@ -226,7 +226,8 @@ class FuturesSettlement {
         if (config.getMarginType() == MarginType.ISOLATED) {
             BigDecimal mark = market.currentMarkPrice(pair.symbol()).orElse(price);
             margin = FuturesMarginMath.isolatedFillMargin(direction, opened, price, mark, config.getLeverage());
-            BigDecimal free = margins.crossState(userId, order.getId()).margin().crossFreeCash();
+            BigDecimal free =
+                    margins.crossState(userId, order.getId(), true).margin().crossFreeCash();
             if (margin.compareTo(free) > 0) {
                 return false;
             }

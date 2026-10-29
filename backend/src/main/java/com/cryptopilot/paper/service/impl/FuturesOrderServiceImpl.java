@@ -77,6 +77,7 @@ import org.springframework.transaction.annotation.Transactional;
  *       (4.3 rule 6, 4.7), the cost being the initial margin plus the open loss (4.6). The position after it must stay
  *       within the largest notional the leverage allows ({@code -2027}).
  *   <li>Nothing is locked: the margin of a waiting order is derived ({@link FuturesMargins}).
+ *   <li>What opens risk waits for current marks ({@code MARK_STALE}, 8.2.1); closing orders do not.
  * </ul>
  *
  * <p>A MARKET order, and a LIMIT order that crosses the book, take the levels of the other side of the exchange's
@@ -88,7 +89,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Every change runs under the Trader's paper lock, the scope of {@link PaperAccountServiceImpl}, shared with Spot
  * and the settings, so nothing on the account interleaves. A refusal rolls the placement back and leaves no row.
  *
- * <p>Rule: TR-15, TR-16; D-127.
+ * <p>Rule: TR-15, TR-16, TR-22a; D-127.
  * <p>Reference: Binance. <i>USDⓈ-M Futures API: New Order, Cancel Order, Cancel All Open Orders, Query Order, Current
  * All Open Orders, All Orders, Account Trade List</i>, Binance Developer Center.
  */
@@ -176,18 +177,21 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         BigDecimal mark = market.currentMarkPrice(pair.symbol()).orElse(null);
         BigDecimal last =
                 market.currentLastPrice(MarketType.FUTURES, pair.symbol()).orElse(mark);
+        Optional<SpotArrival.Book> book = bookFor(pair, request.side());
         if (!request.reducing()) {
             BigDecimal valuedAt = marketOrder ? (mark != null ? mark : last) : request.price();
             if (valuedAt == null) {
-                throw priceUnavailable(pair);
+                // A closing MARKET order on a pair without a mark is valued at the book it will take (8.2.1 rule 2).
+                valuedAt =
+                        book.map(found -> found.levels().getFirst().price()).orElseThrow(() -> priceUnavailable(pair));
             }
             SpotFilters.requireNotional(filters, valuedAt.multiply(request.quantity()), false, "quantity");
         }
         BigDecimal opening = request.reducing() ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
         if (opening.signum() > 0) {
+            requireFreshMarks(userId, pair, request, book);
             requireMargin(userId, pair, request, size, opening, last, mark);
         }
-        Optional<SpotArrival.Book> book = bookFor(pair, request.side());
         String key = request.newClientOrderId() == null ? UuidV7.next().toString() : request.newClientOrderId();
         PaperOrder order = marketOrder
                 ? placeMarket(account, pair, request, key, positionSide, book)
@@ -442,6 +446,34 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                     cost.toPlainString(),
                     budget.toPlainString());
         }
+    }
+
+    /**
+     * What opens risk waits for current marks (8.2.1): on a {@code MARK_STALE} pair a MARKET order or a LIMIT order that
+     * would execute on arrival is refused, as nothing can be checked against the mark, while a LIMIT order that waits
+     * is taken; and while a pair of one of the Trader's cross positions is stale, no order opens risk on another pair.
+     * Closing orders never wait for the mark.
+     */
+    private void requireFreshMarks(
+            UUID userId, FuturesPair pair, FuturesOrderRequest request, Optional<SpotArrival.Book> book) {
+        if (margins.freshMark(pair.symbol()).isEmpty()) {
+            boolean takes = request.type() == OrderType.MARKET
+                    || book.filter(found -> found.shown()
+                                    && crosses(
+                                            request.side(),
+                                            request.price(),
+                                            found.levels().getFirst().price()))
+                            .isPresent();
+            if (takes) {
+                throw FuturesMargins.staleMark(pair.symbol());
+            }
+        }
+        margins.requireFreshCrossMarks(userId, pair.pairId());
+    }
+
+    /** Whether a limit price reaches the best price of the other side. */
+    private static boolean crosses(OrderSide side, BigDecimal limit, BigDecimal best) {
+        return side == OrderSide.BUY ? limit.compareTo(best) >= 0 : limit.compareTo(best) <= 0;
     }
 
     /** {@code MAX_NUM_ORDERS}: the open orders of the account on the pair, this one included. */

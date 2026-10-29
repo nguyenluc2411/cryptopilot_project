@@ -225,6 +225,8 @@ public class PaperAccountServiceImpl implements PaperAccountService {
      * position it cannot be known, and the transfer is refused ({@code MARKET_PRICE_UNAVAILABLE}).
      */
     private void requireWithdrawable(PaperAccount account, CoinListing coin, BigDecimal amount) {
+        // What can be withdrawn depends on every cross mark (8.2.1 rule 3).
+        futuresMargins.requireFreshCrossMarks(account.userId(), null);
         BigDecimal withdrawable =
                 futuresMargins.crossState(account.userId(), null).margin().maxWithdrawAmount();
         if (amount.compareTo(withdrawable) > 0) {

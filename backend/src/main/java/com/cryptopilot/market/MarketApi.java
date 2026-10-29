@@ -3,6 +3,7 @@ package com.cryptopilot.market;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -92,6 +93,12 @@ public interface MarketApi {
      * the price of liquidation and unrealized P/L; fills and price checks use {@link #currentLastPrice} (D-111 E2/E3).
      */
     Optional<BigDecimal> currentMarkPrice(String symbol);
+
+    /**
+     * The Futures mark price when the exchange produced it at most {@code maxAge} ago; empty otherwise. The exchange
+     * streams it every second, so an older one means a lost stream (paper Futures {@code MARK_STALE}, TR-22a).
+     */
+    Optional<BigDecimal> currentMarkPrice(String symbol, Duration maxAge);
 
     /**
      * The latest stored open interest reading of a Futures pair at or before {@code at}, in contracts; empty when none

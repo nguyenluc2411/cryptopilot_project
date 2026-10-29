@@ -30,6 +30,8 @@ import com.cryptopilot.market.service.AnalysisService;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -62,7 +64,8 @@ class MarketApiImplTest {
             coinWriter,
             mock(TradingMarketData.class),
             mock(FuturesMetricsRepository.class),
-            analysis);
+            analysis,
+            Clock.systemUTC());
 
     @Test
     void TR04_coins_areNamedBySymbol_andAnUnknownSymbolIsLeftOut() {
@@ -258,6 +261,20 @@ class MarketApiImplTest {
         assertThat(api.currentLastPrice(MarketType.SPOT, "BTCUSDT")).isEmpty();
     }
 
+    /** TR-22a: a mark older than the age asked for is not current, however long the cache keeps it. */
+    @Test
+    void TR22a_aMarkOlderThanTheAgeAskedFor_isNotCurrent() {
+        Instant now = Instant.now();
+        when(prices.latest(MarketType.FUTURES, "BTCUSDT"))
+                .thenReturn(found(mark("60000", now.minusSeconds(3))))
+                .thenReturn(found(mark("60000", now.minusSeconds(30))))
+                .thenReturn(PriceLookup.missing());
+
+        assertThat(api.currentMarkPrice("BTCUSDT", Duration.ofSeconds(5))).contains(new BigDecimal("60000"));
+        assertThat(api.currentMarkPrice("BTCUSDT", Duration.ofSeconds(5))).isEmpty();
+        assertThat(api.currentMarkPrice("BTCUSDT", Duration.ofSeconds(5))).isEmpty();
+    }
+
     @Test
     void BR27_theBrackets_areTheStoredOnes() {
         UUID pairId = UUID.randomUUID();
@@ -288,6 +305,11 @@ class MarketApiImplTest {
 
     private static PriceLookup found(CachedPrice price) {
         return new PriceLookup(PriceLookup.Status.FOUND, Optional.of(price));
+    }
+
+    private static CachedPrice mark(String mark, Instant at) {
+        return new CachedPrice(
+                MarketType.FUTURES, "BTCUSDT", null, null, null, new BigDecimal(mark), null, null, null, at);
     }
 
     private static CachedPrice price(String last, String funding) {

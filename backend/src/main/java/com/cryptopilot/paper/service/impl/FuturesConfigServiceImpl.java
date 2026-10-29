@@ -135,6 +135,10 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
         List<FuturesPosition> open =
                 positions.findByUserIdAndPairIdAndPositionStatus(userId, pair.pairId(), PositionStatus.OPEN);
         if (!open.isEmpty()) {
+            // A position's leverage waits for its mark, as a later replay would judge it at past prices (8.2.1 rule 1).
+            if (margins.freshMark(pair.symbol()).isEmpty()) {
+                throw FuturesMargins.staleMark(pair.symbol());
+            }
             requireLeverageFits(userId, open, config, leverage, maxNotional);
             open.forEach(position -> position.changeLeverage(leverage));
             margins.recordChange(account);

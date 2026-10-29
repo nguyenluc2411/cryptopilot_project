@@ -3,6 +3,7 @@ package com.cryptopilot.paper.service.impl;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
@@ -12,6 +13,7 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.config.PaperAccountProperties;
+import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.entity.FuturesAccountConfig;
 import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.entity.FuturesSymbolConfig;
@@ -40,6 +42,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -53,7 +56,11 @@ import org.springframework.stereotype.Component;
  * orders and the cross side of the account. Callers hold the Trader's lock, so what they read here is what they write
  * against.
  *
- * <p>Rule: TR-14, TR-15, TR-18; D-127.
+ * <p>A pair whose mark price is older than {@code markMaxAge} is {@code MARK_STALE} (plan 8.2.1): values still use its
+ * last known mark, but nothing that opens risk is decided on it, and an isolated position funded meanwhile counts the
+ * stale cross positions at a loss ({@link #crossState(UUID, UUID, boolean)}).
+ *
+ * <p>Rule: TR-14, TR-15, TR-18, TR-22a; D-127.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -65,6 +72,7 @@ class FuturesMargins {
     private final PaperOrderRepository orders;
     private final PaperBalanceRepository balances;
     private final MarketApi market;
+    private final PaperFuturesProperties futures;
     private final EntityManager entityManager;
 
     /** The Trader's Futures settings, created with the defaults before the first Futures action. */
@@ -149,6 +157,47 @@ class FuturesMargins {
         return marks;
     }
 
+    /** The pair's mark price when it is current; empty while the pair is {@code MARK_STALE} (8.2.1). */
+    Optional<BigDecimal> freshMark(String symbol) {
+        return market.currentMarkPrice(symbol, futures.markMaxAge());
+    }
+
+    /**
+     * Refuses what 8.2.1 rule 3 refuses while a pair of one of the Trader's cross positions is {@code MARK_STALE}: the
+     * margin available and what can be withdrawn depend on every cross mark, so a transfer out, an order that opens risk
+     * or margin added to an isolated position waits for the mark.
+     *
+     * @param except a pair whose own staleness the caller judges by rule 1, or {@code null}
+     * @throws BusinessException {@code MARKET_PRICE_UNAVAILABLE} naming the stale pair
+     */
+    void requireFreshCrossMarks(UUID userId, UUID except) {
+        List<FuturesPosition> cross = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN).stream()
+                .filter(position -> position.getMarginType() == MarginType.CROSSED)
+                .filter(position -> !position.getPairId().equals(except))
+                .toList();
+        List<PairListing> stale = stalePairs(cross);
+        if (!stale.isEmpty()) {
+            throw staleMark(stale.getFirst().symbol());
+        }
+    }
+
+    /** {@code MARKET_PRICE_UNAVAILABLE} for a pair whose mark price is stale. */
+    static BusinessException staleMark(String symbol) {
+        return new BusinessException(
+                ErrorCode.MARKET_PRICE_UNAVAILABLE, "the mark price of " + symbol + " is stale (MARK_STALE)");
+    }
+
+    /** The pairs of these positions whose mark price is stale. */
+    private List<PairListing> stalePairs(Collection<FuturesPosition> positions) {
+        if (positions.isEmpty()) {
+            return List.of();
+        }
+        Set<UUID> pairIds = positions.stream().map(FuturesPosition::getPairId).collect(Collectors.toSet());
+        return market.pairListings(pairIds).stream()
+                .filter(pair -> freshMark(pair.symbol()).isEmpty())
+                .toList();
+    }
+
     /**
      * The margin of one pair's open orders in one-way mode at the current prices: the larger of the two sides' costs,
      * counting only what would open or increase the position; reduce-only orders cost nothing (4.7).
@@ -185,9 +234,43 @@ class FuturesMargins {
      * @param excludedOrderId an order whose rest is left out, as if it no longer waited (4.3 rule 6), or {@code null}
      */
     FuturesCrossState crossState(UUID userId, UUID excludedOrderId) {
+        return crossState(userId, excludedOrderId, false);
+    }
+
+    /**
+     * As {@link #crossState(UUID, UUID)}; when {@code conservative}, a cross position on a {@code MARK_STALE} pair counts
+     * {@code min(0, uPnL at its last mark) − notional × staleMarkHaircut}, so an isolated position funded while a mark
+     * is lost never takes cash the stale positions may already have lost (8.2.1 rule 4).
+     */
+    FuturesCrossState crossState(UUID userId, UUID excludedOrderId, boolean conservative) {
         List<FuturesPosition> open = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN);
         Map<UUID, BigDecimal> marks = marks(open);
-        return crossState(userId, open, marks, openOrderMargin(userId, open, excludedOrderId));
+        FuturesCrossState state = crossState(userId, open, marks, openOrderMargin(userId, open, excludedOrderId));
+        if (!conservative) {
+            return state;
+        }
+        List<FuturesPosition> cross = open.stream()
+                .filter(position -> position.getMarginType() == MarginType.CROSSED)
+                .toList();
+        Set<UUID> stale = stalePairs(cross).stream().map(PairListing::pairId).collect(Collectors.toSet());
+        BigDecimal unrealized = state.crossUnrealizedPnl();
+        for (FuturesPosition position : cross) {
+            if (!stale.contains(position.getPairId())) {
+                continue;
+            }
+            BigDecimal mark = marks.get(position.getPairId());
+            BigDecimal atMark = FuturesMarginMath.unrealizedPnl(
+                    position.getDirection(), position.getQuantity(), position.getEntryPrice(), mark);
+            BigDecimal haircut = position.getQuantity().multiply(mark).multiply(futures.staleMarkHaircut());
+            unrealized =
+                    unrealized.subtract(atMark).add(atMark.min(BigDecimal.ZERO)).subtract(haircut);
+        }
+        return new FuturesCrossState(
+                state.walletBalance(),
+                state.crossWalletBalance(),
+                Rounding.toAmount(unrealized),
+                state.crossInitialMargin(),
+                state.openOrderInitialMargin());
     }
 
     /**

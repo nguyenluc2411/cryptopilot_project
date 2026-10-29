@@ -124,6 +124,14 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
             throw new FuturesRejection(
                     ErrorCode.PAPER_POSITION_MARGIN, -4049, "Add margin only support for isolated position.");
         }
+        // Replayed later at past prices with the new wallet, a change made while the mark is lost would favour the
+        // Trader (8.2.1 rule 1); margin added also waits for every cross mark (rule 3).
+        if (margins.freshMark(pair.symbol()).isEmpty()) {
+            throw FuturesMargins.staleMark(pair.symbol());
+        }
+        if (request.adding()) {
+            margins.requireFreshCrossMarks(userId, pair.pairId());
+        }
         BigDecimal amount = request.amount();
         BigDecimal change;
         if (request.adding()) {

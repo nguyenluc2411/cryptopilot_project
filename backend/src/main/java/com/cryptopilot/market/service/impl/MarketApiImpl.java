@@ -27,6 +27,8 @@ import com.cryptopilot.market.service.AnalysisService;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
@@ -61,6 +63,7 @@ public class MarketApiImpl implements MarketApi {
     private final TradingMarketData trading;
     private final FuturesMetricsRepository metrics;
     private final AnalysisService analysis;
+    private final Clock clock;
 
     @Override
     @Transactional(readOnly = true)
@@ -226,6 +229,18 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public Optional<BigDecimal> currentMarkPrice(String symbol) {
         return current(MarketType.FUTURES, symbol, CachedPrice::markPrice);
+    }
+
+    @Override
+    public Optional<BigDecimal> currentMarkPrice(String symbol, Duration maxAge) {
+        PriceLookup lookup = prices.latest(MarketType.FUTURES, symbol);
+        if (lookup.status() != PriceLookup.Status.FOUND) {
+            return Optional.empty();
+        }
+        Instant oldest = clock.instant().minus(maxAge);
+        return lookup.price()
+                .filter(price -> !price.sourceTime().isBefore(oldest))
+                .map(CachedPrice::markPrice);
     }
 
     @Override
