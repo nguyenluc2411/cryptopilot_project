@@ -12,6 +12,7 @@ import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.dto.request.FuturesAlgoOrderRequest;
 import com.cryptopilot.paper.dto.response.FuturesAlgoOrderResponse;
 import com.cryptopilot.paper.entity.FuturesAccountConfig;
@@ -52,7 +53,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * The paper Futures conditional orders of TR-20, one-way mode, as the exchange takes them
- * ({@code POST /fapi/v1/algoOrder}, plan 5.4):
+ * ({@code POST /fapi/v1/algoOrder}, plan 5.4), trailing stops included (TR-21):
  *
  * <ul>
  *   <li>The triggerPrice and price are checked against the pair's PRICE_FILTER, the quantity against LOT_SIZE (and
@@ -67,7 +68,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Once stored, the engine watches the order on the last price or on the mark; a cancel drops it. Every change runs
  * under the Trader's paper lock.
  *
- * <p>Rule: TR-20; D-127.
+ * <p>Rule: TR-20, TR-21; D-127.
  * <p>Reference: Binance. <i>USDⓈ-M Futures API: New Algo Order, Cancel Algo Order, Cancel All Algo Open Orders, Query
  * Algo Order, Current All Algo Open Orders, Query All Algo Orders</i>, Binance Developer Center.
  */
@@ -77,6 +78,9 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
 
     /** The most open conditional orders of an account on one pair when the exchange sent no MAX_NUM_ALGO_ORDERS. */
     static final int DEFAULT_MAX_NUM_ALGO_ORDERS = 10;
+
+    /** The smallest callback of a trailing stop, in percent (plan 5.5). */
+    private static final BigDecimal MIN_CALLBACK_RATE = new BigDecimal("0.1");
 
     private static final int DEFAULT_LIMIT = 500;
 
@@ -91,6 +95,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     private final ApplicationEventPublisher events;
     private final FuturesOrderLists tpSl;
     private final Clock clock;
+    private final PaperFuturesProperties futures;
 
     @Override
     @Transactional
@@ -120,7 +125,14 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
         FuturesPair pair = margins.pair(request.symbol());
         PairFilters filters = pair.filters();
         boolean marketKind = request.type().isFuturesMarketConditional();
-        SpotFilters.requirePrice(filters, request.triggerPrice(), "triggerPrice");
+        boolean trailing = request.type() == OrderType.TRAILING_STOP_MARKET;
+        if (trailing) {
+            if (request.activatePrice() != null) {
+                SpotFilters.requirePrice(filters, request.activatePrice(), "activatePrice");
+            }
+        } else {
+            SpotFilters.requirePrice(filters, request.triggerPrice(), "triggerPrice");
+        }
         if (!marketKind) {
             SpotFilters.requirePrice(filters, request.price(), "price");
         }
@@ -134,21 +146,36 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
         WorkingType workingType =
                 "MARK_PRICE".equals(request.workingType()) ? WorkingType.MARK_PRICE : WorkingType.LAST_PRICE;
         requireNotTriggered(pair, request, workingType);
-        PaperOrder order = orders.save(PaperOrder.futuresConditional(
-                userId,
-                pair.pairId(),
-                request.clientAlgoId() == null ? UuidV7.next().toString() : request.clientAlgoId(),
-                request.type(),
-                request.side(),
-                positionSide,
-                marketKind ? null : request.timeInForce() == null ? TimeInForce.GTC : request.timeInForce(),
-                request.triggerPrice(),
-                marketKind ? null : request.price(),
-                request.closing() ? null : request.quantity(),
-                workingType,
-                request.protecting(),
-                request.reducing(),
-                request.closing()));
+        PaperOrder order = orders.save(
+                trailing
+                        ? PaperOrder.futuresTrailing(
+                                userId,
+                                pair.pairId(),
+                                request.clientAlgoId() == null ? UuidV7.next().toString() : request.clientAlgoId(),
+                                request.side(),
+                                positionSide,
+                                request.activatePrice(),
+                                request.callbackRate(),
+                                request.quantity(),
+                                workingType,
+                                request.reducing())
+                        : PaperOrder.futuresConditional(
+                                userId,
+                                pair.pairId(),
+                                request.clientAlgoId() == null ? UuidV7.next().toString() : request.clientAlgoId(),
+                                request.type(),
+                                request.side(),
+                                positionSide,
+                                marketKind
+                                        ? null
+                                        : request.timeInForce() == null ? TimeInForce.GTC : request.timeInForce(),
+                                request.triggerPrice(),
+                                marketKind ? null : request.price(),
+                                request.closing() ? null : request.quantity(),
+                                workingType,
+                                request.protecting(),
+                                request.reducing(),
+                                request.closing()));
         events.publishEvent(FuturesTrigger.awaiting(order));
         return PaperResponses.futuresAlgo(order, pair.symbol(), null);
     }
@@ -246,6 +273,12 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
      * is refused, as the exchange refuses it.
      */
     private void requireNotTriggered(FuturesPair pair, FuturesAlgoOrderRequest request, WorkingType workingType) {
+        BigDecimal trigger =
+                request.type() == OrderType.TRAILING_STOP_MARKET ? request.activatePrice() : request.triggerPrice();
+        if (trigger == null) {
+            // A trailing stop without an activation starts at the next price.
+            return;
+        }
         Optional<BigDecimal> latest = workingType == WorkingType.MARK_PRICE
                 ? margins.freshMark(pair.symbol())
                 : market.currentLastPrice(MarketType.FUTURES, pair.symbol());
@@ -253,7 +286,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
                 ErrorCode.MARKET_PRICE_UNAVAILABLE,
                 "no current " + workingType.binanceName() + " of " + pair.symbol() + " to judge the trigger"));
         TriggerCondition condition = request.type().futuresTriggerConditionFor(request.side());
-        int side = price.compareTo(request.triggerPrice());
+        int side = price.compareTo(trigger);
         boolean met = condition == TriggerCondition.AT_OR_ABOVE ? side >= 0 : side <= 0;
         if (met) {
             throw new FuturesRejection(
@@ -295,13 +328,39 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     }
 
     /** Which fields the type takes, before the pair is looked up. */
-    private static void requireShape(FuturesAlgoOrderRequest request) {
+    private void requireShape(FuturesAlgoOrderRequest request) {
+        BigDecimal maxCallbackRate = futures.maxCallbackRate();
         Map<String, String> errors = new LinkedHashMap<>();
         Set<OrderType> taken = OrderType.FUTURES_CONDITIONAL;
+        boolean trailing = request.type() == OrderType.TRAILING_STOP_MARKET;
         if (!taken.contains(request.type())) {
-            // TRAILING_STOP_MARKET is TR-21; the other types are not conditional.
             errors.put("type", "MSG15");
+        } else if (trailing) {
+            if (request.callbackRate() == null) {
+                errors.put("callbackRate", "MSG01");
+            } else if (request.callbackRate().compareTo(MIN_CALLBACK_RATE) < 0
+                    || request.callbackRate().compareTo(maxCallbackRate) > 0) {
+                errors.put("callbackRate", "MSG15");
+            }
+            if (request.triggerPrice() != null) {
+                errors.put("triggerPrice", "MSG15");
+            }
+            if (request.quantity() == null) {
+                errors.put("quantity", "MSG01");
+            }
+            if (request.closing()) {
+                errors.put("closePosition", "MSG15");
+            }
+            if (request.price() != null) {
+                errors.put("price", "MSG15");
+            }
+            if (request.timeInForce() != null) {
+                errors.put("timeInForce", "MSG15");
+            }
         } else {
+            if (request.triggerPrice() == null) {
+                errors.put("triggerPrice", "MSG01");
+            }
             boolean marketKind = request.type().isFuturesMarketConditional();
             if (marketKind && request.price() != null) {
                 errors.put("price", "MSG15");
@@ -327,10 +386,10 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
                 errors.put("quantity", "MSG01");
             }
         }
-        if (request.activatePrice() != null) {
+        if (!trailing && request.activatePrice() != null) {
             errors.put("activatePrice", "MSG15");
         }
-        if (request.callbackRate() != null) {
+        if (!trailing && request.callbackRate() != null) {
             errors.put("callbackRate", "MSG15");
         }
         if (!errors.isEmpty()) {
@@ -348,7 +407,12 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
                 && placed.getSide() == request.side()
                 && placed.getOrderType() == request.type()
                 && placed.isClosePosition() == request.closing()
-                && sameValue(placed.getStopPrice(), request.triggerPrice())
+                && sameValue(
+                        placed.getStopPrice(),
+                        request.type() == OrderType.TRAILING_STOP_MARKET
+                                ? request.activatePrice()
+                                : request.triggerPrice())
+                && sameValue(placed.getCallbackRate(), request.callbackRate())
                 && sameValue(placed.getLimitPrice(), request.price())
                 && sameValue(placed.getOrigQuantity(), request.quantity());
         if (!same) {

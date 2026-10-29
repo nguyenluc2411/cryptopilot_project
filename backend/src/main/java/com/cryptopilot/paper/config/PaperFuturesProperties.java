@@ -22,6 +22,8 @@ import org.springframework.validation.annotation.Validated;
  * @param triggerProtect how far apart, as a share of the mark, the mark and the last price may be when a conditional
  *     order with {@code priceProtect} triggers; further apart it waits for the next price (the exchange's
  *     {@code triggerProtect} of the pair, which the symbol synchronisation does not read yet)
+ * @param maxCallbackRate the largest callback of a trailing stop, in percent (plan 5.5: 20 in the exchange's current
+ *     algo documentation; a setting in case it changes)
  */
 @Validated
 @ConfigurationProperties(prefix = "cryptopilot.paper.futures")
@@ -32,4 +34,6 @@ public record PaperFuturesProperties(
         BigDecimal staleMarkHaircut,
 
         @NotNull @DecimalMin("0") @DecimalMax("1") @DefaultValue("0.05")
-        BigDecimal triggerProtect) {}
+        BigDecimal triggerProtect,
+
+        @NotNull @DecimalMin("0.1") @DefaultValue("20") BigDecimal maxCallbackRate) {}

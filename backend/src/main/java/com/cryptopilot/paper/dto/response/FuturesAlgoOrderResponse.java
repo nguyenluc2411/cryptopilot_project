@@ -37,6 +37,8 @@ import java.util.UUID;
  * @param createTime when it was placed
  * @param updateTime when it last changed
  * @param triggerTime when it triggered; {@code null} before
+ * @param activatePrice a trailing stop's activation; {@code null} otherwise
+ * @param priceRate a trailing stop's callback in percent; {@code null} otherwise
  */
 public record FuturesAlgoOrderResponse(
         UUID algoId,
@@ -61,4 +63,6 @@ public record FuturesAlgoOrderResponse(
         boolean reduceOnly,
         Instant createTime,
         Instant updateTime,
-        Instant triggerTime) {}
+        Instant triggerTime,
+        BigDecimal activatePrice,
+        BigDecimal priceRate) {}

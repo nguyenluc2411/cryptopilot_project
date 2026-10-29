@@ -440,6 +440,45 @@ public class PaperOrder extends BaseEntity {
         return order;
     }
 
+    /**
+     * A Futures TRAILING_STOP_MARKET (TR-21, plan 5.4): it follows the best price since it started, the highest for a
+     * SELL and the lowest for a BUY, and triggers once the price comes back from it by {@code callbackRate} percent;
+     * with an {@code activatePrice} it starts once the price reaches it (at or above for a SELL, at or below for a
+     * BUY), without one at the first price after its placement. Once triggered it places a MARKET order.
+     *
+     * @param activatePrice where it starts following, on the pair's tick; {@code null} for at once
+     * @param callbackRate the pull-back in percent, e.g. {@code 1} for 1 %
+     * @param quantity positive, on the pair's step
+     */
+    public static PaperOrder futuresTrailing(
+            UUID userId,
+            UUID pairId,
+            String clientOrderId,
+            OrderSide side,
+            PositionSide positionSide,
+            BigDecimal activatePrice,
+            BigDecimal callbackRate,
+            BigDecimal quantity,
+            WorkingType workingType,
+            boolean reduceOnly) {
+        PaperOrder order = new PaperOrder(
+                        userId,
+                        pairId,
+                        clientOrderId,
+                        side,
+                        OrderType.TRAILING_STOP_MARKET,
+                        null,
+                        null,
+                        positive(quantity),
+                        null)
+                .futures(positionSide, reduceOnly);
+        order.stopPrice = activatePrice == null ? null : positive(activatePrice);
+        order.callbackRate = positive(callbackRate);
+        order.triggerCondition = OrderType.TRAILING_STOP_MARKET.futuresTriggerConditionFor(side);
+        order.workingType = Objects.requireNonNull(workingType, "workingType must not be null");
+        return order;
+    }
+
     /** Marks the order as placed by a triggered Futures conditional order. Called before it is first stored. */
     public PaperOrder placedBy(PaperOrder conditional) {
         if (!conditional.getOrderType().isFuturesConditional() || marketType != MarketType.FUTURES) {

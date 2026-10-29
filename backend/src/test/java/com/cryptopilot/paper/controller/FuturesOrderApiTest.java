@@ -79,7 +79,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-22, TR-22a, TR-24, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -1386,6 +1386,47 @@ class FuturesOrderApiTest {
         assertThat(sql.sql("""
                                 select order_status || ':' || status_reason from trade_order
                                  where user_id = ? and order_type = 'STOP_MARKET'""").param(trader).query(String.class).single()).isEqualTo("REJECTED:WOULD_TRIGGER");
+    }
+
+    /** TR-21: a trailing stop takes a callback of 0.1 to 20 % and an optional activation not yet reached. */
+    @Test
+    void TR21_aTrailingStop_isPlacedWithItsCallback_andTriggeredItClosesThePosition() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+
+        String id = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "TRAILING_STOP_MARKET",
+                         "quantity": "1", "callbackRate": "1", "activatePrice": "105", "reduceOnly": true,
+                         "workingType": "MARK_PRICE"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.algoStatus").value("NEW"))
+                .andExpect(jsonPath("$.activatePrice").value(numeric("105")))
+                .andExpect(jsonPath("$.priceRate").value(numeric("1")))
+                .andExpect(jsonPath("$.triggerPrice").doesNotExist()));
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "TRAILING_STOP_MARKET",
+                         "quantity": "1", "callbackRate": "1", "activatePrice": "95", "workingType": "MARK_PRICE"}""".formatted(symbol))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-2021));
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "TRAILING_STOP_MARKET",
+                         "quantity": "1", "callbackRate": "25"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.callbackRate").value("MSG15"));
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "TRAILING_STOP_MARKET",
+                         "quantity": "1"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.callbackRate").value("MSG01"));
+
+        // The engine found the pull-back: 1 % below a peak of 110.
+        depth(List.of(level("109", "5")), List.of(level("108.9", "5")));
+        trigger(trader, id, OrderSide.SELL, TriggerCondition.AT_OR_ABOVE, "108.9");
+
+        assertThat(openPositions(trader)).isZero();
+        as(trader, get(FUTURES + "/algoOrder").param("symbol", symbol).param("algoId", id), null)
+                .andExpect(jsonPath("$.algoStatus").value("FINISHED"));
     }
 
     private ResultActions algo(UUID trader, String body) throws Exception {

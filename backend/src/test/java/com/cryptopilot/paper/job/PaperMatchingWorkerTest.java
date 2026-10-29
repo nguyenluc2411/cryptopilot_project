@@ -2,6 +2,7 @@ package com.cryptopilot.paper.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.doThrow;
@@ -759,6 +760,38 @@ class PaperMatchingWorkerTest {
         verify(matching, timeout(WAIT)).liquidate(reached, new BigDecimal("94"), MINUTE_1);
         verify(matching, timeout(WAIT)).liquidationLevels(trader, PAIR);
         verify(matching, never()).liquidate(eq(short_), any(), any());
+    }
+
+    /** TR-21: a trailing stop on the mark follows the peak and triggers on the pull-back of its callback. */
+    @Test
+    void TR21_aTrailingStopOnTheMark_followsThePeak_andTriggersOnThePullBack() {
+        TriggerOrder trailing = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_ABOVE,
+                null,
+                new BigDecimal("1"),
+                null,
+                PLACED);
+        when(matching.markTriggerOrders()).thenReturn(List.of(trailing));
+        when(matching.trigger(any(), any(), any(), any(), any())).thenReturn(true);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("105"), MINUTE_1.plusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("104"), MINUTE_1.plusSeconds(2)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("103.9"), MINUTE_1.plusSeconds(3)));
+
+        verify(matching, timeout(WAIT))
+                .trigger(
+                        eq(trailing),
+                        eq(MINUTE_1.plusSeconds(3)),
+                        argThat(price -> price.compareTo(new BigDecimal("103.95")) == 0),
+                        any(),
+                        any());
     }
 
     @Test

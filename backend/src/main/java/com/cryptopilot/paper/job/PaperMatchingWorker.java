@@ -155,8 +155,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     /** The merged forming range of each pair, waiting for the consumer; its key is queued once while present. */
     private final Map<BookKey, PriceRange> forming = new ConcurrentHashMap<>();
 
-    /** The latest mark price of each Futures pair, waiting for the consumer; its key is queued once while present. */
-    private final Map<BookKey, MarkPrice> marks = new ConcurrentHashMap<>();
+    /**
+     * The mark prices of each Futures pair waiting for the consumer, in arrival order; its key is queued once while
+     * present. Every one is kept: a trailing stop needs each peak, and a mark that crossed a trigger and came back must
+     * still reach it. The exchange sends one a second per pair, so the wait stays short.
+     */
+    private final Map<BookKey, List<MarkPrice>> marks = new ConcurrentHashMap<>();
 
     /** The market trades of each pair, waiting for the consumer; its key is queued once while present. */
     private final Map<BookKey, PendingTrades> trades = new ConcurrentHashMap<>();
@@ -310,7 +314,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     /**
      * Hands a Futures mark price to the consumer without waiting (TR-20): the mark goes through the same queue and the
      * same thread as the pair's trades, so a mark trigger and a last-price trigger keep the order they arrived in (plan
-     * 9.1). Marks that arrive while the consumer is busy are merged into the latest one, as only the newest decides.
+     * 9.1). Marks that arrive while the consumer is busy wait in order and are all applied.
      */
     @Override
     public void onMarkPrice(MarkPrice mark) {
@@ -318,7 +322,17 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             return;
         }
         BookKey key = new BookKey(MarketType.FUTURES, mark.pairId());
-        if (marks.put(key, mark) == null) {
+        AtomicBoolean fresh = new AtomicBoolean();
+        marks.compute(key, (ignored, waiting) -> {
+            List<MarkPrice> gathered = waiting;
+            if (gathered == null) {
+                gathered = new ArrayList<>();
+                fresh.set(true);
+            }
+            gathered.add(mark);
+            return gathered;
+        });
+        if (fresh.get()) {
             queue.offer(new Command.Mark(key));
         }
     }
@@ -505,9 +519,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             case Command.TrackMarkTrigger track -> markTriggers.track(track.order());
             case Command.AccountChanged changed -> refreshLevels(changed.userId(), changed.pairId());
             case Command.Mark markKey -> {
-                MarkPrice mark = marks.remove(markKey.key());
-                if (mark != null) {
-                    onMark(markKey.key(), mark);
+                List<MarkPrice> waiting = marks.remove(markKey.key());
+                if (waiting != null) {
+                    waiting.forEach(mark -> onMark(markKey.key(), mark));
                 }
             }
             case Command.TrackTrigger track -> {
@@ -1135,7 +1149,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         /** A Futures conditional order on the mark price starts waiting (TR-20). */
         record TrackMarkTrigger(TriggerOrder order) implements Command {}
 
-        /** Read the pair's latest mark price (TR-20). */
+        /** Read the pair's waiting mark prices (TR-20). */
         record Mark(BookKey key) implements Command {}
 
         /** Read a Trader's liquidation levels on a pair again (TR-22). */

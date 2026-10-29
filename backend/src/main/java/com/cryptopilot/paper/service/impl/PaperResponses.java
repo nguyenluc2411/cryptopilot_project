@@ -152,7 +152,7 @@ final class PaperResponses {
                 FuturesTrigger.TRIGGERED.equals(conditional.getStatusReason()) ? null : conditional.getStatusReason(),
                 placed == null ? null : placed.getId(),
                 placed == null || placed.getAvgPrice() == null ? BigDecimal.ZERO : placed.getAvgPrice(),
-                conditional.getStopPrice(),
+                conditional.isTrailing() ? null : conditional.getStopPrice(),
                 conditional.getLimitPrice() != null ? conditional.getLimitPrice() : BigDecimal.ZERO,
                 conditional.getWorkingType().binanceName(),
                 "NONE",
@@ -161,6 +161,8 @@ final class PaperResponses {
                 conditional.isReduceOnly(),
                 conditional.getCreatedAt(),
                 conditional.getClosedAt() != null ? conditional.getClosedAt() : conditional.getUpdatedAt(),
-                conditional.getTriggeredAt());
+                conditional.getTriggeredAt(),
+                conditional.isTrailing() ? conditional.getStopPrice() : null,
+                conditional.getCallbackRate());
     }
 }

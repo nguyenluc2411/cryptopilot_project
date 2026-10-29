@@ -20,7 +20,8 @@ import java.math.BigDecimal;
  *       absent. Once triggered they place a LIMIT order at {@code price}.
  *   <li>STOP_MARKET and TAKE_PROFIT_MARKET: {@code triggerPrice} and {@code quantity}, or {@code closePosition} to
  *       close the whole position. Once triggered they place a MARKET order.
- *   <li>TRAILING_STOP_MARKET is TR-21 and refused here.
+ *   <li>TRAILING_STOP_MARKET (TR-21): {@code quantity} and {@code callbackRate} (0.1 to 20 %), {@code activatePrice}
+ *       optional, no {@code triggerPrice}; it follows the best price and triggers on a pull-back of the callback.
  * </ul>
  *
  * <p>A stop BUY and a take-profit SELL trigger when the watched price is at or above {@code triggerPrice}, a stop SELL
@@ -35,14 +36,14 @@ import java.math.BigDecimal;
  * @param timeInForce STOP and TAKE_PROFIT only
  * @param quantity the base quantity, absent with {@code closePosition}
  * @param price STOP and TAKE_PROFIT only
- * @param triggerPrice the price it triggers at, on the pair's tick
+ * @param triggerPrice the price it triggers at, on the pair's tick; not for a trailing stop
  * @param workingType {@code CONTRACT_PRICE} (the last price, when absent) or {@code MARK_PRICE}
  * @param priceProtect whether it waits while the mark and the last price are too far apart
  * @param reduceOnly whether it may only make the position smaller
  * @param closePosition whether it closes the whole position (market kinds; no quantity, no reduceOnly)
  * @param clientAlgoId the idempotency key, as the exchange's: up to 36 of {@code . A-Z : / a-z 0-9 _ -}
- * @param activatePrice a trailing stop's activation; refused here (TR-21)
- * @param callbackRate a trailing stop's callback; refused here (TR-21)
+ * @param activatePrice a trailing stop's activation; absent to start at once
+ * @param callbackRate a trailing stop's pull-back, in percent
  */
 public record FuturesAlgoOrderRequest(
         @NotBlank(message = "MSG01") @Pattern(regexp = "CONDITIONAL", message = "MSG15")
@@ -67,7 +68,6 @@ public record FuturesAlgoOrderRequest(
         @Digits(integer = 16, fraction = 12, message = "MSG15")
         BigDecimal price,
 
-        @NotNull(message = "MSG01")
         @DecimalMin(value = "0", inclusive = false, message = "MSG15")
         @Digits(integer = 16, fraction = 12, message = "MSG15")
         BigDecimal triggerPrice,
@@ -84,8 +84,12 @@ public record FuturesAlgoOrderRequest(
         @Pattern(regexp = "[.A-Z:/a-z0-9_-]{1,36}", message = "MSG15")
         String clientAlgoId,
 
+        @DecimalMin(value = "0", inclusive = false, message = "MSG15")
+        @Digits(integer = 16, fraction = 12, message = "MSG15")
         BigDecimal activatePrice,
 
+        @DecimalMin(value = "0", inclusive = false, message = "MSG15")
+        @Digits(integer = 4, fraction = 8, message = "MSG15")
         BigDecimal callbackRate) {
 
     /** Whether it closes the whole position when triggered. */

@@ -121,7 +121,8 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
             + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_LIMIT))"
             + " or (o.marketType = com.cryptopilot.market.model.enums.MarketType.FUTURES and o.orderType in"
             + " (com.cryptopilot.paper.model.enums.OrderType.STOP, com.cryptopilot.paper.model.enums.OrderType.STOP_MARKET,"
-            + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_MARKET)"
+            + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_MARKET,"
+            + " com.cryptopilot.paper.model.enums.OrderType.TRAILING_STOP_MARKET)"
             + " and o.workingType = com.cryptopilot.paper.model.enums.WorkingType.LAST_PRICE))")
     List<TriggerOrder> findAwaitingTrigger(Collection<OrderStatus> statuses);
 

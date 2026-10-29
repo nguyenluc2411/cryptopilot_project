@@ -133,8 +133,8 @@ class FuturesTrigger {
                 conditional.getSide(),
                 conditional.getTriggerCondition(),
                 conditional.getStopPrice(),
-                null,
-                null,
+                conditional.getCallbackRate(),
+                conditional.getTrailingExtremePrice(),
                 conditional.watchedSince());
         return conditional.getWorkingType() == WorkingType.MARK_PRICE
                 ? new PaperOrderAwaitingMarkTrigger(watched)
