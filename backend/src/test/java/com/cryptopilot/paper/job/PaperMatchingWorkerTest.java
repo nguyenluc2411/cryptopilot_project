@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKline;
@@ -699,6 +700,44 @@ class PaperMatchingWorkerTest {
 
         assertThat(worker.isIdle()).isTrue();
         verifyNoInteractions(matching);
+    }
+
+    /** TR-20: a mark price reaches the conditional orders that watch the mark, and only those. */
+    @Test
+    void TR20_aMark_triggersTheConditionalOrdersOnTheMark_atItsTime() {
+        TriggerOrder onMark = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("95"),
+                null,
+                null,
+                PLACED);
+        TriggerOrder onLast = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("95"),
+                null,
+                null,
+                PLACED);
+        when(matching.markTriggerOrders()).thenReturn(List.of(onMark));
+        when(matching.triggerOrders()).thenReturn(List.of(onLast));
+        when(matching.trigger(any(), any(), any(), any(), any())).thenReturn(true);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("96"), MINUTE_1));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("94.5"), MINUTE_1.plusSeconds(1)));
+
+        verify(matching, timeout(WAIT))
+                .trigger(onMark, MINUTE_1.plusSeconds(1), new BigDecimal("95"), FillSource.LIVE, null);
+        verify(matching, never()).trigger(eq(onLast), any(), any(), any(), any());
     }
 
     @Test

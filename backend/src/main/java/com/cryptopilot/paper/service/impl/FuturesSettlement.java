@@ -59,7 +59,8 @@ import org.springframework.transaction.annotation.Transactional;
  *       ({@code MARGIN_INSUFFICIENT}). A cross position is not checked at a fill, as on the exchange.
  *   <li>Every change of an isolated wallet is one {@code futures_margin_adjustment} row (10.3).
  *   <li>Once the position is smaller, the reduce-only orders of the pair that no longer fit it expire, newest first
- *       (5.2). The exchange shrinks such an order instead; an order's quantity is fixed here, so it expires.
+ *       (5.2). The exchange shrinks such an order instead; an order's quantity is fixed here, so it expires. Once it is
+ *       closed, its closing conditional orders (TP/SL with {@code closePosition} or reduce-only) expire too.
  *   <li>The cross wallet left below zero with no cross position open is made good by an insurance cover (4.3 rule 5).
  * </ol>
  *
@@ -73,6 +74,9 @@ class FuturesSettlement {
 
     /** Why an order expired: the isolated position it would open could not be funded at the fill. */
     static final String MARGIN_INSUFFICIENT = "MARGIN_INSUFFICIENT";
+
+    /** Why a closing conditional order expired: the position it would close was closed. */
+    static final String POSITION_CLOSED = "POSITION_CLOSED";
 
     /** Why a reduce-only order expired: there is no position left for it to reduce. */
     static final String REDUCE_ONLY = "REDUCE_ONLY_NOTHING_TO_REDUCE";
@@ -275,6 +279,15 @@ class FuturesSettlement {
         UUID userId = account.userId();
         FuturesPosition position = margins.openPosition(userId, pairId);
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
+        if (position == null) {
+            // A closed position takes its TP/SL with it: the closing conditional orders of the pair end (8.3 step 8).
+            for (PaperOrder conditional : margins.openConditionalOrders(userId)) {
+                if (conditional.getPairId().equals(pairId)
+                        && (conditional.isClosePosition() || conditional.isReduceOnly())) {
+                    end(account, conditional, POSITION_CLOSED, at);
+                }
+            }
+        }
         List<PaperOrder> reduceOnly = new ArrayList<>();
         for (PaperOrder order : margins.openOrders(userId)) {
             if (order.getPairId().equals(pairId) && order.isReduceOnly() && order.isOpen()) {

@@ -9,9 +9,7 @@ import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.common.util.UuidV7;
-import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.MarketApi;
-import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
@@ -28,8 +26,6 @@ import com.cryptopilot.paper.exception.FuturesRejection;
 import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.model.FuturesAccountMargin;
 import com.cryptopilot.paper.model.PaperAccount;
-import com.cryptopilot.paper.model.enums.FillSource;
-import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
@@ -100,9 +96,6 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     /** The most open orders of an account on one pair when the exchange sent no {@code MAX_NUM_ORDERS}. */
     static final int DEFAULT_MAX_NUM_ORDERS = 200;
 
-    /** Why an IOC or FOK order expired: the price was not there on arrival. */
-    static final String NOT_FILLABLE = "NOT_FILLABLE_ON_ARRIVAL";
-
     private static final int DEFAULT_LIMIT = 500;
 
     private static final int MAX_LIMIT = 1000;
@@ -121,7 +114,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     private final PaperFillRepository fills;
     private final FuturesMargins margins;
     private final FuturesSettlement settlement;
-    private final SpotArrival arrival;
+    private final FuturesArrival futuresArrival;
     private final UserLock lock;
     private final MarketApi market;
     private final EntitlementApi entitlements;
@@ -177,7 +170,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         BigDecimal mark = market.currentMarkPrice(pair.symbol()).orElse(null);
         BigDecimal last =
                 market.currentLastPrice(MarketType.FUTURES, pair.symbol()).orElse(mark);
-        Optional<SpotArrival.Book> book = bookFor(pair, request.side());
+        Optional<SpotArrival.Book> book = futuresArrival.bookFor(pair.pairId(), pair.symbol(), request.side());
         if (!request.reducing()) {
             BigDecimal valuedAt = marketOrder ? (mark != null ? mark : last) : request.price();
             if (valuedAt == null) {
@@ -228,8 +221,12 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesPair pair = margins.pair(symbol);
-        List<PaperOrder> open = orders.findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
-                userId, pair.pairId(), MarketType.FUTURES, OrderStatus.OPEN);
+        List<PaperOrder> open = orders
+                .findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
+                        userId, pair.pairId(), MarketType.FUTURES, OrderStatus.OPEN)
+                .stream()
+                .filter(order -> !order.isConditional())
+                .toList();
         Instant now = clock.instant();
         open.forEach(order -> cancelWorking(account, order, now));
         return open.stream()
@@ -276,6 +273,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                         TimeBounds.toOrLatest(endTime),
                         PageRequest.of(0, limitOf(limit)))
                 .getContent());
+        found.removeIf(PaperOrder::isConditional);
         Collections.reverse(found);
         return found.stream()
                 .map(order -> PaperResponses.futuresOrder(order, pair.symbol()))
@@ -315,9 +313,10 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             FuturesOrderRequest request,
             String key,
             PositionSide positionSide,
-            Optional<SpotArrival.Book> found) {
-        SpotArrival.Book book = found.orElseThrow(() -> priceUnavailable(pair));
-        BookSweep.Result sweep = BookSweep.ofQuantity(book.levels(), request.side(), request.quantity(), null);
+            Optional<SpotArrival.Book> book) {
+        if (book.isEmpty()) {
+            throw priceUnavailable(pair);
+        }
         PaperOrder order = orders.save(PaperOrder.futuresMarket(
                 account.userId(),
                 pair.pairId(),
@@ -326,14 +325,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                 positionSide,
                 request.quantity(),
                 request.reducing()));
-        Instant now = clock.instant();
-        execute(account, order, sweep, now);
-        if (order.isOpen()) {
-            order.expire(NOT_FILLABLE, now);
-        }
-        if (order.getOrderStatus() == OrderStatus.FILLED && sweep.pastBook() && book.shown()) {
-            order.flagDepthExhausted();
-        }
+        futuresArrival.market(account, order, book, clock.instant());
         return order;
     }
 
@@ -351,17 +343,15 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             PositionSide positionSide,
             Optional<SpotArrival.Book> book) {
         TimeInForce timeInForce = request.timeInForce() == null ? TimeInForce.GTC : request.timeInForce();
-        BookSweep.Result sweep = book.map(found ->
-                        BookSweep.ofQuantity(found.levels(), request.side(), request.quantity(), request.price()))
-                .orElseGet(() -> new BookSweep.Result(List.of(), false));
-        if (timeInForce == TimeInForce.GTX && !sweep.isEmpty()) {
+        if (timeInForce == TimeInForce.GTX
+                && !FuturesArrival.sweep(book, request.side(), request.quantity(), request.price())
+                        .isEmpty()) {
             throw new FuturesRejection(
                     ErrorCode.PAPER_ORDER_WOULD_TAKE,
                     -5022,
                     "Due to the order could not be executed as maker, the Post Only order will be rejected.");
         }
-        boolean decidedNow = timeInForce == TimeInForce.IOC || timeInForce == TimeInForce.FOK;
-        if (decidedNow && book.isEmpty()) {
+        if ((timeInForce == TimeInForce.IOC || timeInForce == TimeInForce.FOK) && book.isEmpty()) {
             throw priceUnavailable(pair);
         }
         PaperOrder order = orders.save(PaperOrder.futuresLimit(
@@ -374,36 +364,8 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                 request.price(),
                 request.quantity(),
                 request.reducing()));
-        Instant now = clock.instant();
-        if (timeInForce == TimeInForce.FOK && sweep.quantity().compareTo(request.quantity()) < 0) {
-            order.expire(NOT_FILLABLE, now);
-            return order;
-        }
-        execute(account, order, sweep, now);
-        if (!order.isOpen()) {
-            if (order.getOrderStatus() == OrderStatus.FILLED
-                    && sweep.pastBook()
-                    && book.get().shown()) {
-                order.flagDepthExhausted();
-            }
-            return order;
-        }
-        if (decidedNow) {
-            order.expire(NOT_FILLABLE, now);
-            return order;
-        }
-        arrival.rest(account, order);
+        futuresArrival.limit(account, order, book, clock.instant());
         return order;
-    }
-
-    /** Applies each level of a sweep as a live execution, as a taker, until the order ends. */
-    private void execute(PaperAccount account, PaperOrder order, BookSweep.Result sweep, Instant at) {
-        for (BookSweep.Slice slice : sweep.slices()) {
-            if (!order.isOpen()) {
-                return;
-            }
-            settlement.execute(account, order, slice.price(), slice.quantity(), Liquidity.TAKER, FillSource.LIVE, at);
-        }
     }
 
     /**
@@ -510,30 +472,6 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         return quantity.subtract(closable).max(BigDecimal.ZERO);
     }
 
-    /**
-     * The other side of the Futures book an order of {@code side} takes: the depth20, else the best bid and ask as one
-     * level, else the last price, whose depth is not known. Empty without any current price.
-     */
-    private Optional<SpotArrival.Book> bookFor(FuturesPair pair, OrderSide side) {
-        boolean buy = side == OrderSide.BUY;
-        Optional<List<PriceLevel>> depth = market.currentDepth(MarketType.FUTURES, pair.pairId())
-                .map(found -> buy ? found.asks() : found.bids())
-                .filter(levels -> !levels.isEmpty());
-        if (depth.isPresent()) {
-            return Optional.of(new SpotArrival.Book(depth.get(), true));
-        }
-        Optional<BookTop> top = market.currentBookTop(MarketType.FUTURES, pair.pairId());
-        Optional<PriceLevel> best = top.map(found -> buy
-                        ? new PriceLevel(found.askPrice(), found.askQuantity())
-                        : new PriceLevel(found.bidPrice(), found.bidQuantity()))
-                .filter(level -> level.price().signum() > 0);
-        if (best.isPresent()) {
-            return Optional.of(new SpotArrival.Book(List.of(best.get()), true));
-        }
-        return market.currentLastPrice(MarketType.FUTURES, pair.symbol())
-                .map(last -> new SpotArrival.Book(List.of(new PriceLevel(last, BigDecimal.ZERO)), false));
-    }
-
     /** Which fields the order type takes, before the pair is looked up. */
     private static void requireShape(FuturesOrderRequest request) {
         if (CONDITIONAL.contains(request.type())) {
@@ -606,7 +544,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         Optional<PaperOrder> found = orderId != null
                 ? orders.findByIdAndUserIdAndMarketType(orderId, userId, MarketType.FUTURES)
                 : orders.findByUserIdAndClientOrderIdAndMarketType(userId, origClientOrderId, MarketType.FUTURES);
-        return found.filter(order -> order.getPairId().equals(pair.pairId()))
+        return found.filter(order -> order.getPairId().equals(pair.pairId()) && !order.isConditional())
                 .orElseThrow(() ->
                         new ResourceNotFoundException("PaperOrder", orderId != null ? orderId : origClientOrderId));
     }

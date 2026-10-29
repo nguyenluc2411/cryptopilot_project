@@ -107,18 +107,40 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     List<RestingOrder> findResting(Collection<OrderStatus> statuses);
 
     /**
-     * Every Spot stop that still waits for its trigger, which the engine starts watching from: a pending stop of a
-     * group from its activation, the others from their placement (D-77).
+     * Every order that still waits for the last price to trigger it, which the engine starts watching from: the Spot
+     * stops, a pending stop of a group from its activation and the others from their placement (D-77), and the Futures
+     * conditional orders that watch the last price (TR-20).
      */
     @Transactional(readOnly = true)
-    @Query(
-            "select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
-                    + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice,"
-                    + " coalesce(o.activatedAt, o.createdAt)) from PaperOrder o"
-                    + " where o.orderStatus in :statuses and o.triggeredAt is null and o.orderType in"
-                    + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS, com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS_LIMIT,"
-                    + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_LIMIT)")
+    @Query("select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
+            + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice,"
+            + " coalesce(o.activatedAt, o.createdAt)) from PaperOrder o"
+            + " where o.orderStatus in :statuses and o.triggeredAt is null and ((o.marketType ="
+            + " com.cryptopilot.market.model.enums.MarketType.SPOT and o.orderType in"
+            + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS, com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS_LIMIT,"
+            + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_LIMIT))"
+            + " or (o.marketType = com.cryptopilot.market.model.enums.MarketType.FUTURES and o.orderType in"
+            + " (com.cryptopilot.paper.model.enums.OrderType.STOP, com.cryptopilot.paper.model.enums.OrderType.STOP_MARKET,"
+            + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_MARKET)"
+            + " and o.workingType = com.cryptopilot.paper.model.enums.WorkingType.LAST_PRICE))")
     List<TriggerOrder> findAwaitingTrigger(Collection<OrderStatus> statuses);
+
+    /** Every Futures conditional order that still waits for the mark price to trigger it (TR-20). */
+    @Transactional(readOnly = true)
+    @Query("select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
+            + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice, o.createdAt)"
+            + " from PaperOrder o where o.orderStatus in :statuses and o.triggeredAt is null"
+            + " and o.marketType = com.cryptopilot.market.model.enums.MarketType.FUTURES"
+            + " and o.workingType = com.cryptopilot.paper.model.enums.WorkingType.MARK_PRICE")
+    List<TriggerOrder> findAwaitingMarkTrigger(Collection<OrderStatus> statuses);
+
+    /** The order a Futures conditional order placed once triggered, if it did. */
+    @Transactional(readOnly = true)
+    Optional<PaperOrder> findByParentOrderId(UUID parentOrderId);
+
+    /** The orders the Futures conditional orders placed once triggered. */
+    @Transactional(readOnly = true)
+    List<PaperOrder> findByParentOrderIdIn(Collection<UUID> parentOrderIds);
 
     /** The orders of a group, as they were placed. */
     @Transactional(readOnly = true)

@@ -563,8 +563,10 @@ trade_order,order_status,character varying,,,NO
 trade_order,order_type,character varying,,,NO
 trade_order,orig_quantity,numeric,28,12,YES
 trade_order,pair_id,uuid,,,NO
+trade_order,parent_order_id,uuid,,,YES
 trade_order,plan_id,uuid,,,YES
 trade_order,position_side,character varying,,,YES
+trade_order,price_protect,boolean,,,NO
 trade_order,quote_order_amount,numeric,28,8,YES
 trade_order,reduce_only,boolean,,,NO
 trade_order,self_trade_prevention_mode,character varying,,,YES

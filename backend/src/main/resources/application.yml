@@ -367,6 +367,8 @@ cryptopilot:
       # loss less this share of its notional.
       mark-max-age: 5s
       stale-mark-haircut: 0.01
+      # TR-20: a conditional order with priceProtect waits while mark and last differ by more than this share.
+      trigger-protect: 0.05
     account:
       # TR-04, Q-T5: the virtual funds a paper account is opened with, granted once; there is no reset. Keys in lower
       # case, the form an environment variable binds to, so CRYPTOPILOT_PAPER_ACCOUNT_SPOTGRANT_USDT replaces usdt

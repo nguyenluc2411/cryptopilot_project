@@ -23,9 +23,11 @@ import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.dto.response.FuturesAccountResponse;
 import com.cryptopilot.paper.dto.response.FuturesOrderUpdateResponse;
 import com.cryptopilot.paper.model.RestingOrder;
+import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -69,11 +71,12 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * arrival against the Futures book, a waiting order filled by the engine, and what each fill does to the one-way
  * position, the Futures wallet, the isolated wallet and its audit rows; then the positions and the account read at
  * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes;
- * what each committed change pushes on the Trader's Futures queues; and what a stale mark price refuses.
+ * what each committed change pushes on the Trader's Futures queues; what a stale mark price refuses; and the
+ * conditional orders, placed, triggered and ended.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-22a, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-20, TR-22a, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -1119,6 +1122,196 @@ class FuturesOrderApiTest {
                     .update();
             new MarketTestData(sql, Instant.now()).remove(otherPair);
         }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Conditional (algo) orders
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void TR20_aConditionalOrder_waitsOnTheAlgoEndpoints_andOneThatWouldTriggerAtOnce_isRefused() throws Exception {
+        UUID trader = trader(true);
+
+        String id = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "95", "quantity": "1", "workingType": "MARK_PRICE", "clientAlgoId": "sl-1"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.algoStatus").value("NEW"))
+                .andExpect(jsonPath("$.algoType").value("CONDITIONAL"))
+                .andExpect(jsonPath("$.workingType").value("MARK_PRICE"))
+                .andExpect(jsonPath("$.clientAlgoId").value("sl-1")));
+
+        as(trader, get(FUTURES + "/openAlgoOrders"), null)
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].algoId").value(id));
+        as(trader, get(FUTURES + "/openOrders"), null)
+                .andExpect(jsonPath("$.length()").value(0));
+        as(trader, get(FUTURES + "/algoOrder").param("symbol", symbol).param("clientAlgoId", "sl-1"), null)
+                .andExpect(jsonPath("$.algoId").value(id));
+        // The mark is at 100: a stop SELL at 105 is already met.
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "105", "quantity": "1", "workingType": "MARK_PRICE"}""".formatted(symbol))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_WOULD_TRIGGER"))
+                .andExpect(jsonPath("$.binanceCode").value(-2021));
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "95", "quantity": "1", "closePosition": true}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.quantity").value("MSG15"));
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "type": "STOP",
+                         "triggerPrice": "105", "quantity": "1"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.price").value("MSG01"));
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "TRAILING_STOP_MARKET",
+                         "triggerPrice": "95", "quantity": "1", "callbackRate": "1"}""".formatted(symbol)).andExpect(status().isBadRequest());
+        // The last price is not known here: an order on it cannot be judged.
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "95", "quantity": "1"}""".formatted(symbol)).andExpect(status().isServiceUnavailable());
+
+        as(trader, delete(FUTURES + "/algoOrder").param("symbol", symbol).param("algoId", id), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.algoStatus").value("CANCELED"));
+        as(trader, delete(FUTURES + "/algoOrder").param("symbol", symbol).param("algoId", id), null)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-2011));
+    }
+
+    @Test
+    void TR20_aTriggeredStopLoss_closesThePosition_andFinishes() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String id = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "95", "closePosition": true, "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+
+        depth(List.of(level("94.6", "5")), List.of(level("94.5", "5")));
+        trigger(trader, id, OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "95");
+
+        assertThat(openPositions(trader)).isZero();
+        String placed = JsonPath.read(
+                as(trader, get(FUTURES + "/algoOrder").param("symbol", symbol).param("algoId", id), null)
+                        .andExpect(jsonPath("$.algoStatus").value("FINISHED"))
+                        .andExpect(jsonPath("$.actualPrice").value(numeric("94.5")))
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString(),
+                "$.actualOrderId");
+        as(trader, get(FUTURES + "/order").param("symbol", symbol).param("orderId", placed), null)
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.reduceOnly").value(true));
+        as(trader, get(FUTURES + "/allAlgoOrders").param("symbol", symbol), null)
+                .andExpect(jsonPath("$[0].actualOrderId").value(placed));
+    }
+
+    @Test
+    void TR20_aStopLimit_placesItsLimitOrder_whichWaits_andTheAlgoOrderIsTriggered() throws Exception {
+        UUID trader = trader(true);
+        String id = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "type": "STOP",
+                         "triggerPrice": "105", "price": "106", "quantity": "1", "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+
+        depth(List.of(level("107", "5")), List.of(level("106.9", "5")));
+        trigger(trader, id, OrderSide.BUY, TriggerCondition.AT_OR_ABOVE, "105");
+
+        as(trader, get(FUTURES + "/algoOrder").param("symbol", symbol).param("algoId", id), null)
+                .andExpect(jsonPath("$.algoStatus").value("TRIGGERED"));
+        as(trader, get(FUTURES + "/openOrders").param("symbol", symbol), null)
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].price").value(numeric("106")));
+    }
+
+    @Test
+    void TR20_marginIsCheckedWhenItTriggers_notWhenItIsPlaced() throws Exception {
+        UUID trader = trader(true);
+        leverage(trader, 1);
+        String id = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "type": "STOP_MARKET",
+                         "triggerPrice": "105", "quantity": "60", "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+
+        depth(List.of(level("105", "100")), List.of(level("104.9", "100")));
+        trigger(trader, id, OrderSide.BUY, TriggerCondition.AT_OR_ABOVE, "105");
+
+        as(trader, get(FUTURES + "/algoOrder").param("symbol", symbol).param("algoId", id), null)
+                .andExpect(jsonPath("$.algoStatus").value("REJECTED"))
+                .andExpect(jsonPath("$.statusReason").value("MARGIN_INSUFFICIENT"));
+        assertThat(openPositions(trader)).isZero();
+    }
+
+    @Test
+    void TR20_closingConditionalOrders_endWithThePosition_andOnesWithNothingToClose_expire() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String takeProfit = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "TAKE_PROFIT_MARKET",
+                         "triggerPrice": "110", "closePosition": true, "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        String reduce = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "90", "quantity": "1", "reduceOnly": true, "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+
+        place(trader, market("SELL", "1")).andExpect(status().isOk());
+
+        assertThat(statusOf(takeProfit)).isEqualTo("EXPIRED");
+        assertThat(statusOf(reduce)).isEqualTo("EXPIRED");
+
+        String orphan = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "95", "closePosition": true, "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        trigger(trader, orphan, OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "95");
+        as(trader, get(FUTURES + "/algoOrder").param("symbol", symbol).param("algoId", orphan), null)
+                .andExpect(jsonPath("$.algoStatus").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("NOTHING_TO_CLOSE"));
+        as(trader, delete(FUTURES + "/algoOpenOrders").param("symbol", symbol), null)
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    /** With priceProtect, no last price to compare the mark with means it does not trigger and keeps waiting. */
+    @Test
+    void TR20_aProtectedOrder_withoutALastPriceToCompare_keepsWaiting() throws Exception {
+        UUID trader = trader(true);
+        String id = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "type": "STOP_MARKET",
+                         "triggerPrice": "105", "quantity": "1", "workingType": "MARK_PRICE", "priceProtect": true}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.priceProtect").value(true)));
+
+        trigger(trader, id, OrderSide.BUY, TriggerCondition.AT_OR_ABOVE, "105");
+
+        assertThat(statusOf(id)).isEqualTo("NEW");
+    }
+
+    private ResultActions algo(UUID trader, String body) throws Exception {
+        return as(trader, post(FUTURES + "/algoOrder"), body);
+    }
+
+    private static String algoId(ResultActions placed) throws Exception {
+        return JsonPath.read(placed.andReturn().getResponse().getContentAsString(), "$.algoId");
+    }
+
+    /** The engine triggers the conditional order at its trigger price, as a mark or a trade reaching it does. */
+    private void trigger(UUID trader, String id, OrderSide side, TriggerCondition condition, String price) {
+        matching.trigger(
+                new TriggerOrder(
+                        UUID.fromString(id),
+                        trader,
+                        MarketType.FUTURES,
+                        pair,
+                        side,
+                        condition,
+                        new BigDecimal(price),
+                        null,
+                        null,
+                        Instant.now().minusSeconds(1)),
+                Instant.now(),
+                new BigDecimal(price),
+                FillSource.LIVE,
+                null);
     }
 
     /** A mark the exchange produced longer ago than mark-max-age (5 s): the cache holds it, but it is not current. */

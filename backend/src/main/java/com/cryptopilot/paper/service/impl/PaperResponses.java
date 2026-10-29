@@ -2,6 +2,7 @@ package com.cryptopilot.paper.service.impl;
 
 import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.paper.dto.response.FillResponse;
+import com.cryptopilot.paper.dto.response.FuturesAlgoOrderResponse;
 import com.cryptopilot.paper.dto.response.FuturesOrderResponse;
 import com.cryptopilot.paper.dto.response.FuturesTradeResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
@@ -17,7 +18,7 @@ import java.math.BigDecimal;
  * user queues (TR-07, TR-08), so the two never disagree on a field; and a Futures order and fill as the exchange's
  * USDⓈ-M API shows them (TR-15, TR-16).
  *
- * <p>Rule: TR-07, TR-08, TR-15, TR-16.
+ * <p>Rule: TR-07, TR-08, TR-15, TR-16, TR-20.
  */
 final class PaperResponses {
 
@@ -123,5 +124,43 @@ final class PaperResponses {
                 fill.getSide() == OrderSide.BUY,
                 fill.getPositionId(),
                 fill.getTradedAt());
+    }
+
+    /**
+     * A Futures conditional order of the pair named {@code symbol}, with the order it placed once triggered, or
+     * {@code null} (TR-20). Its status is the exchange's algoStatus: NEW while it waits, TRIGGERED while the order it
+     * placed works and FINISHED once that ended.
+     */
+    static FuturesAlgoOrderResponse futuresAlgo(PaperOrder conditional, String symbol, PaperOrder placed) {
+        String status =
+                switch (conditional.getOrderStatus()) {
+                    case FILLED -> placed != null && placed.isOpen() ? "TRIGGERED" : "FINISHED";
+                    case NEW, PARTIALLY_FILLED, PENDING_NEW -> "NEW";
+                    default -> conditional.getOrderStatus().name();
+                };
+        return new FuturesAlgoOrderResponse(
+                conditional.getId(),
+                conditional.getClientOrderId(),
+                "CONDITIONAL",
+                conditional.getOrderType(),
+                symbol,
+                conditional.getSide(),
+                conditional.getPositionSide(),
+                conditional.getTimeInForce(),
+                conditional.getOrigQuantity(),
+                status,
+                FuturesTrigger.TRIGGERED.equals(conditional.getStatusReason()) ? null : conditional.getStatusReason(),
+                placed == null ? null : placed.getId(),
+                placed == null || placed.getAvgPrice() == null ? BigDecimal.ZERO : placed.getAvgPrice(),
+                conditional.getStopPrice(),
+                conditional.getLimitPrice() != null ? conditional.getLimitPrice() : BigDecimal.ZERO,
+                conditional.getWorkingType().binanceName(),
+                "NONE",
+                conditional.isClosePosition(),
+                conditional.isPriceProtect(),
+                conditional.isReduceOnly(),
+                conditional.getCreatedAt(),
+                conditional.getClosedAt() != null ? conditional.getClosedAt() : conditional.getUpdatedAt(),
+                conditional.getTriggeredAt());
     }
 }

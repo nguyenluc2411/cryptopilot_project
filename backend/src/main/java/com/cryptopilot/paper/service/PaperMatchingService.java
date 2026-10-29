@@ -26,6 +26,9 @@ public interface PaperMatchingService {
     /** Every stop limit and trailing stop that still waits for its trigger. */
     List<TriggerOrder> triggerOrders();
 
+    /** Every Futures conditional order that waits for the mark price to trigger it (TR-20). */
+    List<TriggerOrder> markTriggerOrders();
+
     /**
      * Triggers a stop limit or a trailing stop the last price reached, under its Trader's lock, if it still waits: it
      * becomes the limit order it carries. Live, that order meets the current book at once as a limit order placed now

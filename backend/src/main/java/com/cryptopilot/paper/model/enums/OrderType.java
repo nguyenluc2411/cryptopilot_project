@@ -52,6 +52,29 @@ public enum OrderType {
     public static final Set<OrderType> SPOT_STOPS = Set.of(STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT);
 
     /** Whether a Spot order of this kind waits for a trigger. */
+    /** The conditional orders of paper Futures that TR-20 takes: STOP, STOP_MARKET, TAKE_PROFIT, TAKE_PROFIT_MARKET. */
+    public static final Set<OrderType> FUTURES_CONDITIONAL = Set.of(STOP, STOP_MARKET, TAKE_PROFIT, TAKE_PROFIT_MARKET);
+
+    /** Whether the type is a Futures conditional order, which waits for a trigger before it places an order. */
+    public boolean isFuturesConditional() {
+        return FUTURES_CONDITIONAL.contains(this);
+    }
+
+    /** Whether a Futures conditional order of this type places a MARKET order once triggered. */
+    public boolean isFuturesMarketConditional() {
+        return this == STOP_MARKET || this == TAKE_PROFIT_MARKET;
+    }
+
+    /**
+     * The side of the price a Futures conditional order of this type and side triggers on (plan 5.4): a stop BUY and
+     * a take-profit SELL at or above the trigger, a stop SELL and a take-profit BUY at or below it.
+     */
+    public TriggerCondition futuresTriggerConditionFor(OrderSide side) {
+        boolean stop = this == STOP || this == STOP_MARKET;
+        boolean above = stop == (side == OrderSide.BUY);
+        return above ? TriggerCondition.AT_OR_ABOVE : TriggerCondition.AT_OR_BELOW;
+    }
+
     public boolean isSpotStop() {
         return SPOT_STOPS.contains(this);
     }

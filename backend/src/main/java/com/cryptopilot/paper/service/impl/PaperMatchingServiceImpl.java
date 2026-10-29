@@ -38,12 +38,13 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * A stop limit or a trailing stop the price triggered is triggered the same way, under the lock, and only once.
  *
- * <p>A Futures order's fill is applied to the Trader's position by {@link FuturesSettlement} (TR-16).
+ * <p>A Futures order's fill is applied to the Trader's position by {@link FuturesSettlement} (TR-16), and a Futures
+ * conditional order the price triggered places the order it carries through {@link FuturesTrigger} (TR-20).
  *
  * <p>An order of a Spot pair the system no longer trades, stopped by the exchange or disabled by an administrator, is
  * cancelled instead ({@code PAIR_NOT_TRADING}), by the cancellation the pair's stop runs.
  *
- * <p>Rule: TR-02, TR-09, TR-11, TR-16; NSF-01, NSF-07; Q-T6.
+ * <p>Rule: TR-02, TR-09, TR-11, TR-16, TR-20; NSF-01, NSF-07; Q-T6.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -55,6 +56,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final PaperOrderRepository orders;
     private final SpotSettlement settlement;
     private final FuturesSettlement futuresSettlement;
+    private final FuturesTrigger futuresTrigger;
     private final SpotStopTrigger stopTrigger;
     private final PaperOrderLists lists;
     private final PairStopCancellation pairStops;
@@ -136,6 +138,12 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<TriggerOrder> markTriggerOrders() {
+        return orders.findAwaitingMarkTrigger(OrderStatus.OPEN);
+    }
+
+    @Override
     @Transactional
     public boolean trigger(
             TriggerOrder watched, Instant at, BigDecimal stopPrice, FillSource source, BigDecimal candleOpen) {
@@ -148,6 +156,10 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             return false;
         }
         PaperOrder order = found.get();
+        if (order.getMarketType() == MarketType.FUTURES) {
+            futuresTrigger.execute(account, order, at, source);
+            return true;
+        }
         if (cancelledAsNotTrading(account, order)) {
             return false;
         }

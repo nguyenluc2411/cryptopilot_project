@@ -126,10 +126,27 @@ class FuturesMargins {
                 .orElse(null);
     }
 
-    /** The Trader's open Futures orders, newest first. */
+    /**
+     * The Trader's open Futures MARKET and LIMIT orders, newest first. A conditional order is not one of them: it holds
+     * no margin until its trigger places the order it carries (plan 4.7), and it is listed by the algo endpoints.
+     */
     List<PaperOrder> openOrders(UUID userId) {
-        return orders.findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
-                userId, MarketType.FUTURES, OrderStatus.OPEN);
+        return orders
+                .findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
+                        userId, MarketType.FUTURES, OrderStatus.OPEN)
+                .stream()
+                .filter(order -> !order.isConditional())
+                .toList();
+    }
+
+    /** The Trader's open Futures conditional orders, newest first (TR-20). */
+    List<PaperOrder> openConditionalOrders(UUID userId) {
+        return orders
+                .findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
+                        userId, MarketType.FUTURES, OrderStatus.OPEN)
+                .stream()
+                .filter(PaperOrder::isConditional)
+                .toList();
     }
 
     /** The coin of the Futures wallet, USDT. */

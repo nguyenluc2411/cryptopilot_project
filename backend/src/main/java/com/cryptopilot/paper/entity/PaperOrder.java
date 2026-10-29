@@ -9,6 +9,7 @@ import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.TimeInForce;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
+import com.cryptopilot.paper.model.enums.WorkingType;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -97,6 +98,19 @@ public class PaperOrder extends BaseEntity {
     /** A Spot stop's stopPrice: its trigger, or the activation of a trailing stop; {@code null} without one. */
     @Column(name = "stop_price", precision = 28, scale = 12, updatable = false)
     private BigDecimal stopPrice;
+
+    /** The price a Futures conditional order watches: the last or the mark price (TR-20); {@code null} otherwise. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "working_type", length = 32, updatable = false)
+    private WorkingType workingType;
+
+    /** Whether a Futures conditional order waits while the mark and the last price are too far apart (TR-20). */
+    @Column(name = "price_protect", nullable = false, updatable = false)
+    private boolean priceProtect;
+
+    /** The Futures conditional order that placed this order once triggered (TR-20); {@code null} for every other. */
+    @Column(name = "parent_order_id", updatable = false)
+    private UUID parentOrderId;
 
     /** The side of the last price a stop's condition is met on, fixed by its type and side; otherwise null. */
     @Enumerated(EnumType.STRING)
@@ -371,6 +385,87 @@ public class PaperOrder extends BaseEntity {
                 .futures(positionSide, reduceOnly);
     }
 
+    /**
+     * A Futures conditional order (TR-20): STOP or TAKE_PROFIT, which places a LIMIT order at {@code price} once
+     * triggered, or STOP_MARKET or TAKE_PROFIT_MARKET, which places a MARKET order. The side of the price it triggers on
+     * follows from its type and side.
+     *
+     * @param timeInForce for STOP and TAKE_PROFIT; {@code null} for the market kinds
+     * @param triggerPrice the exchange's triggerPrice, on the pair's tick
+     * @param price for STOP and TAKE_PROFIT, on the pair's tick; {@code null} for the market kinds
+     * @param quantity positive, on the pair's step; {@code null} with {@code closePosition}
+     * @param closePosition whether it closes the whole position when triggered (market kinds only)
+     */
+    public static PaperOrder futuresConditional(
+            UUID userId,
+            UUID pairId,
+            String clientOrderId,
+            OrderType type,
+            OrderSide side,
+            PositionSide positionSide,
+            TimeInForce timeInForce,
+            BigDecimal triggerPrice,
+            BigDecimal price,
+            BigDecimal quantity,
+            WorkingType workingType,
+            boolean priceProtect,
+            boolean reduceOnly,
+            boolean closePosition) {
+        if (!type.isFuturesConditional()) {
+            throw new IllegalArgumentException(type + " is not a Futures conditional order");
+        }
+        boolean market = type.isFuturesMarketConditional();
+        if (market != (price == null) || market != (timeInForce == null)) {
+            throw new IllegalArgumentException(type + " takes a price and a time in force only as a limit kind");
+        }
+        if (closePosition != (quantity == null) || (closePosition && (!market || reduceOnly))) {
+            throw new IllegalArgumentException("closePosition takes no quantity, no reduceOnly and a market kind");
+        }
+        PaperOrder order = new PaperOrder(
+                        userId,
+                        pairId,
+                        clientOrderId,
+                        side,
+                        type,
+                        timeInForce,
+                        market ? null : positive(price),
+                        quantity == null ? null : positive(quantity),
+                        null)
+                .futures(positionSide, reduceOnly);
+        order.stopPrice = positive(triggerPrice);
+        order.triggerCondition = type.futuresTriggerConditionFor(side);
+        order.workingType = Objects.requireNonNull(workingType, "workingType must not be null");
+        order.priceProtect = priceProtect;
+        order.closePosition = closePosition;
+        return order;
+    }
+
+    /** Marks the order as placed by a triggered Futures conditional order. Called before it is first stored. */
+    public PaperOrder placedBy(PaperOrder conditional) {
+        if (!conditional.getOrderType().isFuturesConditional() || marketType != MarketType.FUTURES) {
+            throw new IllegalArgumentException("only a Futures conditional order places a Futures order");
+        }
+        this.parentOrderId = conditional.getId();
+        return this;
+    }
+
+    /** Whether the order is a Futures conditional order (TR-20). */
+    public boolean isConditional() {
+        return orderType.isFuturesConditional();
+    }
+
+    /**
+     * Ends a triggered Futures conditional order: FILLED once it placed the order it carries, the exchange's
+     * TRIGGERED; or EXPIRED or REJECTED with the reason the trigger could not place it.
+     */
+    public void endTrigger(OrderStatus status, String reason, Instant at) {
+        requireOpen("ended");
+        if (!isConditional() || triggeredAt == null) {
+            throw new IllegalStateException("order " + getId() + " is not a triggered conditional order");
+        }
+        end(status, reason, at);
+    }
+
     private PaperOrder futures(PositionSide positionSide, boolean reduceOnly) {
         this.marketType = MarketType.FUTURES;
         this.positionSide = Objects.requireNonNull(positionSide, "a Futures order has a position side");
@@ -429,9 +524,9 @@ public class PaperOrder extends BaseEntity {
         return orderType != OrderType.MARKET;
     }
 
-    /** Whether the order is a Spot stop: STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT or TAKE_PROFIT_LIMIT. */
+    /** Whether the order waits for a trigger: a Spot stop, or a Futures conditional order (TR-20). */
     public boolean isTriggered() {
-        return orderType.isSpotStop();
+        return marketType == MarketType.SPOT ? orderType.isSpotStop() : orderType.isFuturesConditional();
     }
 
     /** Whether the order still waits for the price to trigger it. */

@@ -1,5 +1,7 @@
 package com.cryptopilot.paper.job;
 
+import com.cryptopilot.market.MarkPrice;
+import com.cryptopilot.market.MarkPriceListener;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MarketTradeListener;
@@ -9,6 +11,7 @@ import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
+import com.cryptopilot.paper.event.PaperOrderAwaitingMarkTrigger;
 import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
@@ -132,7 +135,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * "Aggregator" (the forming updates of a candle merged into one).
  */
 @Component
-public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeListener {
+public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeListener, MarkPriceListener {
 
     private static final Logger log = LoggerFactory.getLogger(PaperMatchingWorker.class);
     private static final Duration MINUTE = Duration.ofMinutes(1);
@@ -148,6 +151,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     /** The merged forming range of each pair, waiting for the consumer; its key is queued once while present. */
     private final Map<BookKey, PriceRange> forming = new ConcurrentHashMap<>();
+
+    /** The latest mark price of each Futures pair, waiting for the consumer; its key is queued once while present. */
+    private final Map<BookKey, MarkPrice> marks = new ConcurrentHashMap<>();
 
     /** The market trades of each pair, waiting for the consumer; its key is queued once while present. */
     private final Map<BookKey, PendingTrades> trades = new ConcurrentHashMap<>();
@@ -165,8 +171,11 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     /** Owned by the consumer thread once it starts; written by {@link #start()} before that. */
     private final PaperOrderBook book;
 
-    /** The stop limits and trailing stops; owned like {@link #book}. */
+    /** The stop limits and trailing stops, and the Futures conditional orders on the last price; owned like {@link #book}. */
     private final TriggerBook triggers = new TriggerBook();
+
+    /** The Futures conditional orders on the mark price (TR-20); owned like {@link #book}. */
+    private final TriggerBook markTriggers = new TriggerBook();
 
     /** The latest live trades of each pair the consumer matched, earliest first; owned like {@link #book}. */
     private final Map<BookKey, Deque<PriceRange.Print>> recentTrades = new HashMap<>();
@@ -229,6 +238,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             oldest.merge(
                     new BookKey(order.market(), order.pairId()), order.placedAt(), (a, b) -> a.isBefore(b) ? a : b);
         }
+        // A mark trigger missed while the engine was down waits for the next mark; replaying marks is TR-42.
+        matching.markTriggerOrders().forEach(markTriggers::track);
         if (properties.replay().enabled()) {
             oldest.forEach((key, placedAt) -> startupReplay(key, placedAt));
         }
@@ -270,7 +281,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     /** Whether nothing is queued for the consumer or the replay thread; for tests. */
     boolean isIdle() {
-        return queue.isEmpty() && forming.isEmpty() && trades.isEmpty() && replays.isEmpty();
+        return queue.isEmpty() && forming.isEmpty() && trades.isEmpty() && marks.isEmpty() && replays.isEmpty();
     }
 
     @Override
@@ -287,6 +298,22 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                 kline.closed(),
                 FillSource.LIVE);
         submit(range);
+    }
+
+    /**
+     * Hands a Futures mark price to the consumer without waiting (TR-20): the mark goes through the same queue and the
+     * same thread as the pair's trades, so a mark trigger and a last-price trigger keep the order they arrived in (plan
+     * 9.1). Marks that arrive while the consumer is busy are merged into the latest one, as only the newest decides.
+     */
+    @Override
+    public void onMarkPrice(MarkPrice mark) {
+        if (!running) {
+            return;
+        }
+        BookKey key = new BookKey(MarketType.FUTURES, mark.pairId());
+        if (marks.put(key, mark) == null) {
+            queue.offer(new Command.Mark(key));
+        }
     }
 
     /** Hands a market trade to the consumer without waiting; see the class comment. */
@@ -410,6 +437,14 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         untracked.computeIfPresent(key, (ignored, count) -> count > 1 ? count - 1 : null);
     }
 
+    /** A Futures conditional order on the mark price waits for its trigger (TR-20). */
+    @TransactionalEventListener
+    public void onAwaitingMarkTrigger(PaperOrderAwaitingMarkTrigger event) {
+        if (running) {
+            queue.offer(new Command.TrackMarkTrigger(event.order()));
+        }
+    }
+
     /** A cancelled order leaves the book. */
     @TransactionalEventListener
     public void onCanceled(PaperOrderCanceled event) {
@@ -449,6 +484,13 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                 tracked(key);
                 forgetIfIdle(key);
             }
+            case Command.TrackMarkTrigger track -> markTriggers.track(track.order());
+            case Command.Mark markKey -> {
+                MarkPrice mark = marks.remove(markKey.key());
+                if (mark != null) {
+                    onMark(markKey.key(), mark);
+                }
+            }
             case Command.TrackTrigger track -> {
                 BookKey key = new BookKey(track.order().market(), track.order().pairId());
                 triggers.track(track.order());
@@ -459,6 +501,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             case Command.Untrack untrack -> {
                 book.untrack(untrack.orderId());
                 triggers.untrack(untrack.orderId());
+                markTriggers.untrack(untrack.orderId());
                 retries.values()
                         .forEach(waiting -> waiting.removeIf(
                                 pending -> pending.order().orderId().equals(untrack.orderId())));
@@ -628,6 +671,25 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     private void triggerReached(PriceRange range) {
         for (TriggerBook.Triggered fired : triggers.onRange(range)) {
             trigger(fired, range.source(), range.open());
+        }
+    }
+
+    /** Triggers the conditional orders a mark price reached, earliest placed first (TR-20). */
+    private void onMark(BookKey key, MarkPrice mark) {
+        PriceRange range = PriceRange.ofPrints(
+                key.market(),
+                key.pairId(),
+                List.of(new PriceRange.Print(mark.price(), BigDecimal.ZERO, false, mark.eventTime())));
+        for (TriggerBook.Triggered fired : markTriggers.onRange(range)) {
+            try {
+                matching.trigger(fired.order(), fired.at(), fired.stopPrice(), FillSource.LIVE, null);
+            } catch (RuntimeException failure) {
+                markTriggers.track(fired.order());
+                log.warn(
+                        "TR-20 paper order {} trigger failed; it waits for the next mark: {}",
+                        fired.order().orderId(),
+                        failure.toString());
+            }
         }
     }
 
@@ -1019,6 +1081,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         record Track(RestingOrder order) implements Command {}
 
         record TrackTrigger(TriggerOrder order) implements Command {}
+
+        /** A Futures conditional order on the mark price starts waiting (TR-20). */
+        record TrackMarkTrigger(TriggerOrder order) implements Command {}
+
+        /** Read the pair's latest mark price (TR-20). */
+        record Mark(BookKey key) implements Command {}
 
         record Untrack(UUID orderId) implements Command {}
 
