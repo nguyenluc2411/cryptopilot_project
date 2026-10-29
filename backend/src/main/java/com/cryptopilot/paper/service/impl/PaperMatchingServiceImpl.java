@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -46,7 +47,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>An order of a Spot pair the system no longer trades, stopped by the exchange or disabled by an administrator, is
  * cancelled instead ({@code PAIR_NOT_TRADING}), by the cancellation the pair's stop runs.
  *
- * <p>Rule: TR-02, TR-09, TR-11, TR-16, TR-20, TR-22; NSF-01, NSF-07; Q-T6.
+ * <p>Rule: TR-02, TR-09, TR-11, TR-16, TR-20, TR-22, TR-42; NSF-01, NSF-07; Q-T6.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -67,6 +68,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final PaperMatchingWatermarkRepository watermarks;
     private final UserLock lock;
     private final MarketApi market;
+    private final FuturesMarkCatchUp markCatchUp;
     private final QuoteUsdtRate usdtRates;
     private final Clock clock;
 
@@ -254,5 +256,22 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     @Transactional
     public void advanceWatermark(MarketType market, UUID pairId, Instant openTime) {
         watermarks.advance(market.name(), pairId, openTime, clock.instant());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Instant> markWatermark(UUID pairId) {
+        return watermarks.lastMarkCandleOpenTime(pairId);
+    }
+
+    @Override
+    @Transactional
+    public void advanceMarkWatermark(UUID pairId, Instant openTime) {
+        watermarks.advanceMark(pairId, openTime, clock.instant());
+    }
+
+    @Override
+    public void markCatchingUp(UUID pairId, boolean catchingUp) {
+        market.pairListings(Set.of(pairId)).forEach(pair -> markCatchUp.set(pair.symbol(), catchingUp));
     }
 }

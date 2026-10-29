@@ -61,6 +61,11 @@ public final class LiquidationBook {
         return reached;
     }
 
+    /** Whether any level of the pair is watched. */
+    public boolean hasLevels(UUID pairId) {
+        return levels.containsKey(key(pairId));
+    }
+
     /** How many levels are watched. */
     public int size() {
         return levels.values().stream().mapToInt(Map::size).sum();

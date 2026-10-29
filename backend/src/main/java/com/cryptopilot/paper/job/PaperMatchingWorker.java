@@ -10,6 +10,7 @@ import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperOrderAwaitingMarkTrigger;
@@ -128,7 +129,20 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * The best prices the trailing stops followed to are stored once a minute, on each closed candle, and a restart
  * resumes from them; the replay from the watermark covers the minute not stored.
  *
- * <p>Rule: TR-02, TR-05, TR-09, TR-11; NSF-07; Q-T1, Q-T6, Q-T8; A-04; D-77, D-78; ADR-011.
+ * <h2>Mark prices (Futures)</h2>
+ *
+ * <p>The mark prices of a Futures pair run its conditional orders on the mark and its isolated liquidations, in arrival
+ * order (TR-20, TR-22). A pair with either keeps a mark watermark of its own: a minute of marks is whole once a mark of
+ * the next minute follows without a gap (TR-42, plan 9.5). A mark more than {@code mark-max-age} after the previous
+ * one, or a restart, starts a catch-up: the pair is {@code MARK_STALE} for every request, the live marks are held,
+ * and the replay thread fetches the closed 1-minute mark candles from the mark watermark, each run as open, the
+ * extreme nearer the open, the other extreme, close. What a replayed mark triggers or liquidates is applied at the
+ * time it is applied, on the state of now, never back-dated. The catch-up ends once the candle of the minute the first
+ * held mark came in is replayed, which may mean waiting for that minute to close, and two live marks follow: the held
+ * marks inside replayed candles are dropped, the others run in order. The last price candles are not replayed for a
+ * lost mark stream, as the trades went on.
+ *
+ * <p>Rule: TR-02, TR-05, TR-09, TR-11, TR-42; NSF-07; Q-T1, Q-T6, Q-T8; A-04; D-77, D-78; ADR-011.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
  * (producer-consumer), ch. 7 (cancellation and shutdown) and ch. 11 (lock scope and contention).
@@ -146,6 +160,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     private final PaperMatchingService matching;
     private final MarketApi market;
     private final PaperMatchingProperties properties;
+    private final PaperFuturesProperties futures;
     private final Clock clock;
     private final ThreadFactory threads;
 
@@ -196,6 +211,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     /** When the consumer last read a trade of each pair. */
     private final Map<BookKey, Instant> lastTrade = new HashMap<>();
 
+    /** When the consumer last ran a live mark of each Futures pair (TR-42); owned like {@link #book}. */
+    private final Map<BookKey, Instant> lastMark = new HashMap<>();
+
+    /** The Futures pairs catching up on missed marks (TR-42); owned like {@link #book} once the consumer starts. */
+    private final Map<BookKey, MarkCatchUp> markCatchUps = new HashMap<>();
+
     private final Map<BookKey, Instant> lastClosed = new HashMap<>();
     private final Set<BookKey> replaying = new HashSet<>();
     private final Set<BookKey> watermarkHeld = new HashSet<>();
@@ -209,19 +230,25 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     @Autowired
     public PaperMatchingWorker(
-            PaperMatchingService matching, MarketApi market, PaperMatchingProperties properties, Clock clock) {
-        this(matching, market, properties, clock, Thread.ofVirtual().factory());
+            PaperMatchingService matching,
+            MarketApi market,
+            PaperMatchingProperties properties,
+            PaperFuturesProperties futures,
+            Clock clock) {
+        this(matching, market, properties, futures, clock, Thread.ofVirtual().factory());
     }
 
     PaperMatchingWorker(
             PaperMatchingService matching,
             MarketApi market,
             PaperMatchingProperties properties,
+            PaperFuturesProperties futures,
             Clock clock,
             ThreadFactory threads) {
         this.matching = matching;
         this.market = market;
         this.properties = properties;
+        this.futures = futures;
         this.clock = clock;
         this.threads = threads;
         this.book = new PaperOrderBook(properties.limitFillMode());
@@ -248,20 +275,31 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             oldest.merge(
                     new BookKey(order.market(), order.pairId()), order.placedAt(), (a, b) -> a.isBefore(b) ? a : b);
         }
-        // A mark trigger missed while the engine was down waits for the next mark; replaying marks is TR-42.
-        matching.markTriggerOrders().forEach(markTriggers::track);
-        matching.liquidationLevels().forEach(liquidations::track);
+        Map<BookKey, Instant> oldestOnMark = new HashMap<>();
+        for (TriggerOrder order : matching.markTriggerOrders()) {
+            markTriggers.track(order);
+            oldestOnMark.merge(
+                    new BookKey(order.market(), order.pairId()), order.placedAt(), (a, b) -> a.isBefore(b) ? a : b);
+        }
+        // A position's level has no time of its own: without a mark watermark only the minute running now is caught up.
+        for (LiquidationLevel level : matching.liquidationLevels()) {
+            liquidations.track(level);
+            oldestOnMark.putIfAbsent(new BookKey(MarketType.FUTURES, level.pairId()), clock.instant());
+        }
         if (properties.replay().enabled()) {
             oldest.forEach((key, placedAt) -> startupReplay(key, placedAt));
+            oldestOnMark.forEach((key, placedAt) -> startupMarkReplay(key, placedAt));
         }
         running = true;
         startThread("paper-matching", this::drain);
         startThread("paper-replay", this::runReplays);
         log.info(
-                "TR-02 paper matching started with {} orders and {} waiting for a trigger; {} pairs to replay",
+                "TR-02 paper matching started with {} orders and {} waiting for a trigger; {} pairs to replay, {} on"
+                        + " the mark",
                 resting.size(),
                 waiting.size(),
-                replaying.size());
+                replaying.size(),
+                markCatchUps.size());
     }
 
     /** Stops the threads and waits up to {@code stop-timeout} for them to end. */
@@ -521,7 +559,15 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             case Command.Mark markKey -> {
                 List<MarkPrice> waiting = marks.remove(markKey.key());
                 if (waiting != null) {
-                    waiting.forEach(mark -> onMark(markKey.key(), mark));
+                    waiting.forEach(mark -> onLiveMark(markKey.key(), mark));
+                }
+            }
+            case Command.MarkCandle candle -> onMarkCandle(candle.key(), candle.kline());
+            case Command.MarkReplayDone done -> {
+                MarkCatchUp catchUp = markCatchUps.get(done.key());
+                if (catchUp != null) {
+                    catchUp.replayed(done.until());
+                    finishCatchUp(done.key(), catchUp, false);
                 }
             }
             case Command.TrackTrigger track -> {
@@ -713,11 +759,13 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
      * liquidation price is on the mark's way down before it, so it goes first (plan 8.4); a position it closed is then
      * found closed and not liquidated.
      */
-    private void onMark(BookKey key, MarkPrice mark) {
-        triggerOnMark(key, mark);
+    private void onMark(BookKey key, MarkPrice mark, FillSource source) {
+        triggerOnMark(key, mark, source);
+        // A replayed mark acts now, on the state of now (plan 9.5): nothing is back-dated.
+        Instant at = source == FillSource.REPLAY ? clock.instant() : mark.eventTime();
         for (LiquidationLevel level : liquidations.reached(key.pairId(), mark.price())) {
             try {
-                if (!matching.liquidate(level, mark.price(), mark.eventTime())) {
+                if (!matching.liquidate(level, mark.price(), at)) {
                     refreshLevels(level.userId(), level.pairId());
                 }
             } catch (RuntimeException failure) {
@@ -726,6 +774,137 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                         level.positionId(),
                         failure.toString());
             }
+        }
+    }
+
+    /**
+     * A live mark: held while the pair catches up; otherwise one that comes too long after the previous starts a
+     * catch-up (TR-42), and any other runs, and closes the previous mark's minute when it opens a new one.
+     */
+    private void onLiveMark(BookKey key, MarkPrice mark) {
+        MarkCatchUp catchUp = markCatchUps.get(key);
+        if (catchUp != null) {
+            catchUp.hold(mark);
+            finishCatchUp(key, catchUp, true);
+            return;
+        }
+        Instant last = lastMark.get(key);
+        boolean gap = last != null && mark.eventTime().isAfter(last.plus(futures.markMaxAge()));
+        if (gap && properties.replay().enabled() && watchesMarks(key)) {
+            log.warn(
+                    "TR-42 FUTURES {}: no mark from {} to {}; replaying the mark candles from {}",
+                    key.pairId(),
+                    last,
+                    mark.eventTime(),
+                    minuteOf(last));
+            startCatchUp(key, minuteOf(last)).hold(mark);
+            return;
+        }
+        onMark(key, mark, FillSource.LIVE);
+        if (last == null || mark.eventTime().isAfter(last)) {
+            lastMark.put(key, mark.eventTime());
+        }
+        if (!gap && last != null && minuteOf(mark.eventTime()).isAfter(minuteOf(last)) && watchesMarks(key)) {
+            advanceMarkWatermark(key, minuteOf(mark.eventTime()).minus(MINUTE));
+        }
+    }
+
+    /** A replayed mark candle of a pair catching up: its path run as marks, then its minute is whole. */
+    private void onMarkCandle(BookKey key, MinuteKline kline) {
+        if (!markCatchUps.containsKey(key)) {
+            return;
+        }
+        markPath(kline).forEach(mark -> onMark(key, mark, FillSource.REPLAY));
+        advanceMarkWatermark(key, kline.openTime());
+    }
+
+    /**
+     * The marks a candle stands for, in the order plan 9.5 assumes: open, the extreme nearer the open, the other
+     * extreme, close; at times inside the minute, so a conditional order placed during it is reached only by what
+     * follows its placement (D-77). Without an open, the low comes first.
+     */
+    static List<MarkPrice> markPath(MinuteKline kline) {
+        BigDecimal open = kline.open() != null ? kline.open() : kline.low();
+        boolean lowFirst = open.subtract(kline.low())
+                        .abs()
+                        .compareTo(kline.high().subtract(open).abs())
+                <= 0;
+        Instant start = kline.openTime();
+        return List.of(
+                new MarkPrice(kline.pairId(), open, start),
+                new MarkPrice(kline.pairId(), lowFirst ? kline.low() : kline.high(), start.plusSeconds(20)),
+                new MarkPrice(kline.pairId(), lowFirst ? kline.high() : kline.low(), start.plusSeconds(40)),
+                new MarkPrice(kline.pairId(), kline.close(), start.plus(MINUTE).minusMillis(1)));
+    }
+
+    /**
+     * Ends a pair's catch-up once its replay reached past the minute of the first held mark and two live marks followed
+     * it; once that minute is over, a held mark asks for the next candles, at most once per {@code replay.retry-delay},
+     * so a candle the exchange has not published yet is never polled faster than the marks come. The held marks inside
+     * replayed candles are dropped.
+     */
+    private void finishCatchUp(BookKey key, MarkCatchUp catchUp, boolean onMark) {
+        if (catchUp.replaying) {
+            return;
+        }
+        catchUp.held.removeIf(mark -> mark.eventTime().isBefore(catchUp.replayedUntil));
+        if (catchUp.firstHeld == null) {
+            return;
+        }
+        if (!catchUp.replayedUntil.isAfter(minuteOf(catchUp.firstHeld))) {
+            // The minute of the first live mark is not replayed yet: its candle comes once it closes (plan 9.5 rule 5),
+            // asked for again at the next held mark once retry-delay has passed, as the exchange may lag the close.
+            Instant now = clock.instant();
+            if (onMark && !now.isBefore(catchUp.replayedUntil.plus(MINUTE)) && !now.isBefore(catchUp.nextAskAt)) {
+                catchUp.replaying = true;
+                catchUp.nextAskAt = now.plus(properties.replay().retryDelay());
+                replays.offer(new Replay(key, catchUp.replayedUntil, true));
+            }
+            return;
+        }
+        if (catchUp.held.size() < 2) {
+            return;
+        }
+        markCatchUps.remove(key);
+        catchUp.held.forEach(mark -> onMark(key, mark, FillSource.LIVE));
+        Instant last = catchUp.held.getLast().eventTime();
+        lastMark.put(key, last);
+        advanceMarkWatermark(key, minuteOf(last).minus(MINUTE));
+        catchingUp(key, false);
+        log.info("TR-42 FUTURES {}: marks caught up to {}; live again", key.pairId(), last);
+    }
+
+    /** Starts a pair's catch-up: it is {@code MARK_STALE} meanwhile, and its mark candles from {@code from} replay. */
+    private MarkCatchUp startCatchUp(BookKey key, Instant from) {
+        MarkCatchUp catchUp = new MarkCatchUp(from);
+        markCatchUps.put(key, catchUp);
+        catchingUp(key, true);
+        replays.offer(new Replay(key, from, true));
+        return catchUp;
+    }
+
+    private void catchingUp(BookKey key, boolean catchingUp) {
+        try {
+            matching.markCatchingUp(key.pairId(), catchingUp);
+        } catch (RuntimeException failure) {
+            log.warn("TR-42 FUTURES {} catch-up not reported: {}", key.pairId(), failure.toString());
+        }
+    }
+
+    /** Whether a mark of the pair can trigger or liquidate anything. */
+    private boolean watchesMarks(BookKey key) {
+        return markTriggers.hasOrders(key.market(), key.pairId()) || liquidations.hasLevels(key.pairId());
+    }
+
+    private void advanceMarkWatermark(BookKey key, Instant openTime) {
+        try {
+            matching.advanceMarkWatermark(key.pairId(), openTime);
+        } catch (RuntimeException failure) {
+            log.warn(
+                    "TR-42 FUTURES {} mark watermark not advanced to {}: {}",
+                    key.pairId(),
+                    openTime,
+                    failure.toString());
         }
     }
 
@@ -739,14 +918,15 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     }
 
     /** Triggers the conditional orders a mark price reached, earliest placed first (TR-20). */
-    private void triggerOnMark(BookKey key, MarkPrice mark) {
+    private void triggerOnMark(BookKey key, MarkPrice mark, FillSource source) {
         PriceRange range = PriceRange.ofPrints(
                 key.market(),
                 key.pairId(),
                 List.of(new PriceRange.Print(mark.price(), BigDecimal.ZERO, false, mark.eventTime())));
         for (TriggerBook.Triggered fired : markTriggers.onRange(range)) {
             try {
-                matching.trigger(fired.order(), fired.at(), fired.stopPrice(), FillSource.LIVE, null);
+                Instant at = source == FillSource.REPLAY ? clock.instant() : fired.at();
+                matching.trigger(fired.order(), at, fired.stopPrice(), source, null);
             } catch (RuntimeException failure) {
                 markTriggers.track(fired.order());
                 log.warn(
@@ -850,7 +1030,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                     key.pairId(),
                     last.plus(MINUTE),
                     range.from());
-            replays.offer(new Replay(key, last.plus(MINUTE)));
+            replays.offer(new Replay(key, last.plus(MINUTE), false));
         }
         if (range.closed() && (last == null || range.from().isAfter(last))) {
             lastClosed.put(key, range.from());
@@ -1019,7 +1199,32 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             from = oldest;
         }
         replaying.add(key);
-        replays.offer(new Replay(key, from));
+        replays.offer(new Replay(key, from, false));
+    }
+
+    /**
+     * Starts the catch-up of a Futures pair with marks to watch at start (TR-42): from the later of the candle after
+     * its mark watermark and the minute {@code since}, at most {@code replay.max-window} back.
+     */
+    private void startupMarkReplay(BookKey key, Instant since) {
+        Instant from = minuteOf(since);
+        Instant afterWatermark = matching.markWatermark(key.pairId())
+                .map(watermark -> watermark.plus(MINUTE))
+                .orElse(from);
+        if (afterWatermark.isAfter(from)) {
+            from = afterWatermark;
+        }
+        Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
+        if (from.isBefore(oldest)) {
+            log.warn(
+                    "TR-42 FUTURES {}: mark candles from {} to {} are beyond the replay window of {} and not replayed",
+                    key.pairId(),
+                    from,
+                    oldest,
+                    properties.replay().maxWindow());
+            from = oldest;
+        }
+        startCatchUp(key, from);
     }
 
     /** The replay thread: one pair at a time, page by page, until it has caught up with the closed candles. */
@@ -1040,38 +1245,28 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         BookKey key = replay.key();
         Instant cursor = replay.from();
         while (running) {
-            MinuteKlineBatch batch;
-            try {
-                batch = market.closedMinuteKlines(key.market(), key.pairId(), cursor);
-            } catch (RuntimeException failure) {
-                log.warn(
-                        "TR-02 {} {} paper replay failed at {}; retried in {}: {}",
-                        key.market(),
-                        key.pairId(),
-                        cursor,
-                        properties.replay().retryDelay(),
-                        failure.toString());
-                Thread.sleep(properties.replay().retryDelay());
+            Optional<List<MinuteKline>> page = page(replay, cursor);
+            if (page.isEmpty()) {
                 continue;
             }
-            if (batch.refused()) {
-                Duration wait = Duration.between(clock.instant(), batch.retryAt());
-                Thread.sleep(wait.isPositive() ? wait : properties.replay().retryDelay());
-                continue;
+            if (!replay.mark()) {
+                prefetchQuoteRates(key, page.get(), cursor);
             }
-            prefetchQuoteRates(key, batch.klines(), cursor);
             boolean advanced = false;
-            for (MinuteKline kline : batch.klines()) {
+            for (MinuteKline kline : page.get()) {
                 if (!kline.openTime().isBefore(cursor)) {
-                    queue.offer(new Command.Range(new PriceRange(
-                            kline.market(),
-                            kline.pairId(),
-                            kline.low(),
-                            kline.high(),
-                            kline.openTime(),
-                            true,
-                            FillSource.REPLAY,
-                            kline.open())));
+                    queue.offer(
+                            replay.mark()
+                                    ? new Command.MarkCandle(key, kline)
+                                    : new Command.Range(new PriceRange(
+                                            kline.market(),
+                                            kline.pairId(),
+                                            kline.low(),
+                                            kline.high(),
+                                            kline.openTime(),
+                                            true,
+                                            FillSource.REPLAY,
+                                            kline.open())));
                     cursor = kline.openTime().plus(MINUTE);
                     advanced = true;
                 }
@@ -1080,8 +1275,40 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                 break;
             }
         }
-        queue.offer(new Command.ReplayDone(key, cursor));
-        log.info("TR-02 {} {} paper replay done up to {}", key.market(), key.pairId(), cursor);
+        queue.offer(replay.mark() ? new Command.MarkReplayDone(key, cursor) : new Command.ReplayDone(key, cursor));
+        log.info(
+                "TR-02 {} {} paper {}replay done up to {}",
+                key.market(),
+                key.pairId(),
+                replay.mark() ? "mark " : "",
+                cursor);
+    }
+
+    /** The next page of closed candles from {@code cursor}; empty after waiting when it could not be fetched now. */
+    private Optional<List<MinuteKline>> page(Replay replay, Instant cursor) throws InterruptedException {
+        BookKey key = replay.key();
+        MinuteKlineBatch batch;
+        try {
+            batch = replay.mark()
+                    ? market.closedMarkPriceKlines(key.pairId(), cursor)
+                    : market.closedMinuteKlines(key.market(), key.pairId(), cursor);
+        } catch (RuntimeException failure) {
+            log.warn(
+                    "TR-02 {} {} paper replay failed at {}; retried in {}: {}",
+                    key.market(),
+                    key.pairId(),
+                    cursor,
+                    properties.replay().retryDelay(),
+                    failure.toString());
+            Thread.sleep(properties.replay().retryDelay());
+            return Optional.empty();
+        }
+        if (batch.refused()) {
+            Duration wait = Duration.between(clock.instant(), batch.retryAt());
+            Thread.sleep(wait.isPositive() ? wait : properties.replay().retryDelay());
+            return Optional.empty();
+        }
+        return Optional.of(batch.klines());
     }
 
     /** Before the candles are queued, so their fills read the quote rates without a network call (Q-52). */
@@ -1127,8 +1354,39 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     private record Failure(Fill fill, RuntimeException cause) {}
 
-    /** A pair's replay from the candle opened at {@code from}. */
-    private record Replay(BookKey key, Instant from) {}
+    /** A pair's replay from the candle opened at {@code from}: of its last price candles, or its mark candles. */
+    private record Replay(BookKey key, Instant from, boolean mark) {}
+
+    /**
+     * A Futures pair catching up on its marks (TR-42): the live marks held meanwhile, the first of them, and how far
+     * the replay reached.
+     */
+    private static final class MarkCatchUp {
+
+        private final List<MarkPrice> held = new ArrayList<>();
+        private Instant firstHeld;
+        private Instant replayedUntil;
+        private boolean replaying = true;
+        private Instant nextAskAt = Instant.MIN;
+
+        private MarkCatchUp(Instant from) {
+            this.replayedUntil = from;
+        }
+
+        private void hold(MarkPrice mark) {
+            if (firstHeld == null) {
+                firstHeld = mark.eventTime();
+            }
+            held.add(mark);
+        }
+
+        private void replayed(Instant until) {
+            replaying = false;
+            if (until.isAfter(replayedUntil)) {
+                replayedUntil = until;
+            }
+        }
+    }
 
     /** A fill to try again, with when it first failed and when to try next. */
     private record PendingFill(
@@ -1151,6 +1409,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
         /** Read the pair's waiting mark prices (TR-20). */
         record Mark(BookKey key) implements Command {}
+
+        /** A replayed 1-minute mark candle of a pair catching up (TR-42). */
+        record MarkCandle(BookKey key, MinuteKline kline) implements Command {}
+
+        /** A mark replay has caught up; {@code until} is the open time of the first mark candle not replayed. */
+        record MarkReplayDone(BookKey key, Instant until) implements Command {}
 
         /** Read a Trader's liquidation levels on a pair again (TR-22). */
         record AccountChanged(UUID userId, UUID pairId) implements Command {}

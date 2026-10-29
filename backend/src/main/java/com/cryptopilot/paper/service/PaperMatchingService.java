@@ -17,7 +17,7 @@ import java.util.UUID;
  * The storage side of the paper matching engine: the orders its book starts from, the fills it decides, and how far
  * it has matched.
  *
- * <p>Rule: TR-02, TR-09, TR-11; NSF-07; Q-T6.
+ * <p>Rule: TR-02, TR-09, TR-11, TR-42; NSF-07; Q-T6.
  */
 public interface PaperMatchingService {
 
@@ -84,4 +84,19 @@ public interface PaperMatchingService {
 
     /** Records that the candle opened at {@code openTime} is closed and fully matched; never moves backwards. */
     void advanceWatermark(MarketType market, UUID pairId, Instant openTime);
+
+    /**
+     * The open time of the Futures pair's last 1-minute mark price candle its mark triggers and liquidations ran over,
+     * from which a mark replay starts; or empty (TR-42).
+     */
+    Optional<Instant> markWatermark(UUID pairId);
+
+    /** Records that the mark price candle opened at {@code openTime} was run over; never moves backwards (TR-42). */
+    void advanceMarkWatermark(UUID pairId, Instant openTime);
+
+    /**
+     * Whether the engine is catching up on the Futures pair's missed marks: meanwhile the pair is {@code MARK_STALE}
+     * whatever its latest mark (TR-42, plan 9.5).
+     */
+    void markCatchingUp(UUID pairId, boolean catchingUp);
 }

@@ -427,7 +427,8 @@ order_list,pair_id,uuid,,,NO
 order_list,updated_at,timestamp with time zone,,,NO
 order_list,user_id,uuid,,,NO
 order_list,version,bigint,64,0,NO
-order_matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
+order_matching_watermark,last_candle_open_time,timestamp with time zone,,,YES
+order_matching_watermark,last_mark_candle_open_time,timestamp with time zone,,,YES
 order_matching_watermark,market_type,character varying,,,NO
 order_matching_watermark,pair_id,uuid,,,NO
 order_matching_watermark,updated_at,timestamp with time zone,,,NO

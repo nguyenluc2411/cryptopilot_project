@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -24,7 +25,9 @@ import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
+import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
@@ -70,6 +73,8 @@ class PaperMatchingWorkerTest {
     private static final Instant MINUTE_2 = MINUTE_0.plusSeconds(120);
     private static final Instant MINUTE_5 = MINUTE_0.plusSeconds(300);
     private static final long WAIT = Duration.ofSeconds(5).toMillis();
+    private static final PaperFuturesProperties FUTURES_PROPERTIES = new PaperFuturesProperties(
+            Duration.ofSeconds(5), new BigDecimal("0.01"), new BigDecimal("0.05"), new BigDecimal("20"));
 
     private final PaperMatchingService matching = mock(PaperMatchingService.class);
     private final MarketApi market = mock(MarketApi.class);
@@ -86,7 +91,9 @@ class PaperMatchingWorkerTest {
     @BeforeEach
     void noCandlesToReplayByDefault() {
         when(market.closedMinuteKlines(any(), any(), any())).thenReturn(MinuteKlineBatch.of(List.of()));
+        when(market.closedMarkPriceKlines(any(), any())).thenReturn(MinuteKlineBatch.of(List.of()));
         when(matching.watermark(any(), any())).thenReturn(Optional.empty());
+        when(matching.markWatermark(any())).thenReturn(Optional.empty());
         when(matching.fill(any(), any(), any(), any())).thenReturn(true);
     }
 
@@ -803,6 +810,97 @@ class PaperMatchingWorkerTest {
         assertThat(started).hasSize(2);
     }
 
+    /**
+     * TR-42: at start, a pair with a stop on the mark is caught up from the minute it was placed: its mark candles run
+     * now, the pair stays caught up until the minute of the first live mark is replayed and two live marks followed.
+     */
+    @Test
+    void TR42_atStart_theMarkCandles_areReplayed_andThePairGoesLive_afterItsMinuteAndTwoMarks() {
+        TriggerOrder stop = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("95"),
+                null,
+                null,
+                PLACED);
+        when(matching.markTriggerOrders()).thenReturn(List.of(stop));
+        when(matching.trigger(any(), any(), any(), any(), any())).thenReturn(true);
+        when(market.closedMarkPriceKlines(PAIR, MINUTE_0))
+                .thenReturn(MinuteKlineBatch.of(List.of(
+                        markKline(MINUTE_0, "100", "101", "99", "100"),
+                        markKline(MINUTE_1, "100", "100.5", "94", "96"))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+
+        verify(matching, timeout(WAIT)).markCatchingUp(PAIR, true);
+        // Below 95 in the second candle: triggered now, on the state of now.
+        verify(matching, timeout(WAIT)).trigger(stop, MINUTE_2, new BigDecimal("95"), FillSource.REPLAY, null);
+        verify(matching, timeout(WAIT)).advanceMarkWatermark(PAIR, MINUTE_1);
+
+        // The minute of the first live mark is still running: the pair waits for its candle.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), MINUTE_2.plusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), MINUTE_2.plusSeconds(2)));
+        verify(matching, after(200).never()).markCatchingUp(PAIR, false);
+
+        Instant minute3 = MINUTE_2.plus(Duration.ofMinutes(1));
+        when(market.closedMarkPriceKlines(PAIR, MINUTE_2))
+                .thenReturn(MinuteKlineBatch.of(List.of(markKline(MINUTE_2, "96", "97", "96", "97"))));
+        clock.set(minute3.plusSeconds(1));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), minute3.plusSeconds(1)));
+        verify(matching, timeout(WAIT)).advanceMarkWatermark(PAIR, MINUTE_2);
+        verify(matching, after(200).never()).markCatchingUp(PAIR, false);
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), minute3.plusSeconds(2)));
+        verify(matching, timeout(WAIT)).markCatchingUp(PAIR, false);
+    }
+
+    /**
+     * TR-42: live, a mark of a watched pair that comes too long after the previous holds the pair: it is caught up
+     * from the minute of the last mark, and the mark held liquidates nothing meanwhile. Marks without a gap close
+     * their minute.
+     */
+    @Test
+    void TR42_aGapInTheMarks_startsACatchUp_fromTheMinuteOfTheLastMark() {
+        UUID trader = UUID.randomUUID();
+        LiquidationLevel level =
+                new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("95"));
+        when(matching.liquidationLevels(trader, PAIR)).thenReturn(List.of(level));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        worker.onAccountChanged(new FuturesAccountChanged(trader, PAIR));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1.minusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1));
+        verify(matching, timeout(WAIT)).advanceMarkWatermark(PAIR, MINUTE_0);
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("94"), MINUTE_1.plusSeconds(10)));
+
+        verify(matching, timeout(WAIT)).markCatchingUp(PAIR, true);
+        verify(market, timeout(WAIT).atLeastOnce()).closedMarkPriceKlines(PAIR, MINUTE_1);
+        verify(matching, after(200).never()).liquidate(any(), any(), any());
+        // The candle of that minute is not out yet: asked for again only when a live mark comes.
+        verify(market, atMost(1)).closedMarkPriceKlines(PAIR, MINUTE_1);
+    }
+
+    /** TR-42: a mark candle runs open, the extreme nearer the open, the other extreme, close. */
+    @Test
+    void TR42_aMarkCandle_runsOpen_theNearerExtreme_theOther_andClose() {
+        assertThat(PaperMatchingWorker.markPath(markKline(MINUTE_0, "100", "100.5", "94", "96")))
+                .extracting(MarkPrice::price)
+                .containsExactly(
+                        new BigDecimal("100"), new BigDecimal("100.5"), new BigDecimal("94"), new BigDecimal("96"));
+        assertThat(PaperMatchingWorker.markPath(markKline(MINUTE_0, "100", "106", "99", "105")))
+                .extracting(MarkPrice::price)
+                .containsExactly(
+                        new BigDecimal("100"), new BigDecimal("99"), new BigDecimal("106"), new BigDecimal("105"));
+        assertThat(PaperMatchingWorker.markPath(markKline(MINUTE_0, "100", "106", "99", "105")))
+                .extracting(MarkPrice::eventTime)
+                .isSorted()
+                .allMatch(at -> !at.isBefore(MINUTE_0) && at.isBefore(MINUTE_1));
+    }
+
     private PaperMatchingWorker started(PaperMatchingProperties properties) {
         PaperMatchingWorker created = worker(properties);
         created.start();
@@ -810,7 +908,7 @@ class PaperMatchingWorkerTest {
     }
 
     private PaperMatchingWorker worker(PaperMatchingProperties properties) {
-        return new PaperMatchingWorker(matching, market, properties, clock, recording);
+        return new PaperMatchingWorker(matching, market, properties, FUTURES_PROPERTIES, clock, recording);
     }
 
     private static PaperMatchingProperties properties(boolean enabled, boolean replay, Duration deadline) {
@@ -935,5 +1033,18 @@ class PaperMatchingWorkerTest {
                 new BigDecimal(high),
                 closed,
                 open.plusSeconds(closed ? 59 : 10));
+    }
+
+    private static MinuteKline markKline(Instant open, String first, String high, String low, String close) {
+        return new MinuteKline(
+                MarketType.FUTURES,
+                PAIR,
+                open,
+                new BigDecimal(low),
+                new BigDecimal(high),
+                new BigDecimal(close),
+                true,
+                open.plusSeconds(59),
+                new BigDecimal(first));
     }
 }

@@ -173,6 +173,9 @@ class FuturesOrderApiTest {
                 .param(pair)
                 .update();
         sql.sql("delete from leverage_bracket where pair_id = ?").param(pair).update();
+        sql.sql("delete from order_matching_watermark where pair_id = ?")
+                .param(pair)
+                .update();
         new MarketTestData(sql, Instant.now()).remove(pair);
         for (String coin : List.of("USDT", "BTC", "ETH", "BNB")) {
             if (!preStoredCoins.contains(coin)) {
@@ -999,6 +1002,42 @@ class FuturesOrderApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("FILLED"));
         assertThat(openPositions(trader)).isZero();
+    }
+
+    /** TR-42 (plan 9.5): while the engine catches up on a pair's marks, the pair is stale whatever its latest mark. */
+    @Test
+    void TR42_aPairCatchingUpOnItsMarks_isStale_untilTheEngineIsLiveAgain() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        matching.markCatchingUp(pair, true);
+        try {
+            place(trader, market("BUY", "1"))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.code").value("MARKET_PRICE_UNAVAILABLE"));
+        } finally {
+            matching.markCatchingUp(pair, false);
+        }
+        place(trader, market("BUY", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FILLED"));
+    }
+
+    /** TR-42: the mark watermark only moves forward, and the last price watermark of the pair is kept apart. */
+    @Test
+    void TR42_theMarkWatermark_movesForwardOnly_besideTheLastPriceOne() {
+        Instant minute = Instant.parse("2026-10-29T08:00:00Z");
+        assertThat(matching.markWatermark(pair)).isEmpty();
+
+        matching.advanceMarkWatermark(pair, minute.plusSeconds(60));
+        matching.advanceMarkWatermark(pair, minute);
+        assertThat(matching.markWatermark(pair)).contains(minute.plusSeconds(60));
+        assertThat(matching.watermark(MarketType.FUTURES, pair)).isEmpty();
+
+        matching.advanceWatermark(MarketType.FUTURES, pair, minute);
+        matching.advanceMarkWatermark(pair, minute.plusSeconds(120));
+        assertThat(matching.watermark(MarketType.FUTURES, pair)).contains(minute);
+        assertThat(matching.markWatermark(pair)).contains(minute.plusSeconds(120));
     }
 
     /** 8.2.1 rule 3: while a pair of a cross position is stale, nothing opens risk elsewhere and nothing leaves. */

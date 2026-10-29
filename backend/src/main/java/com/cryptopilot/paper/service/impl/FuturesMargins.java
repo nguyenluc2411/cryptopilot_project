@@ -73,6 +73,7 @@ class FuturesMargins {
     private final PaperBalanceRepository balances;
     private final MarketApi market;
     private final PaperFuturesProperties futures;
+    private final FuturesMarkCatchUp catchUp;
     private final EntityManager entityManager;
 
     /** The Trader's Futures settings, created with the defaults before the first Futures action. */
@@ -174,8 +175,14 @@ class FuturesMargins {
         return marks;
     }
 
-    /** The pair's mark price when it is current; empty while the pair is {@code MARK_STALE} (8.2.1). */
+    /**
+     * The pair's mark price when it is current; empty while the pair is {@code MARK_STALE} (8.2.1), which it also is
+     * while the engine catches up on its missed marks (9.5).
+     */
     Optional<BigDecimal> freshMark(String symbol) {
+        if (catchUp.catchingUp(symbol)) {
+            return Optional.empty();
+        }
         return market.currentMarkPrice(symbol, futures.markMaxAge());
     }
 
