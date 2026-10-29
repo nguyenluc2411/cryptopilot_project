@@ -1614,6 +1614,82 @@ class FuturesOrderApiTest {
         assertThat(liquidate(trader, positionId, "40000")).isFalse();
     }
 
+    /**
+     * TR-23 (plan 4.12, 9.3): a cross long of 0.1 at 60,000 on a cross wallet of 5,000 is due once its margin balance,
+     * {@code 5,000 + 0.1 × (mark − 60,000)}, is at most its maintenance, {@code 0.1 × mark × 0.4 %}: at a mark of
+     * 10,040.16 or less. A step for no pair only names the pair; the account is then liquidating and its orders are
+     * cancelled. The step of the pair closes the position at the mark, and the fee is what the margin balance has left.
+     */
+    @Test
+    void TR23_aCrossLongPastItsMaintenance_isLiquidated_inSteps_andTheAccountIsFreedAfter() throws Exception {
+        UUID trader = trader(true);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+        String waiting = id(place(trader, limit("BUY", "GTC", "50000", "0.01")).andExpect(status().isOk()));
+
+        mark("10050");
+        assertThat(matching.liquidateCross(trader, pair, Instant.now())).isEmpty();
+        assertThat(liquidatingSince(trader)).isNull();
+
+        mark("10030");
+        assertThat(matching.liquidateCross(trader, null, Instant.now())).contains(pair);
+        assertThat(liquidatingSince(trader)).isNotNull();
+        assertThat(statusOf(waiting)).isEqualTo("CANCELED");
+        assertThat(openPositions(trader)).isOne();
+        place(trader, market("BUY", "0.01"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-2023));
+        assertThat(matching.liquidatingSince(Instant.now())).contains(trader);
+
+        assertThat(matching.liquidateCross(trader, pair, Instant.now())).isEmpty();
+
+        assertThat(openPositions(trader)).isZero();
+        assertThat(liquidatingSince(trader)).isNull();
+        Map<String, Object> closed = sql.sql("""
+                        select close_reason, realized_pnl_amount, liquidation_fee_amount from futures_position
+                         where user_id = ?""").param(trader).query().singleRow();
+        assertThat(closed.get("close_reason")).isEqualTo("LIQUIDATION");
+        assertThat((BigDecimal) closed.get("realized_pnl_amount")).isEqualByComparingTo("-4997");
+        // 0.1 × 10,030 × 1.25 % = 12.54 is more than the 3 the margin balance has left.
+        assertThat((BigDecimal) closed.get("liquidation_fee_amount")).isEqualByComparingTo("3");
+        assertThat(wallet(trader)).isEqualByComparingTo("0");
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+        as(trader, get(FUTURES + "/forceOrders"), null)
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].avgPrice").value(numeric("10030")));
+    }
+
+    /** TR-23: a mark past the bankruptcy price leaves the cross wallet below zero, made good once no cross is left. */
+    @Test
+    void TR23_aCrossLossBeyondTheWallet_isAnInsuranceCover_onceNoCrossPositionIsLeft() throws Exception {
+        UUID trader = trader(true);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+
+        mark("9000");
+        assertThat(matching.liquidateCross(trader, pair, Instant.now())).isEmpty();
+
+        // Lost 5,100 on a wallet of 5,000: 100 covered, no fee left to take.
+        assertThat(wallet(trader)).isEqualByComparingTo("0");
+        assertThat(sql.sql("""
+                                select amount from wallet_ledger_entry
+                                 where user_id = ? and entry_type = 'INSURANCE_COVER'""").param(trader).query(BigDecimal.class).single()).isEqualByComparingTo("100");
+        assertThat(sql.sql("""
+                                select count(*) from wallet_ledger_entry
+                                 where user_id = ? and entry_type = 'LIQUIDATION_FEE'""").param(trader).query(Long.class).single()).isZero();
+        assertThat(liquidatingSince(trader)).isNull();
+    }
+
+    private Instant liquidatingSince(UUID trader) {
+        return sql.sql("select liquidating_since from futures_account_config where user_id = ?")
+                .param(trader)
+                .query(Instant.class)
+                .optional()
+                .orElse(null);
+    }
+
     /** The engine liquidates a position the way the matching service does it for a mark that reached its level. */
     private boolean liquidate(UUID trader, UUID positionId, String mark) {
         return matching.liquidate(

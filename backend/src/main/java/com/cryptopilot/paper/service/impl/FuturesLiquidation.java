@@ -49,7 +49,7 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>The clearance fee and the loss follow the isolated cash-flow rule ({@link FuturesSettlement#liquidate}).
  * </ol>
  *
- * <p>Cross liquidation, which spans the pairs of an account, is TR-23.
+ * <p>Cross liquidation, which spans the pairs of an account, is {@link FuturesCrossLiquidation} (TR-23).
  *
  * <p>Rule: TR-22; D-97, D-127.
  */
@@ -67,7 +67,7 @@ class FuturesLiquidation {
     static final String LIQUIDATION = "LIQUIDATION";
 
     /** What a liquidation cancels: the working orders and the take profits and stop losses still pending. */
-    private static final Set<OrderStatus> CANCELLED_ON_LIQUIDATION =
+    static final Set<OrderStatus> CANCELLED_ON_LIQUIDATION =
             EnumSet.of(OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED, OrderStatus.PENDING_NEW);
 
     /** The tick of a price column, for a pair whose filters are no longer read. */
@@ -173,7 +173,7 @@ class FuturesLiquidation {
     }
 
     /** The maintenance margin by the notional's bracket, the largest bracket's above every cap. */
-    private static BigDecimal maintenance(List<LeverageTier> tiers, BigDecimal notional) {
+    static BigDecimal maintenance(List<LeverageTier> tiers, BigDecimal notional) {
         List<LeverageTier> resolved = FuturesMarginMath.withMaintenanceAmounts(tiers);
         LeverageTier tier = FuturesMarginMath.bracketFor(resolved, notional).orElse(resolved.getLast());
         return notional.abs().multiply(tier.maintenanceMarginRate()).subtract(tier.maintenanceAmount());

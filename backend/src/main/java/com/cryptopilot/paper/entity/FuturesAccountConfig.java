@@ -53,4 +53,16 @@ public class FuturesAccountConfig extends BaseEntity {
     public boolean liquidating() {
         return liquidatingSince != null;
     }
+
+    /** Starts a cross liquidation at {@code at}; one already running keeps its start (TR-23, plan 9.3). */
+    public void startLiquidation(Instant at) {
+        if (liquidatingSince == null) {
+            liquidatingSince = Objects.requireNonNull(at, "at must not be null");
+        }
+    }
+
+    /** Ends the running cross liquidation, if any. */
+    public void endLiquidation() {
+        liquidatingSince = null;
+    }
 }

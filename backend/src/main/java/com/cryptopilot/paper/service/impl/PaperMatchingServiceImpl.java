@@ -4,6 +4,7 @@ import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.entity.FuturesAccountConfig;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.PaperAccount;
@@ -13,6 +14,7 @@ import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.repository.FuturesAccountConfigRepository;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperMatchingWatermarkRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -42,12 +44,13 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>A Futures order's fill is applied to the Trader's position by {@link FuturesSettlement} (TR-16), and a Futures
  * conditional order the price triggered places the order it carries through {@link FuturesTrigger} (TR-20). An
- * isolated position a mark reached is liquidated through {@link FuturesLiquidation} (TR-22).
+ * isolated position a mark reached is liquidated through {@link FuturesLiquidation} (TR-22), cross positions through
+ * {@link FuturesCrossLiquidation} (TR-23).
  *
  * <p>An order of a Spot pair the system no longer trades, stopped by the exchange or disabled by an administrator, is
  * cancelled instead ({@code PAIR_NOT_TRADING}), by the cancellation the pair's stop runs.
  *
- * <p>Rule: TR-02, TR-09, TR-11, TR-16, TR-20, TR-22, TR-42; NSF-01, NSF-07; Q-T6.
+ * <p>Rule: TR-02, TR-09, TR-11, TR-16, TR-20, TR-22, TR-23, TR-42; NSF-01, NSF-07; Q-T6.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -61,6 +64,8 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final FuturesSettlement futuresSettlement;
     private final FuturesTrigger futuresTrigger;
     private final FuturesLiquidation liquidation;
+    private final FuturesCrossLiquidation crossLiquidation;
+    private final FuturesAccountConfigRepository accountConfigs;
     private final FuturesOrderLists futuresTpSl;
     private final SpotStopTrigger stopTrigger;
     private final PaperOrderLists lists;
@@ -169,6 +174,25 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 .orElseThrow(() -> new IllegalStateException("account " + level.userId() + " is not stored"));
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.userId());
         return liquidation.liquidate(account, level.positionId(), mark, at);
+    }
+
+    @Override
+    @Transactional
+    public Optional<UUID> liquidateCross(UUID userId, UUID pairId, Instant at) {
+        Optional<PaperAccount> account = accounts.findByUserId(userId);
+        if (account.isEmpty()) {
+            return Optional.empty();
+        }
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        return crossLiquidation.step(account.get(), pairId, at);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UUID> liquidatingSince(Instant at) {
+        return accountConfigs.findByLiquidatingSinceLessThanEqual(at).stream()
+                .map(FuturesAccountConfig::userId)
+                .toList();
     }
 
     @Override

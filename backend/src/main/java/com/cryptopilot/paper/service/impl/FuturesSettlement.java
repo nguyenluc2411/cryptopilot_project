@@ -229,6 +229,64 @@ class FuturesSettlement {
         events.publishEvent(new FuturesAccountChanged(account.userId(), order.getPairId()));
     }
 
+    /**
+     * Liquidates a cross position (TR-23, plan 4.12): the system's MARKET order closes all of it at the mark, the
+     * realised loss goes to the cross wallet, which may go below zero meanwhile (4.3 rule 5), and the clearance fee is
+     * {@code min(notional × rate, what the cross margin balance has left after the loss)}. With no cross position left,
+     * a cross wallet below zero is made good by an insurance cover. The orders were cancelled by the caller.
+     *
+     * @param order the stored system MARKET order, reduce-only, of the position's size
+     * @param feeRate the liquidation clearance fee rate (D-97)
+     * @param otherUnrealizedPnl the unrealized profit of the Trader's other cross positions at their marks
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    void liquidateCross(
+            PaperAccount account,
+            PaperOrder order,
+            FuturesPosition position,
+            BigDecimal mark,
+            BigDecimal feeRate,
+            BigDecimal otherUnrealizedPnl,
+            Instant at) {
+        CoinListing usdt = margins.usdt();
+        UUID userId = account.userId();
+        BigDecimal quantity = position.getQuantity();
+        BigDecimal realized = FuturesMarginMath.applyFill(
+                        position.signedQuantity(), position.getEntryPrice(), order.getSide(), quantity, mark)
+                .realizedPnl();
+        BigDecimal isolated = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN).stream()
+                .filter(open -> open.getMarginType() == MarginType.ISOLATED)
+                .map(FuturesPosition::getIsolatedWalletAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal crossWallet = margins.futuresWallet(userId).subtract(isolated);
+        BigDecimal fee = FuturesMarginMath.liquidationFee(
+                quantity.multiply(mark),
+                feeRate,
+                crossWallet.add(realized).add(otherUnrealizedPnl).max(BigDecimal.ZERO));
+        PaperFill fill = fills.save(PaperFill.futures(
+                order,
+                execution(mark, quantity, Liquidity.TAKER, FillSource.LIVE, at, usdt),
+                position.getId(),
+                realized));
+        feed.futuresFill(account, order, fill);
+        Ref byFill = Ref.to(LedgerRefType.FILL, fill.getId());
+        if (realized.signum() != 0) {
+            wallets.changeFutures(account, position.getPairId(), usdt, realized, LedgerEntryType.REALIZED_PNL, byFill);
+        }
+        if (fee.signum() > 0) {
+            wallets.changeFutures(
+                    account, position.getPairId(), usdt, fee.negate(), LedgerEntryType.LIQUIDATION_FEE, byFill);
+        }
+        position.reduce(quantity, mark, realized, PositionCloseReason.LIQUIDATION, at);
+        position.addLiquidationFee(fee);
+        order.fill(quantity, mark, Rounding.toAmount(mark.multiply(quantity)), at);
+        feed.futuresOrder(account, order);
+        entityManager.flush();
+        coverCrossDeficit(account, userId, position, usdt);
+        margins.recordChange(margins.accountConfig(userId));
+        events.publishEvent(new FuturesAccountChanged(userId, order.getPairId()));
+    }
+
     /** The part of a fill that reduces or closes the position, and the isolated cash flow it makes. */
     private void close(
             PaperAccount account,

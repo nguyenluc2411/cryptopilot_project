@@ -44,6 +44,19 @@ public interface PaperMatchingService {
     boolean liquidate(LiquidationLevel level, BigDecimal mark, Instant at);
 
     /**
+     * One step of the Trader's cross liquidation under their lock (TR-23): judged on the database at the latest marks;
+     * when due, the account is marked as liquidating, its orders cancelled, and the cross position losing most is
+     * closed if it is on {@code pairId}.
+     *
+     * @param pairId the pair the step acts for; {@code null} to only name the pair to close first
+     * @return the pair whose cross position is to close next, or empty when nothing more is due
+     */
+    Optional<UUID> liquidateCross(UUID userId, UUID pairId, Instant at);
+
+    /** The Traders whose cross liquidation started at or before {@code at} and still runs (TR-23). */
+    List<UUID> liquidatingSince(Instant at);
+
+    /**
      * Triggers a stop limit or a trailing stop the last price reached, under its Trader's lock, if it still waits: it
      * becomes the limit order it carries. Live, that order meets the current book at once as a limit order placed now
      * does; replayed, it waits at its price for the replayed candles that follow.
