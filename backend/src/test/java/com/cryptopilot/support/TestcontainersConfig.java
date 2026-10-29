@@ -65,14 +65,28 @@ public class TestcontainersConfig {
 
     /**
      * The latest-price cache (TD 5.6), the same pinned tag as {@code deploy/docker-compose.dev.yml} (Q-09). Shared by
-     * every context, like the database; tests that need a clean cache empty the keys they use.
+     * every context, like the database; tests that need a clean cache empty the keys they use. No context stops it
+     * either: once the suite holds more contexts than the test context cache keeps, the oldest is closed, and closing
+     * it stopped Redis under every later test ("Unable to connect to Redis").
      */
-    private static final GenericContainer<?> REDIS =
-            new GenericContainer<>(DockerImageName.parse("redis:7.4.11-alpine")).withExposedPorts(6379);
+    private static final GenericContainer<?> REDIS = new SharedRedis().withExposedPorts(6379);
 
     @Bean
     @ServiceConnection(name = "redis")
     GenericContainer<?> redisContainer() {
         return REDIS;
+    }
+
+    /** The Redis container no context may stop; see {@link #REDIS}. */
+    private static final class SharedRedis extends GenericContainer<SharedRedis> {
+
+        SharedRedis() {
+            super(DockerImageName.parse("redis:7.4.11-alpine"));
+        }
+
+        @Override
+        public void stop() {
+            // Shared by every context.
+        }
     }
 }
