@@ -98,6 +98,14 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
     @Transactional(readOnly = true)
     public FuturesAccountResponse account(UUID userId) {
         requireFutures(userId);
+        return accountOf(userId);
+    }
+
+    /**
+     * The account at the current marks, without the plan's check: for the push of a change the Trader just made
+     * (TR-41). Public, so a call through the transactional proxy reaches this bean.
+     */
+    public FuturesAccountResponse accountOf(UUID userId) {
         Snapshot snapshot = snapshot(userId);
         FuturesCrossState cross = snapshot.cross();
         FuturesAccountMargin margin = cross.margin();

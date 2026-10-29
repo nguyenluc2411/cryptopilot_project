@@ -95,6 +95,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     private final PaperLedgerEntryRepository ledger;
     private final PaperWallets wallets;
     private final FuturesMargins futuresMargins;
+    private final PaperUserFeed feed;
     private final UserLock lock;
     private final PaperAccountProperties properties;
     private final MarketApi market;
@@ -212,6 +213,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         Ref ref = Ref.transfer(UuidV7.next(), key);
         wallets.debit(account, request.from(), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
         wallets.credit(account, other(request.from()), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
+        feed.futuresAccount(account);
         PaperLedgerEntry debit = ledger.findTransfer(account.userId(), key)
                 .orElseThrow(() -> new IllegalStateException("transfer " + key + " was not written"));
         return new RecordedTransfer(transferOf(debit, coin.symbol()), true);

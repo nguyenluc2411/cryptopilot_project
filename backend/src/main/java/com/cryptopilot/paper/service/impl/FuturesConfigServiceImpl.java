@@ -22,6 +22,7 @@ import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.entity.FuturesSymbolConfig;
 import com.cryptopilot.paper.exception.FuturesRejection;
 import com.cryptopilot.paper.model.FuturesCrossState;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.PositionStatus;
@@ -70,6 +71,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     private final UserLock lock;
     private final MarketApi market;
     private final EntitlementApi entitlements;
+    private final PaperUserFeed feed;
 
     @Override
     @Transactional
@@ -118,7 +120,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     @Override
     @Transactional
     public FuturesLeverageResponse changeLeverage(UUID userId, FuturesLeverageRequest request) {
-        requireFutures(userId);
+        PaperAccount trader = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesAccountConfig account = requireNotLiquidating(userId);
         FuturesPair pair = margins.pair(request.symbol());
@@ -136,6 +138,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
             requireLeverageFits(userId, open, config, leverage, maxNotional);
             open.forEach(position -> position.changeLeverage(leverage));
             margins.recordChange(account);
+            feed.futuresAccount(trader);
         }
         config.changeLeverage(leverage);
         symbolConfigs.save(config);
@@ -244,9 +247,9 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     }
 
     /** The Futures feature of the Trader's plan (Q-T10) and an opened paper account (MSG41). */
-    private void requireFutures(UUID userId) {
+    private PaperAccount requireFutures(UUID userId) {
         entitlements.requireFeature(userId, Feature.FUTURES_ANALYSIS);
-        accounts.findByUserId(userId).orElseThrow(() -> new ResourceNotFoundException("PaperAccount", userId));
+        return accounts.findByUserId(userId).orElseThrow(() -> new ResourceNotFoundException("PaperAccount", userId));
     }
 
     private FuturesSymbolConfig configOf(UUID userId, FuturesPair pair) {

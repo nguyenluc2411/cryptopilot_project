@@ -21,6 +21,7 @@ import com.cryptopilot.paper.entity.FuturesAccountConfig;
 import com.cryptopilot.paper.entity.FuturesMarginAdjustment;
 import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.exception.FuturesRejection;
+import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.MarginAdjustmentType;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
@@ -94,11 +95,12 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     private final UserLock lock;
     private final MarketApi market;
     private final EntitlementApi entitlements;
+    private final PaperUserFeed feed;
 
     @Override
     @Transactional
     public FuturesPositionMarginResponse changeMargin(UUID userId, FuturesPositionMarginRequest request) {
-        requireFutures(userId);
+        PaperAccount trader = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesAccountConfig account = margins.accountConfig(userId);
         if (account.liquidating()) {
@@ -163,6 +165,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
                 null,
                 null));
         margins.recordChange(account);
+        feed.futuresAccount(trader);
         return new FuturesPositionMarginResponse(
                 amount, 200, MODIFIED, request.type(), position.getIsolatedWalletAmount());
     }
@@ -294,9 +297,9 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     }
 
     /** The Futures feature of the Trader's plan (Q-T10) and an opened paper account (MSG41). */
-    private void requireFutures(UUID userId) {
+    private PaperAccount requireFutures(UUID userId) {
         entitlements.requireFeature(userId, Feature.FUTURES_ANALYSIS);
-        accounts.findByUserId(userId).orElseThrow(() -> new ResourceNotFoundException("PaperAccount", userId));
+        return accounts.findByUserId(userId).orElseThrow(() -> new ResourceNotFoundException("PaperAccount", userId));
     }
 
     private static int limitOf(Integer limit) {

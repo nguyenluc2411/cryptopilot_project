@@ -1,6 +1,11 @@
 package com.cryptopilot.paper.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -15,9 +20,12 @@ import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
+import com.cryptopilot.paper.dto.response.FuturesAccountResponse;
+import com.cryptopilot.paper.dto.response.FuturesOrderUpdateResponse;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -36,6 +44,7 @@ import org.hamcrest.Matcher;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -43,10 +52,12 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -55,11 +66,12 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * Paper Futures orders end to end, on the database: placement with the exchange's refusals and codes, execution on
  * arrival against the Futures book, a waiting order filled by the engine, and what each fill does to the one-way
  * position, the Futures wallet, the isolated wallet and its audit rows; then the positions and the account read at
- * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes.
+ * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes;
+ * and what each committed change pushes on the Trader's Futures queues.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -90,6 +102,9 @@ class FuturesOrderApiTest {
 
     @Autowired
     private PaperMatchingService matching;
+
+    @MockitoSpyBean
+    private SimpMessageSendingOperations broker;
 
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
@@ -873,6 +888,67 @@ class FuturesOrderApiTest {
                         {"type": "LIMIT", "price": "100"}""")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.symbol").value("MSG01"));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Pushes on the Futures queues
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void TR41_anExecution_pushesTheOrderWithItsFills_andTheAccount_onTheFuturesQueuesOnly() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "0.5"), level("101", "2")), List.of(level("99.9", "5")));
+        clearInvocations(broker);
+
+        String id = id(place(trader, market("BUY", "1")).andExpect(status().isOk()));
+
+        FuturesOrderUpdateResponse update = (FuturesOrderUpdateResponse) single(trader, "/queue/futures.orders");
+        assertThat(update.order().orderId()).hasToString(id);
+        assertThat(update.order().status()).isEqualTo(OrderStatus.FILLED);
+        assertThat(update.trades()).hasSize(2);
+        assertThat(update.trades())
+                .allSatisfy(trade -> assertThat(trade.orderId()).hasToString(id));
+        FuturesAccountResponse account = (FuturesAccountResponse) single(trader, "/queue/futures.account");
+        assertThat(account.positions()).singleElement().satisfies(position -> assertThat(position.positionAmt())
+                .isEqualByComparingTo("1"));
+        verify(broker, never()).convertAndSendToUser(eq(trader.toString()), eq("/queue/orders"), any(Object.class));
+        verify(broker, never()).convertAndSendToUser(eq(trader.toString()), eq("/queue/fills"), any(Object.class));
+    }
+
+    @Test
+    void TR41_aRefusedOrder_pushesNothing_andAMarginChangeOrATransfer_pushesTheAccount() throws Exception {
+        UUID trader = trader(true);
+        leverage(trader, 1);
+        clearInvocations(broker);
+
+        place(trader, limit("BUY", "GTC", "99", "60")).andExpect(status().isBadRequest());
+
+        verify(broker, never())
+                .convertAndSendToUser(eq(trader.toString()), eq("/queue/futures.orders"), any(Object.class));
+        verify(broker, never())
+                .convertAndSendToUser(eq(trader.toString()), eq("/queue/futures.account"), any(Object.class));
+
+        as(trader, post("/api/v1/paper/transfers"), """
+                        {"asset": "USDT", "from": "FUTURES", "amount": "1000"}""").andExpect(status().isCreated());
+        FuturesAccountResponse account = (FuturesAccountResponse) single(trader, "/queue/futures.account");
+        assertThat(account.totalWalletBalance()).isEqualByComparingTo("4000");
+
+        isolated(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        clearInvocations(broker);
+        positionMargin(trader, "5", 1).andExpect(status().isOk());
+        account = (FuturesAccountResponse) single(trader, "/queue/futures.account");
+        assertThat(account.positions().getFirst().isolatedWallet()).isEqualByComparingTo("15");
+        verify(broker, never())
+                .convertAndSendToUser(eq(trader.toString()), eq("/queue/futures.orders"), any(Object.class));
+    }
+
+    /** The one body pushed to the Trader on the queue since the last clear. */
+    private Object single(UUID trader, String queue) {
+        ArgumentCaptor<Object> body = ArgumentCaptor.forClass(Object.class);
+        verify(broker).convertAndSendToUser(eq(trader.toString()), eq(queue), body.capture());
+        return body.getValue();
     }
 
     // ------------------------------------------------------------------------------------------

@@ -125,6 +125,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     private final MarketApi market;
     private final EntitlementApi entitlements;
     private final ApplicationEventPublisher events;
+    private final PaperUserFeed feed;
     private final Clock clock;
 
     @Override
@@ -191,6 +192,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         PaperOrder order = marketOrder
                 ? placeMarket(account, pair, request, key, positionSide, book)
                 : placeLimit(account, pair, request, key, positionSide, book);
+        feed.futuresOrder(account, order);
         log.debug(
                 "Paper Futures order {} {} {} {} placed: {}",
                 order.getId(),
@@ -204,7 +206,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     @Override
     @Transactional
     public FuturesOrderResponse cancel(UUID userId, String symbol, UUID orderId, String origClientOrderId) {
-        requireFutures(userId);
+        PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesPair pair = margins.pair(symbol);
         PaperOrder order = find(userId, pair, orderId, origClientOrderId);
@@ -212,20 +214,20 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             throw new FuturesRejection(
                     ErrorCode.PAPER_ORDER_NOT_OPEN, -2011, "Unknown order sent.", order.getOrderStatus());
         }
-        cancelWorking(order, clock.instant());
+        cancelWorking(account, order, clock.instant());
         return PaperResponses.futuresOrder(order, pair.symbol());
     }
 
     @Override
     @Transactional
     public List<FuturesOrderResponse> cancelAll(UUID userId, String symbol) {
-        requireFutures(userId);
+        PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesPair pair = margins.pair(symbol);
         List<PaperOrder> open = orders.findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
                 userId, pair.pairId(), MarketType.FUTURES, OrderStatus.OPEN);
         Instant now = clock.instant();
-        open.forEach(order -> cancelWorking(order, now));
+        open.forEach(order -> cancelWorking(account, order, now));
         return open.stream()
                 .map(order -> PaperResponses.futuresOrder(order, pair.symbol()))
                 .toList();
@@ -461,8 +463,9 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     }
 
     /** Cancels a working order; the engine drops it from its book after the commit. Nothing was locked. */
-    private void cancelWorking(PaperOrder order, Instant at) {
+    private void cancelWorking(PaperAccount account, PaperOrder order, Instant at) {
         order.cancel(at);
+        feed.futuresOrder(account, order);
         events.publishEvent(new PaperOrderCanceled(order.getId()));
     }
 

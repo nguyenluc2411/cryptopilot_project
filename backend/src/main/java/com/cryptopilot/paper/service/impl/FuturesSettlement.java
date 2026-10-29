@@ -84,6 +84,7 @@ class FuturesSettlement {
     private final FuturesMargins margins;
     private final MarketApi market;
     private final ApplicationEventPublisher events;
+    private final PaperUserFeed feed;
     private final EntityManager entityManager;
 
     /**
@@ -108,7 +109,7 @@ class FuturesSettlement {
         if (order.isReduceOnly()) {
             wanted = wanted.min(closableBy(order.getSide(), size));
             if (wanted.signum() == 0) {
-                end(order, REDUCE_ONLY, at);
+                end(account, order, REDUCE_ONLY, at);
                 return BigDecimal.ZERO;
             }
         }
@@ -134,10 +135,11 @@ class FuturesSettlement {
             order.fill(executed, price, Rounding.toAmount(price.multiply(executed)), at);
         }
         if (!funded && order.isOpen()) {
-            end(order, MARGIN_INSUFFICIENT, at);
+            end(account, order, MARGIN_INSUFFICIENT, at);
         }
+        feed.futuresOrder(account, order);
         if (closed.signum() > 0) {
-            trimReduceOnly(userId, order.getPairId(), at);
+            trimReduceOnly(account, order.getPairId(), at);
             coverCrossDeficit(account, userId, position, usdt);
         }
         margins.recordChange(margins.accountConfig(userId));
@@ -160,6 +162,7 @@ class FuturesSettlement {
         BigDecimal sizeBefore = position.getQuantity();
         PaperFill fill = fills.save(PaperFill.futures(
                 order, execution(price, closed, liquidity, source, at, usdt), position.getId(), realized));
+        feed.futuresFill(account, order, fill);
         if (realized.signum() != 0) {
             wallets.changeFutures(
                     account, usdt, realized, LedgerEntryType.REALIZED_PNL, Ref.to(LedgerRefType.FILL, fill.getId()));
@@ -249,6 +252,7 @@ class FuturesSettlement {
         }
         PaperFill fill = fills.save(PaperFill.futures(
                 order, execution(price, opened, liquidity, source, at, usdt), target.getId(), BigDecimal.ZERO));
+        feed.futuresFill(account, order, fill);
         if (margin.signum() > 0) {
             target.adjustIsolatedWallet(margin);
             adjustments.save(FuturesMarginAdjustment.of(
@@ -266,7 +270,8 @@ class FuturesSettlement {
      * whose rest would take the side's total past what it can close expires, as does every one once the position is
      * closed (5.2).
      */
-    private void trimReduceOnly(UUID userId, UUID pairId, Instant at) {
+    private void trimReduceOnly(PaperAccount account, UUID pairId, Instant at) {
+        UUID userId = account.userId();
         FuturesPosition position = margins.openPosition(userId, pairId);
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
         List<PaperOrder> reduceOnly = new ArrayList<>();
@@ -283,7 +288,7 @@ class FuturesSettlement {
             boolean buy = order.getSide() == OrderSide.BUY;
             BigDecimal taken = (buy ? bids : asks).add(order.remainingQuantity());
             if (taken.compareTo(closableBy(order.getSide(), size)) > 0) {
-                end(order, REDUCE_ONLY, at);
+                end(account, order, REDUCE_ONLY, at);
             } else if (buy) {
                 bids = taken;
             } else {
@@ -320,8 +325,9 @@ class FuturesSettlement {
     }
 
     /** Ends an order the position no longer takes, and drops it from the engine's book after the commit. */
-    private void end(PaperOrder order, String reason, Instant at) {
+    private void end(PaperAccount account, PaperOrder order, String reason, Instant at) {
         order.expire(reason, at);
+        feed.futuresOrder(account, order);
         events.publishEvent(new PaperOrderCanceled(order.getId()));
     }
 
