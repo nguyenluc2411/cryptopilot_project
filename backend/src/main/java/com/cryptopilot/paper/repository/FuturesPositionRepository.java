@@ -7,6 +7,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 
 /**
@@ -33,6 +35,18 @@ public interface FuturesPositionRepository extends Repository<FuturesPosition, U
 
     /** Every position closed at or after an instant: a settlement before its close is still owed (TR-24). */
     List<FuturesPosition> findByClosedAtGreaterThanEqual(Instant closedAt);
+
+    /** The Trader's positions closed in {@code [from, to)}, newest first (TR-19). */
+    @Query("select p from FuturesPosition p where p.userId = :userId"
+            + " and p.positionStatus = com.cryptopilot.paper.model.enums.PositionStatus.CLOSED"
+            + " and p.closedAt >= :from and p.closedAt < :to order by p.closedAt desc, p.id desc")
+    List<FuturesPosition> closed(UUID userId, Instant from, Instant to, Pageable pageable);
+
+    /** As {@link #closed}, of one pair. */
+    @Query("select p from FuturesPosition p where p.userId = :userId and p.pairId = :pairId"
+            + " and p.positionStatus = com.cryptopilot.paper.model.enums.PositionStatus.CLOSED"
+            + " and p.closedAt >= :from and p.closedAt < :to order by p.closedAt desc, p.id desc")
+    List<FuturesPosition> closedOfPair(UUID userId, UUID pairId, Instant from, Instant to, Pageable pageable);
 
     FuturesPosition save(FuturesPosition position);
 }

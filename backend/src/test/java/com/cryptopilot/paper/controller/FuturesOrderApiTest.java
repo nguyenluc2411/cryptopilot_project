@@ -79,7 +79,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-20, TR-22, TR-22a, TR-24, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-22, TR-22a, TR-24, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -1469,6 +1469,56 @@ class FuturesOrderApiTest {
 
         assertThat(funding.run()).isZero();
         assertThat(wallet(trader)).isEqualByComparingTo("5000");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Income and position history
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void TR19_theIncome_namesThePairOfEachChange_inTheExchangesTypes_andTheClosedPositionIsInTheHistory()
+            throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        backdate(trader, Duration.ofHours(2));
+        settlement(Duration.ofHours(1), "0.0001", "100");
+        funding.run();
+        depth(List.of(level("110.1", "5")), List.of(level("110", "5")));
+        place(trader, market("SELL", "1")).andExpect(status().isOk());
+
+        as(trader, get(FUTURES + "/income"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[0].incomeType").value("TRANSFER"))
+                .andExpect(jsonPath("$[0].symbol").value(""))
+                .andExpect(jsonPath("$[0].income").value(numeric("5000")))
+                .andExpect(jsonPath("$[1].incomeType").value("FUNDING_FEE"))
+                .andExpect(jsonPath("$[1].symbol").value(symbol))
+                .andExpect(jsonPath("$[1].income").value(numeric("-0.01")))
+                .andExpect(jsonPath("$[2].incomeType").value("REALIZED_PNL"))
+                .andExpect(jsonPath("$[2].income").value(numeric("10")))
+                .andExpect(jsonPath("$[2].asset").value("USDT"));
+        as(trader, get(FUTURES + "/income").param("incomeType", "REALIZED_PNL"), null)
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].tradeId").isNotEmpty());
+        as(trader, get(FUTURES + "/income").param("symbol", symbol).param("limit", "1"), null)
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].incomeType").value("REALIZED_PNL"));
+        as(trader, get(FUTURES + "/income").param("incomeType", "BONUS"), null).andExpect(status().isBadRequest());
+
+        as(trader, get(FUTURES + "/positionHistory"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].symbol").value(symbol))
+                .andExpect(jsonPath("$[0].direction").value("LONG"))
+                .andExpect(jsonPath("$[0].closeReason").value("MANUAL"))
+                .andExpect(jsonPath("$[0].avgClosePrice").value(numeric("110")))
+                .andExpect(jsonPath("$[0].realizedPnl").value(numeric("10")))
+                .andExpect(jsonPath("$[0].fundingFee").value(numeric("-0.01")))
+                .andExpect(jsonPath("$[0].netProfit").value(numeric("9.99")));
+        as(trader, get(FUTURES + "/positionHistory").param("symbol", symbol).param("limit", "0"), null)
+                .andExpect(status().isBadRequest());
     }
 
     /** Moves the Trader's positions and fills back in time, as if opened then. */

@@ -2,8 +2,10 @@ package com.cryptopilot.paper.service.impl;
 
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
+import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.util.Rounding;
+import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
@@ -13,32 +15,43 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.dto.response.FuturesAccountResponse;
 import com.cryptopilot.paper.dto.response.FuturesBalanceResponse;
+import com.cryptopilot.paper.dto.response.FuturesIncomeResponse;
+import com.cryptopilot.paper.dto.response.FuturesPositionHistoryResponse;
 import com.cryptopilot.paper.dto.response.FuturesPositionRiskResponse;
 import com.cryptopilot.paper.entity.FuturesPosition;
+import com.cryptopilot.paper.entity.PaperLedgerEntry;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.model.FuturesAccountMargin;
 import com.cryptopilot.paper.model.FuturesCrossState;
+import com.cryptopilot.paper.model.enums.LedgerEntryType;
+import com.cryptopilot.paper.model.enums.LedgerRefType;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
+import com.cryptopilot.paper.repository.PaperLedgerEntryRepository;
 import com.cryptopilot.paper.service.FuturesAccountService;
 import com.cryptopilot.paper.service.impl.FuturesMargins.Pending;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,7 +72,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Without a mark price of a pair with a position nothing can be valued, and the read answers
  * {@code MARKET_PRICE_UNAVAILABLE}.
  *
- * <p>Rule: TR-18; BR-26, BR-27; D-127.
+ * <p>Rule: TR-18, TR-19; BR-26, BR-27; D-127.
  * <p>Reference: Binance. <i>USDⓈ-M Futures API: Position Information V3, Account Information V3, Futures Account
  * Balance V3</i>, Binance Developer Center.
  */
@@ -69,11 +82,25 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
 
     private static final String ACCOUNT_ALIAS = "paper";
 
+    /**
+     * The exchange's income type of each ledger type of the Futures wallet (plan 7.2): the opening grant reads as a
+     * transfer in, the clearance fee of a liquidation as INSURANCE_CLEAR, and INSURANCE_COVER is CryptoPilot's own.
+     */
+    private static final Map<LedgerEntryType, String> INCOME = Map.of(
+            LedgerEntryType.INITIAL_GRANT, "TRANSFER",
+            LedgerEntryType.TRANSFER, "TRANSFER",
+            LedgerEntryType.REALIZED_PNL, "REALIZED_PNL",
+            LedgerEntryType.FEE, "COMMISSION",
+            LedgerEntryType.FUNDING_FEE, "FUNDING_FEE",
+            LedgerEntryType.LIQUIDATION_FEE, "INSURANCE_CLEAR",
+            LedgerEntryType.INSURANCE_COVER, "INSURANCE_COVER");
+
     /** The tick of a price column, for a pair whose filters are no longer read. */
     private static final BigDecimal FINEST_TICK = BigDecimal.ONE.movePointLeft(FuturesMarginMath.PRICE_SCALE);
 
     private final PaperAccountRepository accounts;
     private final FuturesPositionRepository positions;
+    private final PaperLedgerEntryRepository ledger;
     private final FuturesMargins margins;
     private final MarketApi market;
     private final EntitlementApi entitlements;
@@ -176,6 +203,109 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
                 margin.maxWithdrawAmount(),
                 true,
                 clock.instant()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<FuturesIncomeResponse> income(
+            UUID userId, String symbol, String incomeType, Instant startTime, Instant endTime, Integer limit) {
+        requireFutures(userId);
+        TimeBounds.requireOrdered(startTime, endTime);
+        Set<LedgerEntryType> types = incomeType == null ? INCOME.keySet() : typesOf(incomeType);
+        PageRequest page = PageRequest.of(0, limitOf(limit, 100));
+        Instant from = TimeBounds.fromOrEarliest(startTime);
+        Instant to = TimeBounds.toOrLatest(endTime);
+        List<PaperLedgerEntry> found = new ArrayList<>(
+                symbol == null
+                        ? ledger.searchFutures(userId, types, from, to, page)
+                        : ledger.searchFuturesPair(userId, margins.pair(symbol).pairId(), types, from, to, page));
+        Collections.reverse(found);
+        Map<UUID, String> symbols = symbolsOf(found.stream()
+                .map(PaperLedgerEntry::getPairId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet()));
+        String asset = margins.usdt().symbol();
+        return found.stream()
+                .map(entry -> new FuturesIncomeResponse(
+                        entry.getPairId() == null ? "" : symbols.get(entry.getPairId()),
+                        INCOME.get(entry.getEntryType()),
+                        entry.getAmount(),
+                        asset,
+                        entry.getEntryType().name(),
+                        entry.getCreatedAt(),
+                        entry.getId(),
+                        entry.getRefType() == LedgerRefType.FILL ? entry.getRefId() : null))
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<FuturesPositionHistoryResponse> positionHistory(
+            UUID userId, String symbol, Instant startTime, Instant endTime, Integer limit) {
+        requireFutures(userId);
+        TimeBounds.requireOrdered(startTime, endTime);
+        PageRequest page = PageRequest.of(0, limitOf(limit, 100));
+        Instant from = TimeBounds.fromOrEarliest(startTime);
+        Instant to = TimeBounds.toOrLatest(endTime);
+        List<FuturesPosition> closed = symbol == null
+                ? positions.closed(userId, from, to, page)
+                : positions.closedOfPair(userId, margins.pair(symbol).pairId(), from, to, page);
+        Map<UUID, String> symbols =
+                symbolsOf(closed.stream().map(FuturesPosition::getPairId).collect(Collectors.toSet()));
+        return closed.stream()
+                .map(position -> new FuturesPositionHistoryResponse(
+                        position.getId(),
+                        symbols.get(position.getPairId()),
+                        position.getPositionSide(),
+                        position.getDirection(),
+                        position.getMarginType(),
+                        position.getLeverage(),
+                        position.getMaxQuantity(),
+                        position.getClosedQuantity(),
+                        position.getEntryPrice(),
+                        position.getCloseAvgPrice(),
+                        position.getRealizedPnlAmount(),
+                        position.getFundingAmount(),
+                        position.getLiquidationFeeAmount(),
+                        position.getRealizedPnlAmount()
+                                .add(position.getFundingAmount())
+                                .subtract(position.getLiquidationFeeAmount()),
+                        position.getCloseReason(),
+                        position.getOpenedAt(),
+                        position.getClosedAt()))
+                .toList();
+    }
+
+    /** The ledger types an income type stands for; an unknown one is refused. */
+    private static Set<LedgerEntryType> typesOf(String incomeType) {
+        Set<LedgerEntryType> types = INCOME.entrySet().stream()
+                .filter(entry -> entry.getValue().equals(incomeType))
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toSet());
+        if (types.isEmpty()) {
+            throw new FieldValidationException(
+                    "incomeType " + incomeType + " is not one of " + Set.copyOf(INCOME.values()),
+                    Map.of("incomeType", "MSG15"));
+        }
+        return types;
+    }
+
+    private Map<UUID, String> symbolsOf(Set<UUID> pairIds) {
+        Map<UUID, String> symbols = new HashMap<>();
+        if (!pairIds.isEmpty()) {
+            market.pairListings(pairIds).forEach(pair -> symbols.put(pair.pairId(), pair.symbol()));
+        }
+        return symbols;
+    }
+
+    private static int limitOf(Integer limit, int fallback) {
+        if (limit == null) {
+            return fallback;
+        }
+        if (limit < 1 || limit > 1000) {
+            throw new FieldValidationException("limit must be 1 to 1000", Map.of("limit", "MSG15"));
+        }
+        return limit;
     }
 
     /**

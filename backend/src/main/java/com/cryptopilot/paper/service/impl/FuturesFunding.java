@@ -132,7 +132,12 @@ public class FuturesFunding {
                 .orElseThrow(() -> new IllegalStateException("account " + owed.userId() + " is not stored"));
         CoinListing usdt = margins.usdt();
         wallets.changeFutures(
-                account, usdt, fee, LedgerEntryType.FUNDING_FEE, Ref.to(LedgerRefType.FUNDING, reference));
+                account,
+                position.getPairId(),
+                usdt,
+                fee,
+                LedgerEntryType.FUNDING_FEE,
+                Ref.to(LedgerRefType.FUNDING, reference));
         position.addFunding(fee);
         if (position.isOpen() && position.getMarginType() == MarginType.ISOLATED) {
             IsolatedCashFlow flow = FuturesMarginMath.fundingFlow(position.getIsolatedWalletAmount(), fee);
@@ -140,6 +145,7 @@ public class FuturesFunding {
             if (flow.insuranceCover().signum() > 0) {
                 cover = wallets.changeFutures(
                         account,
+                        position.getPairId(),
                         usdt,
                         flow.insuranceCover(),
                         LedgerEntryType.INSURANCE_COVER,

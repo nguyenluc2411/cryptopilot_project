@@ -67,6 +67,10 @@ public class PaperLedgerEntry extends BaseEntity {
     @Column(name = "client_transfer_id", length = 64, updatable = false)
     private String clientTransferId;
 
+    /** The pair of the Futures position an entry comes from (TR-19); {@code null} for every other entry. */
+    @Column(name = "pair_id", updatable = false)
+    private UUID pairId;
+
     /** For JPA only. */
     protected PaperLedgerEntry() {}
 
@@ -100,6 +104,15 @@ public class PaperLedgerEntry extends BaseEntity {
     public static PaperLedgerEntry of(PaperBalance balance, LedgerEntryType entryType, BigDecimal amount, Ref ref) {
         Objects.requireNonNull(balance, "balance must not be null");
         return new PaperLedgerEntry(balance, entryType, amount, ref);
+    }
+
+    /** Names the pair of the Futures position the entry comes from. Called before it is first stored. */
+    public PaperLedgerEntry onPair(UUID pairId) {
+        if (walletType != WalletType.FUTURES) {
+            throw new IllegalStateException("only a Futures entry names a pair");
+        }
+        this.pairId = Objects.requireNonNull(pairId, "pairId must not be null");
+        return this;
     }
 
     /**

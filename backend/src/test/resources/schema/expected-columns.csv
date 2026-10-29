@@ -776,6 +776,7 @@ wallet_ledger_entry,coin_id,uuid,,,NO
 wallet_ledger_entry,created_at,timestamp with time zone,,,NO
 wallet_ledger_entry,entry_id,uuid,,,NO
 wallet_ledger_entry,entry_type,character varying,,,NO
+wallet_ledger_entry,pair_id,uuid,,,YES
 wallet_ledger_entry,ref_id,uuid,,,YES
 wallet_ledger_entry,ref_type,character varying,,,YES
 wallet_ledger_entry,updated_at,timestamp with time zone,,,NO

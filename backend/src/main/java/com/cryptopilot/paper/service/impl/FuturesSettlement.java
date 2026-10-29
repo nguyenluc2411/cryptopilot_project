@@ -185,16 +185,18 @@ class FuturesSettlement {
         feed.futuresFill(account, order, fill);
         Ref byFill = Ref.to(LedgerRefType.FILL, fill.getId());
         if (realized.signum() != 0) {
-            wallets.changeFutures(account, usdt, realized, LedgerEntryType.REALIZED_PNL, byFill);
+            wallets.changeFutures(account, position.getPairId(), usdt, realized, LedgerEntryType.REALIZED_PNL, byFill);
         }
         if (fee.signum() > 0) {
-            wallets.changeFutures(account, usdt, fee.negate(), LedgerEntryType.LIQUIDATION_FEE, byFill);
+            wallets.changeFutures(
+                    account, position.getPairId(), usdt, fee.negate(), LedgerEntryType.LIQUIDATION_FEE, byFill);
         }
         IsolatedCashFlow flow = FuturesMarginMath.closeFlow(wallet, quantity, quantity, realized, fee);
         PaperLedgerEntry cover = null;
         if (flow.insuranceCover().signum() > 0) {
             cover = wallets.changeFutures(
                     account,
+                    position.getPairId(),
                     usdt,
                     flow.insuranceCover(),
                     LedgerEntryType.INSURANCE_COVER,
@@ -245,7 +247,12 @@ class FuturesSettlement {
         feed.futuresFill(account, order, fill);
         if (realized.signum() != 0) {
             wallets.changeFutures(
-                    account, usdt, realized, LedgerEntryType.REALIZED_PNL, Ref.to(LedgerRefType.FILL, fill.getId()));
+                    account,
+                    position.getPairId(),
+                    usdt,
+                    realized,
+                    LedgerEntryType.REALIZED_PNL,
+                    Ref.to(LedgerRefType.FILL, fill.getId()));
         }
         if (position.getMarginType() == MarginType.ISOLATED) {
             IsolatedCashFlow flow = FuturesMarginMath.closeFlow(
@@ -254,6 +261,7 @@ class FuturesSettlement {
             if (flow.insuranceCover().signum() > 0) {
                 cover = wallets.changeFutures(
                         account,
+                        position.getPairId(),
                         usdt,
                         flow.insuranceCover(),
                         LedgerEntryType.INSURANCE_COVER,
@@ -407,6 +415,7 @@ class FuturesSettlement {
         if (crossWallet.signum() < 0) {
             wallets.changeFutures(
                     account,
+                    closed.getPairId(),
                     usdt,
                     crossWallet.negate(),
                     LedgerEntryType.INSURANCE_COVER,
