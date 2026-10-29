@@ -27,6 +27,7 @@ import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.PositionCloseReason;
 import com.cryptopilot.paper.model.enums.PositionDirection;
+import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.repository.FuturesMarginAdjustmentRepository;
 import com.cryptopilot.paper.repository.FuturesPositionRepository;
@@ -109,10 +110,10 @@ class FuturesSettlement {
             FillSource source,
             Instant at) {
         UUID userId = account.userId();
-        FuturesPosition position = margins.openPosition(userId, order.getPairId());
+        FuturesPosition position = margins.openPosition(userId, order.getPairId(), order.getPositionSide());
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
         BigDecimal wanted = quantity;
-        if (order.isReduceOnly()) {
+        if (order.reducing()) {
             wanted = wanted.min(closableBy(order.getSide(), size));
             if (wanted.signum() == 0) {
                 end(account, order, REDUCE_ONLY, at);
@@ -145,7 +146,7 @@ class FuturesSettlement {
         }
         feed.futuresOrder(account, order);
         if (closed.signum() > 0) {
-            trimReduceOnly(account, order.getPairId(), at);
+            trimReduceOnly(account, order.getPairId(), order.getPositionSide(), at);
             coverCrossDeficit(account, userId, position, usdt);
         }
         margins.recordChange(margins.accountConfig(userId));
@@ -224,7 +225,7 @@ class FuturesSettlement {
         position.addLiquidationFee(fee);
         order.fill(quantity, mark, Rounding.toAmount(mark.multiply(quantity)), at);
         feed.futuresOrder(account, order);
-        trimReduceOnly(account, order.getPairId(), at);
+        trimReduceOnly(account, order.getPairId(), order.getPositionSide(), at);
         margins.recordChange(margins.accountConfig(account.userId()));
         events.publishEvent(new FuturesAccountChanged(account.userId(), order.getPairId()));
     }
@@ -418,22 +419,26 @@ class FuturesSettlement {
      * whose rest would take the side's total past what it can close expires, as does every one once the position is
      * closed (5.2).
      */
-    private void trimReduceOnly(PaperAccount account, UUID pairId, Instant at) {
+    private void trimReduceOnly(PaperAccount account, UUID pairId, PositionSide positionSide, Instant at) {
         UUID userId = account.userId();
-        FuturesPosition position = margins.openPosition(userId, pairId);
+        FuturesPosition position = margins.openPosition(userId, pairId, positionSide);
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
         if (position == null) {
             // A closed position takes its TP/SL with it: the closing conditional orders of the pair end (8.3 step 8).
             for (PaperOrder conditional : margins.openConditionalOrders(userId)) {
                 if (conditional.getPairId().equals(pairId)
-                        && (conditional.isClosePosition() || conditional.isReduceOnly())) {
+                        && conditional.getPositionSide() == positionSide
+                        && (conditional.isClosePosition() || conditional.reducing())) {
                     end(account, conditional, POSITION_CLOSED, at);
                 }
             }
         }
         List<PaperOrder> reduceOnly = new ArrayList<>();
         for (PaperOrder order : margins.openOrders(userId)) {
-            if (order.getPairId().equals(pairId) && order.isReduceOnly() && order.isOpen()) {
+            if (order.getPairId().equals(pairId)
+                    && order.getPositionSide() == positionSide
+                    && order.reducing()
+                    && order.isOpen()) {
                 reduceOnly.add(order);
             }
         }

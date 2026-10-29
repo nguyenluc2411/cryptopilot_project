@@ -40,6 +40,7 @@ import com.cryptopilot.paper.service.impl.FuturesMargins.FuturesPair;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -109,16 +110,9 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
         if (account.liquidating()) {
             throw new FuturesRejection(ErrorCode.PAPER_USER_IN_LIQUIDATION, -2023, "User in liquidation mode now.");
         }
-        if (request.positionSide() != null && request.positionSide() != PositionSide.BOTH) {
-            throw new FuturesRejection(
-                    ErrorCode.PAPER_POSITION_SIDE,
-                    -4061,
-                    "Order's position side does not match user's setting.",
-                    "positionSide",
-                    request.positionSide());
-        }
+        PositionSide positionSide = FuturesMargins.positionSide(account, request.positionSide(), false);
         FuturesPair pair = margins.pair(request.symbol());
-        FuturesPosition position = margins.openPosition(userId, pair.pairId());
+        FuturesPosition position = margins.openPosition(userId, pair.pairId(), positionSide);
         if (position == null) {
             throw new FuturesRejection(
                     ErrorCode.PAPER_POSITION_MARGIN, -4054, "Cannot add position margin: position is 0.");
@@ -228,11 +222,35 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
             return closeAll(userId);
         }
         FuturesPair pair = margins.pair(request.symbol());
-        FuturesPosition position = margins.openPosition(userId, pair.pairId());
-        if (position == null) {
+        FuturesAccountConfig account = margins.accountConfig(userId);
+        List<FuturesPosition> closed;
+        if (account.isDualSidePosition() && request.positionSide() == null) {
+            // Hedge mode without a side: both sides of the pair, LONG first.
+            closed =
+                    positions
+                            .findByUserIdAndPairIdAndPositionStatus(userId, pair.pairId(), PositionStatus.OPEN)
+                            .stream()
+                            .sorted(Comparator.comparing(FuturesPosition::getPositionSide))
+                            .toList();
+        } else {
+            PositionSide positionSide = FuturesMargins.positionSide(account, request.positionSide(), false);
+            FuturesPosition position = margins.openPosition(userId, pair.pairId(), positionSide);
+            closed = position == null ? List.of() : List.of(position);
+        }
+        if (closed.isEmpty()) {
             throw new FuturesRejection(
                     ErrorCode.PAPER_REDUCE_ONLY_REJECTED, -2022, "ReduceOnly Order is rejected.", "symbol");
         }
+        List<FuturesOrderResponse> placed = new ArrayList<>(closed.size());
+        for (FuturesPosition position : closed) {
+            placed.add(closeShare(userId, pair, position, request));
+        }
+        return placed;
+    }
+
+    /** Closes the request's share of one position. */
+    private FuturesOrderResponse closeShare(
+            UUID userId, FuturesPair pair, FuturesPosition position, FuturesClosePositionRequest request) {
         BigDecimal percent = request.percent() == null ? WHOLE : request.percent();
         BigDecimal quantity = percent.compareTo(WHOLE) == 0
                 ? position.getQuantity()
@@ -242,8 +260,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
             throw new FieldValidationException(
                     percent.toPlainString() + " % of the position is less than one step", Map.of("percent", "MSG15"));
         }
-        return List.of(
-                orders.place(userId, closing(pair.symbol(), position, request.type(), request.price(), quantity)));
+        return orders.place(userId, closing(pair.symbol(), position, request.type(), request.price(), quantity));
     }
 
     /** Closes every open position by MARKET, the oldest first. */
@@ -268,19 +285,23 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
         return placed;
     }
 
-    /** The reduce-only order on the other side of the position. */
+    /**
+     * The order on the other side of the position: reduce-only in one-way mode; in hedge mode the side's closing order,
+     * which takes no {@code reduceOnly} (TR-14b).
+     */
     private static FuturesOrderRequest closing(
             String symbol, FuturesPosition position, OrderType type, BigDecimal price, BigDecimal quantity) {
         OrderSide side = position.getDirection() == PositionDirection.LONG ? OrderSide.SELL : OrderSide.BUY;
+        boolean oneWay = position.getPositionSide() == PositionSide.BOTH;
         return new FuturesOrderRequest(
                 symbol,
                 side,
-                PositionSide.BOTH,
+                position.getPositionSide(),
                 type,
                 type == OrderType.LIMIT ? TimeInForce.GTC : null,
                 quantity,
                 price,
-                true,
+                oneWay ? Boolean.TRUE : null,
                 null,
                 null,
                 null,

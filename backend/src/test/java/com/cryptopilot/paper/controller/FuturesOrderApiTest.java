@@ -1862,6 +1862,168 @@ class FuturesOrderApiTest {
     // Helpers
     // ------------------------------------------------------------------------------------------
 
+    // ------------------------------------------------------------------------------------------
+    // Hedge mode (TR-14b)
+    // ------------------------------------------------------------------------------------------
+
+    /** Plan 5.3: the mode changes only to the other one, with no open order and no position on any pair. */
+    @Test
+    void TR14b_thePositionMode_changesOnlyWithNothingOpen() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        positionMode(trader, false)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-4059));
+        String waiting = id(place(trader, limit("BUY", "GTC", "90", "1")).andExpect(status().isOk()));
+        positionMode(trader, true)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-4067));
+        as(trader, delete(FUTURES + "/order").param("symbol", symbol).param("orderId", waiting), null)
+                .andExpect(status().isOk());
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        positionMode(trader, true)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-4068));
+        close(trader, """
+                        {"symbol": "%s", "type": "MARKET"}""".formatted(symbol)).andExpect(status().isOk());
+
+        positionMode(trader, true)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.dualSidePosition").value(true));
+        as(trader, get(FUTURES + "/positionSide/dual"), null)
+                .andExpect(jsonPath("$.dualSidePosition").value(true));
+        as(trader, post(FUTURES + "/positionSide/dual"), "{}").andExpect(status().isBadRequest());
+    }
+
+    /**
+     * Plan 4.4, 5.1: in hedge mode a LONG and a SHORT of the pair are held together; an order names its side and takes
+     * no reduceOnly; SELL on LONG closes the long only, never more than it holds; in cross the two share one
+     * liquidation price; closing the pair without a side closes both.
+     */
+    @Test
+    void TR14b_inHedgeMode_aLongAndAShort_areHeldTogether_andClosedSideBySide() throws Exception {
+        UUID trader = trader(true);
+        positionMode(trader, true).andExpect(status().isOk());
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        place(trader, market("BUY", "1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.binanceCode").value(-4061));
+        place(trader, hedge("BUY", "LONG", "1").replace("}", ", \"reduceOnly\": false}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.reduceOnly").value("MSG15"));
+        place(trader, hedge("BUY", "SHORT", "1"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-2022));
+
+        place(trader, hedge("BUY", "LONG", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.positionSide").value("LONG"))
+                .andExpect(jsonPath("$.status").value("FILLED"));
+        place(trader, hedge("SELL", "SHORT", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FILLED"));
+        assertThat(openPositions(trader)).isEqualTo(2);
+        String risk = as(trader, get(FUTURES + "/positionRisk").param("symbol", symbol), null)
+                .andExpect(jsonPath("$.length()").value(2))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        List<String> sides = JsonPath.read(risk, "$[*].positionSide");
+        assertThat(sides).containsExactlyInAnyOrder("LONG", "SHORT");
+        List<Object> prices = JsonPath.read(risk, "$[*].liquidationPrice");
+        assertThat(prices.get(0)).isEqualTo(prices.get(1));
+
+        place(trader, hedge("SELL", "LONG", "3"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-2022));
+        place(trader, hedge("SELL", "LONG", "0.5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FILLED"));
+        assertThat(sql.sql("""
+                                select quantity from futures_position
+                                 where user_id = ? and position_status = 'OPEN' and position_side = 'LONG'""").param(trader).query(BigDecimal.class).single()).isEqualByComparingTo("1.5");
+        assertThat(openPositions(trader)).isEqualTo(2);
+
+        close(trader, """
+                        {"symbol": "%s", "type": "MARKET"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2));
+        assertThat(openPositions(trader)).isZero();
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+    }
+
+    /** Plan 4.7: in hedge mode each side's orders are margined from flat, and a side's closing orders cost nothing. */
+    @Test
+    void TR14b_inHedgeMode_eachSidesOrders_areMarginedApart_andClosingOrdersAreFree() throws Exception {
+        UUID trader = trader(true);
+        positionMode(trader, true).andExpect(status().isOk());
+        leverage(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, hedge("BUY", "LONG", "1")).andExpect(status().isOk());
+
+        place(trader, """
+                        {"symbol": "%s", "side": "BUY", "positionSide": "LONG", "type": "LIMIT", "timeInForce": "GTC",
+                         "price": "90", "quantity": "1"}""".formatted(symbol)).andExpect(status().isOk());
+        place(trader, """
+                        {"symbol": "%s", "side": "SELL", "positionSide": "SHORT", "type": "LIMIT", "timeInForce": "GTC",
+                         "price": "110", "quantity": "1"}""".formatted(symbol)).andExpect(status().isOk());
+        place(trader, """
+                        {"symbol": "%s", "side": "SELL", "positionSide": "LONG", "type": "LIMIT", "timeInForce": "GTC",
+                         "price": "120", "quantity": "1"}""".formatted(symbol)).andExpect(status().isOk());
+
+        // 90 / 10 = 9 for the BUY on LONG and 110 × 1.0015 / 10 = 11.0165 for the SELL on SHORT, added rather than the
+        // larger of the two as in one-way mode; the SELL closing the LONG is free.
+        as(trader, get(FUTURES + "/account"), null)
+                .andExpect(jsonPath("$.totalOpenOrderInitialMargin").value(numeric("20.0165")));
+    }
+
+    /** Plan 5.4: in hedge mode a closePosition stop closes its side only: SELL on LONG, never BUY on LONG. */
+    @Test
+    void TR14b_inHedgeMode_aStopLossClosesItsSideOnly() throws Exception {
+        UUID trader = trader(true);
+        positionMode(trader, true).andExpect(status().isOk());
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, hedge("BUY", "LONG", "1")).andExpect(status().isOk());
+        place(trader, hedge("SELL", "SHORT", "1")).andExpect(status().isOk());
+
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "positionSide": "LONG",
+                         "type": "STOP_MARKET", "triggerPrice": "105", "closePosition": true,
+                         "workingType": "MARK_PRICE"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.binanceCode").value(-4061));
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "positionSide": "LONG",
+                         "type": "STOP_MARKET", "triggerPrice": "95", "quantity": "1", "reduceOnly": true,
+                         "workingType": "MARK_PRICE"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.reduceOnly").value("MSG15"));
+        String id = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "positionSide": "LONG",
+                         "type": "STOP_MARKET", "triggerPrice": "95", "closePosition": true,
+                         "workingType": "MARK_PRICE"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.positionSide").value("LONG")));
+
+        depth(List.of(level("95", "5")), List.of(level("94.9", "5")));
+        trigger(trader, id, OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "95");
+
+        assertThat(openPositions(trader)).isOne();
+        assertThat(position(trader).get("position_side")).isEqualTo("SHORT");
+    }
+
+    private ResultActions positionMode(UUID trader, boolean dual) throws Exception {
+        return as(trader, post(FUTURES + "/positionSide/dual"), """
+                {"dualSidePosition": %s}""".formatted(dual));
+    }
+
+    private String hedge(String side, String positionSide, String quantity) {
+        return """
+                {"symbol": "%s", "side": "%s", "positionSide": "%s", "type": "MARKET", "quantity": "%s"}""".formatted(symbol, side, positionSide, quantity);
+    }
+
     private String market(String side, String quantity) {
         return """
                 {"symbol": "%s", "side": "%s", "type": "MARKET", "quantity": "%s"}""".formatted(symbol, side, quantity);

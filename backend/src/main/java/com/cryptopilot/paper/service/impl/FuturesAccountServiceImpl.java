@@ -27,6 +27,8 @@ import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.LedgerRefType;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.PositionDirection;
+import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
@@ -45,6 +47,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -351,9 +354,12 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
                     maintenance(tiers, notional),
                     tiers,
                     tick));
-            List<Pending> orders = pending.getOrDefault(pairId, List.of());
+            // A hedge position is margined with its own side's orders only (TR-14b).
+            List<Pending> orders = pending.getOrDefault(pairId, List.of()).stream()
+                    .filter(order -> order.positionSide() == position.getPositionSide())
+                    .toList();
             orderMargins.put(
-                    pairId,
+                    position.getId(),
                     FuturesMargins.pairOrderMargin(
                             position.signedQuantity(),
                             orders,
@@ -380,7 +386,28 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
         BigDecimal orderMargin = snapshot.orderMargin(valued);
         BigDecimal liquidation;
         BigDecimal ratio;
-        if (valued.cross()) {
+        Optional<Valued> opposite = valued.cross() ? snapshot.hedgedOpposite(valued) : Optional.empty();
+        if (opposite.isPresent()) {
+            // A hedged LONG and SHORT in cross share one liquidation price (plan 4.5 note 2).
+            FuturesCrossState cross = snapshot.cross();
+            Valued longSide = position.getDirection() == PositionDirection.LONG ? valued : opposite.get();
+            Valued shortSide = longSide == valued ? opposite.get() : valued;
+            liquidation = FuturesMarginMath.hedgeLiquidationPrice(
+                    longSide.position().getQuantity(),
+                    longSide.position().getEntryPrice(),
+                    shortSide.position().getQuantity(),
+                    shortSide.position().getEntryPrice(),
+                    cross.crossWalletBalance(),
+                    snapshot.crossMaintenance()
+                            .subtract(valued.maintenance())
+                            .subtract(opposite.get().maintenance()),
+                    cross.crossUnrealizedPnl()
+                            .subtract(valued.unrealized())
+                            .subtract(opposite.get().unrealized()),
+                    valued.tiers(),
+                    valued.tick());
+            ratio = snapshot.crossRatio();
+        } else if (valued.cross()) {
             FuturesCrossState cross = snapshot.cross();
             liquidation = FuturesMarginMath.liquidationPrice(
                     position.getDirection(),
@@ -497,8 +524,22 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
             BigDecimal crossMaintenance,
             BigDecimal crossRatio) {
 
+        /** The other side of a hedged cross position on the same pair, when it is open and cross too. */
+        Optional<Valued> hedgedOpposite(Valued valued) {
+            FuturesPosition position = valued.position();
+            if (position.getPositionSide() == PositionSide.BOTH) {
+                return Optional.empty();
+            }
+            return positions().stream()
+                    .filter(other -> other != valued
+                            && other.cross()
+                            && other.position().getPairId().equals(position.getPairId())
+                            && other.position().getPositionSide() != position.getPositionSide())
+                    .findFirst();
+        }
+
         BigDecimal orderMargin(Valued valued) {
-            return orderMargins.getOrDefault(valued.position().getPairId(), BigDecimal.ZERO);
+            return orderMargins.getOrDefault(valued.position().getId(), BigDecimal.ZERO);
         }
     }
 }

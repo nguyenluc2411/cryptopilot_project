@@ -87,10 +87,10 @@ class FuturesTrigger {
             return;
         }
         conditional.trigger(at);
-        FuturesPosition position = margins.openPosition(account.userId(), pair.pairId());
+        FuturesPosition position = margins.openPosition(account.userId(), pair.pairId(), conditional.getPositionSide());
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
         BigDecimal closable = FuturesSettlement.closableBy(conditional.getSide(), size);
-        boolean reducing = conditional.isReduceOnly() || conditional.isClosePosition();
+        boolean reducing = conditional.reducing() || conditional.isClosePosition();
         BigDecimal quantity = conditional.isClosePosition() ? closable : conditional.getOrigQuantity();
         if (reducing) {
             quantity = quantity.min(closable);

@@ -389,6 +389,13 @@ public enum ErrorCode {
     PAPER_MARGIN_TYPE(HttpStatus.CONFLICT, "MSG43"),
 
     /**
+     * The position mode cannot change: it is already that mode ({@code -4059}), or the account has an open order
+     * ({@code -4067}) or a position ({@code -4068}) on any pair (TR-14b). Borrows MSG43 like
+     * {@link #PAPER_ORDER_WOULD_TAKE} (A-38).
+     */
+    PAPER_POSITION_MODE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
      * A cross liquidation of the account is running; orders and changes wait until it ends ({@code -2023}). Borrows
      * MSG43 like {@link #PAPER_ORDER_WOULD_TAKE} (A-38). 409: the same request succeeds once the liquidation is over.
      */

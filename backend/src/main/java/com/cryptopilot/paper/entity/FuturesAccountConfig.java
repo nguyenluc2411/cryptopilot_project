@@ -54,6 +54,11 @@ public class FuturesAccountConfig extends BaseEntity {
         return liquidatingSince != null;
     }
 
+    /** Switches the account between hedge mode ({@code true}) and one-way mode (TR-14b, plan 5.3). */
+    public void changePositionMode(boolean dualSidePosition) {
+        this.dualSidePosition = dualSidePosition;
+    }
+
     /** Starts a cross liquidation at {@code at}; one already running keeps its start (TR-23, plan 9.3). */
     public void startLiquidation(Instant at) {
         if (liquidatingSince == null) {

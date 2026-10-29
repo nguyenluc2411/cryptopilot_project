@@ -134,16 +134,8 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             throw new FuturesRejection(ErrorCode.PAPER_USER_IN_LIQUIDATION, -2023, "User in liquidation mode now.");
         }
         requireShape(request);
-        PositionSide positionSide = request.positionSide() == null ? PositionSide.BOTH : request.positionSide();
-        if (accountConfig.isDualSidePosition() || positionSide != PositionSide.BOTH) {
-            // Hedge mode is TR-14b; until then every account is one-way, where BOTH is the only side.
-            throw new FuturesRejection(
-                    ErrorCode.PAPER_POSITION_SIDE,
-                    -4061,
-                    "Order's position side does not match user's setting.",
-                    "positionSide",
-                    positionSide);
-        }
+        PositionSide positionSide =
+                FuturesMargins.positionSide(accountConfig, request.positionSide(), request.reduceOnly() != null);
         if (request.newClientOrderId() != null) {
             // Under the lock, so a retry that raced the original waited for it and finds it here.
             Optional<PaperOrder> placed = orders.findByUserIdAndClientOrderId(userId, request.newClientOrderId());
@@ -162,10 +154,14 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             SpotFilters.requireMarketQuantity(filters, request.quantity(), "quantity", true);
         }
         requireRoom(userId, pair);
-        FuturesPosition position = margins.openPosition(userId, pair.pairId());
+        FuturesPosition position = margins.openPosition(userId, pair.pairId(), positionSide);
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
-        if (request.reducing()
-                && FuturesSettlement.closableBy(request.side(), size).signum() == 0) {
+        // In hedge mode SELL on LONG and BUY on SHORT close their side and never more than it holds (plan 4.4).
+        boolean hedgeClose = closesHedgeSide(positionSide, request.side());
+        boolean reducing = request.reducing() || hedgeClose;
+        BigDecimal closable = FuturesSettlement.closableBy(request.side(), size);
+        if ((reducing && closable.signum() == 0)
+                || (hedgeClose && request.quantity().compareTo(closable) > 0)) {
             throw new FuturesRejection(
                     ErrorCode.PAPER_REDUCE_ONLY_REJECTED, -2022, "ReduceOnly Order is rejected.", "reduceOnly");
         }
@@ -173,7 +169,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         BigDecimal last =
                 market.currentLastPrice(MarketType.FUTURES, pair.symbol()).orElse(mark);
         Optional<SpotArrival.Book> book = futuresArrival.bookFor(pair.pairId(), pair.symbol(), request.side());
-        if (!request.reducing()) {
+        if (!reducing) {
             BigDecimal valuedAt = marketOrder ? (mark != null ? mark : last) : request.price();
             if (valuedAt == null) {
                 // A closing MARKET order on a pair without a mark is valued at the book it will take (8.2.1 rule 2).
@@ -185,7 +181,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         if (request.withTpSl()) {
             requireTpSl(filters, request, request.price() != null ? request.price() : mark != null ? mark : last);
         }
-        BigDecimal opening = request.reducing() ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
+        BigDecimal opening = reducing ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
         if (opening.signum() > 0) {
             requireFreshMarks(userId, pair, request, book);
             requireMargin(userId, pair, request, size, opening, last, mark);
@@ -540,6 +536,12 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         feed.futuresOrder(account, order);
         events.publishEvent(new PaperOrderCanceled(order.getId()));
         tpSl.settle(account, order, at);
+    }
+
+    /** Whether an order of {@code side} on {@code positionSide} closes a hedge-mode side (TR-14b). */
+    static boolean closesHedgeSide(PositionSide positionSide, OrderSide side) {
+        return (positionSide == PositionSide.LONG && side == OrderSide.SELL)
+                || (positionSide == PositionSide.SHORT && side == OrderSide.BUY);
     }
 
     /**

@@ -69,6 +69,7 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.PAPER_LEVERAGE_MARGIN, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_MAX_POSITION_AT_LEVERAGE, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_MARGIN_TYPE, "MSG43 409"),
+            Map.entry(ErrorCode.PAPER_POSITION_MODE, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_USER_IN_LIQUIDATION, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_INSUFFICIENT_MARGIN, "MSG01 400"),
             Map.entry(ErrorCode.PAPER_REDUCE_ONLY_REJECTED, "MSG43 409"),

@@ -32,6 +32,42 @@ class FuturesMarginMathTest {
         assertThat(FuturesMarginMath.maxLeverage(TIERS)).isEqualTo(125);
     }
 
+    /**
+     * TR-14b (plan 4.5 note 2): a hedged LONG and SHORT in cross share one price,
+     * {@code (WB − QL × EL + QS × ES) / (QL × MMR + QS × MMR − QL + QS)}, rounded against the larger side.
+     */
+    @Test
+    void TR14b_aHedgedPairInCross_sharesOneLiquidationPrice() {
+        BigDecimal tick = new BigDecimal("0.1");
+        // (10 − 100 + 50) / (0.004 + 0.002 − 1 + 0.5) = 80.97..., the long larger: up.
+        assertThat(hedge("1", "0.5", "10", TIERS, tick)).isEqualByComparingTo("81.0");
+        // (10 − 50 + 100) / (0.002 + 0.004 − 0.5 + 1) = 118.57..., the short larger: down.
+        assertThat(hedge("0.5", "1", "10", TIERS, tick)).isEqualByComparingTo("118.5");
+        // A wallet that covers any fall: no price liquidates.
+        assertThat(hedge("1", "0.5", "100", TIERS, tick)).isZero();
+        // Fully hedged with no maintenance: nothing to solve.
+        assertThat(hedge("1", "1", "10", List.of(tier(1, "0", "50000", 125, "0", "0")), tick))
+                .isZero();
+        // A side large enough for the second bracket is solved again with it.
+        assertThat(hedge("600", "1", "1000", TIERS, tick)).isPositive();
+        assertThatIllegalArgumentException().isThrownBy(() -> hedge("1", "1", "10", List.of(), tick));
+        assertThatIllegalArgumentException().isThrownBy(() -> hedge("0", "1", "10", TIERS, tick));
+    }
+
+    private static BigDecimal hedge(
+            String longQuantity, String shortQuantity, String wallet, List<LeverageTier> tiers, BigDecimal tick) {
+        return FuturesMarginMath.hedgeLiquidationPrice(
+                new BigDecimal(longQuantity),
+                new BigDecimal("100"),
+                new BigDecimal(shortQuantity),
+                new BigDecimal("100"),
+                new BigDecimal(wallet),
+                BigDecimal.ZERO,
+                BigDecimal.ZERO,
+                tiers,
+                tick);
+    }
+
     @Test
     void TR40_aPairWithoutBrackets_isRefused() {
         assertThatIllegalArgumentException().isThrownBy(() -> FuturesMarginMath.maxLeverage(List.of()));

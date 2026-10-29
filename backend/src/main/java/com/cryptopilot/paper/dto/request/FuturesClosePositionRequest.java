@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.dto.request;
 
 import com.cryptopilot.paper.model.enums.OrderType;
+import com.cryptopilot.paper.model.enums.PositionSide;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
@@ -22,6 +23,8 @@ import java.math.BigDecimal;
  * @param price LIMIT only, on the pair's tick
  * @param percent the share of the position closed, 1 to 100; 100 when absent. A share of less than the whole is
  *     rounded down to the pair's step
+ * @param positionSide in hedge mode the side closed, LONG or SHORT; both sides of the pair when absent (TR-14b).
+ *     BOTH or absent in one-way mode
  */
 public record FuturesClosePositionRequest(
         @Size(max = 32, message = "MSG15") String symbol,
@@ -35,4 +38,6 @@ public record FuturesClosePositionRequest(
         @DecimalMin(value = "1", message = "MSG15")
         @DecimalMax(value = "100", message = "MSG15")
         @Digits(integer = 3, fraction = 2, message = "MSG15")
-        BigDecimal percent) {}
+        BigDecimal percent,
+
+        PositionSide positionSide) {}

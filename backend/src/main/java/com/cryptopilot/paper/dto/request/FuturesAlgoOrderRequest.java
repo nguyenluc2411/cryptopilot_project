@@ -31,7 +31,7 @@ import java.math.BigDecimal;
  * @param algoType {@code CONDITIONAL}
  * @param symbol the pair, e.g. {@code BTCUSDT}
  * @param side BUY or SELL
- * @param positionSide BOTH, or absent, in one-way mode
+ * @param positionSide BOTH, or absent, in one-way mode; LONG or SHORT in hedge mode (TR-14b)
  * @param type STOP, STOP_MARKET, TAKE_PROFIT or TAKE_PROFIT_MARKET
  * @param timeInForce STOP and TAKE_PROFIT only
  * @param quantity the base quantity, absent with {@code closePosition}

@@ -3,6 +3,7 @@ package com.cryptopilot.paper.controller;
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.paper.dto.request.FuturesLeverageRequest;
 import com.cryptopilot.paper.dto.request.FuturesMarginTypeRequest;
+import com.cryptopilot.paper.dto.request.FuturesPositionModeRequest;
 import com.cryptopilot.paper.dto.response.FuturesAccountConfigResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageBracketResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageResponse;
@@ -66,6 +67,22 @@ public class FuturesConfigController {
     @GetMapping("/positionSide/dual")
     public FuturesPositionModeResponse positionMode(@AuthenticationPrincipal Jwt caller) {
         return futures.positionMode(callerOf(caller));
+    }
+
+    @Operation(summary = "Switch between one-way and hedge mode. Binance: POST /fapi/v1/positionSide/dual")
+    @ApiResponse(responseCode = "200", description = "The position mode after the change")
+    @ApiResponse(responseCode = "400", description = "MSG01: dualSidePosition is missing")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
+    @ApiResponse(responseCode = "404", description = "MSG41: the paper account is not opened yet")
+    @ApiResponse(
+            responseCode = "409",
+            description = "PAPER_POSITION_MODE (-4059 same mode, -4067 open orders, -4068 position);"
+                    + " PAPER_USER_IN_LIQUIDATION (-2023)")
+    @PostMapping("/positionSide/dual")
+    public FuturesPositionModeResponse changePositionMode(
+            @AuthenticationPrincipal Jwt caller, @Valid @RequestBody FuturesPositionModeRequest request) {
+        return futures.changePositionMode(callerOf(caller), request);
     }
 
     @Operation(

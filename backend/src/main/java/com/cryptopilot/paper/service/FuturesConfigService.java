@@ -2,6 +2,7 @@ package com.cryptopilot.paper.service;
 
 import com.cryptopilot.paper.dto.request.FuturesLeverageRequest;
 import com.cryptopilot.paper.dto.request.FuturesMarginTypeRequest;
+import com.cryptopilot.paper.dto.request.FuturesPositionModeRequest;
 import com.cryptopilot.paper.dto.response.FuturesAccountConfigResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageBracketResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageResponse;
@@ -24,6 +25,12 @@ public interface FuturesConfigService {
 
     /** One-way or hedge mode. */
     FuturesPositionModeResponse positionMode(UUID userId);
+
+    /**
+     * Switches the account between one-way and hedge mode (TR-14b, plan 5.3): refused for the mode it already has
+     * ({@code -4059}), with an open order ({@code -4067}) or a position ({@code -4068}) on any pair.
+     */
+    FuturesPositionModeResponse changePositionMode(UUID userId, FuturesPositionModeRequest request);
 
     /** The settings of one pair, or of every pair the Trader configured when {@code symbol} is null. */
     List<FuturesSymbolConfigResponse> symbolConfigs(UUID userId, String symbol);

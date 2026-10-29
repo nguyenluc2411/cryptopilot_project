@@ -2,6 +2,7 @@ package com.cryptopilot.paper.service.impl;
 
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.CoinListing;
@@ -25,6 +26,7 @@ import com.cryptopilot.paper.model.PendingOrderMargin;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.FuturesAccountConfigRepository;
@@ -120,11 +122,38 @@ class FuturesMargins {
                 .orElseGet(() -> FuturesSymbolConfig.defaults(userId, pairId, FuturesMarginMath.maxLeverage(tiers)));
     }
 
-    /** The Trader's open one-way position on the pair, or {@code null} when flat. */
-    FuturesPosition openPosition(UUID userId, UUID pairId) {
-        return positions.findByUserIdAndPairIdAndPositionStatus(userId, pairId, PositionStatus.OPEN).stream()
-                .findFirst()
+    /**
+     * The Trader's open position on the pair's side, or {@code null} when flat: {@code BOTH} in one-way mode, {@code
+     * LONG} or {@code SHORT} in hedge mode (TR-14b).
+     */
+    FuturesPosition openPosition(UUID userId, UUID pairId, PositionSide positionSide) {
+        return positions
+                .findFirstByUserIdAndPairIdAndPositionSideAndPositionStatus(
+                        userId, pairId, positionSide, PositionStatus.OPEN)
                 .orElse(null);
+    }
+
+    /**
+     * The side an order or a position request names in the account's mode (TR-14b, plan 5.1): one-way takes {@code
+     * BOTH} or nothing, hedge {@code LONG} or {@code SHORT} and no {@code reduceOnly}.
+     *
+     * @throws FuturesRejection {@code PAPER_POSITION_SIDE} ({@code -4061}) for a side the mode does not take
+     * @throws FieldValidationException {@code reduceOnly} (the exchange's {@code -1106}) sent in hedge mode
+     */
+    static PositionSide positionSide(FuturesAccountConfig config, PositionSide asked, boolean reduceOnlySent) {
+        PositionSide side = asked == null ? PositionSide.BOTH : asked;
+        if (config.isDualSidePosition() == (side == PositionSide.BOTH)) {
+            throw new FuturesRejection(
+                    ErrorCode.PAPER_POSITION_SIDE,
+                    -4061,
+                    "Order's position side does not match user's setting.",
+                    "positionSide",
+                    side);
+        }
+        if (config.isDualSidePosition() && reduceOnlySent) {
+            throw new FieldValidationException("reduceOnly is not taken in hedge mode", Map.of("reduceOnly", "MSG15"));
+        }
+        return side;
     }
 
     /**
@@ -223,8 +252,9 @@ class FuturesMargins {
     }
 
     /**
-     * The margin of one pair's open orders in one-way mode at the current prices: the larger of the two sides' costs,
-     * counting only what would open or increase the position; reduce-only orders cost nothing (4.7).
+     * The margin of one pair's open orders at the current prices (4.7). One-way: the larger of the two sides' costs,
+     * counting only what would open or increase the position. Hedge: the LONG and the SHORT side each from flat, added
+     * (TR-14b). Orders that can only reduce cost nothing.
      *
      * @param positionQuantity the signed size of the pair's position, zero when flat
      * @param pending the pair's open orders, as what is left of each
@@ -233,6 +263,21 @@ class FuturesMargins {
      * @param mark the mark price, or {@code null}; likewise
      */
     static BigDecimal pairOrderMargin(
+            BigDecimal positionQuantity, List<Pending> pending, int leverage, BigDecimal last, BigDecimal mark) {
+        if (pending.stream().anyMatch(order -> order.positionSide() != PositionSide.BOTH)) {
+            BigDecimal total = BigDecimal.ZERO;
+            for (PositionSide side : List.of(PositionSide.LONG, PositionSide.SHORT)) {
+                List<Pending> ofSide = pending.stream()
+                        .filter(order -> order.positionSide() == side)
+                        .toList();
+                total = total.add(oneWayOrderMargin(BigDecimal.ZERO, ofSide, leverage, last, mark));
+            }
+            return total;
+        }
+        return oneWayOrderMargin(positionQuantity, pending, leverage, last, mark);
+    }
+
+    private static BigDecimal oneWayOrderMargin(
             BigDecimal positionQuantity, List<Pending> pending, int leverage, BigDecimal last, BigDecimal mark) {
         List<PendingOrderMargin> costed = new ArrayList<>(pending.size());
         for (Pending order : pending) {
@@ -337,7 +382,9 @@ class FuturesMargins {
         if (byPair.isEmpty()) {
             return BigDecimal.ZERO;
         }
+        // A hedge position's orders are costed from flat, side by side: only one-way positions net against them.
         Map<UUID, BigDecimal> sizes = openPositions.stream()
+                .filter(position -> position.getPositionSide() == PositionSide.BOTH)
                 .collect(Collectors.toMap(FuturesPosition::getPairId, FuturesPosition::signedQuantity));
         BigDecimal total = BigDecimal.ZERO;
         for (PairListing pair : market.pairListings(byPair.keySet())) {
@@ -374,10 +421,16 @@ class FuturesMargins {
      * @param limitPrice the limit price, or {@code null} for a MARKET order
      * @param quantity the quantity still to fill, positive
      */
-    record Pending(OrderSide side, BigDecimal limitPrice, BigDecimal quantity, boolean reduceOnly) {
+    record Pending(
+            OrderSide side, BigDecimal limitPrice, BigDecimal quantity, boolean reduceOnly, PositionSide positionSide) {
 
         static Pending of(PaperOrder order) {
-            return new Pending(order.getSide(), order.getLimitPrice(), order.remainingQuantity(), order.isReduceOnly());
+            return new Pending(
+                    order.getSide(),
+                    order.getLimitPrice(),
+                    order.remainingQuantity(),
+                    order.reducing(),
+                    order.getPositionSide() == null ? PositionSide.BOTH : order.getPositionSide());
         }
     }
 }

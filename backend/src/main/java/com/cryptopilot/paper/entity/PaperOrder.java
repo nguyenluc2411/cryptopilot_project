@@ -488,6 +488,20 @@ public class PaperOrder extends BaseEntity {
         return this;
     }
 
+    /**
+     * Whether the order can only make its Futures position smaller: reduce-only, or in hedge mode a SELL on the LONG
+     * side or a BUY on the SHORT side (TR-14b, plan 4.4), which never reverses the position.
+     */
+    public boolean reducing() {
+        return reduceOnly || closesHedgeSide();
+    }
+
+    /** Whether, in hedge mode, the order closes its side: SELL on LONG or BUY on SHORT (TR-14b). */
+    public boolean closesHedgeSide() {
+        return (positionSide == PositionSide.LONG && side == OrderSide.SELL)
+                || (positionSide == PositionSide.SHORT && side == OrderSide.BUY);
+    }
+
     /** Whether the order is a Futures conditional order (TR-20). */
     public boolean isConditional() {
         return orderType.isFuturesConditional();

@@ -107,8 +107,12 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
             throw new FuturesRejection(ErrorCode.PAPER_USER_IN_LIQUIDATION, -2023, "User in liquidation mode now.");
         }
         requireShape(request);
-        PositionSide positionSide = request.positionSide() == null ? PositionSide.BOTH : request.positionSide();
-        if (accountConfig.isDualSidePosition() || positionSide != PositionSide.BOTH) {
+        PositionSide positionSide =
+                FuturesMargins.positionSide(accountConfig, request.positionSide(), request.reduceOnly() != null);
+        if (request.closing()
+                && positionSide != PositionSide.BOTH
+                && !FuturesOrderServiceImpl.closesHedgeSide(positionSide, request.side())) {
+            // In hedge mode a closePosition order closes its side: SELL on LONG or BUY on SHORT (plan 5.4).
             throw new FuturesRejection(
                     ErrorCode.PAPER_POSITION_SIDE,
                     -4061,

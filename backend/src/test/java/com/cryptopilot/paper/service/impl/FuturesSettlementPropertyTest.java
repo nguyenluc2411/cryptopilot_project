@@ -220,8 +220,8 @@ class FuturesSettlementPropertyTest {
                     trader, new FuturesPositionMarginRequest(symbol, null, amount, 1 + random.nextInt(2))));
         } else if (action < 85) {
             BigDecimal percent = BigDecimal.valueOf(1 + random.nextInt(100));
-            attempt(() ->
-                    positions.close(trader, new FuturesClosePositionRequest(symbol, OrderType.MARKET, null, percent)));
+            attempt(() -> positions.close(
+                    trader, new FuturesClosePositionRequest(symbol, OrderType.MARKET, null, percent, null)));
         } else if (action < 90) {
             int leverage = 1 + random.nextInt(100);
             attempt(() -> config.changeLeverage(trader, new FuturesLeverageRequest(symbol, leverage)));

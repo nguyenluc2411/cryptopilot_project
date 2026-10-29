@@ -443,6 +443,70 @@ public final class FuturesMarginMath {
                 raw, tickSize, direction == PositionDirection.LONG ? RoundingMode.CEILING : RoundingMode.FLOOR);
     }
 
+    /**
+     * The one liquidation price a hedge-mode LONG and SHORT of one pair share in cross margin (plan 4.5, the exchange's
+     * general formula): {@code LP = (WB − TMM + UPNL + cumL + cumS − QL × EL + QS × ES) / (QL × MMR_L + QS × MMR_S − QL +
+     * QS)}, {@code TMM} and {@code UPNL} those of the other cross positions. Each side's bracket is the one of its
+     * notional at the liquidation price, found again when the first guess lands in another. Rounded to the tick
+     * against the larger side (long up, short down); zero when no price can liquidate them, a fully hedged pair
+     * among them.
+     *
+     * <p>Rule: TR-14b, TR-18; BR-27; D-127.
+     */
+    public static BigDecimal hedgeLiquidationPrice(
+            BigDecimal longQuantity,
+            BigDecimal longEntry,
+            BigDecimal shortQuantity,
+            BigDecimal shortEntry,
+            BigDecimal walletBalance,
+            BigDecimal otherMaintenanceMargin,
+            BigDecimal otherUnrealizedPnl,
+            List<LeverageTier> tiers,
+            BigDecimal tickSize) {
+        requirePositive(longQuantity, "longQuantity");
+        requirePositive(shortQuantity, "shortQuantity");
+        List<LeverageTier> resolved = withMaintenanceAmounts(tiers);
+        if (resolved.isEmpty()) {
+            throw new IllegalArgumentException("the pair has no leverage bracket");
+        }
+        BigDecimal base = walletBalance
+                .subtract(otherMaintenanceMargin)
+                .add(otherUnrealizedPnl)
+                .subtract(longQuantity.multiply(longEntry))
+                .add(shortQuantity.multiply(shortEntry));
+        LeverageTier longTier =
+                bracketFor(resolved, longQuantity.multiply(longEntry)).orElse(resolved.getLast());
+        LeverageTier shortTier =
+                bracketFor(resolved, shortQuantity.multiply(shortEntry)).orElse(resolved.getLast());
+        BigDecimal raw = BigDecimal.ZERO;
+        for (int attempt = 0; attempt <= resolved.size(); attempt++) {
+            BigDecimal denominator = longQuantity
+                    .multiply(longTier.maintenanceMarginRate())
+                    .add(shortQuantity.multiply(shortTier.maintenanceMarginRate()))
+                    .subtract(longQuantity)
+                    .add(shortQuantity);
+            if (denominator.signum() == 0) {
+                return BigDecimal.ZERO;
+            }
+            raw = Rounding.divide(
+                    base.add(longTier.maintenanceAmount()).add(shortTier.maintenanceAmount()), denominator);
+            if (raw.signum() <= 0) {
+                return BigDecimal.ZERO;
+            }
+            LeverageTier longAt =
+                    bracketFor(resolved, longQuantity.multiply(raw)).orElse(resolved.getLast());
+            LeverageTier shortAt =
+                    bracketFor(resolved, shortQuantity.multiply(raw)).orElse(resolved.getLast());
+            if (longAt.bracketNo() == longTier.bracketNo() && shortAt.bracketNo() == shortTier.bracketNo()) {
+                break;
+            }
+            longTier = longAt;
+            shortTier = shortAt;
+        }
+        return Rounding.toTickSize(
+                raw, tickSize, longQuantity.compareTo(shortQuantity) >= 0 ? RoundingMode.CEILING : RoundingMode.FLOOR);
+    }
+
     // ------------------------------------------------------------------ isolated cash flow, funding, liquidation
 
     /**

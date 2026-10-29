@@ -2,6 +2,7 @@ package com.cryptopilot.paper.repository;
 
 import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.model.enums.MarginType;
+import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import java.time.Instant;
 import java.util.List;
@@ -23,6 +24,10 @@ public interface FuturesPositionRepository extends Repository<FuturesPosition, U
 
     /** The Trader's positions of one pair in a status: one per position side when open. */
     List<FuturesPosition> findByUserIdAndPairIdAndPositionStatus(UUID userId, UUID pairId, PositionStatus status);
+
+    /** The Trader's open position of one pair and side, if any (TR-14b). */
+    Optional<FuturesPosition> findFirstByUserIdAndPairIdAndPositionSideAndPositionStatus(
+            UUID userId, UUID pairId, PositionSide positionSide, PositionStatus status);
 
     /** One position. */
     Optional<FuturesPosition> findById(UUID positionId);

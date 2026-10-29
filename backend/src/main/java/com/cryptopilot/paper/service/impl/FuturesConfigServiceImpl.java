@@ -12,6 +12,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.dto.request.FuturesLeverageRequest;
 import com.cryptopilot.paper.dto.request.FuturesMarginTypeRequest;
+import com.cryptopilot.paper.dto.request.FuturesPositionModeRequest;
 import com.cryptopilot.paper.dto.response.FuturesAccountConfigResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageBracketResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageResponse;
@@ -93,6 +94,35 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     public FuturesPositionModeResponse positionMode(UUID userId) {
         requireFutures(userId);
         return new FuturesPositionModeResponse(margins.accountConfig(userId).isDualSidePosition());
+    }
+
+    @Override
+    @Transactional
+    public FuturesPositionModeResponse changePositionMode(UUID userId, FuturesPositionModeRequest request) {
+        requireFutures(userId);
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        requireNotLiquidating(userId);
+        FuturesAccountConfig config = margins.accountConfig(userId);
+        if (config.isDualSidePosition() == request.dualSidePosition()) {
+            throw new FuturesRejection(ErrorCode.PAPER_POSITION_MODE, -4059, "No need to change position side.");
+        }
+        if (!orders.findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
+                        userId, MarketType.FUTURES, OPEN_ORDERS)
+                .isEmpty()) {
+            throw new FuturesRejection(
+                    ErrorCode.PAPER_POSITION_MODE,
+                    -4067,
+                    "Position side cannot be changed if there exists open orders.");
+        }
+        if (!positions
+                .findByUserIdAndPositionStatus(userId, PositionStatus.OPEN)
+                .isEmpty()) {
+            throw new FuturesRejection(
+                    ErrorCode.PAPER_POSITION_MODE, -4068, "Position side cannot be changed if there exists position.");
+        }
+        config.changePositionMode(request.dualSidePosition());
+        margins.recordChange(config);
+        return new FuturesPositionModeResponse(config.isDualSidePosition());
     }
 
     @Override
