@@ -174,8 +174,6 @@ class FuturesLiquidation {
 
     /** The maintenance margin by the notional's bracket, the largest bracket's above every cap. */
     static BigDecimal maintenance(List<LeverageTier> tiers, BigDecimal notional) {
-        List<LeverageTier> resolved = FuturesMarginMath.withMaintenanceAmounts(tiers);
-        LeverageTier tier = FuturesMarginMath.bracketFor(resolved, notional).orElse(resolved.getLast());
-        return notional.abs().multiply(tier.maintenanceMarginRate()).subtract(tier.maintenanceAmount());
+        return FuturesMarginMath.liquidationMaintenance(tiers, notional);
     }
 }

@@ -369,6 +369,9 @@ cryptopilot:
       stale-mark-haircut: 0.01
       # TR-20: a conditional order with priceProtect waits while mark and last differ by more than this share.
       trigger-protect: 0.05
+      # TR-23, plan 9.3: a cross liquidation still running after this is judged again and resumed by a safety job,
+      # which runs this often (and once at start).
+      liquidation-max-duration: 30s
     account:
       # TR-04, Q-T5: the virtual funds a paper account is opened with, granted once; there is no reset. Keys in lower
       # case, the form an environment variable binds to, so CRYPTOPILOT_PAPER_ACCOUNT_SPOTGRANT_USDT replaces usdt

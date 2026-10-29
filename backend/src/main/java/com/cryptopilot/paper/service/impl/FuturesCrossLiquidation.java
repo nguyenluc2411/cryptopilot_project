@@ -10,6 +10,7 @@ import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
+import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
@@ -119,6 +120,41 @@ class FuturesCrossLiquidation {
             return Optional.empty();
         }
         return Optional.of(after.get().firstToClose().getPairId());
+    }
+
+    /** The cross side of every Trader with an open cross position, which the engine screens from (TR-23). */
+    @Transactional(propagation = Propagation.MANDATORY)
+    List<CrossAccount> accounts() {
+        return positions.findByPositionStatusAndMarginType(PositionStatus.OPEN, MarginType.CROSSED).stream()
+                .map(FuturesPosition::getUserId)
+                .distinct()
+                .map(this::account)
+                .flatMap(Optional::stream)
+                .toList();
+    }
+
+    /** The cross side of the Trader's account as it is now, or empty without an open cross position. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    Optional<CrossAccount> account(UUID userId) {
+        List<FuturesPosition> open = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN);
+        List<CrossAccount.Leg> legs = open.stream()
+                .filter(position -> position.getMarginType() == MarginType.CROSSED)
+                .map(position -> new CrossAccount.Leg(
+                        position.getPairId(),
+                        position.getDirection(),
+                        position.getQuantity(),
+                        position.getEntryPrice(),
+                        market.leverageBrackets(position.getPairId())))
+                .toList();
+        if (legs.isEmpty()) {
+            return Optional.empty();
+        }
+        BigDecimal isolated = open.stream()
+                .filter(position -> position.getMarginType() == MarginType.ISOLATED)
+                .map(FuturesPosition::getIsolatedWalletAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return Optional.of(
+                new CrossAccount(userId, margins.futuresWallet(userId).subtract(isolated), legs));
     }
 
     /** The Trader's cross positions at their latest marks; empty when one of them has no mark at all. */

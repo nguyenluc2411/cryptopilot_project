@@ -23,6 +23,7 @@ import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.dto.response.FuturesAccountResponse;
 import com.cryptopilot.paper.dto.response.FuturesOrderUpdateResponse;
 import com.cryptopilot.paper.job.FuturesFundingJob;
+import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
@@ -1627,6 +1628,14 @@ class FuturesOrderApiTest {
         depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
         place(trader, market("BUY", "0.1")).andExpect(status().isOk());
         String waiting = id(place(trader, limit("BUY", "GTC", "50000", "0.01")).andExpect(status().isOk()));
+        CrossAccount snapshot = matching.crossAccount(trader).orElseThrow();
+        assertThat(snapshot.crossWalletBalance()).isEqualByComparingTo("5000");
+        assertThat(snapshot.legs()).singleElement().satisfies(leg -> {
+            assertThat(leg.pairId()).isEqualTo(pair);
+            assertThat(leg.quantity()).isEqualByComparingTo("0.1");
+            assertThat(leg.tiers()).hasSize(3);
+        });
+        assertThat(matching.crossAccounts()).extracting(CrossAccount::userId).contains(trader);
 
         mark("10050");
         assertThat(matching.liquidateCross(trader, pair, Instant.now())).isEmpty();
@@ -1646,6 +1655,7 @@ class FuturesOrderApiTest {
 
         assertThat(openPositions(trader)).isZero();
         assertThat(liquidatingSince(trader)).isNull();
+        assertThat(matching.crossAccount(trader)).isEmpty();
         Map<String, Object> closed = sql.sql("""
                         select close_reason, realized_pnl_amount, liquidation_fee_amount from futures_position
                          where user_id = ?""").param(trader).query().singleRow();

@@ -10,6 +10,7 @@ import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.event.FuturesAccountChanged;
@@ -21,6 +22,7 @@ import com.cryptopilot.paper.matching.LiquidationBook;
 import com.cryptopilot.paper.matching.PaperOrderBook;
 import com.cryptopilot.paper.matching.PaperOrderBook.BookKey;
 import com.cryptopilot.paper.matching.TriggerBook;
+import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.PriceRange;
 import com.cryptopilot.paper.model.ReplayedCandle;
@@ -142,7 +144,17 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * marks inside replayed candles are dropped, the others run in order. The last price candles are not replayed for a
  * lost mark stream, as the trades went on.
  *
- * <p>Rule: TR-02, TR-05, TR-09, TR-11, TR-42; NSF-07; Q-T1, Q-T6, Q-T8; A-04; D-77, D-78; ADR-011.
+ * <h2>Cross liquidation (Futures)</h2>
+ *
+ * <p>The engine keeps a snapshot of the cross side of each Trader with cross positions (TR-23, plan 9.3), read again
+ * whenever a committed change of the account is reported, and the latest mark of each pair. A mark of a pair screens
+ * the Traders with a cross position on it, without the database: a cross margin balance at or below the maintenance
+ * margin of their cross positions asks the matching service for a step of the liquidation, decided again on the
+ * database under the Trader's lock. A position to close on another pair is a {@code ForceClose} queued for that pair,
+ * so it closes in its turn, at that pair's mark. A liquidation still running after {@code liquidation-max-duration},
+ * or at start, is resumed by {@link #resumeLiquidations()}.
+ *
+ * <p>Rule: TR-02, TR-05, TR-09, TR-11, TR-23, TR-42; NSF-07; Q-T1, Q-T6, Q-T8; A-04; D-77, D-78; ADR-011.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
  * (producer-consumer), ch. 7 (cancellation and shutdown) and ch. 11 (lock scope and contention).
@@ -210,6 +222,15 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
     /** When the consumer last read a trade of each pair. */
     private final Map<BookKey, Instant> lastTrade = new HashMap<>();
+
+    /** The cross side of each Trader with cross positions, as last read (TR-23); owned like {@link #book}. */
+    private final Map<UUID, CrossAccount> crossAccounts = new HashMap<>();
+
+    /** The Traders with a cross position on each pair (TR-23); owned like {@link #book}. */
+    private final Map<UUID, Set<UUID>> crossHolders = new HashMap<>();
+
+    /** The latest mark of each Futures pair, live or replayed (TR-23); owned like {@link #book}. */
+    private final Map<UUID, BigDecimal> latestMarks = new HashMap<>();
 
     /** When the consumer last ran a live mark of each Futures pair (TR-42); owned like {@link #book}. */
     private final Map<BookKey, Instant> lastMark = new HashMap<>();
@@ -286,10 +307,13 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             liquidations.track(level);
             oldestOnMark.putIfAbsent(new BookKey(MarketType.FUTURES, level.pairId()), clock.instant());
         }
+        matching.crossAccounts().forEach(this::trackCross);
         if (properties.replay().enabled()) {
             oldest.forEach((key, placedAt) -> startupReplay(key, placedAt));
             oldestOnMark.forEach((key, placedAt) -> startupMarkReplay(key, placedAt));
         }
+        // A liquidation that ran when the engine stopped goes on now.
+        queue.offer(new Command.ResumeLiquidations(clock.instant()));
         running = true;
         startThread("paper-matching", this::drain);
         startThread("paper-replay", this::runReplays);
@@ -326,6 +350,16 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     /** Whether the engine accepts candles and orders. */
     public boolean isRunning() {
         return running;
+    }
+
+    /**
+     * Resumes the cross liquidations that started more than {@code liquidation-max-duration} ago and still run: each
+     * account is judged again, and the pair whose position closes next gets a {@code ForceClose} (TR-23, plan 9.3).
+     */
+    public void resumeLiquidations() {
+        if (running) {
+            queue.offer(new Command.ResumeLiquidations(clock.instant().minus(futures.liquidationMaxDuration())));
+        }
     }
 
     /** Whether nothing is queued for the consumer or the replay thread; for tests. */
@@ -555,7 +589,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                 forgetIfIdle(key);
             }
             case Command.TrackMarkTrigger track -> markTriggers.track(track.order());
-            case Command.AccountChanged changed -> refreshLevels(changed.userId(), changed.pairId());
+            case Command.AccountChanged changed -> {
+                refreshLevels(changed.userId(), changed.pairId());
+                refreshCross(changed.userId());
+            }
+            case Command.ForceClose force -> crossStep(force.userId(), force.pairId(), clock.instant());
+            case Command.ResumeLiquidations resume -> resume(resume.startedBefore());
             case Command.Mark markKey -> {
                 List<MarkPrice> waiting = marks.remove(markKey.key());
                 if (waiting != null) {
@@ -773,6 +812,114 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                         "TR-22 liquidation of position {} failed; it is tried at the next mark: {}",
                         level.positionId(),
                         failure.toString());
+            }
+        }
+        latestMarks.put(key.pairId(), mark.price());
+        screenCross(key.pairId(), at);
+    }
+
+    /**
+     * Screens the Traders with a cross position on the pair at the latest marks, from their snapshots: one whose cross
+     * margin balance is at or below the maintenance margin gets a step of the liquidation (TR-23, plan 9.3).
+     */
+    private void screenCross(UUID pairId, Instant at) {
+        Set<UUID> holders = crossHolders.get(pairId);
+        if (holders == null) {
+            return;
+        }
+        for (UUID userId : List.copyOf(holders)) {
+            CrossAccount account = crossAccounts.get(userId);
+            if (account != null && crossDue(account)) {
+                crossStep(userId, pairId, at);
+            }
+        }
+    }
+
+    /** Whether the snapshot is at or past liquidation at the latest marks; not while a pair of it has no mark yet. */
+    private boolean crossDue(CrossAccount account) {
+        BigDecimal balance = account.crossWalletBalance();
+        BigDecimal maintenance = BigDecimal.ZERO;
+        for (CrossAccount.Leg leg : account.legs()) {
+            BigDecimal mark = latestMarks.get(leg.pairId());
+            if (mark == null || leg.tiers().isEmpty()) {
+                return false;
+            }
+            balance = balance.add(
+                    FuturesMarginMath.unrealizedPnl(leg.direction(), leg.quantity(), leg.entryPrice(), mark));
+            maintenance = maintenance.add(FuturesMarginMath.liquidationMaintenance(
+                    leg.tiers(), leg.quantity().multiply(mark)));
+        }
+        return balance.compareTo(maintenance) <= 0;
+    }
+
+    /**
+     * One step of a Trader's cross liquidation for the pair, or for none; a position to close on another pair is
+     * queued for it. The snapshot is read again at once, so the next mark does not screen the old one.
+     */
+    private void crossStep(UUID userId, UUID pairId, Instant at) {
+        Optional<UUID> next;
+        try {
+            next = matching.liquidateCross(userId, pairId, at);
+        } catch (RuntimeException failure) {
+            log.warn(
+                    "TR-23 cross liquidation step of user {} on {} failed; tried again at the next mark or by the safety"
+                            + " job: {}",
+                    userId,
+                    pairId,
+                    failure.toString());
+            return;
+        }
+        refreshCross(userId);
+        // The same pair named again means its close did not go through: the safety job tries again.
+        next.filter(other -> !other.equals(pairId))
+                .ifPresent(other -> queue.offer(new Command.ForceClose(userId, other)));
+    }
+
+    /** Judges again every liquidation that started before {@code startedBefore} and still runs. */
+    private void resume(Instant startedBefore) {
+        List<UUID> running;
+        try {
+            running = matching.liquidatingSince(startedBefore);
+        } catch (RuntimeException failure) {
+            log.warn("TR-23 running cross liquidations not read: {}", failure.toString());
+            return;
+        }
+        for (UUID userId : running) {
+            log.info("TR-23 cross liquidation of user {} resumed", userId);
+            crossStep(userId, null, clock.instant());
+        }
+    }
+
+    /** Reads the Trader's cross side again, as the database holds it now. */
+    private void refreshCross(UUID userId) {
+        try {
+            Optional<CrossAccount> account = matching.crossAccount(userId);
+            untrackCross(userId);
+            account.ifPresent(this::trackCross);
+        } catch (RuntimeException failure) {
+            log.warn("TR-23 cross positions of user {} not read: {}", userId, failure.toString());
+        }
+    }
+
+    private void trackCross(CrossAccount account) {
+        crossAccounts.put(account.userId(), account);
+        account.legs().forEach(leg -> crossHolders
+                .computeIfAbsent(leg.pairId(), ignored -> new HashSet<>())
+                .add(account.userId()));
+    }
+
+    private void untrackCross(UUID userId) {
+        CrossAccount previous = crossAccounts.remove(userId);
+        if (previous == null) {
+            return;
+        }
+        for (CrossAccount.Leg leg : previous.legs()) {
+            Set<UUID> holders = crossHolders.get(leg.pairId());
+            if (holders != null) {
+                holders.remove(userId);
+                if (holders.isEmpty()) {
+                    crossHolders.remove(leg.pairId());
+                }
             }
         }
     }
@@ -1415,6 +1562,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
         /** A mark replay has caught up; {@code until} is the open time of the first mark candle not replayed. */
         record MarkReplayDone(BookKey key, Instant until) implements Command {}
+
+        /** Close the Trader's cross position on the pair if the liquidation still calls for it (TR-23). */
+        record ForceClose(UUID userId, UUID pairId) implements Command {}
+
+        /** Resume the cross liquidations that started before {@code startedBefore} and still run (TR-23). */
+        record ResumeLiquidations(Instant startedBefore) implements Command {}
 
         /** Read a Trader's liquidation levels on a pair again (TR-22). */
         record AccountChanged(UUID userId, UUID pairId) implements Command {}

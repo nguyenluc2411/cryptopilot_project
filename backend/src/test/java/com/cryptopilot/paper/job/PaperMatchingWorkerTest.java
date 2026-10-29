@@ -18,6 +18,7 @@ import static org.mockito.Mockito.when;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTrade;
@@ -31,6 +32,7 @@ import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
+import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
@@ -74,7 +76,11 @@ class PaperMatchingWorkerTest {
     private static final Instant MINUTE_5 = MINUTE_0.plusSeconds(300);
     private static final long WAIT = Duration.ofSeconds(5).toMillis();
     private static final PaperFuturesProperties FUTURES_PROPERTIES = new PaperFuturesProperties(
-            Duration.ofSeconds(5), new BigDecimal("0.01"), new BigDecimal("0.05"), new BigDecimal("20"));
+            Duration.ofSeconds(5),
+            new BigDecimal("0.01"),
+            new BigDecimal("0.05"),
+            new BigDecimal("20"),
+            Duration.ofSeconds(30));
 
     private final PaperMatchingService matching = mock(PaperMatchingService.class);
     private final MarketApi market = mock(MarketApi.class);
@@ -899,6 +905,62 @@ class PaperMatchingWorkerTest {
                 .extracting(MarkPrice::eventTime)
                 .isSorted()
                 .allMatch(at -> !at.isBefore(MINUTE_0) && at.isBefore(MINUTE_1));
+    }
+
+    /**
+     * TR-23: a mark that puts a Trader's cross snapshot at or below its maintenance asks for a step of the liquidation
+     * on that pair; the position named on another pair is force-closed in that pair's turn, and the snapshot is read
+     * again.
+     */
+    @Test
+    void TR23_aMarkPuttingACrossAccountPastMaintenance_asksForAStep_andForceClosesTheNamedPair() {
+        UUID trader = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        when(matching.crossAccounts()).thenReturn(List.of(crossAccount(trader, other)));
+        when(matching.liquidateCross(trader, PAIR, MINUTE_1)).thenReturn(Optional.of(other));
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(other, new BigDecimal("100"), MINUTE_0));
+        // 5,000 + 0.1 × (20,000 − 60,000) = 1,000 is above the maintenance.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("20000"), MINUTE_0.plusSeconds(1)));
+        verify(matching, after(200).never()).liquidateCross(eq(trader), any(), any());
+
+        // 5,000 + 0.1 × (10,000 − 60,000) = 0 is not.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("10000"), MINUTE_1));
+
+        verify(matching, timeout(WAIT)).liquidateCross(trader, PAIR, MINUTE_1);
+        verify(matching, timeout(WAIT)).liquidateCross(eq(trader), eq(other), any());
+        verify(matching, timeout(WAIT).atLeastOnce()).crossAccount(trader);
+    }
+
+    /** TR-23: at start, and when asked, a liquidation still running is judged again and its next pair force-closed. */
+    @Test
+    void TR23_aRunningLiquidation_isResumed_atStartAndWhenAsked() {
+        UUID trader = UUID.randomUUID();
+        when(matching.liquidatingSince(any())).thenReturn(List.of(trader));
+        when(matching.liquidateCross(trader, null, MINUTE_2)).thenReturn(Optional.of(PAIR));
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        verify(matching, timeout(WAIT)).liquidatingSince(MINUTE_2);
+        verify(matching, timeout(WAIT)).liquidateCross(trader, PAIR, MINUTE_2);
+
+        worker.resumeLiquidations();
+
+        verify(matching, timeout(WAIT)).liquidatingSince(MINUTE_2.minusSeconds(30));
+        verify(matching, timeout(WAIT).times(2)).liquidateCross(trader, PAIR, MINUTE_2);
+    }
+
+    private static CrossAccount crossAccount(UUID trader, UUID other) {
+        List<LeverageTier> tiers = List.of(new LeverageTier(
+                1, BigDecimal.ZERO, new BigDecimal("1000000"), 125, new BigDecimal("0.004"), BigDecimal.ZERO));
+        return new CrossAccount(
+                trader,
+                new BigDecimal("5000"),
+                List.of(
+                        new CrossAccount.Leg(
+                                PAIR, PositionDirection.LONG, new BigDecimal("0.1"), new BigDecimal("60000"), tiers),
+                        new CrossAccount.Leg(
+                                other, PositionDirection.LONG, BigDecimal.ONE, new BigDecimal("100"), tiers)));
     }
 
     private PaperMatchingWorker started(PaperMatchingProperties properties) {

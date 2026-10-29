@@ -6,6 +6,7 @@ import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.entity.FuturesAccountConfig;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.ReplayedCandle;
@@ -193,6 +194,18 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         return accountConfigs.findByLiquidatingSinceLessThanEqual(at).stream()
                 .map(FuturesAccountConfig::userId)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CrossAccount> crossAccounts() {
+        return crossLiquidation.accounts();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<CrossAccount> crossAccount(UUID userId) {
+        return crossLiquidation.account(userId);
     }
 
     @Override

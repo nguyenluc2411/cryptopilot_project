@@ -111,6 +111,18 @@ public final class FuturesMarginMath {
     }
 
     /**
+     * The maintenance margin a liquidation is judged by: {@code |notional| × MMR − cum} of the notional's bracket, the
+     * brackets' maintenance amounts filled in, the largest bracket's above every cap; not rounded.
+     *
+     * <p>Rule: TR-22, TR-23; BR-27.
+     */
+    public static BigDecimal liquidationMaintenance(List<LeverageTier> tiers, BigDecimal notional) {
+        List<LeverageTier> resolved = withMaintenanceAmounts(tiers);
+        LeverageTier tier = bracketFor(resolved, notional).orElse(resolved.getLast());
+        return notional.abs().multiply(tier.maintenanceMarginRate()).subtract(tier.maintenanceAmount());
+    }
+
+    /**
      * The initial margin of a notional at a leverage, {@code notional / L}.
      *
      * <p>Rule: BR-26.

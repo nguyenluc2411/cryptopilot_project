@@ -24,6 +24,8 @@ import org.springframework.validation.annotation.Validated;
  *     {@code triggerProtect} of the pair, which the symbol synchronisation does not read yet)
  * @param maxCallbackRate the largest callback of a trailing stop, in percent (plan 5.5: 20 in the exchange's current
  *     algo documentation; a setting in case it changes)
+ * @param liquidationMaxDuration how long a cross liquidation may run before the safety job judges the account again
+ *     and resumes it (plan 9.3); also how often that job runs
  */
 @Validated
 @ConfigurationProperties(prefix = "cryptopilot.paper.futures")
@@ -36,4 +38,6 @@ public record PaperFuturesProperties(
         @NotNull @DecimalMin("0") @DecimalMax("1") @DefaultValue("0.05")
         BigDecimal triggerProtect,
 
-        @NotNull @DecimalMin("0.1") @DefaultValue("20") BigDecimal maxCallbackRate) {}
+        @NotNull @DecimalMin("0.1") @DefaultValue("20") BigDecimal maxCallbackRate,
+
+        @NotNull @DefaultValue("30s") Duration liquidationMaxDuration) {}

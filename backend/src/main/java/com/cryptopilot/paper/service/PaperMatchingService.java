@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.service;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
@@ -55,6 +56,12 @@ public interface PaperMatchingService {
 
     /** The Traders whose cross liquidation started at or before {@code at} and still runs (TR-23). */
     List<UUID> liquidatingSince(Instant at);
+
+    /** The cross side of every Trader with an open cross position, which the engine screens on each mark (TR-23). */
+    List<CrossAccount> crossAccounts();
+
+    /** The cross side of one Trader's account as it is now, or empty without an open cross position (TR-23). */
+    Optional<CrossAccount> crossAccount(UUID userId);
 
     /**
      * Triggers a stop limit or a trailing stop the last price reached, under its Trader's lock, if it still waits: it
