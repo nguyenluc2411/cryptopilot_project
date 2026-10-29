@@ -37,41 +37,60 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     @Transactional(readOnly = true)
     Optional<PaperOrder> findByUserIdAndClientOrderId(UUID userId, String clientOrderId);
 
-    /** The account's orders in these statuses, newest first. */
+    /** The account's orders on one market in these statuses, newest first. */
     @Transactional(readOnly = true)
-    List<PaperOrder> findByUserIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
-            UUID userId, Collection<OrderStatus> statuses);
+    List<PaperOrder> findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
+            UUID userId, MarketType marketType, Collection<OrderStatus> statuses);
 
-    /** The account's orders of one pair in these statuses, oldest first. */
-    List<PaperOrder> findByUserIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(
-            UUID userId, UUID pairId, Collection<OrderStatus> statuses);
+    /** The account's order of this id on one market. */
+    @Transactional(readOnly = true)
+    Optional<PaperOrder> findByIdAndUserIdAndMarketType(UUID orderId, UUID userId, MarketType marketType);
+
+    /** The account's order of this client order id on one market. */
+    @Transactional(readOnly = true)
+    Optional<PaperOrder> findByUserIdAndClientOrderIdAndMarketType(
+            UUID userId, String clientOrderId, MarketType marketType);
 
     /** The account's orders of one pair on one market in these statuses, oldest first. */
     List<PaperOrder> findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
             UUID userId, UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
 
     /**
-     * One page of an account's orders in these statuses, placed in {@code [from, to)}, newest first. No parameter is
-     * null, so PostgreSQL can type every one.
+     * One page of an account's orders on one market in these statuses, placed in {@code [from, to)}, newest first.
+     * No parameter is null, so PostgreSQL can type every one.
      */
     @Transactional(readOnly = true)
     @Query(
-            value = "select o from PaperOrder o where o.userId = :userId and o.orderStatus in :statuses"
-                    + " and o.createdAt >= :from and o.createdAt < :to order by o.createdAt desc, o.id desc",
-            countQuery = "select count(o) from PaperOrder o where o.userId = :userId"
+            value = "select o from PaperOrder o where o.userId = :userId and o.marketType = :marketType"
+                    + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to"
+                    + " order by o.createdAt desc, o.id desc",
+            countQuery = "select count(o) from PaperOrder o where o.userId = :userId and o.marketType = :marketType"
                     + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to")
-    Page<PaperOrder> search(UUID userId, Collection<OrderStatus> statuses, Instant from, Instant to, Pageable pageable);
+    Page<PaperOrder> search(
+            UUID userId,
+            MarketType marketType,
+            Collection<OrderStatus> statuses,
+            Instant from,
+            Instant to,
+            Pageable pageable);
 
     /** As {@link #search}, for one pair. */
     @Transactional(readOnly = true)
     @Query(
             value = "select o from PaperOrder o where o.userId = :userId and o.pairId = :pairId"
-                    + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to"
-                    + " order by o.createdAt desc, o.id desc",
+                    + " and o.marketType = :marketType and o.orderStatus in :statuses and o.createdAt >= :from"
+                    + " and o.createdAt < :to order by o.createdAt desc, o.id desc",
             countQuery = "select count(o) from PaperOrder o where o.userId = :userId and o.pairId = :pairId"
-                    + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to")
+                    + " and o.marketType = :marketType and o.orderStatus in :statuses and o.createdAt >= :from"
+                    + " and o.createdAt < :to")
     Page<PaperOrder> searchPair(
-            UUID userId, UUID pairId, Collection<OrderStatus> statuses, Instant from, Instant to, Pageable pageable);
+            UUID userId,
+            UUID pairId,
+            MarketType marketType,
+            Collection<OrderStatus> statuses,
+            Instant from,
+            Instant to,
+            Pageable pageable);
 
     /**
      * Every working order of every account that waits at its limit price, which the matching engine starts its books

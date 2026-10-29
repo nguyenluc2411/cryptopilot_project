@@ -8,6 +8,7 @@ import com.cryptopilot.paper.model.enums.MarginAdjustmentRefType;
 import com.cryptopilot.paper.model.enums.MarginAdjustmentType;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.PositionCloseReason;
 import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.PositionSide;
 import java.math.BigDecimal;
@@ -26,6 +27,7 @@ class FuturesEntitiesTest {
     private static final UUID TRADER = UUID.randomUUID();
     private static final UUID PAIR = UUID.randomUUID();
     private static final Instant NOW = Instant.parse("2026-10-28T10:00:00Z");
+    private static final PositionCloseReason REASON = PositionCloseReason.MANUAL;
 
     @Test
     void TR14_theAccountDefaults_areOneWayAndNotLiquidating() {
@@ -157,6 +159,72 @@ class FuturesEntitiesTest {
                 10,
                 new BigDecimal("0.1"),
                 new BigDecimal("60000"),
+                NOW);
+    }
+
+    @Test
+    void TR16_aFillThatIncreases_averagesTheEntry_andKeepsTheLargestSize() {
+        FuturesPosition position = cross("0.1", "60000");
+
+        position.increase(new BigDecimal("0.05"), new BigDecimal("61000"));
+
+        assertThat(position.getQuantity()).isEqualByComparingTo("0.15");
+        assertThat(position.getMaxQuantity()).isEqualByComparingTo("0.15");
+        assertThat(position.getEntryPrice()).isEqualByComparingTo("61000");
+    }
+
+    @Test
+    void TR16_aFillThatReduces_keepsTheEntry_andClosesThePositionWhenNothingIsLeft() {
+        FuturesPosition position = cross("0.2", "60000");
+
+        position.reduce(new BigDecimal("0.1"), new BigDecimal("62000"), new BigDecimal("200"), REASON, NOW);
+        position.reduce(new BigDecimal("0.1"), new BigDecimal("64000"), new BigDecimal("400"), REASON, NOW);
+
+        assertThat(position.isOpen()).isFalse();
+        assertThat(position.getQuantity()).isEqualByComparingTo("0");
+        assertThat(position.getMaxQuantity()).isEqualByComparingTo("0.2");
+        assertThat(position.getEntryPrice()).isEqualByComparingTo("60000");
+        assertThat(position.getClosedQuantity()).isEqualByComparingTo("0.2");
+        assertThat(position.getCloseAvgPrice()).isEqualByComparingTo("63000");
+        assertThat(position.getRealizedPnlAmount()).isEqualByComparingTo("600");
+        assertThat(position.getCloseReason()).isEqualTo(REASON);
+        assertThat(position.getClosedAt()).isEqualTo(NOW);
+        assertThatIllegalStateException().isThrownBy(() -> position.increase(BigDecimal.ONE, BigDecimal.ONE));
+    }
+
+    @Test
+    void TR16_aPosition_isNeverReducedPastItsSize_norClosedWithMarginLeftInIt() {
+        FuturesPosition cross = cross("0.1", "60000");
+        FuturesPosition isolated = FuturesPosition.open(
+                TRADER,
+                PAIR,
+                PositionSide.BOTH,
+                PositionDirection.SHORT,
+                MarginType.ISOLATED,
+                10,
+                new BigDecimal("0.1"),
+                new BigDecimal("60000"),
+                NOW);
+        isolated.adjustIsolatedWallet(new BigDecimal("600"));
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() ->
+                        cross.reduce(new BigDecimal("0.2"), new BigDecimal("60000"), BigDecimal.ZERO, REASON, NOW));
+        assertThatIllegalStateException()
+                .isThrownBy(() ->
+                        isolated.reduce(new BigDecimal("0.1"), new BigDecimal("60000"), BigDecimal.ZERO, REASON, NOW));
+    }
+
+    private static FuturesPosition cross(String quantity, String entry) {
+        return FuturesPosition.open(
+                TRADER,
+                PAIR,
+                PositionSide.BOTH,
+                PositionDirection.LONG,
+                MarginType.CROSSED,
+                20,
+                new BigDecimal(quantity),
+                new BigDecimal(entry),
                 NOW);
     }
 }

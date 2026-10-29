@@ -12,6 +12,7 @@ import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
+import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.TimeInForce;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -251,5 +252,42 @@ class PaperOrderTest {
     private static PaperOrder limit(OrderSide side, String price, String quantity) {
         return PaperOrder.spotLimit(
                 ACCOUNT, PAIR, "k", side, TimeInForce.GTC, new BigDecimal(price), new BigDecimal(quantity));
+    }
+
+    /** TR-15: a Futures order has a position side, may be reduce-only, and only its fills belong to a position. */
+    @Test
+    void TR15_aFuturesOrder_hasAPositionSide_andOnlyItsFillsBelongToAPosition() {
+        PaperOrder futures = PaperOrder.futuresLimit(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                "f-1",
+                OrderSide.SELL,
+                PositionSide.BOTH,
+                TimeInForce.GTC,
+                new BigDecimal("100"),
+                BigDecimal.ONE,
+                true);
+        PaperOrder spot =
+                PaperOrder.spotMarket(UUID.randomUUID(), UUID.randomUUID(), "s-1", OrderSide.BUY, BigDecimal.ONE);
+        PaperFill.Execution execution = new PaperFill.Execution(
+                new BigDecimal("100"),
+                BigDecimal.ONE,
+                new BigDecimal("100"),
+                BigDecimal.ZERO,
+                UUID.randomUUID(),
+                Liquidity.MAKER,
+                FillSource.LIVE,
+                Instant.now());
+        UUID position = UUID.randomUUID();
+
+        PaperFill fill = PaperFill.futures(futures, execution, position, new BigDecimal("3"));
+
+        assertThat(futures.getMarketType()).isEqualTo(MarketType.FUTURES);
+        assertThat(futures.isReduceOnly()).isTrue();
+        assertThat(fill.getPositionId()).isEqualTo(position);
+        assertThat(fill.getPositionSide()).isEqualTo(PositionSide.BOTH);
+        assertThat(fill.getRealizedPnlAmount()).isEqualByComparingTo("3");
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> PaperFill.futures(spot, execution, position, BigDecimal.ZERO));
     }
 }

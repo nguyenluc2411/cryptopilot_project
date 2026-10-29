@@ -4,24 +4,41 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.market.CoinListing;
+import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.PairListing;
+import com.cryptopilot.market.TradablePair;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.config.PaperAccountProperties;
 import com.cryptopilot.paper.entity.FuturesAccountConfig;
 import com.cryptopilot.paper.entity.FuturesPosition;
+import com.cryptopilot.paper.entity.FuturesSymbolConfig;
 import com.cryptopilot.paper.entity.PaperBalance;
+import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.exception.FuturesRejection;
 import com.cryptopilot.paper.model.FuturesCrossState;
+import com.cryptopilot.paper.model.PendingOrderMargin;
 import com.cryptopilot.paper.model.enums.MarginType;
+import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.FuturesAccountConfigRepository;
+import com.cryptopilot.paper.repository.FuturesPositionRepository;
+import com.cryptopilot.paper.repository.FuturesSymbolConfigRepository;
 import com.cryptopilot.paper.repository.PaperBalanceRepository;
+import com.cryptopilot.paper.repository.PaperOrderRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -31,17 +48,21 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
- * Reads what the Futures rules need from the database and the price caches: the Trader's Futures settings row
- * (created on first use), the mark prices of the pairs with positions, and the cross side of the account. Callers hold
- * the Trader's lock, so what they read here is what they write against.
+ * Reads what the Futures rules need from the database and the price caches: the Trader's Futures settings (created on
+ * first use), a pair's settings and brackets, the mark prices of the pairs with positions, the margin of the open
+ * orders and the cross side of the account. Callers hold the Trader's lock, so what they read here is what they write
+ * against.
  *
- * <p>Rule: TR-14, TR-18; D-127.
+ * <p>Rule: TR-14, TR-15, TR-18; D-127.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 class FuturesMargins {
 
     private final FuturesAccountConfigRepository accountConfigs;
+    private final FuturesSymbolConfigRepository symbolConfigs;
+    private final FuturesPositionRepository positions;
+    private final PaperOrderRepository orders;
     private final PaperBalanceRepository balances;
     private final MarketApi market;
     private final EntityManager entityManager;
@@ -63,6 +84,54 @@ class FuturesMargins {
     }
 
     /**
+     * A Futures pair the exchange trades and that has leverage brackets; without them it cannot be margined.
+     *
+     * @throws ResourceNotFoundException MSG41 for a symbol not listed or not traded on Futures
+     * @throws FuturesRejection {@code PAIR_NOT_TRADING} ({@code -4141}) for a pair without brackets
+     */
+    FuturesPair pair(String symbol) {
+        String name = symbol.strip().toUpperCase(Locale.ROOT);
+        PairListing listing = market.pairListing(name)
+                .filter(PairListing::futuresListed)
+                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", name));
+        TradablePair tradable = market.tradablePair(listing.pairId(), MarketType.FUTURES)
+                .filter(TradablePair::exchangeTrading)
+                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", name));
+        List<LeverageTier> tiers = market.leverageBrackets(tradable.pairId());
+        if (tiers.isEmpty()) {
+            throw new FuturesRejection(ErrorCode.PAIR_NOT_TRADING, -4141, "Symbol is closed.", name);
+        }
+        return new FuturesPair(tradable.pairId(), tradable.symbol(), tradable.filters(), tiers);
+    }
+
+    /** The Trader's settings of a pair, or the defaults (20x or the pair's highest, CROSSED) of one never changed. */
+    FuturesSymbolConfig symbolConfig(UUID userId, UUID pairId, List<LeverageTier> tiers) {
+        return symbolConfigs
+                .findByUserIdAndPairId(userId, pairId)
+                .orElseGet(() -> FuturesSymbolConfig.defaults(userId, pairId, FuturesMarginMath.maxLeverage(tiers)));
+    }
+
+    /** The Trader's open one-way position on the pair, or {@code null} when flat. */
+    FuturesPosition openPosition(UUID userId, UUID pairId) {
+        return positions.findByUserIdAndPairIdAndPositionStatus(userId, pairId, PositionStatus.OPEN).stream()
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** The Trader's open Futures orders, newest first. */
+    List<PaperOrder> openOrders(UUID userId) {
+        return orders.findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
+                userId, MarketType.FUTURES, OrderStatus.OPEN);
+    }
+
+    /** The coin of the Futures wallet, USDT. */
+    CoinListing usdt() {
+        return market.coinsBySymbol(Set.of(PaperAccountProperties.FUTURES_COIN)).stream()
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Coin", PaperAccountProperties.FUTURES_COIN));
+    }
+
+    /**
      * The current mark price of each pair of the positions.
      *
      * @throws BusinessException {@code MARKET_PRICE_UNAVAILABLE} when a pair has no mark price, so no margin can be
@@ -78,6 +147,47 @@ class FuturesMargins {
             marks.put(pair.pairId(), mark);
         }
         return marks;
+    }
+
+    /**
+     * The margin of one pair's open orders in one-way mode at the current prices: the larger of the two sides' costs,
+     * counting only what would open or increase the position; reduce-only orders cost nothing (4.7).
+     *
+     * @param positionQuantity the signed size of the pair's position, zero when flat
+     * @param pending the pair's open orders, as what is left of each
+     * @param leverage the pair's leverage
+     * @param last the last price, or {@code null}; then a LIMIT order is costed at its own price
+     * @param mark the mark price, or {@code null}; likewise
+     */
+    static BigDecimal pairOrderMargin(
+            BigDecimal positionQuantity, List<Pending> pending, int leverage, BigDecimal last, BigDecimal mark) {
+        List<PendingOrderMargin> costed = new ArrayList<>(pending.size());
+        for (Pending order : pending) {
+            if (order.reduceOnly()) {
+                continue;
+            }
+            BigDecimal reference = order.limitPrice() != null ? order.limitPrice() : last;
+            BigDecimal lastPrice = last != null ? last : reference;
+            BigDecimal markPrice = mark != null ? mark : reference;
+            costed.add(new PendingOrderMargin(
+                    order.side(),
+                    order.quantity(),
+                    FuturesMarginMath.orderCost(
+                            order.side(), order.quantity(), order.limitPrice(), lastPrice, markPrice, leverage)));
+        }
+        return FuturesMarginMath.openOrderInitialMargin(positionQuantity, costed);
+    }
+
+    /**
+     * The cross side of the account at the current marks: the positions, and the margin of every open order but the
+     * one excluded.
+     *
+     * @param excludedOrderId an order whose rest is left out, as if it no longer waited (4.3 rule 6), or {@code null}
+     */
+    FuturesCrossState crossState(UUID userId, UUID excludedOrderId) {
+        List<FuturesPosition> open = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN);
+        Map<UUID, BigDecimal> marks = marks(open);
+        return crossState(userId, open, marks, openOrderMargin(userId, open, excludedOrderId));
     }
 
     /**
@@ -108,12 +218,59 @@ class FuturesMargins {
         return new FuturesCrossState(wallet, wallet.subtract(isolated), unrealized, initial, openOrderInitialMargin);
     }
 
-    private BigDecimal futuresWallet(UUID userId) {
-        CoinListing usdt = market.coinsBySymbol(Set.of(PaperAccountProperties.FUTURES_COIN)).stream()
-                .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException("Coin", PaperAccountProperties.FUTURES_COIN));
-        return balances.findByUserIdAndWalletTypeAndCoinId(userId, WalletType.FUTURES, usdt.coinId())
+    /** The margin of every open Futures order of the Trader but the one excluded, pair by pair. */
+    BigDecimal openOrderMargin(UUID userId, List<FuturesPosition> openPositions, UUID excludedOrderId) {
+        Map<UUID, List<Pending>> byPair = new LinkedHashMap<>();
+        for (PaperOrder order : openOrders(userId)) {
+            if (!order.getId().equals(excludedOrderId)) {
+                byPair.computeIfAbsent(order.getPairId(), ignored -> new ArrayList<>())
+                        .add(Pending.of(order));
+            }
+        }
+        if (byPair.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        Map<UUID, BigDecimal> sizes = openPositions.stream()
+                .collect(Collectors.toMap(FuturesPosition::getPairId, FuturesPosition::signedQuantity));
+        BigDecimal total = BigDecimal.ZERO;
+        for (PairListing pair : market.pairListings(byPair.keySet())) {
+            int leverage = symbolConfig(userId, pair.pairId(), market.leverageBrackets(pair.pairId()))
+                    .getLeverage();
+            total = total.add(pairOrderMargin(
+                    sizes.getOrDefault(pair.pairId(), BigDecimal.ZERO),
+                    byPair.get(pair.pairId()),
+                    leverage,
+                    market.currentLastPrice(MarketType.FUTURES, pair.symbol()).orElse(null),
+                    market.currentMarkPrice(pair.symbol()).orElse(null)));
+        }
+        return total;
+    }
+
+    /** The Futures wallet balance, the sum of its ledger; may be below zero (D-127). */
+    BigDecimal futuresWallet(UUID userId) {
+        return balances.findByUserIdAndWalletTypeAndCoinId(userId, WalletType.FUTURES, usdt().coinId())
                 .map(PaperBalance::getFreeAmount)
                 .orElse(BigDecimal.ZERO);
+    }
+
+    /**
+     * A Futures pair with its filters and brackets.
+     *
+     * @param filters the pair's Futures filters
+     * @param tiers its leverage brackets, never empty
+     */
+    record FuturesPair(UUID pairId, String symbol, PairFilters filters, List<LeverageTier> tiers) {}
+
+    /**
+     * What is left of an open order, as its margin sees it; a new order before it is stored too.
+     *
+     * @param limitPrice the limit price, or {@code null} for a MARKET order
+     * @param quantity the quantity still to fill, positive
+     */
+    record Pending(OrderSide side, BigDecimal limitPrice, BigDecimal quantity, boolean reduceOnly) {
+
+        static Pending of(PaperOrder order) {
+            return new Pending(order.getSide(), order.getLimitPrice(), order.remainingQuantity(), order.isReduceOnly());
+        }
     }
 }

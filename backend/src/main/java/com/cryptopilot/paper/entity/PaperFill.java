@@ -6,6 +6,7 @@ import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.UsdtRateSource;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
@@ -23,9 +24,11 @@ import lombok.Getter;
  * One execution of a paper order, never edited and never deleted: the trade history of the trading screens. The
  * balance changes it makes are ledger entries that point back at it.
  *
- * <p>The position side and realised profit of a Futures fill are left unmapped until the Futures stage of TR-02.
+ * <p>A Futures fill belongs to exactly one position, with the position side of its order and the profit or loss it
+ * realised; a fill that reverses a one-way position is stored as two, one closing the old position and one opening
+ * the new (TR-16).
  *
- * <p>Rule: TR-02; Q-T6 (the source says whether a live update or a replayed candle decided it).
+ * <p>Rule: TR-02, TR-16; Q-T6 (the source says whether a live update or a replayed candle decided it).
  */
 @Getter
 @Entity
@@ -87,6 +90,19 @@ public class PaperFill extends BaseEntity {
     @Column(name = "quote_usdt_price_source", length = 32, updatable = false)
     private UsdtRateSource quoteUsdtPriceSource;
 
+    /** The position side of a Futures fill's order; {@code null} on Spot. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "position_side", length = 32, updatable = false)
+    private PositionSide positionSide;
+
+    /** The position a Futures fill opened, increased, reduced or closed; {@code null} on Spot. */
+    @Column(name = "position_id", updatable = false)
+    private UUID positionId;
+
+    /** What a Futures fill realised, zero when it opened or increased; {@code null} on Spot. */
+    @Column(name = "realized_pnl_amount", precision = 28, scale = 8, updatable = false)
+    private BigDecimal realizedPnlAmount;
+
     /** For JPA only. */
     protected PaperFill() {}
 
@@ -119,6 +135,23 @@ public class PaperFill extends BaseEntity {
     public static PaperFill of(PaperOrder order, Execution execution, UsdtRate quoteUsdt) {
         return new PaperFill(
                 Objects.requireNonNull(order, "order"), Objects.requireNonNull(execution, "execution"), quoteUsdt);
+    }
+
+    /**
+     * A fill of a Futures order: part or all of an execution, on one position.
+     *
+     * @param positionId the position it acts on
+     * @param realizedPnl what it realised, zero when it opened or increased the position
+     */
+    public static PaperFill futures(PaperOrder order, Execution execution, UUID positionId, BigDecimal realizedPnl) {
+        if (order.getMarketType() != MarketType.FUTURES) {
+            throw new IllegalArgumentException("order " + order.getId() + " is not a Futures order");
+        }
+        PaperFill fill = of(order, execution, null);
+        fill.positionSide = order.getPositionSide();
+        fill.positionId = Objects.requireNonNull(positionId, "positionId");
+        fill.realizedPnlAmount = Objects.requireNonNull(realizedPnl, "realizedPnl");
+        return fill;
     }
 
     /**

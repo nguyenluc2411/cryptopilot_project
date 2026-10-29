@@ -69,7 +69,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * The order use cases of TR-02 for Spot: place MARKET and LIMIT orders, cancel a working one, and read the open
- * orders, the order history and the trade history.
+ * orders, the order history and the trade history. Every read and cancel is scoped to Spot: a pair trades on both
+ * markets under one id, and its Futures orders are {@link FuturesOrderServiceImpl}'s.
  *
  * <p>Every change runs under the Trader's paper lock (the scope of {@link PaperAccountServiceImpl}), so a placement,
  * a cancel and a fill of the matching engine never interleave on the same account, and an idempotency key is looked
@@ -181,7 +182,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     public OrderResponse cancel(UUID userId, UUID orderId) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         PaperAccount account = accountOf(userId);
-        PaperOrder order = orders.findByIdAndUserId(orderId, account.userId())
+        PaperOrder order = orders.findByIdAndUserIdAndMarketType(orderId, account.userId(), MarketType.SPOT)
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
         if (!order.isOpen() && !order.isPending()) {
             throw new BusinessException(
@@ -203,8 +204,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     public List<OrderResponse> cancelAll(UUID userId, UUID pairId) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         PaperAccount account = accountOf(userId);
-        List<PaperOrder> open = orders.findByUserIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(
-                account.userId(), pairId, OrderStatus.OPEN);
+        List<PaperOrder> open = orders.findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
+                account.userId(), pairId, MarketType.SPOT, OrderStatus.OPEN);
         if (open.isEmpty()) {
             return List.of();
         }
@@ -272,7 +273,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Override
     @Transactional(readOnly = true)
     public OrderResponse order(UUID userId, UUID orderId) {
-        PaperOrder order = orders.findByIdAndUserId(orderId, accountOf(userId).userId())
+        PaperOrder order = orders.findByIdAndUserIdAndMarketType(
+                        orderId, accountOf(userId).userId(), MarketType.SPOT)
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
         return toResponse(order, symbolsOf(List.of(order.getPairId())));
     }
@@ -281,8 +283,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Transactional(readOnly = true)
     public List<OrderResponse> openOrders(UUID userId, UUID pairId) {
         List<PaperOrder> open = orders
-                .findByUserIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
-                        accountOf(userId).userId(), LISTED_OPEN)
+                .findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
+                        accountOf(userId).userId(), MarketType.SPOT, LISTED_OPEN)
                 .stream()
                 .filter(order -> pairId == null || order.getPairId().equals(pairId))
                 .toList();
@@ -303,8 +305,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         Instant from = TimeBounds.fromOrEarliest(query.from());
         Instant to = TimeBounds.toOrLatest(query.to());
         Page<PaperOrder> found = query.pairId() == null
-                ? orders.search(userId, statuses, from, to, request)
-                : orders.searchPair(userId, query.pairId(), statuses, from, to, request);
+                ? orders.search(userId, MarketType.SPOT, statuses, from, to, request)
+                : orders.searchPair(userId, query.pairId(), MarketType.SPOT, statuses, from, to, request);
         Map<UUID, String> symbols =
                 symbolsOf(found.getContent().stream().map(PaperOrder::getPairId).toList());
         return PageResponse.of(found, order -> toResponse(order, symbols));
@@ -320,8 +322,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         Instant from = TimeBounds.fromOrEarliest(query.from());
         Instant to = TimeBounds.toOrLatest(query.to());
         Page<PaperFill> found = query.pairId() == null
-                ? fills.search(userId, from, to, request)
-                : fills.searchPair(userId, query.pairId(), from, to, request);
+                ? fills.search(userId, MarketType.SPOT, from, to, request)
+                : fills.searchPair(userId, query.pairId(), MarketType.SPOT, from, to, request);
         Map<UUID, String> symbols =
                 symbolsOf(found.getContent().stream().map(PaperFill::getPairId).toList());
         Map<UUID, String> assets =

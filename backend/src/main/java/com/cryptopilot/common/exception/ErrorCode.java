@@ -395,6 +395,25 @@ public enum ErrorCode {
     PAPER_USER_IN_LIQUIDATION(HttpStatus.CONFLICT, "MSG43"),
 
     /**
+     * A Futures order costs more margin than the account has for it ({@code -2019}): the available balance for a
+     * cross pair, the cross wallet's free cash for an isolated one (TR-15). Borrows MSG01 like
+     * {@link #PAPER_INSUFFICIENT_BALANCE}; the message arguments carry the margin needed and the margin there is.
+     */
+    PAPER_INSUFFICIENT_MARGIN(HttpStatus.BAD_REQUEST, "MSG01"),
+
+    /**
+     * A reduce-only Futures order that would not make a position smaller: there is none, or it is on the same side
+     * ({@code -2022}). Borrows MSG43 like {@link #PAPER_ORDER_WOULD_TAKE} (A-38). 409: the position refuses it.
+     */
+    PAPER_REDUCE_ONLY_REJECTED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A Futures order's position side does not fit the position mode ({@code -4061}): one-way takes BOTH, hedge LONG
+     * or SHORT. 400 with MSG15, the text of a value not allowed.
+     */
+    PAPER_POSITION_SIDE(HttpStatus.BAD_REQUEST, "MSG15"),
+
+    /**
      * A file named for a post is not one the post may carry (BR-44): not uploaded, not the caller's, already attached
      * to another post, of a type or size outside the limits, a video too long, or a combination of files a post may
      * not hold. MSG32; the message argument is the limit that applies, e.g. {@code 5 MB}. 400: the request names it.

@@ -38,10 +38,12 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * A stop limit or a trailing stop the price triggered is triggered the same way, under the lock, and only once.
  *
+ * <p>A Futures order's fill is applied to the Trader's position by {@link FuturesSettlement} (TR-16).
+ *
  * <p>An order of a Spot pair the system no longer trades, stopped by the exchange or disabled by an administrator, is
  * cancelled instead ({@code PAIR_NOT_TRADING}), by the cancellation the pair's stop runs.
  *
- * <p>Rule: TR-02, TR-09, TR-11; NSF-01, NSF-07; Q-T6.
+ * <p>Rule: TR-02, TR-09, TR-11, TR-16; NSF-01, NSF-07; Q-T6.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -52,6 +54,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final PaperAccountRepository accounts;
     private final PaperOrderRepository orders;
     private final SpotSettlement settlement;
+    private final FuturesSettlement futuresSettlement;
     private final SpotStopTrigger stopTrigger;
     private final PaperOrderLists lists;
     private final PairStopCancellation pairStops;
@@ -86,6 +89,25 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             return false;
         }
         PaperOrder order = found.get();
+        if (order.getMarketType() == MarketType.FUTURES) {
+            // The rest at the limit price, as a maker; what the position does not take ends the order (TR-16).
+            futuresSettlement.execute(
+                    account,
+                    order,
+                    order.getLimitPrice(),
+                    order.remainingQuantity(),
+                    Liquidity.MAKER,
+                    source,
+                    tradedAt);
+            log.info(
+                    "TR-16 paper Futures order {} filled at {} ({}, {}): {}",
+                    order.getId(),
+                    order.getLimitPrice(),
+                    tradedAt,
+                    source,
+                    order.getOrderStatus());
+            return true;
+        }
         if (cancelledAsNotTrading(account, order)) {
             return false;
         }

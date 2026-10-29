@@ -8,7 +8,6 @@ import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairListing;
-import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.dto.request.FuturesLeverageRequest;
@@ -31,11 +30,11 @@ import com.cryptopilot.paper.repository.FuturesSymbolConfigRepository;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
 import com.cryptopilot.paper.service.FuturesConfigService;
+import com.cryptopilot.paper.service.impl.FuturesMargins.FuturesPair;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -99,18 +98,18 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     public List<FuturesSymbolConfigResponse> symbolConfigs(UUID userId, String symbol) {
         requireFutures(userId);
         if (symbol != null) {
-            Pair pair = pair(symbol);
-            return List.of(response(pair, configOf(userId, pair)));
+            FuturesPair pair = margins.pair(symbol);
+            return List.of(response(pair.symbol(), pair.tiers(), configOf(userId, pair)));
         }
         List<FuturesSymbolConfig> configured = symbolConfigs.findByUserId(userId);
         List<FuturesSymbolConfigResponse> responses = new ArrayList<>(configured.size());
         for (PairListing listing : market.pairListings(
                 configured.stream().map(FuturesSymbolConfig::getPairId).toList())) {
-            Pair pair = new Pair(listing.pairId(), listing.symbol(), market.leverageBrackets(listing.pairId()));
+            List<LeverageTier> tiers = market.leverageBrackets(listing.pairId());
             configured.stream()
                     .filter(c -> c.getPairId().equals(listing.pairId()))
                     .findFirst()
-                    .ifPresent(c -> responses.add(response(pair, c)));
+                    .ifPresent(c -> responses.add(response(listing.symbol(), tiers, c)));
         }
         responses.sort((a, b) -> a.symbol().compareTo(b.symbol()));
         return responses;
@@ -122,7 +121,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
         requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesAccountConfig account = requireNotLiquidating(userId);
-        Pair pair = pair(request.symbol());
+        FuturesPair pair = margins.pair(request.symbol());
         int leverage = request.leverage();
         int highest = FuturesMarginMath.maxLeverage(pair.tiers());
         if (leverage < 1 || leverage > highest) {
@@ -149,7 +148,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
         requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         requireNotLiquidating(userId);
-        Pair pair = pair(request.symbol());
+        FuturesPair pair = margins.pair(request.symbol());
         FuturesSymbolConfig config = configOf(userId, pair);
         if (config.getMarginType() == request.marginType()) {
             throw new FuturesRejection(ErrorCode.PAPER_MARGIN_TYPE, -4046, "No need to change margin type.");
@@ -167,14 +166,14 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
                     ErrorCode.PAPER_MARGIN_TYPE, -4048, "Margin type cannot be changed if there exists position.");
         }
         config.changeMarginType(request.marginType());
-        return response(pair, symbolConfigs.save(config));
+        return response(pair.symbol(), pair.tiers(), symbolConfigs.save(config));
     }
 
     @Override
     @Transactional(readOnly = true)
     public FuturesLeverageBracketResponse leverageBrackets(UUID userId, String symbol) {
         requireFutures(userId);
-        Pair pair = pair(symbol);
+        FuturesPair pair = margins.pair(symbol);
         List<FuturesLeverageBracketResponse.Bracket> brackets =
                 FuturesMarginMath.withMaintenanceAmounts(pair.tiers()).stream()
                         .map(t -> new FuturesLeverageBracketResponse.Bracket(
@@ -215,8 +214,8 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
         }
         List<FuturesPosition> every = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN);
         Map<UUID, BigDecimal> everyMark = margins.marks(every);
-        // TODO(TR-15): add the margin of the open Futures orders once they exist.
-        FuturesCrossState cross = margins.crossState(userId, every, everyMark, BigDecimal.ZERO);
+        FuturesCrossState cross =
+                margins.crossState(userId, every, everyMark, margins.openOrderMargin(userId, every, null));
         BigDecimal extra = BigDecimal.ZERO;
         for (FuturesPosition position : open) {
             BigDecimal notional = position.getQuantity().multiply(everyMark.get(position.getPairId()));
@@ -250,38 +249,17 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
         accounts.findByUserId(userId).orElseThrow(() -> new ResourceNotFoundException("PaperAccount", userId));
     }
 
-    /** A Futures pair the exchange trades and that has leverage brackets; without them it cannot be margined. */
-    private Pair pair(String symbol) {
-        String name = symbol.strip().toUpperCase(Locale.ROOT);
-        PairListing listing = market.pairListing(name)
-                .filter(PairListing::futuresListed)
-                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", name));
-        TradablePair tradable = market.tradablePair(listing.pairId(), MarketType.FUTURES)
-                .filter(TradablePair::exchangeTrading)
-                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", name));
-        List<LeverageTier> tiers = market.leverageBrackets(tradable.pairId());
-        if (tiers.isEmpty()) {
-            throw new FuturesRejection(ErrorCode.PAIR_NOT_TRADING, -4141, "Symbol is closed.", name);
-        }
-        return new Pair(tradable.pairId(), tradable.symbol(), tiers);
+    private FuturesSymbolConfig configOf(UUID userId, FuturesPair pair) {
+        return margins.symbolConfig(userId, pair.pairId(), pair.tiers());
     }
 
-    private FuturesSymbolConfig configOf(UUID userId, Pair pair) {
-        return symbolConfigs
-                .findByUserIdAndPairId(userId, pair.pairId())
-                .orElseGet(() -> FuturesSymbolConfig.defaults(
-                        userId, pair.pairId(), FuturesMarginMath.maxLeverage(pair.tiers())));
-    }
-
-    private static FuturesSymbolConfigResponse response(Pair pair, FuturesSymbolConfig config) {
+    private static FuturesSymbolConfigResponse response(
+            String symbol, List<LeverageTier> tiers, FuturesSymbolConfig config) {
         return new FuturesSymbolConfigResponse(
-                pair.symbol(),
+                symbol,
                 config.getMarginType(),
                 false,
                 config.getLeverage(),
-                FuturesMarginMath.maxNotionalAtLeverage(pair.tiers(), config.getLeverage()));
+                FuturesMarginMath.maxNotionalAtLeverage(tiers, config.getLeverage()));
     }
-
-    /** A Futures pair with its brackets. */
-    private record Pair(UUID pairId, String symbol, List<LeverageTier> tiers) {}
 }

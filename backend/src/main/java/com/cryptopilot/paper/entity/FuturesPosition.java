@@ -13,6 +13,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -30,6 +31,9 @@ import lombok.Getter;
 @Table(name = "futures_position")
 @AttributeOverride(name = "id", column = @Column(name = "position_id", nullable = false, updatable = false))
 public class FuturesPosition extends BaseEntity {
+
+    /** Decimals of a price column, {@code numeric(28,12)}. */
+    private static final int ENTRY_SCALE = 12;
 
     @Column(name = "user_id", nullable = false, updatable = false)
     private UUID userId;
@@ -176,12 +180,64 @@ public class FuturesPosition extends BaseEntity {
         isolatedWalletAmount = after;
     }
 
+    /**
+     * Adds a fill that increases the position.
+     *
+     * @param quantity the filled quantity, positive
+     * @param entryPriceAfter the size-weighted entry price with the fill
+     */
+    public void increase(BigDecimal quantity, BigDecimal entryPriceAfter) {
+        requireOpen();
+        this.quantity = this.quantity.add(positive(quantity, "quantity"));
+        this.maxQuantity = this.maxQuantity.max(this.quantity);
+        this.entryPrice = positive(entryPriceAfter, "entryPriceAfter");
+    }
+
+    /**
+     * Takes a fill that reduces the position, at its price, with the profit or loss it realised; the entry price
+     * stays. Nothing left, the position is closed at {@code at} for {@code reason}; an isolated wallet must have been
+     * released by then.
+     *
+     * @param quantity the closed quantity, positive and at most the size
+     */
+    public void reduce(
+            BigDecimal quantity, BigDecimal price, BigDecimal realizedPnl, PositionCloseReason reason, Instant at) {
+        requireOpen();
+        positive(quantity, "quantity");
+        if (quantity.compareTo(this.quantity) > 0) {
+            throw new IllegalArgumentException(
+                    "closed " + quantity.toPlainString() + " is more than the size " + this.quantity.toPlainString());
+        }
+        BigDecimal closedBefore = closedQuantity;
+        closedQuantity = closedQuantity.add(quantity);
+        BigDecimal closedValue = closeAvgPrice == null ? BigDecimal.ZERO : closeAvgPrice.multiply(closedBefore);
+        closeAvgPrice = closedValue
+                .add(positive(price, "price").multiply(quantity))
+                .divide(closedQuantity, ENTRY_SCALE, RoundingMode.HALF_EVEN);
+        realizedPnlAmount = realizedPnlAmount.add(realizedPnl);
+        this.quantity = this.quantity.subtract(quantity);
+        if (this.quantity.signum() == 0) {
+            if (isolatedWalletAmount != null && isolatedWalletAmount.signum() != 0) {
+                throw new IllegalStateException("the isolated wallet of a closed position must be released first");
+            }
+            positionStatus = PositionStatus.CLOSED;
+            closeReason = Objects.requireNonNull(reason, "reason must not be null");
+            closedAt = Objects.requireNonNull(at, "at must not be null");
+        }
+    }
+
     /** Sets the leverage of the open position; the caller checked it against the brackets and the margin. */
     public void changeLeverage(int leverage) {
         if (leverage < 1) {
             throw new IllegalArgumentException("leverage must be at least 1, was " + leverage);
         }
         this.leverage = leverage;
+    }
+
+    private void requireOpen() {
+        if (!isOpen()) {
+            throw new IllegalStateException("position " + getId() + " is closed");
+        }
     }
 
     private static BigDecimal positive(BigDecimal value, String name) {

@@ -1,5 +1,6 @@
 package com.cryptopilot.paper.repository;
 
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.entity.PaperFill;
 import java.time.Instant;
 import java.util.UUID;
@@ -16,23 +17,28 @@ import org.springframework.transaction.annotation.Transactional;
  */
 public interface PaperFillRepository extends Repository<PaperFill, UUID> {
 
-    /** One page of an account's fills traded in {@code [from, to)}, newest first. No parameter is null. */
+    /**
+     * One page of an account's fills on one market traded in {@code [from, to)}, newest first. No parameter is
+     * null.
+     */
     @Transactional(readOnly = true)
     @Query(
-            value = "select f from PaperFill f where f.userId = :userId"
+            value = "select f from PaperFill f where f.userId = :userId and f.marketType = :marketType"
                     + " and f.tradedAt >= :from and f.tradedAt < :to order by f.tradedAt desc, f.id desc",
-            countQuery = "select count(f) from PaperFill f where f.userId = :userId"
+            countQuery = "select count(f) from PaperFill f where f.userId = :userId and f.marketType = :marketType"
                     + " and f.tradedAt >= :from and f.tradedAt < :to")
-    Page<PaperFill> search(UUID userId, Instant from, Instant to, Pageable pageable);
+    Page<PaperFill> search(UUID userId, MarketType marketType, Instant from, Instant to, Pageable pageable);
 
     /** As {@link #search}, for one pair. */
     @Transactional(readOnly = true)
     @Query(
             value = "select f from PaperFill f where f.userId = :userId and f.pairId = :pairId"
-                    + " and f.tradedAt >= :from and f.tradedAt < :to order by f.tradedAt desc, f.id desc",
+                    + " and f.marketType = :marketType and f.tradedAt >= :from and f.tradedAt < :to"
+                    + " order by f.tradedAt desc, f.id desc",
             countQuery = "select count(f) from PaperFill f where f.userId = :userId and f.pairId = :pairId"
-                    + " and f.tradedAt >= :from and f.tradedAt < :to")
-    Page<PaperFill> searchPair(UUID userId, UUID pairId, Instant from, Instant to, Pageable pageable);
+                    + " and f.marketType = :marketType and f.tradedAt >= :from and f.tradedAt < :to")
+    Page<PaperFill> searchPair(
+            UUID userId, UUID pairId, MarketType marketType, Instant from, Instant to, Pageable pageable);
 
     /** Writes a fill. Not transactional here; the unit of work is the calling service's. */
     PaperFill save(PaperFill fill);

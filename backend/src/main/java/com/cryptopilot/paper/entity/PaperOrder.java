@@ -6,6 +6,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
+import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.TimeInForce;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
 import jakarta.persistence.AttributeOverride;
@@ -30,7 +31,11 @@ import lombok.Getter;
  * of the exchange's book it takes on arrival (TR-06, Q-T7), and a waiting LIMIT order the rest of its quantity at
  * once when the market reaches it. Part executed, it is {@code PARTIALLY_FILLED} and still works. An order of a
  * group (OCO, OTO, OTOCO) points at it (TR-10); the pending order of an OTO or OTOCO is {@code PENDING_NEW} until its
- * working order fills. The position side of Futures is left unmapped until that stage uses it.
+ * working order fills.
+ *
+ * <p>A Futures MARKET or LIMIT order (TR-15) has a position side, {@code BOTH} in one-way mode, and may be reduce-only;
+ * it holds nothing back, as the margin of Futures orders is derived ({@code FuturesMargins}), and each of its fills
+ * belongs to a position.
  *
  * <p>What a working order holds back is not stored: it follows from the order and what of it is left, so
  * {@link #lockedAmount()} gives the same figure at a fill, at a cancel and after a restart.
@@ -134,6 +139,11 @@ public class PaperOrder extends BaseEntity {
 
     @Column(name = "avg_price", precision = 28, scale = 12)
     private BigDecimal avgPrice;
+
+    /** The Futures position side the order acts on, {@code BOTH} in one-way mode; {@code null} on Spot. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "position_side", length = 32, updatable = false)
+    private PositionSide positionSide;
 
     @Column(name = "reduce_only", nullable = false, updatable = false)
     private boolean reduceOnly;
@@ -309,6 +319,63 @@ public class PaperOrder extends BaseEntity {
         order.callbackRate = trailingPercent == null ? null : positive(trailingPercent);
         order.triggerCondition = type.triggerConditionFor(side);
         return order;
+    }
+
+    /**
+     * A Futures MARKET order (TR-15).
+     *
+     * @param quantity positive, on the pair's step
+     * @param reduceOnly whether it may only make the position smaller
+     */
+    public static PaperOrder futuresMarket(
+            UUID userId,
+            UUID pairId,
+            String clientOrderId,
+            OrderSide side,
+            PositionSide positionSide,
+            BigDecimal quantity,
+            boolean reduceOnly) {
+        return new PaperOrder(
+                        userId, pairId, clientOrderId, side, OrderType.MARKET, null, null, positive(quantity), null)
+                .futures(positionSide, reduceOnly);
+    }
+
+    /**
+     * A Futures LIMIT order (TR-15).
+     *
+     * @param timeInForce GTC, IOC, FOK or GTX
+     * @param price positive, on the pair's tick
+     * @param quantity positive, on the pair's step
+     * @param reduceOnly whether it may only make the position smaller
+     */
+    public static PaperOrder futuresLimit(
+            UUID userId,
+            UUID pairId,
+            String clientOrderId,
+            OrderSide side,
+            PositionSide positionSide,
+            TimeInForce timeInForce,
+            BigDecimal price,
+            BigDecimal quantity,
+            boolean reduceOnly) {
+        return new PaperOrder(
+                        userId,
+                        pairId,
+                        clientOrderId,
+                        side,
+                        OrderType.LIMIT,
+                        Objects.requireNonNull(timeInForce, "a LIMIT order has a time in force"),
+                        positive(price),
+                        positive(quantity),
+                        null)
+                .futures(positionSide, reduceOnly);
+    }
+
+    private PaperOrder futures(PositionSide positionSide, boolean reduceOnly) {
+        this.marketType = MarketType.FUTURES;
+        this.positionSide = Objects.requireNonNull(positionSide, "a Futures order has a position side");
+        this.reduceOnly = reduceOnly;
+        return this;
     }
 
     /**

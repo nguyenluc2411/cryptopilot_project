@@ -89,6 +89,11 @@ class OpenApiDocsTest {
             "/api/v1/paper/futures/leverage",
             "/api/v1/paper/futures/marginType",
             "/api/v1/paper/futures/leverageBracket",
+            "/api/v1/paper/futures/order",
+            "/api/v1/paper/futures/allOpenOrders",
+            "/api/v1/paper/futures/openOrders",
+            "/api/v1/paper/futures/allOrders",
+            "/api/v1/paper/futures/userTrades",
             "/api/v1/watchlist",
             "/api/v1/watchlist/{id}",
             "/api/v1/alerts",
@@ -176,7 +181,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/news-articles/{id}/restore",
             "/api/v1/admin/news-articles/{id}/summarize");
 
-    private static final int OPERATIONS = 179;
+    private static final int OPERATIONS = 186;
 
     @Autowired
     private MockMvc mvc;
