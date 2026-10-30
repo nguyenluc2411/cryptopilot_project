@@ -13,6 +13,7 @@ import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.support.PlanTraders;
+import com.cryptopilot.support.StompRecorder;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.jayway.jsonpath.JsonPath;
 import java.lang.reflect.Type;
@@ -47,7 +48,6 @@ import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
 import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
-import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.web.socket.WebSocketHttpHeaders;
@@ -131,7 +131,7 @@ class AnalysisTopicTest {
         Client refused = connect(null);
         refused.session.subscribe(main(MarketType.SPOT), new Inbox(new CopyOnWriteArrayList<>()));
 
-        assertRefused(refused, "sign in as a Trader");
+        refused.recorder().awaitRefused(refused.session(), "sign in as a Trader");
         assertThat(subscribers(main(MarketType.SPOT))).isZero();
         assertThat(guest.session.isConnected()).isTrue();
     }
@@ -139,14 +139,12 @@ class AnalysisTopicTest {
     /** D-126 (3): a token this application did not sign is refused on CONNECT, not taken as an anonymous session. */
     @Test
     void D126_aConnectWithAnInvalidToken_isRefused() {
-        List<String> errors = new CopyOnWriteArrayList<>();
+        StompRecorder recorder = new StompRecorder();
         StompHeaders connect = new StompHeaders();
         connect.add(HttpHeaders.AUTHORIZATION, "Bearer not-a-token");
-        stompClient()
-                .connectAsync("ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, handler(errors));
+        stompClient().connectAsync("ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, recorder);
 
-        await(() -> !errors.isEmpty(), "the error frame");
-        assertThat(errors.getFirst()).contains("access token is not valid");
+        recorder.awaitRefused("access token is not valid");
     }
 
     /** BR-62: a FREE Trader has the Spot analysis, but neither the Futures analysis nor the components (CR-08). */
@@ -159,11 +157,11 @@ class AnalysisTopicTest {
 
         Client futures = connect(bearer);
         futures.session.subscribe(main(MarketType.FUTURES), new Inbox(new CopyOnWriteArrayList<>()));
-        assertRefused(futures, "FUTURES_ANALYSIS");
+        futures.recorder().awaitRefused(futures.session(), "FUTURES_ANALYSIS");
 
         Client components = connect(bearer);
         components.session.subscribe(components(MarketType.SPOT), new Inbox(new CopyOnWriteArrayList<>()));
-        assertRefused(components, "SCORE_COMPONENTS");
+        components.recorder().awaitRefused(components.session(), "SCORE_COMPONENTS");
 
         assertThat(subscribers(main(MarketType.FUTURES))).isZero();
         assertThat(subscribers(components(MarketType.SPOT))).isZero();
@@ -275,19 +273,6 @@ class AnalysisTopicTest {
         return main(market) + ".components";
     }
 
-    /**
-     * The subscription was refused: the server closes the session, with an ERROR frame naming why when the client
-     * reads it before the close (it may not, under load).
-     */
-    private static void assertRefused(Client client, String why) {
-        await(() -> !client.errors.isEmpty() || !client.session.isConnected(), "the refusal");
-        await(() -> !client.session.isConnected(), "the session to be closed");
-        client.errors.stream()
-                .filter(error -> !error.startsWith("transport:"))
-                .findFirst()
-                .ifPresent(error -> assertThat(error).contains(why));
-    }
-
     private int subscribers(String destination) {
         SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
         headers.setDestination(destination);
@@ -298,16 +283,16 @@ class AnalysisTopicTest {
     }
 
     private Client connect(String bearer) throws Exception {
-        List<String> errors = new CopyOnWriteArrayList<>();
+        StompRecorder recorder = new StompRecorder();
         StompHeaders connect = new StompHeaders();
         if (bearer != null) {
             connect.add(HttpHeaders.AUTHORIZATION, bearer);
         }
         StompSession session = stompClient()
-                .connectAsync("ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, handler(errors))
+                .connectAsync("ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, recorder)
                 .get(5, TimeUnit.SECONDS); // ends when the session connects; the bound only stops a hang
         sessions.add(session);
-        return new Client(session, errors);
+        return new Client(session, recorder);
     }
 
     private WebSocketStompClient stompClient() {
@@ -317,28 +302,7 @@ class AnalysisTopicTest {
         return stomp;
     }
 
-    private static StompSessionHandlerAdapter handler(List<String> errors) {
-        return new StompSessionHandlerAdapter() {
-            @Override
-            public void handleFrame(StompHeaders headers, Object payload) {
-                errors.add(String.valueOf(headers.getFirst("message")));
-                signal();
-            }
-
-            @Override
-            public void handleTransportError(StompSession session, Throwable exception) {
-                errors.add("transport: " + exception);
-                signal();
-            }
-
-            @Override
-            public Type getPayloadType(StompHeaders headers) {
-                return String.class;
-            }
-        };
-    }
-
-    private record Client(StompSession session, List<String> errors) {}
+    private record Client(StompSession session, StompRecorder recorder) {}
 
     private static final class Inbox implements StompFrameHandler {
 

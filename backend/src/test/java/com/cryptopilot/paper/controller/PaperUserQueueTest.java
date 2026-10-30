@@ -15,6 +15,7 @@ import com.cryptopilot.paper.config.PaperAccountProperties;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.service.PaperMatchingService;
+import com.cryptopilot.support.StompRecorder;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -52,7 +53,6 @@ import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
 import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
-import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.messaging.simp.user.SimpSession;
 import org.springframework.messaging.simp.user.SimpUser;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
@@ -282,9 +282,7 @@ class PaperUserQueueTest {
 
         client.session.subscribe("/user/queue/orders", new Inbox());
 
-        await(() -> !client.errors.isEmpty(), "the error frame");
-        assertThat(client.errors.get(0)).contains("sign in to subscribe");
-        await(() -> !client.session.isConnected(), "the session to be closed");
+        client.recorder().awaitRefused(client.session(), "sign in to subscribe");
     }
 
     /** Another user's queue cannot be named directly, signed in or not. */
@@ -295,22 +293,19 @@ class PaperUserQueueTest {
 
         client.session.subscribe("/user/" + UUID.randomUUID() + "/queue/orders", new Inbox());
 
-        await(() -> !client.errors.isEmpty(), "the error frame");
-        assertThat(client.errors.get(0)).contains("not a public market topic");
-        await(() -> !client.session.isConnected(), "the session to be closed");
+        client.recorder().awaitRefused(client.session(), "not a public market topic");
     }
 
     /** A CONNECT with a token this application did not sign is refused, not taken as an anonymous session. */
     @Test
     void TR08_aConnectWithAnInvalidToken_isRefused() throws Exception {
-        List<String> errors = new CopyOnWriteArrayList<>();
+        StompRecorder recorder = new StompRecorder();
         WebSocketStompClient stomp = stompClient();
         StompHeaders connect = new StompHeaders();
         connect.add(HttpHeaders.AUTHORIZATION, "Bearer not-a-token");
-        stomp.connectAsync("ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, handler(errors));
+        stomp.connectAsync("ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, recorder);
 
-        await(() -> !errors.isEmpty(), "the error frame");
-        assertThat(errors.get(0)).contains("access token is not valid");
+        recorder.awaitRefused("access token is not valid");
     }
 
     // ------------------------------------------------------------------ helpers
@@ -372,16 +367,16 @@ class PaperUserQueueTest {
     }
 
     private Client connect(String bearer) throws Exception {
-        List<String> errors = new CopyOnWriteArrayList<>();
+        StompRecorder recorder = new StompRecorder();
         StompHeaders connect = new StompHeaders();
         if (bearer != null) {
             connect.add(HttpHeaders.AUTHORIZATION, bearer);
         }
         StompSession session = stompClient()
-                .connectAsync("ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, handler(errors))
+                .connectAsync("ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, recorder)
                 .get(5, TimeUnit.SECONDS); // ends when the session connects; the bound only stops a hang
         sessions.add(session);
-        return new Client(session, errors);
+        return new Client(session, recorder);
     }
 
     private WebSocketStompClient stompClient() {
@@ -389,21 +384,6 @@ class PaperUserQueueTest {
         stomp.setMessageConverter(new TextConverter());
         clients.add(stomp);
         return stomp;
-    }
-
-    private static StompSessionHandlerAdapter handler(List<String> errors) {
-        return new StompSessionHandlerAdapter() {
-            @Override
-            public void handleFrame(StompHeaders headers, Object payload) {
-                errors.add(String.valueOf(headers.getFirst("message")));
-                signal();
-            }
-
-            @Override
-            public Type getPayloadType(StompHeaders headers) {
-                return String.class;
-            }
-        };
     }
 
     /** A Trader with an opened paper account. */
@@ -485,7 +465,7 @@ class PaperUserQueueTest {
                         .getTokenValue();
     }
 
-    private record Client(StompSession session, List<String> errors) {}
+    private record Client(StompSession session, StompRecorder recorder) {}
 
     /** The messages of a Trader's three queues, in the order received. */
     private static final class Queues {
