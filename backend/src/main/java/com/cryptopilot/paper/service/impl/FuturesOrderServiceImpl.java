@@ -66,10 +66,10 @@ import org.springframework.transaction.annotation.Transactional;
  * The paper Futures orders of TR-15, one-way mode, as the exchange takes them ({@code POST /fapi/v1/order}):
  *
  * <ul>
- *   <li>The figures are checked against the pair's Futures filters and refused, never rounded: PRICE_FILTER, LOT_SIZE,
- *       MARKET_LOT_SIZE, and MIN_NOTIONAL (at the mark price for MARKET), which a reduce-only order is exempt from.
- *       The arithmetic is {@link SpotFilters}', the rules the same on both markets. PERCENT_PRICE is not checked yet,
- *       as the symbol synchronisation does not read the Futures form of that filter (TR-39).
+ *   <li>The figures are checked against the pair's Futures filters and refused, never rounded: PRICE_FILTER (tick,
+ *       minPrice, maxPrice), LOT_SIZE (step, minQty, maxQty), MARKET_LOT_SIZE, MIN_NOTIONAL (at the mark price for
+ *       MARKET), which a reduce-only order is exempt from, and PERCENT_PRICE against the mark (TR-39). The arithmetic is
+ *       {@link SpotFilters}', the rules the same on both markets.
  *   <li>A reduce-only order needs a position on the other side ({@code -2022}).
  *   <li>The part that would open or increase a position must cost no more than the account has for it
  *       ({@code -2019}): the available balance for a cross pair, the cross wallet's free cash for an isolated one

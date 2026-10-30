@@ -119,9 +119,16 @@ crypto_pair,created_at,timestamp with time zone,,,NO
 crypto_pair,display_order,integer,32,0,NO
 crypto_pair,futures_exchange_status,character varying,,,YES
 crypto_pair,futures_exchange_status_raw,text,,,YES
+crypto_pair,futures_market_max_qty,numeric,28,12,YES
+crypto_pair,futures_market_min_qty,numeric,28,12,YES
+crypto_pair,futures_market_step_size,numeric,28,12,YES
 crypto_pair,futures_max_num_algo_orders,integer,32,0,YES
 crypto_pair,futures_max_num_orders,integer,32,0,YES
+crypto_pair,futures_max_price,numeric,28,12,YES
+crypto_pair,futures_max_qty,numeric,28,12,YES
 crypto_pair,futures_min_notional,numeric,28,8,YES
+crypto_pair,futures_min_price,numeric,28,12,YES
+crypto_pair,futures_min_qty,numeric,28,12,YES
 crypto_pair,futures_multiplier_down,numeric,28,12,YES
 crypto_pair,futures_multiplier_up,numeric,28,12,YES
 crypto_pair,futures_step_size,numeric,28,12,YES

@@ -67,9 +67,13 @@ class CryptoPairTest {
                         FUTURES_FILTERS.tickSize(), FUTURES_FILTERS.stepSize(), FUTURES_FILTERS.minNotional(), rules));
 
         assertThat(pair.filters(MarketType.SPOT)).contains(spot);
-        // Futures keep only their own: PERCENT_PRICE (the BUY's upper and the SELL's lower multiplier) and the caps.
+        // Futures keep only their own: the price and quantity bounds, PERCENT_PRICE (the BUY's upper and the SELL's
+        // lower
+        // multiplier) and the caps; no maximum notional and no trailing delta.
         SymbolRules futures = pair.filters(MarketType.FUTURES).orElseThrow().rules();
-        assertThat(futures.minPrice()).isNull();
+        assertThat(futures.minPrice()).isEqualByComparingTo(rules.minPrice());
+        assertThat(futures.marketMaxQuantity()).isEqualByComparingTo(rules.marketMaxQuantity());
+        assertThat(futures.maxNotional()).isNull();
         assertThat(futures.minTrailingAboveDelta()).isNull();
         assertThat(futures.bidMultiplierUp()).isEqualByComparingTo(rules.bidMultiplierUp());
         assertThat(futures.askMultiplierDown()).isEqualByComparingTo(rules.askMultiplierDown());
@@ -126,16 +130,16 @@ class CryptoPairTest {
      * Spot-only rules are not kept for Futures.
      */
     @Test
-    void TR39_futuresKeepPercentPrice_andTheOrderCaps_only() {
+    void TR39_futuresKeepTheirBounds_percentPrice_andTheOrderCaps() {
         CryptoPair pair = CryptoPair.register(BTC, USDT, "BTCUSDT");
         SymbolRules sent = new SymbolRules(
                 new BigDecimal("1"),
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                new BigDecimal("4529764"),
+                new BigDecimal("0.001"),
+                new BigDecimal("1000"),
+                new BigDecimal("0.002"),
+                new BigDecimal("120"),
+                new BigDecimal("0.001"),
                 null,
                 null,
                 null,
@@ -155,7 +159,13 @@ class CryptoPairTest {
                 new PairFilters(new BigDecimal("0.1"), new BigDecimal("0.001"), new BigDecimal("5"), sent));
 
         SymbolRules kept = pair.filters(MarketType.FUTURES).orElseThrow().rules();
-        assertThat(kept.minPrice()).isNull();
+        assertThat(kept.minPrice()).isEqualByComparingTo("1");
+        assertThat(kept.maxPrice()).isEqualByComparingTo("4529764");
+        assertThat(kept.minQuantity()).isEqualByComparingTo("0.001");
+        assertThat(kept.maxQuantity()).isEqualByComparingTo("1000");
+        assertThat(kept.marketMinQuantity()).isEqualByComparingTo("0.002");
+        assertThat(kept.marketMaxQuantity()).isEqualByComparingTo("120");
+        assertThat(kept.marketStepSize()).isEqualByComparingTo("0.001");
         assertThat(kept.bidMultiplierUp()).isEqualByComparingTo("1.05");
         assertThat(kept.askMultiplierUp()).isEqualByComparingTo("1.05");
         assertThat(kept.bidMultiplierDown()).isEqualByComparingTo("0.95");
