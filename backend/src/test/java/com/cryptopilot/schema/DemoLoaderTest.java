@@ -14,6 +14,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.PairStatus;
 import com.cryptopilot.market.service.PairAdminService;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.support.OwnDatabaseConfig;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.service.TradingPlanService;
 import java.io.IOException;
@@ -26,10 +27,6 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -43,18 +40,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.flyway.autoconfigure.FlywayConnectionDetails;
-import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.postgresql.PostgreSQLContainer;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -74,88 +65,20 @@ import tools.jackson.databind.node.ObjectNode;
  *
  * <p>Rule: DEMO-01; BR-26, BR-27, BR-28, BR-62 (ACTIVE_PLAN_MAX), UC-16, UC-18, UC-45, UC-46; MSG18.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = OwnDatabaseConfig.PROPERTY + "=" + DemoLoaderTest.LOADER_DATABASE)
 @ActiveProfiles("demo")
-@Import({TestcontainersConfig.class, DemoLoaderTest.LoaderDatabase.class})
+@Import({TestcontainersConfig.class, OwnDatabaseConfig.class})
 class DemoLoaderTest {
 
-    private static final String LOADER_DATABASE = "cryptopilot_demo_loader";
+    static final String LOADER_DATABASE = "cryptopilot_demo_loader";
     private static final String ADMIN_PASSWORD = "admin-password-for-the-loader-test";
     private static final String DEMO_PASSWORD = "demo-password-for-the-loader-test";
     private static final UUID ADMIN_ID = UUID.fromString("019b76da-a800-7000-8000-000000000001");
     private static final UUID DEMO_FREE = UUID.fromString("019b76da-a800-7d04-8000-000000000001");
     private static final BigDecimal BTC_PRICE = new BigDecimal("100000.00");
     private static final BigDecimal ETH_PRICE = new BigDecimal("4000.00");
-
-    /**
-     * The backend's database: a database of its own, which the context's Flyway migrates through the demo profile's
-     * locations. Both the application and Flyway are pointed at it, since the shared container offers each of them its
-     * own connection to the shared database.
-     */
-    @TestConfiguration(proxyBeanMethods = false)
-    static class LoaderDatabase {
-
-        @Bean
-        LoaderConnection loaderConnection(PostgreSQLContainer container) throws SQLException {
-            container.start();
-            try (Connection connection = DriverManager.getConnection(
-                            container.getJdbcUrl(), container.getUsername(), container.getPassword());
-                    Statement statement = connection.createStatement()) {
-                statement.execute("DROP DATABASE IF EXISTS " + LOADER_DATABASE + " WITH (FORCE)");
-                statement.execute("CREATE DATABASE " + LOADER_DATABASE);
-            }
-            String url = container.getJdbcUrl();
-            return new LoaderConnection(
-                    url.substring(0, url.lastIndexOf('/') + 1) + LOADER_DATABASE,
-                    container.getUsername(),
-                    container.getPassword());
-        }
-
-        @Bean
-        @Primary
-        JdbcConnectionDetails loaderJdbc(LoaderConnection loader) {
-            return new JdbcConnectionDetails() {
-                @Override
-                public String getUsername() {
-                    return loader.username();
-                }
-
-                @Override
-                public String getPassword() {
-                    return loader.password();
-                }
-
-                @Override
-                public String getJdbcUrl() {
-                    return loader.url();
-                }
-            };
-        }
-
-        @Bean
-        @Primary
-        FlywayConnectionDetails loaderFlyway(LoaderConnection loader) {
-            return new FlywayConnectionDetails() {
-                @Override
-                public String getUsername() {
-                    return loader.username();
-                }
-
-                @Override
-                public String getPassword() {
-                    return loader.password();
-                }
-
-                @Override
-                public String getJdbcUrl() {
-                    return loader.url();
-                }
-            };
-        }
-    }
-
-    /** Where the loader's database is. */
-    record LoaderConnection(String url, String username, String password) {}
 
     @LocalServerPort
     private int port;
