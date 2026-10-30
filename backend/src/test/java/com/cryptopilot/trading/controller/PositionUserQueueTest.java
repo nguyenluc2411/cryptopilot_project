@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.entity.TradingPlan;
@@ -126,6 +127,8 @@ class PositionUserQueueTest {
     @AfterEach
     void removeRows() {
         try {
+            // MSG22 of a fill is written after its commit; wait for every delivery so none lands on a deleted account.
+            InAppNotifications.awaitDeliveries(sql);
             for (UUID trader : traders) {
                 sql.sql("delete from notification where user_id = ?")
                         .param(trader)
@@ -186,7 +189,7 @@ class PositionUserQueueTest {
                 .isEqualByComparingTo("30");
         assertThat((Boolean) JsonPath.read(body, "$.provisional")).isFalse();
         // MSG23 is written after the same commit: once it is there, any push to the other Trader would be too.
-        await(() -> notifications(owner) == 1, "the owner's MSG23");
+        await(() -> closeNotifications(owner) == 1, "the owner's MSG23");
         assertThat(otherInbox).isEmpty();
     }
 
@@ -288,8 +291,8 @@ class PositionUserQueueTest {
                 .sum();
     }
 
-    private long notifications(UUID trader) {
-        return sql.sql("select count(*) from notification where user_id = ?")
+    private long closeNotifications(UUID trader) {
+        return sql.sql("select count(*) from notification where user_id = ? and source_key like 'POSITION_CLOSED:%'")
                 .param(trader)
                 .query(Long.class)
                 .single();

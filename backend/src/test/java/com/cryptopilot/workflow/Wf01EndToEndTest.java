@@ -29,6 +29,10 @@ import com.cryptopilot.support.StreamedPrices;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.job.MatchingWorker;
 import com.cryptopilot.trading.job.MinuteKlineFeed;
+import com.cryptopilot.trading.model.Fill;
+import com.cryptopilot.trading.model.TrackedEntry;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
+import com.cryptopilot.trading.service.MatchingService;
 import com.jayway.jsonpath.JsonPath;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -44,7 +48,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.slf4j.Logger;
@@ -90,8 +93,8 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>NFR N3 of the Design Brief: a fill or an exit decided by a candle is visible through the API at most 3 s after the
  * candle is handed to the matching feed; each measurement is logged.
  *
- * <p>Rule: WF-01; UC-16 to UC-21; BR-23 to BR-39, BR-62, BR-68, BR-69; NSF-07; MSG16, MSG18, MSG23, MSG27, MSG29,
- * MSG51, MSG52, MSG54; D-111, D-112, D-120, D-122, D-124.
+ * <p>Rule: WF-01; UC-16 to UC-21; BR-23 to BR-39, BR-62, BR-68, BR-69; NSF-07; MSG16, MSG18, MSG22, MSG23, MSG27, MSG29,
+ * MSG51, MSG52, MSG54; D-111, D-112, D-120, D-122, D-124; Q-81.
  */
 @SpringBootTest(
         properties = {
@@ -126,6 +129,8 @@ class Wf01EndToEndTest {
     private static final Instant START = MINUTE_0.plusSeconds(30);
     private static final Instant EIGHT = Instant.parse("2026-11-02T08:00:00Z");
     private static final Duration N3 = Duration.ofSeconds(3);
+    private static final String ENTRY_FILLED = "Entry filled";
+    private static final String POSITION_CLOSED = "Position closed";
     private static final FundingHistory NO_FUNDING =
             new FundingHistory(List.of(), List.of(), List.of(), List.of(), List.of());
 
@@ -161,6 +166,9 @@ class Wf01EndToEndTest {
 
     @Autowired
     private MutableTestClock clock;
+
+    @Autowired
+    private MatchingService matching;
 
     private final DemoWf01Data data = DemoWf01Data.read();
     private final Map<String, UUID> pairs = new LinkedHashMap<>();
@@ -338,7 +346,7 @@ class Wf01EndToEndTest {
         assertDecimal(entry, "$.items[0].realizedPnl", "66.3004");
         assertDecimal(entry, "$.items[0].netPnl", "47.9873298");
         assertThat((Boolean) JsonPath.read(entry, "$.items[0].provisional")).isFalse();
-        assertThat(notification(pro, id))
+        assertThat(notification(pro, id, POSITION_CLOSED))
                 .isEqualTo("BTCUSDT position closed by manual close at 100499.4. P/L: 47.9873298.");
     }
 
@@ -347,7 +355,6 @@ class Wf01EndToEndTest {
      * (SRS 3.5, UC-20).
      */
     @Test
-    @Disabled("bug: no MSG22 notification is written when an entry fills (Q-81)")
     void DS01a_aFill_sendsMsg22() throws Exception {
         futuresLast("100000");
         String id = JsonPath.read(
@@ -356,7 +363,7 @@ class Wf01EndToEndTest {
                         .andExpect(jsonPath("$.status").value("EXECUTED"))),
                 "$.id");
 
-        assertThat(notification(pro, id)).isEqualTo("BTCUSDT LONG entry filled at 100000.");
+        assertThat(notification(pro, id, ENTRY_FILLED)).isEqualTo("BTCUSDT LONG entry filled at 100000.");
     }
 
     /**
@@ -384,7 +391,7 @@ class Wf01EndToEndTest {
         assertDecimal(first, "$.position.feeAmount", "11.6781");
         // 232.4 − 11.6781 = 220.7219, no funding.
         assertDecimal(first, "$.position.netPnl", "220.7219");
-        assertThat(notification(pro, byTakeProfit))
+        assertThat(notification(pro, byTakeProfit, POSITION_CLOSED))
                 .isEqualTo("BTCUSDT position closed by take profit at 101500. P/L: 220.7219.");
 
         clock.set(EIGHT.plusSeconds(10));
@@ -405,7 +412,7 @@ class Wf01EndToEndTest {
         assertDecimal(second, "$.position.feeAmount", "16.5502498");
         // −132.7004 − 16.5502498 = −149.2506498.
         assertDecimal(second, "$.position.netPnl", "-149.2506498");
-        assertThat(notification(pro, byStopLoss))
+        assertThat(notification(pro, byStopLoss, POSITION_CLOSED))
                 .isEqualTo("BTCUSDT position closed by stop loss at 99300.6. P/L: -149.2506498.");
         assertThat(JsonPath.<List<String>>read(journal(pro, "CLOSED"), "$.items[*].planId"))
                 .containsExactlyInAnyOrder(byTakeProfit, byStopLoss);
@@ -461,6 +468,37 @@ class Wf01EndToEndTest {
         String open = journal(pro, "OPEN");
         assertThat((String) JsonPath.read(open, "$.items[0].planId")).isEqualTo(id);
         assertDecimal(open, "$.items[0].entryFee", "1.9998");
+    }
+
+    /**
+     * DS-01b, MSG22 on an engine fill (Q-81): the resting LIMIT filled by the 07:59 candle tells the Trader once. The
+     * same candle replayed after a restart of the engine, and the same fill handed to the matching service again, as a
+     * replay after a crash would, find the plan EXECUTED and write nothing more.
+     */
+    @Test
+    void DS01b_anEngineFill_sendsMsg22Once_evenWhenItsCandleIsReplayed() throws Exception {
+        futuresLast("100000");
+        String id = id(call(pro, post(PLANS), futures("LIMIT", "99000", "98010", "101970", 5, true))
+                .andExpect(jsonPath("$.status").value("ACTIVE")));
+        TrackedEntry resting = matching.activeEntries().stream()
+                .filter(entry -> entry.planId().toString().equals(id))
+                .findFirst()
+                .orElseThrow();
+
+        feedClosed(MarketType.FUTURES, BTC, 1, "99500", "98900", "99600");
+
+        assertThat(notification(pro, id, ENTRY_FILLED)).isEqualTo("BTCUSDT LONG entry filled at 99000.");
+        feed.stop();
+        worker.stop();
+        feed.start();
+        feed.onMinuteKline(
+                ClosedKlines.closed(MarketType.FUTURES, pairs.get(BTC), minute(1), "99500", "98900", "99600"));
+        assertThat(matching.fill(new Fill(resting, LiquidityRole.MAKER, new BigDecimal("99000"), minute(1))))
+                .as("the compare-and-set refuses a plan already EXECUTED")
+                .isEmpty();
+        InAppNotifications.awaitDeliveries(sql);
+        assertThat(notifications(pro, id, ENTRY_FILLED)).hasSize(1);
+        assertThat((String) JsonPath.read(plan(pro, id), "$.position.status")).isEqualTo("OPEN");
     }
 
     // ------------------------------------------------------------------------------------------
@@ -613,7 +651,7 @@ class Wf01EndToEndTest {
 
         assertThat((String) JsonPath.read(invalidated, "$.invalidationReason")).isEqualTo("TAKE_PROFIT_REACHED");
         assertThat(statuses(invalidated)).containsExactly("DRAFT", "ACTIVE", "INVALIDATED");
-        assertThat(notification(free, limit))
+        assertThat(notification(free, limit, "Plan invalidated"))
                 .isEqualTo("BTCUSDT LONG plan was invalidated before its entry was filled: the take profit was reached"
                         + " first.");
         call(free, post(PLANS + "/" + fourth + "/activate"), null)
@@ -694,7 +732,7 @@ class Wf01EndToEndTest {
         // 8.3083 + 99,700.2 × 0.166 × 0.0005 (8.2751166) = 16.5834166; net −66.3668 − 16.5834166 = −82.9502166.
         assertDecimal(closed, "$.position.feeAmount", "16.5834166");
         assertDecimal(closed, "$.position.netPnl", "-82.9502166");
-        assertThat(notification(pro, id))
+        assertThat(notification(pro, id, POSITION_CLOSED))
                 .isEqualTo("BTCUSDT position closed by stop loss at 99700.2. P/L: -82.9502166.");
     }
 
@@ -775,21 +813,29 @@ class Wf01EndToEndTest {
                 .andExpect(status().isOk()));
     }
 
-    /** The content of the Trader's one notification about the plan, once it was written after the commit. */
-    private String notification(String token, String planId) {
+    /**
+     * The content of the Trader's one notification titled {@code title} about the plan, once it was written after the
+     * commit.
+     */
+    private String notification(String token, String planId, String title) {
         AtomicReference<List<String>> contents = new AtomicReference<>(List.of());
-        await("the notification of " + planId)
+        await("the notification '" + title + "' of " + planId)
                 .atMost(Duration.ofSeconds(20))
                 .pollInterval(Duration.ofMillis(20))
                 .until(() -> {
-                    contents.set(JsonPath.read(
-                            json(call(token, get("/api/v1/notifications").param("pageSize", "100"), null)
-                                    .andExpect(status().isOk())),
-                            "$.items[?(@.referenceId == '" + planId + "')].content"));
+                    contents.set(notifications(token, planId, title));
                     return !contents.get().isEmpty();
                 });
         assertThat(contents.get()).hasSize(1);
         return contents.get().getFirst();
+    }
+
+    /** The contents of the Trader's notifications titled {@code title} about the plan, as the API answers now. */
+    private List<String> notifications(String token, String planId, String title) throws Exception {
+        return JsonPath.read(
+                json(call(token, get("/api/v1/notifications").param("pageSize", "100"), null)
+                        .andExpect(status().isOk())),
+                "$.items[?(@.referenceId == '" + planId + "' && @.title == '" + title + "')].content");
     }
 
     /**
