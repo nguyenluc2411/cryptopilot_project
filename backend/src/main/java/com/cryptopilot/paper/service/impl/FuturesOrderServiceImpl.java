@@ -635,15 +635,12 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      */
     private void requireFreshMarks(UUID userId, FuturesPair pair, OrderSide side, BigDecimal price, boolean markFresh) {
         if (!markFresh) {
-            // Whether it would take is judged on the book as last shown, however old: one too old to fill on still says
-            // the order is not one that waits.
+            // Whether it would take is judged on the latest price known, however old, the last trade when no book is
+            // left: one too old to fill on still says the order is not one that waits.
             Optional<SpotArrival.Book> book = futuresArrival.bookFor(pair.pairId(), pair.symbol(), side, true);
             boolean takes = price == null
-                    || book.filter(found -> found.shown()
-                                    && crosses(
-                                            side,
-                                            price,
-                                            found.levels().getFirst().price()))
+                    || book.filter(found -> crosses(
+                                    side, price, found.levels().getFirst().price()))
                             .isPresent();
             if (takes) {
                 throw FuturesMargins.staleMark(pair.symbol());

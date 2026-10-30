@@ -20,6 +20,7 @@ import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
+import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
@@ -2187,6 +2188,64 @@ class FuturesOrderApiTest {
         assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("1");
         // The stop is not spent on an order with nothing to fill at: it waits for the next price.
         assertThat(statusOf(stop)).isEqualTo("NEW");
+    }
+
+    /** 8.2.1 rule 1: with no book left at all, whether an opening LIMIT would take is judged on the last trade. */
+    @Test
+    void TR22a_anOpeningLimitPastTheLastTrade_onAStalePairWithNoBook_isRefused() throws Exception {
+        UUID trader = trader(true);
+        staleMark("100");
+        prices.record(
+                MarketType.FUTURES,
+                new TickerMessage(
+                        symbol,
+                        new BigDecimal("100"),
+                        new BigDecimal("99.9"),
+                        new BigDecimal("100.1"),
+                        new BigDecimal("101"),
+                        new BigDecimal("99"),
+                        BigDecimal.ZERO,
+                        BigDecimal.ONE,
+                        new BigDecimal("100"),
+                        Instant.now()));
+        prices.flush();
+
+        place(trader, limit("BUY", "GTC", "101", "1")).andExpect(status().isServiceUnavailable());
+        place(trader, limit("BUY", "GTC", "99", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW"));
+    }
+
+    /**
+     * A conditional order whose placed order must fill at once, a MARKET one or an IOC/FOK LIMIT one, waits when there is
+     * no price to fill at; an opening one on a stale pair is refused MARK_STALE, with or without a book.
+     */
+    @Test
+    void TR20_onAStalePair_anIocStopWaits_andAnOpeningStopIsRefused() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String closingStop = algoId(algo(trader, """
+                                {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP",
+                                 "triggerPrice": "95", "price": "94", "quantity": "1", "timeInForce": "IOC",
+                                 "reduceOnly": true, "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        String openingStop = algoId(algo(trader, """
+                                {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                                 "triggerPrice": "95", "quantity": "2", "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        staleMark("100");
+        oldDepth(List.of(level("94.1", "5")), List.of(level("94", "5")));
+
+        trigger(trader, closingStop, OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "95");
+        trigger(trader, openingStop, OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "95");
+
+        assertThat(statusOf(closingStop)).isEqualTo("NEW");
+        assertThat(statusOf(openingStop)).isEqualTo("REJECTED");
+        assertThat(sql.sql("select status_reason from trade_order where order_id = ?")
+                        .param(UUID.fromString(openingStop))
+                        .query(String.class)
+                        .single())
+                .isEqualTo("MARK_STALE");
+        assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("1");
     }
 
     /** 8.2.1 rule 1: an opening LIMIT that would take is refused on a stale pair, whatever the age of the book. */

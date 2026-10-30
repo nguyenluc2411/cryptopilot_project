@@ -51,7 +51,6 @@ class FuturesArrival {
     private final FuturesSettlement settlement;
     private final SpotArrival arrival;
     private final MarketApi market;
-    private final FuturesMargins margins;
     private final PaperFuturesProperties futures;
     private final Clock clock;
 
@@ -60,15 +59,8 @@ class FuturesArrival {
      * pair whose mark is stale it is only what the stream showed within {@code mark-max-age}, never the last price:
      * whatever fills there, a close, a triggered order or a liquidation, may not fill on a book as old as the mark
      * (8.2.1 rule 2).
-     */
-    Optional<SpotArrival.Book> bookFor(UUID pairId, String symbol, OrderSide side) {
-        return bookFor(pairId, symbol, side, margins.freshMark(symbol).isPresent());
-    }
-
-    /**
-     * As {@link #bookFor(UUID, String, OrderSide)}, the pair's mark already read.
      *
-     * @param markFresh whether the pair's mark is current
+     * @param markFresh whether the pair's mark is current, as the caller read it once
      */
     Optional<SpotArrival.Book> bookFor(UUID pairId, String symbol, OrderSide side, boolean markFresh) {
         Instant oldest = markFresh ? Instant.MIN : clock.instant().minus(futures.markMaxAge());

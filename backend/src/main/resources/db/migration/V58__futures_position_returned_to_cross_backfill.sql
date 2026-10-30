@@ -2,7 +2,8 @@
 -- reductions, closes and liquidation recorded, as FuturesSettlement adds it at each of them: the cross wallet got their
 -- realised profit or loss, less the liquidation fee, with the insurance covers of their losses beyond the wallet, and
 -- the share the isolated wallet gave up. A cover of a reduction or close is the one its adjustment names or, when the
--- wallet had nothing left to change, the one written with a losing fill of the position; covers of funding are neither.
+-- wallet had nothing left to change, the one written with a losing fill of the position and with no funding fee of the
+-- Trader; covers of funding are neither.
 -- Late funding fees paid before this migration are not counted: which ones the cross wallet paid was not recorded.
 UPDATE futures_position p
 SET returned_to_cross_amount = p.realized_pnl_amount - p.liquidation_fee_amount
@@ -30,5 +31,11 @@ SET returned_to_cross_amount = p.realized_pnl_amount - p.liquidation_fee_amount
                                              WHERE f.position_id = p.position_id
                                                AND f.realized_pnl_amount < 0
                                                AND f.created_at BETWEEN l.created_at - interval '1 second'
-                                                                    AND l.created_at + interval '1 second')))), 0)
+                                                                    AND l.created_at + interval '1 second')
+                                AND NOT EXISTS (SELECT 1
+                                                  FROM wallet_ledger_entry g
+                                                 WHERE g.user_id = l.user_id
+                                                   AND g.entry_type = 'FUNDING_FEE'
+                                                   AND g.created_at BETWEEN l.created_at - interval '1 second'
+                                                                        AND l.created_at + interval '1 second')))), 0)
 WHERE p.margin_type = 'ISOLATED';

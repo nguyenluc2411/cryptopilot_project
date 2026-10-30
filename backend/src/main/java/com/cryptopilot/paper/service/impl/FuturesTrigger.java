@@ -18,6 +18,7 @@ import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.PositionDirection;
+import com.cryptopilot.paper.model.enums.TimeInForce;
 import com.cryptopilot.paper.model.enums.WorkingType;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
 import com.cryptopilot.paper.service.impl.FuturesMargins.FuturesPair;
@@ -94,13 +95,6 @@ class FuturesTrigger {
         // The price the placed order takes is the one PERCENT_PRICE judges.
         Optional<SpotArrival.Book> book =
                 arrival.bookFor(pair.pairId(), pair.symbol(), conditional.getSide(), freshMark.isPresent());
-        if (conditional.getOrderType().isFuturesMarketConditional() && book.isEmpty()) {
-            // No price to fill at now, a stale pair's book as old as its mark among them (8.2.1 rule 2): it is not
-            // spent on an order that would expire unfilled, but waits for the next price.
-            events.publishEvent(awaiting(conditional));
-            return;
-        }
-        conditional.trigger(at);
         FuturesPosition position = margins.openPosition(account.userId(), pair.pairId(), conditional.getPositionSide());
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
         BigDecimal closable = FuturesSettlement.closableBy(conditional.getSide(), size);
@@ -109,6 +103,7 @@ class FuturesTrigger {
         if (reducing) {
             quantity = quantity.min(closable);
             if (quantity.signum() == 0) {
+                conditional.trigger(at);
                 end(account, conditional, OrderStatus.EXPIRED, NOTHING_TO_CLOSE, at);
                 return;
             }
@@ -118,10 +113,18 @@ class FuturesTrigger {
         if (opening.signum() > 0) {
             Optional<String> refused = refusal(account, conditional, pair, size, opening, book, freshMark);
             if (refused.isPresent()) {
+                conditional.trigger(at);
                 end(account, conditional, OrderStatus.REJECTED, refused.get(), at);
                 return;
             }
         }
+        if (book.isEmpty() && decidedOnArrival(conditional)) {
+            // No price to fill at now, a stale pair's book as old as its mark among them (8.2.1 rule 2): an order that
+            // must fill at once is not spent on one that would expire unfilled, but waits for the next price.
+            events.publishEvent(awaiting(conditional));
+            return;
+        }
+        conditional.trigger(at);
         PaperOrder placed =
                 orders.save(placedOrder(conditional, quantity, reducing).placedBy(conditional));
         end(account, conditional, OrderStatus.FILLED, TRIGGERED, at);
@@ -131,6 +134,13 @@ class FuturesTrigger {
             arrival.limit(account, placed, book, at);
         }
         feed.futuresOrder(account, placed);
+    }
+
+    /** Whether the order it places must fill on arrival or end: a MARKET one, or a LIMIT one IOC or FOK. */
+    private static boolean decidedOnArrival(PaperOrder conditional) {
+        return conditional.getOrderType().isFuturesMarketConditional()
+                || conditional.getTimeInForce() == TimeInForce.IOC
+                || conditional.getTimeInForce() == TimeInForce.FOK;
     }
 
     /**
