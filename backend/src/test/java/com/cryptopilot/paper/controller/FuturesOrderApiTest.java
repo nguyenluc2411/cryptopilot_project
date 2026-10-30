@@ -2107,8 +2107,9 @@ class FuturesOrderApiTest {
     }
 
     /**
-     * 8.2.1: a stale mark decides nothing, so PERCENT_PRICE is not judged at it: a close that is not flagged reduce-only
-     * and an opening LIMIT order that waits both go on.
+     * 8.2.1: a stale mark decides nothing for a close, which PERCENT_PRICE does not judge at it, flagged reduce-only or
+     * not; an opening LIMIT order that waits is still held to the last mark known, so that it cannot rest far from the
+     * market and later fill at its own price.
      */
     @Test
     void TR22a_onAStalePair_percentPriceIsNotJudgedAtTheStaleMark() throws Exception {
@@ -2125,6 +2126,9 @@ class FuturesOrderApiTest {
                 .andExpect(jsonPath("$.status").value("FILLED"));
         depth(List.of(level("110", "5")), List.of(level("109.9", "5")));
         place(trader, limit("BUY", "GTC", "106", "0.5"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.binanceCode").value(-4016));
+        place(trader, limit("BUY", "GTC", "104", "0.5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NEW"));
     }
@@ -2159,11 +2163,63 @@ class FuturesOrderApiTest {
         assertThat(openPositions(trader)).isOne();
         as(trader, get(FUTURES + "/forceOrders"), null)
                 .andExpect(jsonPath("$.length()").value(0));
+        // Not held in liquidation meanwhile: the Trader may still act.
+        assertThat(liquidatingSince(trader)).isNull();
     }
 
-    /** Plan 9.5: a GTD order a replay reached in time is never on record as filled after its good-till date. */
+    /** 8.2.1 rule 2 for every close on a stale pair: an IOC close and a triggered stop take no book as old as the mark. */
     @Test
-    void TR44_aReplayedGtdFill_isDatedBeforeTheOrderExpired() throws Exception {
+    void TR22a_closesOnAStalePairWithAStaleBook_takeNothing() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String stop = algoId(algo(trader, """
+                                {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                                 "triggerPrice": "95", "closePosition": true, "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        staleMark("100");
+        oldDepth(List.of(level("94.1", "5")), List.of(level("94", "5")));
+
+        place(trader, """
+                        {"symbol": "%s", "side": "SELL", "type": "LIMIT", "timeInForce": "IOC", "price": "90",
+                         "quantity": "1", "reduceOnly": true}""".formatted(symbol)).andExpect(status().isServiceUnavailable());
+        trigger(trader, stop, OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "95");
+
+        assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("1");
+    }
+
+    /** TR-44: a GTD order whose good-till date came before the replayed candle is not filled by it. */
+    @Test
+    void TR44_aReplayedCandleAfterTheGoodTillDate_fillsNothing() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String waiting = id(place(trader, gtd("99", Instant.now().plus(Duration.ofHours(1))))
+                .andExpect(status().isOk()));
+        Instant until = Instant.now().minus(Duration.ofMinutes(10)).truncatedTo(ChronoUnit.MILLIS);
+        sql.sql("update trade_order set good_till_date = ? where order_id = ?")
+                .params(Timestamp.from(until), UUID.fromString(waiting))
+                .update();
+
+        assertThat(matching.fill(
+                        new RestingOrder(
+                                UUID.fromString(waiting),
+                                trader,
+                                MarketType.FUTURES,
+                                pair,
+                                OrderSide.BUY,
+                                new BigDecimal("99"),
+                                Instant.now().minus(Duration.ofHours(1))),
+                        until.plus(Duration.ofMinutes(5)),
+                        FillSource.REPLAY))
+                .isFalse();
+        assertThat(openPositions(trader)).isZero();
+    }
+
+    /**
+     * Plan 9.5: a GTD order a candle reached before its good-till date is filled when the replay applies it, dated then,
+     * its candle's time kept; the good-till date does not move its date back.
+     */
+    @Test
+    void TR44_aGtdOrderReachedInTime_isFilledWhenApplied() throws Exception {
         UUID trader = trader(true);
         depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
         String waiting = id(place(trader, gtd("99", Instant.now().plus(Duration.ofHours(1))))
@@ -2191,7 +2247,7 @@ class FuturesOrderApiTest {
                 .param(UUID.fromString(waiting))
                 .query(Timestamp.class)
                 .single();
-        assertThat(traded.toInstant()).isBefore(until).isAfter(candle);
+        assertThat(traded.toInstant()).isAfter(until);
     }
 
     /** V58 works out what an isolated position gave back to the cross wallet as the settlement records it. */
@@ -2219,7 +2275,9 @@ class FuturesOrderApiTest {
                         "db/migration/V58__futures_position_returned_to_cross_backfill.sql")
                 .getInputStream()) {
             String update = new String(backfill.readAllBytes(), StandardCharsets.UTF_8)
-                    .replace("WHERE p.margin_type = 'ISOLATED';", "WHERE p.position_id = ?");
+                    .replace(
+                            "WHERE p.margin_type = 'ISOLATED'",
+                            "WHERE p.position_id = ? AND p.margin_type = 'ISOLATED'");
             sql.sql(update).param(positionId).update();
         }
 

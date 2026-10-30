@@ -99,6 +99,15 @@ class FuturesCrossLiquidation {
             end(config);
             return Optional.empty();
         }
+        FuturesPosition first = judgement.firstToClose();
+        Optional<BigDecimal> price = closingPrice(first, first.getDirection().closingSide(), judgement);
+        if (price.isEmpty()) {
+            // Only stale pairs with no recent book either: nothing to close at. The account is not held in liquidation
+            // meanwhile, so the Trader may still act; the safety job judges it again (plan 9.3).
+            log.warn("TR-23 cross liquidation of user {} waits: its pairs' marks and books are stale", userId);
+            end(config);
+            return Optional.empty();
+        }
         if (!config.liquidating()) {
             config.startLiquidation(at);
             margins.recordChange(config);
@@ -109,14 +118,10 @@ class FuturesCrossLiquidation {
                     judgement.marginBalance(),
                     judgement.maintenance());
         }
-        FuturesPosition first = judgement.firstToClose();
         if (pairId == null || !first.getPairId().equals(pairId)) {
             return Optional.of(first.getPairId());
         }
-        if (!close(account, first, judgement, at)) {
-            // A stale pair with no recent book either: nothing to close it at yet; the safety job tries again.
-            return Optional.empty();
-        }
+        close(account, first, price.get(), judgement, at);
         Optional<Judgement> after = judge(userId);
         if (after.isEmpty()) {
             // Left to the safety job, which judges the account again once every mark is known.
@@ -235,19 +240,11 @@ class FuturesCrossLiquidation {
      * Closes all of the position with the system's MARKET order: at its pair's mark, or, on a pair whose mark is stale,
      * at the average price of the book it takes (plan 9.3), the stale mark being no price anyone could trade at.
      *
-     * @return whether it closed; not on a stale pair whose book is as old
+     * @param mark the price it closes at, from {@link #closingPrice}
      */
-    private boolean close(PaperAccount account, FuturesPosition position, Judgement judgement, Instant at) {
+    private void close(
+            PaperAccount account, FuturesPosition position, BigDecimal mark, Judgement judgement, Instant at) {
         OrderSide side = position.getDirection().closingSide();
-        Optional<BigDecimal> price = closingPrice(position, side, judgement);
-        if (price.isEmpty()) {
-            log.warn(
-                    "TR-23 cross position {} of user {} waits: its pair's mark and book are both stale",
-                    position.getId(),
-                    account.userId());
-            return false;
-        }
-        BigDecimal mark = price.get();
         PaperOrder order = orders.save(PaperOrder.futuresMarket(
                 account.userId(),
                 position.getPairId(),
@@ -272,7 +269,6 @@ class FuturesCrossLiquidation {
                 null,
                 at));
         log.info("TR-23 cross position {} of user {} liquidated at mark {}", position.getId(), account.userId(), mark);
-        return true;
     }
 
     /**
@@ -285,7 +281,10 @@ class FuturesCrossLiquidation {
             return Optional.of(judgement.marks().get(position.getPairId()));
         }
         BookSweep.Result sweep = FuturesArrival.sweep(
-                arrival.freshBookFor(position.getPairId(), side), side, position.getQuantity(), null);
+                arrival.bookFor(position.getPairId(), judgement.symbols().get(position.getPairId()), side, false),
+                side,
+                position.getQuantity(),
+                null);
         return sweep.isEmpty() ? Optional.empty() : Optional.of(Rounding.divide(sweep.notional(), sweep.quantity()));
     }
 

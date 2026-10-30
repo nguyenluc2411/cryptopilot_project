@@ -179,7 +179,10 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         BigDecimal mark = market.currentMarkPrice(pair.symbol()).orElse(null);
         BigDecimal last =
                 market.currentLastPrice(MarketType.FUTURES, pair.symbol()).orElse(mark);
-        Optional<SpotArrival.Book> book = futuresArrival.bookFor(pair.pairId(), pair.symbol(), request.side());
+        // Read once: whether the mark is current decides the book, the stale-mark rules and PERCENT_PRICE alike.
+        boolean markFresh = margins.freshMark(pair.symbol()).isPresent();
+        Optional<SpotArrival.Book> book =
+                futuresArrival.bookFor(pair.pairId(), pair.symbol(), request.side(), markFresh);
         if (!reducing) {
             BigDecimal valuedAt = marketOrder ? (mark != null ? mark : last) : request.price();
             if (valuedAt == null) {
@@ -190,16 +193,12 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             SpotFilters.requireNotional(filters, valuedAt.multiply(request.quantity()), false, "quantity");
         }
         BigDecimal opening = reducing ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
-        // A stale mark is told first: PERCENT_PRICE is judged at the mark, and a stale one decides nothing (8.2.1).
+        // A stale mark is told first, before PERCENT_PRICE, which is judged at the mark (8.2.1).
         if (opening.signum() > 0) {
-            requireFreshMarks(userId, pair, request.side(), request.price(), book);
-        } else if (marketOrder && margins.freshMark(pair.symbol()).isEmpty()) {
-            // A close on a stale pair fills on the book alone, which may not be as old as the mark (8.2.1 rule 2).
-            book = Optional.of(futuresArrival
-                    .freshBookFor(pair.pairId(), request.side())
-                    .orElseThrow(() -> priceUnavailable(pair)));
+            requireFreshMarks(userId, pair, request.side(), request.price(), book, markFresh);
         }
-        requirePercentPrice(pair, request.side(), request.price(), book);
+        requirePercentPrice(
+                pair.filters(), request.side(), request.price(), percentPriceMark(mark, markFresh, opening), book);
         if (request.withTpSl()) {
             requireTpSl(filters, request, request.price() != null ? request.price() : mark != null ? mark : last);
         }
@@ -276,7 +275,9 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         SpotFilters.requireQuantity(filters, request.quantity(), "quantity");
         Instant now = clock.instant();
         BigDecimal remaining = request.quantity().subtract(order.getExecutedQuantity());
-        Optional<SpotArrival.Book> book = futuresArrival.bookFor(pair.pairId(), pair.symbol(), order.getSide());
+        boolean markFresh = margins.freshMark(pair.symbol()).isPresent();
+        Optional<SpotArrival.Book> book =
+                futuresArrival.bookFor(pair.pairId(), pair.symbol(), order.getSide(), markFresh);
         if (remaining.signum() <= 0
                 || (order.getTimeInForce() == TimeInForce.GTX
                         && !FuturesArrival.sweep(book, order.getSide(), remaining, request.price())
@@ -292,7 +293,6 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         if (!reducing) {
             SpotFilters.requireNotional(filters, request.price().multiply(request.quantity()), false, "quantity");
         }
-        requirePercentPrice(pair, order.getSide(), request.price(), book);
         BigDecimal size = Optional.ofNullable(margins.openPosition(userId, pair.pairId(), order.getPositionSide()))
                 .map(FuturesPosition::signedQuantity)
                 .orElse(BigDecimal.ZERO);
@@ -301,8 +301,10 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                     ErrorCode.PAPER_REDUCE_ONLY_REJECTED, -2022, "ReduceOnly Order is rejected.", "reduceOnly");
         }
         BigDecimal opening = reducing ? BigDecimal.ZERO : opening(order.getSide(), remaining, size);
+        requirePercentPrice(
+                filters, order.getSide(), request.price(), percentPriceMark(mark, markFresh, opening), book);
         if (opening.signum() > 0) {
-            requireFreshMarks(userId, pair, order.getSide(), request.price(), book);
+            requireFreshMarks(userId, pair, order.getSide(), request.price(), book, markFresh);
             requireMargin(userId, pair, order.getSide(), request.price(), size, opening, last, mark, order.getId());
         }
         if (order.amend(request.price(), request.quantity(), now)) {
@@ -629,8 +631,13 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      * Closing orders never wait for the mark.
      */
     private void requireFreshMarks(
-            UUID userId, FuturesPair pair, OrderSide side, BigDecimal price, Optional<SpotArrival.Book> book) {
-        if (margins.freshMark(pair.symbol()).isEmpty()) {
+            UUID userId,
+            FuturesPair pair,
+            OrderSide side,
+            BigDecimal price,
+            Optional<SpotArrival.Book> book,
+            boolean markFresh) {
+        if (!markFresh) {
             boolean takes = price == null
                     || book.filter(found -> found.shown()
                                     && crosses(
@@ -718,12 +725,14 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      *
      * @param price the limit price, or {@code null} for a MARKET order
      */
-    private void requirePercentPrice(
-            FuturesPair pair, OrderSide side, BigDecimal price, Optional<SpotArrival.Book> book) {
-        // Judged at a current mark only: a stale one decides nothing (8.2.1), what would open risk on it was refused
-        // above, and a close or an order that waits goes on without it.
-        requirePercentPrice(
-                pair.filters(), side, price, margins.freshMark(pair.symbol()).orElse(null), book);
+    /**
+     * The mark PERCENT_PRICE judges an order at: the current one. On a stale pair, an order that opens risk is still
+     * held to the last mark known, the only bound there is, so that one resting far from the market cannot later fill
+     * at its own price; one that only closes is judged by nothing, as a stale mark decides nothing for it (8.2.1 rule
+     * 2).
+     */
+    private static BigDecimal percentPriceMark(BigDecimal mark, boolean markFresh, BigDecimal opening) {
+        return markFresh || opening.signum() > 0 ? mark : null;
     }
 
     private static void requirePercentPrice(
