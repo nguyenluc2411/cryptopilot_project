@@ -113,9 +113,8 @@ class FuturesTrigger {
         BigDecimal opening =
                 reducing ? BigDecimal.ZERO : FuturesOrderServiceImpl.opening(conditional.getSide(), quantity, size);
         // On a stale pair an opening order that would take is refused, as on placement (8.2.1 rule 1), with or without
-        // a book; one that waits goes on, an IOC or FOK one then expiring as on placement. Checked first, as it reads
-        // nothing but prices.
-        if (opening.signum() > 0 && freshMark.isEmpty() && wouldTake(conditional, pair)) {
+        // a book; one that waits goes on to the checks below. Checked first, as it reads nothing but prices.
+        if (opening.signum() > 0 && freshMark.isEmpty() && wouldTake(conditional, pair, book)) {
             conditional.trigger(at);
             end(account, conditional, OrderStatus.REJECTED, MARK_STALE, at);
             return;
@@ -155,9 +154,14 @@ class FuturesTrigger {
     }
 
     /** Whether the order it places would take on arrival, judged as a placed order is on a stale pair. */
-    private boolean wouldTake(PaperOrder conditional, FuturesPair pair) {
+    private boolean wouldTake(PaperOrder conditional, FuturesPair pair, Optional<SpotArrival.Book> book) {
         return arrival.anyPriceReaches(
-                pair.pairId(), pair.symbol(), conditional.getSide(), conditional.getLimitPrice());
+                pair.pairId(),
+                pair.symbol(),
+                conditional.getSide(),
+                conditional.getLimitPrice(),
+                conditional.getTimeInForce(),
+                book);
     }
 
     /**

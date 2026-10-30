@@ -195,7 +195,14 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         BigDecimal opening = reducing ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
         // A stale mark is told first, before PERCENT_PRICE, which is judged at the mark (8.2.1).
         if (opening.signum() > 0) {
-            requireFreshMarks(userId, pair, request.side(), request.price(), markFresh);
+            requireFreshMarks(
+                    userId,
+                    pair,
+                    request.side(),
+                    request.price(),
+                    marketOrder ? null : timeInForceOf(request),
+                    book,
+                    markFresh);
         }
         requirePercentPrice(
                 pair.filters(), request.side(), request.price(), percentPriceMark(mark, markFresh, opening), book);
@@ -303,7 +310,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         BigDecimal opening = reducing ? BigDecimal.ZERO : opening(order.getSide(), remaining, size);
         // A stale mark is told first, as on placement.
         if (opening.signum() > 0) {
-            requireFreshMarks(userId, pair, order.getSide(), request.price(), markFresh);
+            requireFreshMarks(userId, pair, order.getSide(), request.price(), order.getTimeInForce(), book, markFresh);
         }
         requirePercentPrice(
                 filters, order.getSide(), request.price(), percentPriceMark(mark, markFresh, opening), book);
@@ -633,8 +640,16 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      * is taken; and while a pair of one of the Trader's cross positions is stale, no order opens risk on another pair.
      * Closing orders never wait for the mark.
      */
-    private void requireFreshMarks(UUID userId, FuturesPair pair, OrderSide side, BigDecimal price, boolean markFresh) {
-        if (!markFresh && futuresArrival.anyPriceReaches(pair.pairId(), pair.symbol(), side, price)) {
+    private void requireFreshMarks(
+            UUID userId,
+            FuturesPair pair,
+            OrderSide side,
+            BigDecimal price,
+            TimeInForce timeInForce,
+            Optional<SpotArrival.Book> book,
+            boolean markFresh) {
+        if (!markFresh
+                && futuresArrival.anyPriceReaches(pair.pairId(), pair.symbol(), side, price, timeInForce, book)) {
             throw FuturesMargins.staleMark(pair.symbol());
         }
         margins.requireFreshCrossMarks(userId, pair.pairId());
@@ -674,9 +689,9 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         return above ? comparison <= 0 : comparison >= 0;
     }
 
-    /** Whether a limit price reaches the best price of the other side. */
-    private static boolean crosses(OrderSide side, BigDecimal limit, BigDecimal best) {
-        return side == OrderSide.BUY ? limit.compareTo(best) >= 0 : limit.compareTo(best) <= 0;
+    /** The time in force of a LIMIT order, GTC when the request leaves it out. */
+    private static TimeInForce timeInForceOf(FuturesOrderRequest request) {
+        return request.timeInForce() == null ? TimeInForce.GTC : request.timeInForce();
     }
 
     /** {@code MAX_NUM_ORDERS}: the open orders of the account on the pair, this one included. */

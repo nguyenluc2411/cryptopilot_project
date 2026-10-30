@@ -2278,6 +2278,18 @@ class FuturesOrderApiTest {
         assertThat(openPositions(trader)).isZero();
     }
 
+    /** A post-only order never takes, so on a stale pair it is not refused as one that would. */
+    @Test
+    void TR22a_aPostOnlyOpeningOrder_onAStalePair_isNotRefusedAsTaking() throws Exception {
+        UUID trader = trader(true);
+        staleMark("100");
+        oldDepth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        place(trader, limit("BUY", "GTX", "100", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW"));
+    }
+
     /** 8.2.1 rule 1 at a trigger as on placement: an opening stop LIMIT that would not take is placed and waits. */
     @Test
     void TR20_onAStalePair_anOpeningStopLimitThatWaits_isPlaced() throws Exception {
