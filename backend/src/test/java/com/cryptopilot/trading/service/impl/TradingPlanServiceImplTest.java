@@ -159,7 +159,7 @@ class TradingPlanServiceImplTest {
                 settings,
                 styleProvider,
                 journal,
-                new PositionOpener(journal, new FeeRates(settings), market),
+                new PositionOpener(journal, new FeeRates(settings), market, events),
                 new PositionViews(journal, market, new FeeRates(settings), funding, settings));
         when(journal.openSimulatedTrade(any())).thenAnswer(call -> recorded(call.getArgument(0)));
         when(styleProvider.getIfAvailable()).thenReturn(styles);

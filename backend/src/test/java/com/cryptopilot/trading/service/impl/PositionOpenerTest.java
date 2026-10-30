@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -20,6 +21,7 @@ import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.entity.TradingPlan;
+import com.cryptopilot.trading.event.PlanFilled;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.Direction;
@@ -33,11 +35,12 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
 /**
  * The journal record a fill hands over: the plan's values, the entry fee at the rate of the fill's liquidity role,
  * with the T-044 rates (Futures maker 0.02 %, taker 0.05 %), and the liquidation price at the fill price (the TD 7.6
- * vector: 10x, MMR 0.004, cum 0).
+ * vector: 10x, MMR 0.004, cum 0), and the {@link PlanFilled} event it publishes for MSG22 (Q-81).
  */
 class PositionOpenerTest {
 
@@ -52,7 +55,8 @@ class PositionOpenerTest {
     private final TradeJournal journal = mock(TradeJournal.class);
     private final SystemSettingApi settings = mock(SystemSettingApi.class);
     private final MarketApi market = mock(MarketApi.class);
-    private final PositionOpener opener = new PositionOpener(journal, new FeeRates(settings), market);
+    private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    private final PositionOpener opener = new PositionOpener(journal, new FeeRates(settings), market, events);
 
     @BeforeEach
     void rates() {
@@ -169,7 +173,69 @@ class PositionOpenerTest {
         opener.open(plan);
 
         assertThat(opened().liquidationPrice()).isNull();
-        verifyNoInteractions(market);
+        verify(market, never()).leverageBrackets(any());
+    }
+
+    /**
+     * Q-81, MSG22: a fill publishes one {@link PlanFilled} with the position it opened, the stored fill price and role,
+     * the snapshot's quantity, the fill time and the pair's symbol on the plan's market.
+     */
+    @Test
+    void Q81_aFill_publishesPlanFilled_withTheStoredFillAndThePairsSymbol() {
+        opener.open(executed(LiquidityRole.TAKER, "100.123"));
+
+        verify(events)
+                .publishEvent(new PlanFilled(
+                        PLAN,
+                        JOURNAL,
+                        USER,
+                        MarketType.FUTURES,
+                        Direction.SHORT,
+                        "BTCUSDT",
+                        new BigDecimal("100.123"),
+                        new BigDecimal("2"),
+                        LiquidityRole.TAKER,
+                        FILLED_AT));
+    }
+
+    /** Q-81: a Spot fill names the Spot pair's symbol, read on Spot. */
+    @Test
+    void Q81_aSpotFill_namesTheSpotSymbol() {
+        TradingPlan plan = executed(LiquidityRole.MAKER, "100");
+        when(plan.getMarket()).thenReturn(MarketType.SPOT);
+        when(plan.getLeverage()).thenReturn(null);
+        when(market.tradablePair(PAIR, MarketType.SPOT))
+                .thenReturn(Optional.of(new TradablePair(
+                        PAIR,
+                        "ETHUSDT",
+                        MarketType.SPOT,
+                        new PairFilters(new BigDecimal("0.01"), new BigDecimal("0.0001"), new BigDecimal("5")))));
+
+        opener.open(plan);
+
+        assertThat(published().market()).isEqualTo(MarketType.SPOT);
+        assertThat(published().symbol()).isEqualTo("ETHUSDT");
+    }
+
+    /** Q-81: a pair that cannot be read still opens the position and publishes the fill, without a symbol. */
+    @Test
+    void Q81_aPairThatCannotBeRead_publishesTheFillWithoutASymbol() {
+        when(market.tradablePair(PAIR, MarketType.FUTURES)).thenReturn(Optional.empty());
+
+        opener.open(executed(LiquidityRole.MAKER, "100"));
+
+        assertThat(published().symbol()).isNull();
+        assertThat(published().positionId()).isEqualTo(JOURNAL);
+    }
+
+    /** Q-81: a journal that refuses the record (the fill rolls back) publishes nothing. */
+    @Test
+    void Q81_aJournalThatRefusesTheRecord_publishesNothing() {
+        doThrow(new IllegalStateException("already recorded")).when(journal).openSimulatedTrade(any());
+
+        assertThatThrownBy(() -> opener.open(executed(LiquidityRole.MAKER, "100")))
+                .isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(events);
     }
 
     /** BR-34: only an EXECUTED plan has a position to open. */
@@ -183,12 +249,19 @@ class PositionOpenerTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("ACTIVE");
         verify(journal, never()).openSimulatedTrade(any());
+        verifyNoInteractions(events);
     }
 
     private SimulatedTradeOpening opened() {
         ArgumentCaptor<SimulatedTradeOpening> opening = ArgumentCaptor.forClass(SimulatedTradeOpening.class);
         verify(journal).openSimulatedTrade(opening.capture());
         return opening.getValue();
+    }
+
+    private PlanFilled published() {
+        ArgumentCaptor<PlanFilled> filled = ArgumentCaptor.forClass(PlanFilled.class);
+        verify(events).publishEvent(filled.capture());
+        return filled.getValue();
     }
 
     private static OpenTrade recorded(SimulatedTradeOpening opening) {
