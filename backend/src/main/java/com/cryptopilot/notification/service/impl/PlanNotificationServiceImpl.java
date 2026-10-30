@@ -5,6 +5,7 @@ import com.cryptopilot.notification.model.NewNotification;
 import com.cryptopilot.notification.model.enums.NotificationReference;
 import com.cryptopilot.notification.model.enums.NotificationType;
 import com.cryptopilot.notification.service.PlanNotificationService;
+import com.cryptopilot.trading.event.PlanFilled;
 import com.cryptopilot.trading.event.PositionClosed;
 import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.event.TradingPlanInvalidated;
@@ -18,7 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * The texts of the notifications of trading plans and their positions. A plan withdrawn by BR-59 has no SRS message,
- * so its text is written in the style of MSG22 to MSG28: one short sentence naming what happened. A closed position is
+ * so its text is written in the style of MSG22 to MSG28: one short sentence naming what happened. A filled entry is
+ * MSG22, its source key the plan's, which fills at most once (Q-81). A closed position is
  * MSG23, a liquidated one MSG24, with {@code {pnl}} the net P/L of the journal row (Q-56). An expired plan is MSG53, an
  * invalidated one MSG54 with the reason. The source key is the plan's or the position's, so a redelivery writes
  * nothing.
@@ -47,6 +49,25 @@ public class PlanNotificationServiceImpl implements PlanNotificationService {
                 NotificationReference.PLAN,
                 event.planId(),
                 "PLAN_WITHDRAWN:" + event.planId()));
+    }
+
+    /**
+     * MSG22 "{pair} {direction} entry filled at {price}.", the stored fill price as a plain decimal without trailing
+     * zeros.
+     *
+     * <p>Rule: BR-33, BR-34; MSG22; Q-81.
+     */
+    @Override
+    @Transactional
+    public void filled(PlanFilled event) {
+        writer.write(new NewNotification(
+                event.userId(),
+                NotificationType.PLAN,
+                "Entry filled",
+                pair(event.symbol()) + " " + event.direction() + " entry filled at " + plain(event.fillPrice()) + ".",
+                NotificationReference.PLAN,
+                event.planId(),
+                "PLAN_FILLED:" + event.planId()));
     }
 
     /**

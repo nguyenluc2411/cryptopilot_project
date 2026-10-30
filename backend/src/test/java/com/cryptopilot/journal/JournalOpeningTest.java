@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.support.InAppNotifications;
+import com.cryptopilot.support.PlanNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
@@ -115,6 +117,7 @@ class JournalOpeningTest {
 
     @AfterEach
     void removeRows() {
+        PlanNotifications.removeOfPair(jdbc, pair);
         jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from crypto_pair where pair_id = ?").param(pair).update();
@@ -219,7 +222,7 @@ class JournalOpeningTest {
 
     /**
      * BR-34: the record and the fill commit together. With a record already in place the journal's insert fails, and
-     * the fill's compare-and-set rolls back with it: the plan is still ACTIVE.
+     * the fill's compare-and-set rolls back with it: the plan is still ACTIVE, and no MSG22 is written (Q-81).
      */
     @Test
     void BR34_aRecordThatCannotBeWritten_rollsTheFillBack() {
@@ -234,6 +237,13 @@ class JournalOpeningTest {
 
         assertThat(plan(id).getStatus()).isEqualTo(PlanStatus.ACTIVE);
         assertThat(plan(id).getExecutedAt()).isNull();
+        InAppNotifications.awaitDeliveries(jdbc);
+        assertThat(jdbc.sql("select count(*) from notification where source_key = ?")
+                        .param("PLAN_FILLED:" + id)
+                        .query(Long.class)
+                        .single())
+                .as("Q-81: a fill that rolled back tells nobody")
+                .isZero();
     }
 
     /** The engine's fill of the plan's resting LIMIT at {@code price}: MAKER, at the candle time. */

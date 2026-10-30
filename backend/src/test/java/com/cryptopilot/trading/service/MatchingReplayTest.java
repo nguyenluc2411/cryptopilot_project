@@ -22,6 +22,7 @@ import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.support.FixedClockConfig;
+import com.cryptopilot.support.PlanNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.entity.TradingPlan;
@@ -341,7 +342,7 @@ class MatchingReplayTest {
                 .update();
         jdbc.sql("delete from audit_log where user_id = ?").param(admin).update();
         jdbc.sql("delete from user_account where user_id = ?").param(admin).update();
-        deleteNotifications();
+        PlanNotifications.removeOfPair(jdbc, pair);
         jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
@@ -562,7 +563,7 @@ class MatchingReplayTest {
     private void reset() {
         feed.stop();
         worker.stop();
-        deleteNotifications();
+        PlanNotifications.removeOfPair(jdbc, pair);
         jdbc.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         jdbc.sql("delete from trading_plan where pair_id = ?").param(pair).update();
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
@@ -630,32 +631,6 @@ class MatchingReplayTest {
 
     private static BigDecimal stripped(BigDecimal value) {
         return value == null ? null : value.stripTrailingZeros();
-    }
-
-    /**
-     * Waits until every closed position and every invalidated plan of the pair has its notification (MSG23, MSG24,
-     * MSG54), written after the commit, and deletes them, so no row of this test is left for the tests that follow.
-     */
-    private void deleteNotifications() {
-        awaitUntil(
-                () -> jdbc.sql("""
-                                        select count(*) from trading_journal j
-                                         where j.pair_id = ? and j.trade_status = 'CLOSED'
-                                           and not exists (select 1 from notification n
-                                                            where n.source_key = 'POSITION_CLOSED:' || j.journal_id)""").param(pair).query(Long.class).single() == 0,
-                "the notifications of the closed positions");
-        awaitUntil(
-                () -> jdbc.sql("""
-                                        select count(*) from trading_plan p
-                                         where p.pair_id = ? and p.plan_status = 'INVALIDATED'
-                                           and not exists (select 1 from notification n
-                                                            where n.source_key = 'PLAN_INVALIDATED:' || p.plan_id)""").param(pair).query(Long.class).single() == 0,
-                "the notifications of the invalidated plans");
-        jdbc.sql("""
-                        delete from notification where source_key in
-                               (select 'POSITION_CLOSED:' || journal_id from trading_journal where pair_id = ?
-                                union all
-                                select 'PLAN_INVALIDATED:' || plan_id from trading_plan where pair_id = ?)""").params(pair, pair).update();
     }
 
     /** R1, R5: every closed minute reaches the engine once: one watermark advance per minute, none skipped. */
