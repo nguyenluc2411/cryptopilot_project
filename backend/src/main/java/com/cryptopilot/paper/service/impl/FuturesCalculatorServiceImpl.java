@@ -1,7 +1,5 @@
 package com.cryptopilot.paper.service.impl;
 
-import com.cryptopilot.billing.EntitlementApi;
-import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.util.Rounding;
@@ -50,7 +48,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class FuturesCalculatorServiceImpl implements FuturesCalculatorService {
 
     private final FuturesMargins margins;
-    private final EntitlementApi entitlements;
 
     @Override
     @Transactional(readOnly = true)
@@ -172,9 +169,8 @@ public class FuturesCalculatorServiceImpl implements FuturesCalculatorService {
         return new FuturesCalculatorResponse(null, null, null, null, null, null, null, null, null, openPrice, quantity);
     }
 
-    /** The Futures feature of the Trader's plan (Q-T10) and a pair traded on Futures with brackets. */
+    /** A pair traded on Futures with brackets; Futures is open to every plan, as Spot. */
     private FuturesPair pairOf(UUID userId, String symbol) {
-        entitlements.requireFeature(userId, Feature.FUTURES_ANALYSIS);
         return margins.pair(symbol);
     }
 

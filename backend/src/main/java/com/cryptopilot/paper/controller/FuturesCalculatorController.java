@@ -47,7 +47,6 @@ public class FuturesCalculatorController {
             responseCode = "400",
             description = "MSG01, MSG15: a field is missing or not allowed; PAPER_LEVERAGE (-4028): above the pair's")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the symbol is not traded on Futures")
     @PostMapping("/pnl")
     public FuturesCalculatorResponse pnl(
@@ -61,7 +60,6 @@ public class FuturesCalculatorController {
             responseCode = "400",
             description = "MSG01, MSG15: a field is missing or not allowed; PAPER_LEVERAGE (-4028): above the pair's")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the symbol is not traded on Futures")
     @PostMapping("/target")
     public FuturesCalculatorResponse target(
@@ -79,7 +77,6 @@ public class FuturesCalculatorController {
             description =
                     "MSG01: walletBalance missing for CROSSED; MSG15: a field not allowed; PAPER_LEVERAGE" + " (-4028)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the symbol is not traded on Futures")
     @ApiResponse(
             responseCode = "409",
@@ -96,7 +93,6 @@ public class FuturesCalculatorController {
             responseCode = "400",
             description = "MSG01, MSG15: a field is missing or not allowed; PAPER_LEVERAGE (-4028): above the pair's")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the symbol is not traded on Futures")
     @PostMapping("/maxOpen")
     public FuturesCalculatorResponse maxOpen(
@@ -108,7 +104,6 @@ public class FuturesCalculatorController {
     @ApiResponse(responseCode = "200", description = "openPrice and the total quantity")
     @ApiResponse(responseCode = "400", description = "MSG01, MSG15: no part, more than 20, or a field not allowed")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the symbol is not traded on Futures")
     @PostMapping("/openPrice")
     public FuturesCalculatorResponse openPrice(

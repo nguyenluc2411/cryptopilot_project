@@ -65,7 +65,6 @@ public class FuturesOrderController {
                     + " PAPER_NOTIONAL: a filter of the pair; PAPER_POSITION_SIDE (-4061): not BOTH in one-way mode;"
                     + " PAPER_INSUFFICIENT_MARGIN (-2019)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(
             responseCode = "409",
@@ -90,7 +89,6 @@ public class FuturesOrderController {
             responseCode = "400",
             description = "MSG01, MSG15: a field is missing or does not fit the type; PAPER_POSITION_SIDE (-4061)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(responseCode = "503", description = "MARKET_PRICE_UNAVAILABLE (MSG43): no mark price")
     @PostMapping("/order/warnings")
@@ -111,7 +109,6 @@ public class FuturesOrderController {
                     + " PAPER_PRICE_FILTER, PAPER_LOT_SIZE, PAPER_NOTIONAL, PAPER_PERCENT_PRICE: a filter of the pair;"
                     + " PAPER_INSUFFICIENT_MARGIN (-2019). The order is left as it was")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: no such order of the pair (the exchange's -2013)")
     @ApiResponse(
             responseCode = "409",
@@ -130,7 +127,6 @@ public class FuturesOrderController {
     @ApiResponse(responseCode = "200", description = "The order, CANCELED")
     @ApiResponse(responseCode = "400", description = "MSG01: neither orderId nor origClientOrderId")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: no such order of the pair (the exchange's -2013)")
     @ApiResponse(responseCode = "409", description = "PAPER_ORDER_NOT_OPEN (-2011): the order has ended")
     @DeleteMapping("/order")
@@ -145,7 +141,6 @@ public class FuturesOrderController {
     @Operation(summary = "Cancel every working order of a pair. Binance: DELETE /fapi/v1/allOpenOrders")
     @ApiResponse(responseCode = "200", description = "The orders cancelled; empty when there were none")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @DeleteMapping("/allOpenOrders")
     public List<FuturesOrderResponse> cancelAll(
@@ -158,7 +153,6 @@ public class FuturesOrderController {
     @ApiResponse(responseCode = "200", description = "The order")
     @ApiResponse(responseCode = "400", description = "MSG01: neither orderId nor origClientOrderId")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: no such order of the pair")
     @GetMapping("/order")
     public FuturesOrderResponse order(
@@ -172,7 +166,6 @@ public class FuturesOrderController {
     @Operation(summary = "The working orders, newest first. Binance: GET /fapi/v1/openOrders")
     @ApiResponse(responseCode = "200", description = "The orders")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @GetMapping("/openOrders")
     public List<FuturesOrderResponse> openOrders(
@@ -186,7 +179,6 @@ public class FuturesOrderController {
     @ApiResponse(responseCode = "200", description = "The orders")
     @ApiResponse(responseCode = "400", description = "MSG15: limit outside 1 … 1000, or startTime after endTime")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @GetMapping("/allOrders")
     public List<FuturesOrderResponse> allOrders(
@@ -202,7 +194,6 @@ public class FuturesOrderController {
     @ApiResponse(responseCode = "200", description = "The liquidation orders (clientOrderId autoclose-…)")
     @ApiResponse(responseCode = "400", description = "MSG15: limit outside 1 … 100, or startTime after endTime")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @GetMapping("/forceOrders")
     public List<FuturesOrderResponse> forceOrders(
@@ -220,7 +211,6 @@ public class FuturesOrderController {
             description = "The trades; a fill that reversed the position is two, one per position")
     @ApiResponse(responseCode = "400", description = "MSG15: limit outside 1 … 1000, or startTime after endTime")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @GetMapping("/userTrades")
     public List<FuturesTradeResponse> userTrades(

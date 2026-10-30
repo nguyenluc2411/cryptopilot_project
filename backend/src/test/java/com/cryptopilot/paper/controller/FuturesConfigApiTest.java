@@ -132,11 +132,13 @@ class FuturesConfigApiTest {
     // ------------------------------------------------------------------------------------------
 
     @Test
-    void QT10_aTraderWithoutTheFuturesFeature_isRefused() throws Exception {
+    void aTraderOnTheFreePlan_setsUpFutures_asOnSpot() throws Exception {
         UUID trader = trader(false);
 
-        as(trader, get(FUTURES + "/symbolConfig").param("symbol", symbol), null).andExpect(status().isForbidden());
-        as(trader, post(FUTURES + "/leverage"), leverage(10)).andExpect(status().isForbidden());
+        as(trader, get(FUTURES + "/symbolConfig").param("symbol", symbol), null).andExpect(status().isOk());
+        as(trader, post(FUTURES + "/leverage"), leverage(10))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.leverage").value(10));
     }
 
     @Test

@@ -53,7 +53,6 @@ public class FuturesAlgoController {
                     + " the exchange's -4137, with reduceOnly -1106; TRAILING_STOP_MARKET is not offered yet);"
                     + " PAPER_PRICE_FILTER, PAPER_LOT_SIZE, PAPER_MARKET_LOT_SIZE; PAPER_POSITION_SIDE (-4061)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(
             responseCode = "409",
@@ -73,7 +72,6 @@ public class FuturesAlgoController {
     @ApiResponse(responseCode = "200", description = "The order, CANCELED")
     @ApiResponse(responseCode = "400", description = "MSG01: neither algoId nor clientAlgoId")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: no such conditional order of the pair")
     @ApiResponse(responseCode = "409", description = "PAPER_ORDER_NOT_OPEN (-2011): it triggered or ended")
     @DeleteMapping("/algoOrder")
@@ -88,7 +86,6 @@ public class FuturesAlgoController {
     @Operation(summary = "Cancel every waiting conditional order of a pair. Binance: DELETE /fapi/v1/algoOpenOrders")
     @ApiResponse(responseCode = "200", description = "The orders cancelled; empty when there were none")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @DeleteMapping("/algoOpenOrders")
     public List<FuturesAlgoOrderResponse> cancelAll(
@@ -101,7 +98,6 @@ public class FuturesAlgoController {
     @ApiResponse(responseCode = "200", description = "The order, with the order it placed once triggered")
     @ApiResponse(responseCode = "400", description = "MSG01: neither algoId nor clientAlgoId")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: no such conditional order of the pair")
     @GetMapping("/algoOrder")
     public FuturesAlgoOrderResponse order(
@@ -115,7 +111,6 @@ public class FuturesAlgoController {
     @Operation(summary = "The waiting conditional orders, newest first. Binance: GET /fapi/v1/openAlgoOrders")
     @ApiResponse(responseCode = "200", description = "The orders")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @GetMapping("/openAlgoOrders")
     public List<FuturesAlgoOrderResponse> openOrders(
@@ -129,7 +124,6 @@ public class FuturesAlgoController {
     @ApiResponse(responseCode = "200", description = "The orders")
     @ApiResponse(responseCode = "400", description = "MSG15: limit outside 1 … 1000, or startTime after endTime")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @GetMapping("/allAlgoOrders")
     public List<FuturesAlgoOrderResponse> allOrders(

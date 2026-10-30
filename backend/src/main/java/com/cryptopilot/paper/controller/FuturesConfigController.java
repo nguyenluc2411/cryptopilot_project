@@ -53,7 +53,6 @@ public class FuturesConfigController {
     @Operation(summary = "The account settings. Binance: GET /fapi/v1/accountConfig")
     @ApiResponse(responseCode = "200", description = "The settings")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the paper account is not opened yet")
     @GetMapping("/accountConfig")
     public FuturesAccountConfigResponse accountConfig(@AuthenticationPrincipal Jwt caller) {
@@ -65,7 +64,6 @@ public class FuturesConfigController {
             responseCode = "200",
             description = "makerCommissionRate and takerCommissionRate, 0 for now (plan 2.3)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the paper account is not opened or the symbol is unknown")
     @GetMapping("/commissionRate")
     public FuturesCommissionRateResponse commissionRate(
@@ -77,7 +75,6 @@ public class FuturesConfigController {
     @Operation(summary = "One-way or hedge mode. Binance: GET /fapi/v1/positionSide/dual")
     @ApiResponse(responseCode = "200", description = "The position mode")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the paper account is not opened yet")
     @GetMapping("/positionSide/dual")
     public FuturesPositionModeResponse positionMode(@AuthenticationPrincipal Jwt caller) {
@@ -88,7 +85,6 @@ public class FuturesConfigController {
     @ApiResponse(responseCode = "200", description = "The position mode after the change")
     @ApiResponse(responseCode = "400", description = "MSG01: dualSidePosition is missing")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the paper account is not opened yet")
     @ApiResponse(
             responseCode = "409",
@@ -105,7 +101,6 @@ public class FuturesConfigController {
                     + " Binance: GET /fapi/v1/symbolConfig")
     @ApiResponse(responseCode = "200", description = "The settings; a pair never configured shows 20x CROSSED")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(responseCode = "409", description = "PAIR_NOT_TRADING (MSG43): the pair has no leverage brackets")
     @GetMapping("/symbolConfig")
@@ -123,7 +118,6 @@ public class FuturesConfigController {
             responseCode = "400",
             description = "MSG01, MSG15: a field is missing; PAPER_LEVERAGE (-4028): outside 1 … the pair's highest")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(
             responseCode = "409",
@@ -140,7 +134,6 @@ public class FuturesConfigController {
     @ApiResponse(responseCode = "200", description = "The pair's settings after the change")
     @ApiResponse(responseCode = "400", description = "MSG01, MSG15: a field is missing or not ISOLATED / CROSSED")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(
             responseCode = "409",
@@ -155,7 +148,6 @@ public class FuturesConfigController {
     @Operation(summary = "The leverage brackets of a pair. Binance: GET /fapi/v1/leverageBracket")
     @ApiResponse(responseCode = "200", description = "The brackets, smallest notionals first")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(responseCode = "409", description = "PAIR_NOT_TRADING (MSG43): the pair has no leverage brackets")
     @GetMapping("/leverageBracket")

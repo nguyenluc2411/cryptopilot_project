@@ -1,7 +1,5 @@
 package com.cryptopilot.paper.service.impl;
 
-import com.cryptopilot.billing.EntitlementApi;
-import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.FieldValidationException;
@@ -97,7 +95,6 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     private final FuturesOrderService orders;
     private final UserLock lock;
     private final MarketApi market;
-    private final EntitlementApi entitlements;
     private final PaperUserFeed feed;
     private final ApplicationEventPublisher events;
 
@@ -333,9 +330,8 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
         }
     }
 
-    /** The Futures feature of the Trader's plan (Q-T10) and an opened paper account (MSG41). */
+    /** An opened paper account (MSG41); Futures is open to every plan, as Spot. */
     private PaperAccount requireFutures(UUID userId) {
-        entitlements.requireFeature(userId, Feature.FUTURES_ANALYSIS);
         return accounts.findByUserId(userId).orElseThrow(() -> new ResourceNotFoundException("PaperAccount", userId));
     }
 

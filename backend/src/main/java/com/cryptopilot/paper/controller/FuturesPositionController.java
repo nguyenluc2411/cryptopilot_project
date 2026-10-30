@@ -53,7 +53,6 @@ public class FuturesPositionController {
                     + " PAPER_POSITION_SIDE (-4061); PAPER_INSUFFICIENT_MARGIN (-2019): more than the cross wallet's"
                     + " free cash")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(
             responseCode = "409",
@@ -73,7 +72,6 @@ public class FuturesPositionController {
             responseCode = "400",
             description = "MSG15: type not 1 or 2, limit outside 1 … 1000, or startTime" + " after endTime")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @GetMapping("/positionMargin/history")
     public List<FuturesMarginHistoryResponse> positionMarginHistory(
@@ -94,7 +92,6 @@ public class FuturesPositionController {
             description = "MSG01, MSG15: a field is missing or does not fit the type, or the share is less than one"
                     + " step; the refusals of POST /futures/order")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(
             responseCode = "409",

@@ -46,7 +46,6 @@ public class FuturesAccountController {
     @Operation(summary = "The open positions at the mark. Binance: GET /fapi/v3/positionRisk")
     @ApiResponse(responseCode = "200", description = "The open positions; empty when there are none")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @ApiResponse(
             responseCode = "503",
@@ -62,7 +61,6 @@ public class FuturesAccountController {
     @Operation(summary = "The account's margin and balances. Binance: GET /fapi/v3/account")
     @ApiResponse(responseCode = "200", description = "The account")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened yet")
     @ApiResponse(
             responseCode = "503",
@@ -75,7 +73,6 @@ public class FuturesAccountController {
     @Operation(summary = "The balance in short. Binance: GET /fapi/v3/balance")
     @ApiResponse(responseCode = "200", description = "The one asset, USDT")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened yet")
     @ApiResponse(
             responseCode = "503",
@@ -91,7 +88,6 @@ public class FuturesAccountController {
             responseCode = "400",
             description = "MSG15: an unknown incomeType, limit outside 1 … 1000, or startTime after endTime")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @GetMapping("/income")
     public List<FuturesIncomeResponse> income(
@@ -112,7 +108,6 @@ public class FuturesAccountController {
     @ApiResponse(responseCode = "200", description = "The closed positions; a one-way reversal is two")
     @ApiResponse(responseCode = "400", description = "MSG15: limit outside 1 … 1000, or startTime after endTime")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
     @GetMapping("/positionHistory")
     public List<FuturesPositionHistoryResponse> positionHistory(

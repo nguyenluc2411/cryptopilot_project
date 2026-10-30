@@ -1,8 +1,6 @@
 package com.cryptopilot.paper.service.impl;
 
 import com.cryptopilot.admin.SystemSettingApi;
-import com.cryptopilot.billing.EntitlementApi;
-import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
@@ -66,14 +64,12 @@ public class FuturesOrderWarningServiceImpl implements FuturesOrderWarningServic
     private final FuturesPositionRepository positions;
     private final FuturesMargins margins;
     private final MarketApi market;
-    private final EntitlementApi entitlements;
     private final RiskProfileApi riskProfiles;
     private final SystemSettingApi settings;
 
     @Override
     @Transactional(readOnly = true)
     public FuturesOrderWarningsResponse warnings(UUID userId, FuturesOrderRequest request) {
-        entitlements.requireFeature(userId, Feature.FUTURES_ANALYSIS);
         accounts.findByUserId(userId).orElseThrow(() -> new ResourceNotFoundException("PaperAccount", userId));
         FuturesOrderServiceImpl.requireShape(request);
         PositionSide positionSide = FuturesMargins.positionSide(

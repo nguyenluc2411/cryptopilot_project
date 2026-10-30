@@ -231,12 +231,12 @@ class FuturesOrderApiTest {
     // ------------------------------------------------------------------------------------------
 
     @Test
-    void QT10_aTraderWithoutTheFuturesFeature_isRefused() throws Exception {
+    void aTraderOnTheFreePlan_tradesFutures_asOnSpot() throws Exception {
         UUID trader = trader(false);
         depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
 
-        place(trader, market("BUY", "1")).andExpect(status().isForbidden());
-        assertThat(orderCount(trader)).isZero();
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        assertThat(orderCount(trader)).isOne();
     }
 
     @Test
@@ -2400,7 +2400,7 @@ class FuturesOrderApiTest {
     }
 
     @Test
-    void TR25_calculator_refusesALeverageAboveThePairs_andATraderWithoutFutures() throws Exception {
+    void TR25_calculator_refusesALeverageAboveThePairs_onEveryPlan() throws Exception {
         String body = """
                 {"symbol": "%s", "side": "LONG", "leverage": 126, "entryPrice": "100", "roe": "10"}""".formatted(symbol);
 
@@ -2408,7 +2408,9 @@ class FuturesOrderApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("PAPER_LEVERAGE"))
                 .andExpect(jsonPath("$.binanceCode").value(-4028));
-        calculate(trader(false), "target", body).andExpect(status().isForbidden());
+        calculate(trader(false), "target", body)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PAPER_LEVERAGE"));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -2526,8 +2528,8 @@ class FuturesOrderApiTest {
     }
 
     @Test
-    void TR26_theFormsWarnings_needTheFuturesFeature_andAWellShapedOrder() throws Exception {
-        warnings(trader(false), market("BUY", "1")).andExpect(status().isForbidden());
+    void TR26_theFormsWarnings_needAWellShapedOrder_onEveryPlan() throws Exception {
+        warnings(trader(false), market("BUY", "1")).andExpect(status().isOk());
         warnings(trader(true), """
                         {"symbol": "%s", "side": "BUY", "type": "LIMIT", "quantity": "1"}""".formatted(symbol))
                 .andExpect(status().isBadRequest())

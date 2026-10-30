@@ -1,7 +1,5 @@
 package com.cryptopilot.paper.service.impl;
 
-import com.cryptopilot.billing.EntitlementApi;
-import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.util.Rounding;
@@ -106,7 +104,6 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
     private final PaperLedgerEntryRepository ledger;
     private final FuturesMargins margins;
     private final MarketApi market;
-    private final EntitlementApi entitlements;
     private final Clock clock;
 
     @Override
@@ -511,9 +508,8 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
         return snapshot.positions().stream().map(figure).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
-    /** The Futures feature of the Trader's plan (Q-T10) and an opened paper account (MSG41). */
+    /** An opened paper account (MSG41); Futures is open to every plan, as Spot. */
     private void requireFutures(UUID userId) {
-        entitlements.requireFeature(userId, Feature.FUTURES_ANALYSIS);
         accounts.findByUserId(userId).orElseThrow(() -> new ResourceNotFoundException("PaperAccount", userId));
     }
 
