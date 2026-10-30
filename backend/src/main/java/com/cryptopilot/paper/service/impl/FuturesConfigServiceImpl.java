@@ -14,6 +14,7 @@ import com.cryptopilot.paper.dto.request.FuturesLeverageRequest;
 import com.cryptopilot.paper.dto.request.FuturesMarginTypeRequest;
 import com.cryptopilot.paper.dto.request.FuturesPositionModeRequest;
 import com.cryptopilot.paper.dto.response.FuturesAccountConfigResponse;
+import com.cryptopilot.paper.dto.response.FuturesCommissionRateResponse;
 import com.cryptopilot.paper.dto.response.FuturesConfigUpdateResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageBracketResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageResponse;
@@ -25,6 +26,7 @@ import com.cryptopilot.paper.entity.FuturesSymbolConfig;
 import com.cryptopilot.paper.exception.FuturesRejection;
 import com.cryptopilot.paper.model.FuturesCrossState;
 import com.cryptopilot.paper.model.PaperAccount;
+import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.PositionStatus;
@@ -32,6 +34,7 @@ import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.FuturesSymbolConfigRepository;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
+import com.cryptopilot.paper.service.FuturesCommissionPolicy;
 import com.cryptopilot.paper.service.FuturesConfigService;
 import com.cryptopilot.paper.service.impl.FuturesMargins.FuturesPair;
 import java.math.BigDecimal;
@@ -76,6 +79,18 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     private final EntitlementApi entitlements;
     private final PaperUserFeed feed;
     private final Clock clock;
+    private final FuturesCommissionPolicy commission;
+
+    @Override
+    @Transactional(readOnly = true)
+    public FuturesCommissionRateResponse commissionRate(UUID userId, String symbol) {
+        requireFutures(userId);
+        FuturesPair pair = margins.pair(symbol);
+        return new FuturesCommissionRateResponse(
+                pair.symbol(),
+                commission.rate(userId, pair.pairId(), Liquidity.MAKER),
+                commission.rate(userId, pair.pairId(), Liquidity.TAKER));
+    }
 
     @Override
     @Transactional

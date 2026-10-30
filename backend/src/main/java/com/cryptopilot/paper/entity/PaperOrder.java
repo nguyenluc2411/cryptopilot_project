@@ -96,6 +96,10 @@ public class PaperOrder extends BaseEntity {
     private TimeInForce timeInForce;
 
     /** The limit price; a working Futures LIMIT order's may be amended (TR-25). */
+    /** When a GTD order expires (TR-44); {@code null} for every other time in force. */
+    @Column(name = "good_till_date", updatable = false)
+    private Instant goodTillDate;
+
     @Column(name = "limit_price", precision = 28, scale = 12)
     private BigDecimal limitPrice;
 
@@ -535,6 +539,24 @@ public class PaperOrder extends BaseEntity {
             throw new IllegalStateException("order " + getId() + " is not a triggered conditional order");
         }
         end(status, reason, at);
+    }
+
+    /**
+     * Sets when a GTD LIMIT order expires (TR-44). Called before it is first stored.
+     *
+     * @param goodTillDate the instant it expires at
+     */
+    public PaperOrder goodTill(Instant goodTillDate) {
+        if (timeInForce != TimeInForce.GTD || this.goodTillDate != null || executedQuantity.signum() != 0) {
+            throw new IllegalStateException("order " + getId() + " is " + timeInForce + ", not a new GTD order");
+        }
+        this.goodTillDate = Objects.requireNonNull(goodTillDate, "goodTillDate");
+        return this;
+    }
+
+    /** Whether a working GTD order is due to expire at {@code at} (TR-44). */
+    public boolean expiredBy(Instant at) {
+        return goodTillDate != null && isOpen() && !at.isBefore(goodTillDate);
     }
 
     private PaperOrder futures(PositionSide positionSide, boolean reduceOnly) {

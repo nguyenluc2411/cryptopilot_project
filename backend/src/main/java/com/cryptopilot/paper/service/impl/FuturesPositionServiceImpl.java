@@ -309,6 +309,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
                 null,
                 null,
                 null,
+                null,
                 null);
     }
 

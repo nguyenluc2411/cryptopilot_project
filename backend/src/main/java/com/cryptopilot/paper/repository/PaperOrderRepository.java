@@ -37,6 +37,11 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     @Transactional(readOnly = true)
     Optional<PaperOrder> findByUserIdAndClientOrderId(UUID userId, String clientOrderId);
 
+    /** The working GTD orders whose date has come, earliest first (TR-44). */
+    @Transactional(readOnly = true)
+    List<PaperOrder> findByGoodTillDateLessThanEqualAndOrderStatusInOrderByGoodTillDateAsc(
+            Instant at, Collection<OrderStatus> statuses);
+
     /** The account's orders on one market in these statuses, newest first. */
     @Transactional(readOnly = true)
     List<PaperOrder> findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(

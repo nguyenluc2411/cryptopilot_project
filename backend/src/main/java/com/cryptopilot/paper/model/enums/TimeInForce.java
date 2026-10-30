@@ -17,5 +17,13 @@ public enum TimeInForce {
     FOK,
 
     /** Post only (Futures): refused when it would execute on arrival. */
-    GTX
+    GTX,
+
+    /** Good till date (Futures): waits as GTC until its {@code goodTillDate}, then expires (TR-44). */
+    GTD;
+
+    /** Whether only a Futures order takes it: Spot has neither post only as a time in force nor GTD. */
+    public boolean futuresOnly() {
+        return this == GTX || this == GTD;
+    }
 }

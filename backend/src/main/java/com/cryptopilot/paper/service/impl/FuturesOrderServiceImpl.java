@@ -42,6 +42,7 @@ import com.cryptopilot.paper.service.FuturesOrderService;
 import com.cryptopilot.paper.service.impl.FuturesMargins.FuturesPair;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -100,6 +101,15 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
 
     private static final int DEFAULT_LIMIT = 500;
 
+    /** Why a GTD order expired: its date came (TR-44). */
+    static final String GOOD_TILL_DATE = "GOOD_TILL_DATE";
+
+    /** How far ahead a GTD order's date must be, as the exchange's 600 seconds. */
+    private static final Duration GOOD_TILL_MIN_AHEAD = Duration.ofSeconds(600);
+
+    /** The exchange's latest goodTillDate, 9999-12-31T23:59:59Z. */
+    private static final Instant GOOD_TILL_LATEST = Instant.ofEpochMilli(253402300799000L);
+
     private static final int MAX_LIMIT = 1000;
 
     private static final Set<OrderType> CONDITIONAL = EnumSet.of(
@@ -135,6 +145,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             throw new FuturesRejection(ErrorCode.PAPER_USER_IN_LIQUIDATION, -2023, "User in liquidation mode now.");
         }
         requireShape(request);
+        requireGoodTillDate(request.goodTillDate());
         PositionSide positionSide =
                 FuturesMargins.positionSide(accountConfig, request.positionSide(), request.reduceOnly() != null);
         if (request.newClientOrderId() != null) {
@@ -326,6 +337,38 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
 
     @Override
     @Transactional(readOnly = true)
+    public List<UUID> dueGoodTill(Instant at) {
+        return orders
+                .findByGoodTillDateLessThanEqualAndOrderStatusInOrderByGoodTillDateAsc(at, OrderStatus.OPEN)
+                .stream()
+                .map(PaperOrder::getId)
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public boolean expireGoodTill(UUID orderId, Instant at) {
+        Optional<PaperOrder> due = orders.findById(orderId);
+        if (due.isEmpty()) {
+            return false;
+        }
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, due.get().getUserId());
+        // Read again under the lock: a fill or a cancel committed meanwhile is seen.
+        PaperOrder order = orders.findById(orderId).orElseThrow();
+        if (!order.expiredBy(at)) {
+            return false;
+        }
+        PaperAccount account = accounts.findByUserId(order.getUserId())
+                .orElseThrow(() -> new IllegalStateException("account " + order.getUserId() + " is not stored"));
+        order.expire(GOOD_TILL_DATE, at);
+        feed.futuresOrder(account, order);
+        events.publishEvent(new PaperOrderCanceled(order.getId()));
+        tpSl.settle(account, order, at);
+        return true;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public FuturesOrderResponse order(UUID userId, String symbol, UUID orderId, String origClientOrderId) {
         requireFutures(userId);
         FuturesPair pair = margins.pair(symbol);
@@ -476,20 +519,41 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         }
         PaperOrder order = stored(
                 request,
-                PaperOrder.futuresLimit(
-                        account.userId(),
-                        pair.pairId(),
-                        key,
-                        request.side(),
-                        positionSide,
-                        timeInForce,
-                        request.price(),
-                        request.quantity(),
-                        request.reducing()));
+                goodTill(
+                        PaperOrder.futuresLimit(
+                                account.userId(),
+                                pair.pairId(),
+                                key,
+                                request.side(),
+                                positionSide,
+                                timeInForce,
+                                request.price(),
+                                request.quantity(),
+                                request.reducing()),
+                        request.goodTillDate()));
         Instant now = clock.instant();
         futuresArrival.limit(account, order, book, now);
         tpSl.settle(account, order, now);
         return order;
+    }
+
+    /** A GTD order with its date; any other unchanged. */
+    private static PaperOrder goodTill(PaperOrder order, Instant goodTillDate) {
+        return goodTillDate == null ? order : order.goodTill(goodTillDate);
+    }
+
+    /**
+     * A GTD order's date is more than 600 seconds ahead and before the year 10000, as the exchange takes it
+     * ({@code -1130}).
+     */
+    private void requireGoodTillDate(Instant goodTillDate) {
+        if (goodTillDate != null
+                && (!goodTillDate.isAfter(clock.instant().plus(GOOD_TILL_MIN_AHEAD))
+                        || goodTillDate.isAfter(GOOD_TILL_LATEST))) {
+            throw new FieldValidationException(
+                    "goodTillDate must be more than 600 seconds ahead and before the year 10000",
+                    Map.of("goodTillDate", "MSG15"));
+        }
     }
 
     /** Stores a new order, grouped first with the take profit and stop loss it comes with, if any (plan 5.6). */
@@ -726,6 +790,13 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         }
         if (request.priceMatch() != null && !request.priceMatch().equals("NONE")) {
             errors.put("priceMatch", "MSG15");
+        }
+        if (request.timeInForce() == TimeInForce.GTD && request.goodTillDate() == null) {
+            // The exchange's -1102.
+            errors.put("goodTillDate", "MSG01");
+        }
+        if (request.timeInForce() != TimeInForce.GTD && request.goodTillDate() != null) {
+            errors.put("goodTillDate", "MSG15");
         }
         if (request.withTpSl() && request.reducing()) {
             // A take profit or stop loss comes with an order that opens a position.

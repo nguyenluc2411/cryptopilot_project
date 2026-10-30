@@ -37,6 +37,17 @@ public interface FuturesOrderService {
      */
     FuturesOrderResponse amend(UUID userId, FuturesAmendOrderRequest request);
 
+    /** The working GTD orders whose date has come by {@code at}, earliest first (TR-44). */
+    List<UUID> dueGoodTill(Instant at);
+
+    /**
+     * Expires a working GTD order whose date has come by {@code at}, as the exchange does (TR-44): EXPIRED, with the
+     * reason {@code GOOD_TILL_DATE}. An order filled or ended meanwhile is left alone.
+     *
+     * @return whether it was expired
+     */
+    boolean expireGoodTill(UUID orderId, Instant at);
+
     /** Cancels every working order of the pair. */
     List<FuturesOrderResponse> cancelAll(UUID userId, String symbol);
 

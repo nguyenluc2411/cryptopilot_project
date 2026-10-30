@@ -525,7 +525,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 if (request.quantity() == null) {
                     errors.put("quantity", "MSG01");
                 }
-                if (request.timeInForce() == TimeInForce.GTX) {
+                if (request.timeInForce() != null && request.timeInForce().futuresOnly()) {
                     errors.put("timeInForce", "MSG15");
                 }
                 if (request.quoteOrderQty() != null) {
@@ -550,8 +550,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 if (request.price() == null) {
                     errors.put("price", "MSG01");
                 }
-                if (request.timeInForce() == TimeInForce.GTX) {
-                    // GTX is the post-only of Futures; on Spot a post-only order is a LIMIT_MAKER.
+                if (request.timeInForce() != null && request.timeInForce().futuresOnly()) {
+                    // GTX is the post-only of Futures, on Spot a LIMIT_MAKER; GTD is Futures only.
                     errors.put("timeInForce", "MSG15");
                 }
                 if (request.quantity() == null) {

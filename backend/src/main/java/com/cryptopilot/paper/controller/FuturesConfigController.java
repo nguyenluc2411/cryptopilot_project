@@ -5,6 +5,7 @@ import com.cryptopilot.paper.dto.request.FuturesLeverageRequest;
 import com.cryptopilot.paper.dto.request.FuturesMarginTypeRequest;
 import com.cryptopilot.paper.dto.request.FuturesPositionModeRequest;
 import com.cryptopilot.paper.dto.response.FuturesAccountConfigResponse;
+import com.cryptopilot.paper.dto.response.FuturesCommissionRateResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageBracketResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageResponse;
 import com.cryptopilot.paper.dto.response.FuturesPositionModeResponse;
@@ -57,6 +58,20 @@ public class FuturesConfigController {
     @GetMapping("/accountConfig")
     public FuturesAccountConfigResponse accountConfig(@AuthenticationPrincipal Jwt caller) {
         return futures.accountConfig(callerOf(caller));
+    }
+
+    @Operation(summary = "The commission of a pair, zero until configured. Binance: GET /fapi/v1/commissionRate")
+    @ApiResponse(
+            responseCode = "200",
+            description = "makerCommissionRate and takerCommissionRate, 0 for now (plan 2.3)")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
+    @ApiResponse(responseCode = "404", description = "MSG41: the paper account is not opened or the symbol is unknown")
+    @GetMapping("/commissionRate")
+    public FuturesCommissionRateResponse commissionRate(
+            @AuthenticationPrincipal Jwt caller,
+            @Parameter(description = "The pair, e.g. BTCUSDT") @RequestParam String symbol) {
+        return futures.commissionRate(callerOf(caller), symbol);
     }
 
     @Operation(summary = "One-way or hedge mode. Binance: GET /fapi/v1/positionSide/dual")

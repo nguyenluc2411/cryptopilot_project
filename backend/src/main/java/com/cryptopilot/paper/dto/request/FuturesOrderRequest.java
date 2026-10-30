@@ -11,13 +11,14 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
+import java.time.Instant;
 
 /**
  * A paper Futures order, with the exchange's parameter names. Binance: {@code POST /fapi/v1/order}.
  *
  * <ul>
- *   <li>LIMIT: {@code price} and {@code quantity}; {@code timeInForce} GTC when absent, or IOC, FOK or GTX (post-only,
- *       refused when it would execute on arrival).
+ *   <li>LIMIT: {@code price} and {@code quantity}; {@code timeInForce} GTC when absent, or IOC, FOK, GTX (post-only,
+ *       refused when it would execute on arrival) or GTD (waits until {@code goodTillDate}, then expires).
  *   <li>MARKET: {@code quantity}; no {@code price} or {@code timeInForce}.
  *   <li>The conditional types (STOP, STOP_MARKET, TAKE_PROFIT, TAKE_PROFIT_MARKET, TRAILING_STOP_MARKET) are algo
  *       orders on the exchange and are refused here ({@code -4120}).
@@ -44,6 +45,8 @@ import java.math.BigDecimal;
  * @param stopLossPrice likewise, the trigger of a stop loss
  * @param tpSlWorkingType the price the take profit and stop loss watch: CONTRACT_PRICE (the last price, when absent)
  *     or MARK_PRICE
+ * @param goodTillDate when a GTD order expires, ISO-8601: more than 600 seconds ahead and before the year 10000, as the
+ *     exchange's; GTD only
  */
 public record FuturesOrderRequest(
         @NotBlank(message = "MSG01") @Size(max = 32, message = "MSG15")
@@ -87,7 +90,9 @@ public record FuturesOrderRequest(
         BigDecimal stopLossPrice,
 
         @Pattern(regexp = "CONTRACT_PRICE|MARK_PRICE", message = "MSG15")
-        String tpSlWorkingType) {
+        String tpSlWorkingType,
+
+        Instant goodTillDate) {
 
     /** Whether a take profit or a stop loss comes with the order. */
     public boolean withTpSl() {

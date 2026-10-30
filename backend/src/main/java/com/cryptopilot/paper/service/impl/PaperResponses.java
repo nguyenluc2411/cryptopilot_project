@@ -101,7 +101,7 @@ final class PaperResponses {
                 false,
                 "NONE",
                 "NONE",
-                0,
+                order.getGoodTillDate(),
                 order.getCreatedAt(),
                 order.getClosedAt() != null ? order.getClosedAt() : order.getUpdatedAt());
     }

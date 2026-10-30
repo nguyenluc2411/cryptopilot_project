@@ -40,6 +40,7 @@ import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
+import com.cryptopilot.paper.service.FuturesOrderService;
 import com.cryptopilot.paper.service.FuturesPositionWarningService;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -49,6 +50,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -88,11 +90,12 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes;
  * what each committed change pushes on the Trader's Futures queues; what a stale mark price refuses; and the
  * conditional orders, placed, triggered and ended; the liquidation of isolated positions; funding; the amendment of a
- * waiting order, the calculator and the order form's risk warnings; the warnings of held positions.
+ * waiting order, the calculator and the order form's risk warnings; the warnings of held positions; GTD orders and
+ * the commission.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-26, TR-27, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-26, TR-27, TR-41, TR-44; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -136,6 +139,9 @@ class FuturesOrderApiTest {
 
     @Autowired
     private FuturesPositionWarningService positionWarnings;
+
+    @Autowired
+    private FuturesOrderService futuresOrders;
 
     @Autowired
     private ApplicationEvents closedEvents;
@@ -2522,6 +2528,85 @@ class FuturesOrderApiTest {
                         {"symbol": "%s", "side": "BUY", "type": "LIMIT", "quantity": "1"}""".formatted(symbol))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.price").value("MSG01"));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // GTD orders and the commission (TR-44)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Plan 5.1: a GTD order carries a date more than 600 seconds ahead and before the year 10000; no other time in
+     * force takes one, nor does a conditional order. It waits as GTC and shows its date.
+     */
+    @Test
+    void TR44_aGtdOrder_needsADateFarEnoughAhead_andWaitsWithIt() throws Exception {
+        UUID trader = trader(true);
+        Instant date = Instant.now().plus(Duration.ofHours(2)).truncatedTo(ChronoUnit.SECONDS);
+
+        place(trader, gtd("98", null))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.goodTillDate").value("MSG01"));
+        place(trader, gtd("98", Instant.now().plusSeconds(300)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.goodTillDate").value("MSG15"));
+        place(trader, gtd("98", Instant.parse("+10000-01-01T00:00:00Z")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.goodTillDate").value("MSG15"));
+        place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "LIMIT", "timeInForce": "GTC", "price": "98",
+                         "quantity": "1", "goodTillDate": "%s"}""".formatted(symbol, date))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.goodTillDate").value("MSG15"));
+        algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "type": "STOP", "price": "105",
+                         "triggerPrice": "105", "quantity": "1", "timeInForce": "GTD"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.timeInForce").value("MSG15"));
+
+        place(trader, gtd("98", date))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW"))
+                .andExpect(jsonPath("$.timeInForce").value("GTD"))
+                .andExpect(jsonPath("$.goodTillDate").value(date.toString()));
+    }
+
+    /** Its date come, a GTD order expires; one that ended meanwhile is left alone. */
+    @Test
+    void TR44_aGtdOrderWhoseDateCame_expires() throws Exception {
+        UUID trader = trader(true);
+        String id = id(place(trader, gtd("98", Instant.now().plus(Duration.ofHours(2))))
+                .andExpect(status().isOk()));
+        sql.sql("update trade_order set good_till_date = ? where order_id = ?")
+                .params(Timestamp.from(Instant.now().minusSeconds(1)), UUID.fromString(id))
+                .update();
+        Instant now = Instant.now();
+
+        assertThat(futuresOrders.dueGoodTill(now)).contains(UUID.fromString(id));
+        assertThat(futuresOrders.expireGoodTill(UUID.fromString(id), now)).isTrue();
+        assertThat(futuresOrders.expireGoodTill(UUID.fromString(id), now)).isFalse();
+        assertThat(futuresOrders.expireGoodTill(UUID.randomUUID(), now)).isFalse();
+
+        as(trader, get(FUTURES + "/order").param("symbol", symbol).param("orderId", id), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("GOOD_TILL_DATE"));
+        assertThat(futuresOrders.dueGoodTill(now)).doesNotContain(UUID.fromString(id));
+    }
+
+    @Test
+    void TR44_theCommissionRate_isZero_untilConfigured() throws Exception {
+        UUID trader = trader(true);
+
+        as(trader, get(FUTURES + "/commissionRate").param("symbol", symbol), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.symbol").value(symbol))
+                .andExpect(jsonPath("$.makerCommissionRate").value(numeric("0")))
+                .andExpect(jsonPath("$.takerCommissionRate").value(numeric("0")));
+    }
+
+    private String gtd(String price, Instant date) {
+        return """
+                {"symbol": "%s", "side": "BUY", "type": "LIMIT", "timeInForce": "GTD", "price": "%s",
+                 "quantity": "1"%s}""".formatted(symbol, price, date == null ? "" : ", \"goodTillDate\": \"" + date + "\"");
     }
 
     // ------------------------------------------------------------------------------------------

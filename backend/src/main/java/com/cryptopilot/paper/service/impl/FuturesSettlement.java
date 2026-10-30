@@ -33,6 +33,7 @@ import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.repository.FuturesMarginAdjustmentRepository;
 import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperFillRepository;
+import com.cryptopilot.paper.service.FuturesCommissionPolicy;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -67,7 +68,8 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>The cross wallet left below zero with no cross position open is made good by an insurance cover (4.3 rule 5).
  * </ol>
  *
- * <p>Fees are zero for now (plan 2.3): a fill records a commission of zero in USDT.
+ * <p>Fees are zero for now (plan 2.3): a fill asks {@link FuturesCommissionPolicy}, which returns zero, and records a
+ * commission of zero in USDT.
  *
  * <p>Rule: TR-16; D-127.
  */
@@ -94,6 +96,7 @@ class FuturesSettlement {
     private final PaperUserFeed feed;
     private final FuturesOrderLists tpSl;
     private final EntityManager entityManager;
+    private final FuturesCommissionPolicy commission;
 
     /**
      * Executes up to {@code quantity} of the order at {@code price}.
@@ -182,7 +185,7 @@ class FuturesSettlement {
                 quantity.multiply(mark), feeRate, wallet.add(realized).max(BigDecimal.ZERO));
         PaperFill fill = fills.save(PaperFill.futures(
                 order,
-                execution(mark, quantity, Liquidity.TAKER, FillSource.LIVE, at, usdt),
+                execution(mark, quantity, Liquidity.TAKER, FillSource.LIVE, at, usdt, BigDecimal.ZERO),
                 position.getId(),
                 realized));
         feed.futuresFill(account, order, fill);
@@ -268,7 +271,7 @@ class FuturesSettlement {
                 crossWallet.add(realized).add(otherUnrealizedPnl).max(BigDecimal.ZERO));
         PaperFill fill = fills.save(PaperFill.futures(
                 order,
-                execution(mark, quantity, Liquidity.TAKER, FillSource.LIVE, at, usdt),
+                execution(mark, quantity, Liquidity.TAKER, FillSource.LIVE, at, usdt, BigDecimal.ZERO),
                 position.getId(),
                 realized));
         feed.futuresFill(account, order, fill);
@@ -306,7 +309,10 @@ class FuturesSettlement {
         BigDecimal realized = effect.realizedPnl();
         BigDecimal sizeBefore = position.getQuantity();
         PaperFill fill = fills.save(PaperFill.futures(
-                order, execution(price, closed, liquidity, source, at, usdt), position.getId(), realized));
+                order,
+                execution(price, closed, liquidity, source, at, usdt, commissionOf(commission, order, liquidity)),
+                position.getId(),
+                realized));
         feed.futuresFill(account, order, fill);
         if (realized.signum() != 0) {
             wallets.changeFutures(
@@ -417,7 +423,10 @@ class FuturesSettlement {
             target.increase(opened, entry);
         }
         PaperFill fill = fills.save(PaperFill.futures(
-                order, execution(price, opened, liquidity, source, at, usdt), target.getId(), BigDecimal.ZERO));
+                order,
+                execution(price, opened, liquidity, source, at, usdt, commissionOf(commission, order, liquidity)),
+                target.getId(),
+                BigDecimal.ZERO));
         feed.futuresFill(account, order, fill);
         if (margin.signum() > 0) {
             target.adjustIsolatedWallet(margin);
@@ -522,18 +531,35 @@ class FuturesSettlement {
                 : size.min(BigDecimal.ZERO).negate();
     }
 
+    /**
+     * The commission of an ordinary fill, from {@link FuturesCommissionPolicy} (TR-44). Only zero is settled for now
+     * (plan 2.3): a rate other than zero is refused here rather than taken without its FEE ledger row and its share of
+     * the isolated cash flow, which the fee work adds with it.
+     *
+     * @return the commission rate, zero
+     */
+    static BigDecimal commissionOf(FuturesCommissionPolicy commission, PaperOrder order, Liquidity liquidity) {
+        BigDecimal rate = commission.rate(order.getUserId(), order.getPairId(), liquidity);
+        if (rate.signum() != 0) {
+            throw new IllegalStateException("a Futures commission of " + rate.toPlainString()
+                    + " is not settled yet (plan 2.3): FuturesCommissionPolicy must return zero");
+        }
+        return rate;
+    }
+
     private static PaperFill.Execution execution(
             BigDecimal price,
             BigDecimal quantity,
             Liquidity liquidity,
             FillSource source,
             Instant at,
-            CoinListing usdt) {
+            CoinListing usdt,
+            BigDecimal commissionRate) {
         return new PaperFill.Execution(
                 price,
                 quantity,
                 Rounding.toAmount(price.multiply(quantity)),
-                BigDecimal.ZERO,
+                Rounding.toAmount(price.multiply(quantity).multiply(commissionRate)),
                 usdt.coinId(),
                 liquidity,
                 source,

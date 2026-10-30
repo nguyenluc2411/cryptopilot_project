@@ -18,7 +18,8 @@ import java.util.UUID;
  * @param clientOrderId the idempotency key it was placed with, or the one generated
  * @param symbol the pair
  * @param status NEW, PARTIALLY_FILLED, FILLED, CANCELED or EXPIRED
- * @param statusReason why it ended other than by filling, e.g. {@code MARGIN_INSUFFICIENT}; otherwise {@code null}
+ * @param statusReason why it ended other than by filling, e.g. {@code MARGIN_INSUFFICIENT}, or {@code GOOD_TILL_DATE}
+ *     for a GTD order its date expired; otherwise {@code null}
  * @param type LIMIT or MARKET
  * @param origType the type it was placed as, the same
  * @param side BUY or SELL
@@ -36,7 +37,7 @@ import java.util.UUID;
  * @param priceProtect always false for these types
  * @param priceMatch always NONE
  * @param selfTradePreventionMode always NONE: demo orders never meet each other
- * @param goodTillDate always zero (GTD is not offered yet)
+ * @param goodTillDate when a GTD order expires; {@code null} for every other time in force
  * @param time when it was placed
  * @param updateTime when it last changed
  */
@@ -63,6 +64,6 @@ public record FuturesOrderResponse(
         boolean priceProtect,
         String priceMatch,
         String selfTradePreventionMode,
-        long goodTillDate,
+        Instant goodTillDate,
         Instant time,
         Instant updateTime) {}

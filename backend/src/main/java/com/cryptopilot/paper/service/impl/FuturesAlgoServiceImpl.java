@@ -371,7 +371,8 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
             if (marketKind && request.price() != null) {
                 errors.put("price", "MSG15");
             }
-            if (marketKind && request.timeInForce() != null) {
+            if ((marketKind && request.timeInForce() != null) || request.timeInForce() == TimeInForce.GTD) {
+                // GTD is taken by a LIMIT order only, which carries its date (TR-44).
                 errors.put("timeInForce", "MSG15");
             }
             if (!marketKind && request.price() == null) {

@@ -336,4 +336,32 @@ class PaperOrderTest {
                 new BigDecimal(quantity),
                 false);
     }
+
+    @Test
+    void TR44_aGtdOrder_carriesItsDate_andIsDueFromIt() {
+        PaperOrder gtd = PaperOrder.futuresLimit(
+                        ACCOUNT,
+                        PAIR,
+                        "g",
+                        OrderSide.BUY,
+                        PositionSide.BOTH,
+                        TimeInForce.GTD,
+                        new BigDecimal("100"),
+                        BigDecimal.ONE,
+                        false)
+                .goodTill(AT);
+
+        assertThat(gtd.getGoodTillDate()).isEqualTo(AT);
+        assertThat(gtd.expiredBy(AT.minusMillis(1))).isFalse();
+        assertThat(gtd.expiredBy(AT)).isTrue();
+        assertThat(futuresLimit("100", "1").expiredBy(AT)).isFalse();
+        assertThatIllegalStateException().isThrownBy(() -> gtd.goodTill(AT));
+        assertThatIllegalStateException()
+                .isThrownBy(() -> futuresLimit("100", "1").goodTill(AT));
+        gtd.cancel(AT);
+        assertThat(gtd.expiredBy(AT)).isFalse();
+        assertThat(TimeInForce.GTD.futuresOnly()).isTrue();
+        assertThat(TimeInForce.GTX.futuresOnly()).isTrue();
+        assertThat(TimeInForce.GTC.futuresOnly()).isFalse();
+    }
 }

@@ -4,6 +4,7 @@ import com.cryptopilot.paper.dto.request.FuturesLeverageRequest;
 import com.cryptopilot.paper.dto.request.FuturesMarginTypeRequest;
 import com.cryptopilot.paper.dto.request.FuturesPositionModeRequest;
 import com.cryptopilot.paper.dto.response.FuturesAccountConfigResponse;
+import com.cryptopilot.paper.dto.response.FuturesCommissionRateResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageBracketResponse;
 import com.cryptopilot.paper.dto.response.FuturesLeverageResponse;
 import com.cryptopilot.paper.dto.response.FuturesPositionModeResponse;
@@ -22,6 +23,9 @@ public interface FuturesConfigService {
 
     /** The account settings. */
     FuturesAccountConfigResponse accountConfig(UUID userId);
+
+    /** The commission of a pair, zero until it is configured (TR-44). Binance: {@code GET /fapi/v1/commissionRate}. */
+    FuturesCommissionRateResponse commissionRate(UUID userId, String symbol);
 
     /** One-way or hedge mode. */
     FuturesPositionModeResponse positionMode(UUID userId);
