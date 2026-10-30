@@ -68,6 +68,38 @@ class MarketBroadcastServiceTest {
         assertThat(futures.lastPrice()).isNull();
     }
 
+    /**
+     * TR-38: a futures pair's 24-hour ticker and its mark price arrive apart and make one ticker, each keeping what the
+     * other filled in, so the trading screen shows the last price, the 24-hour figures and the mark together.
+     */
+    @Test
+    void TR38_aFuturesTickerAndMark_makeOneTicker() {
+        broadcast.publish(MarketType.FUTURES, markPrice("BTCUSDT", "63055.5", AT));
+        broadcast.publish(
+                MarketType.FUTURES,
+                new TickerMessage(
+                        "BTCUSDT",
+                        new BigDecimal("63050"),
+                        null,
+                        null,
+                        new BigDecimal("64000"),
+                        new BigDecimal("62000"),
+                        new BigDecimal("-1.5"),
+                        BigDecimal.TEN,
+                        new BigDecimal("630500"),
+                        AT.plusSeconds(1)));
+        broadcast.publish(MarketType.FUTURES, markPrice("BTCUSDT", "63060", AT.plusSeconds(2)));
+
+        assertThat(broadcast.pushUpdates()).isOne();
+        TickerUpdateResponse futures = payload("/topic/ticker.FUTURES.BTCUSDT", TickerUpdateResponse.class);
+        assertThat(futures.lastPrice()).isEqualByComparingTo("63050");
+        assertThat(futures.high24h()).isEqualByComparingTo("64000");
+        assertThat(futures.changePercent24h()).isEqualByComparingTo("-1.5");
+        assertThat(futures.markPrice()).isEqualByComparingTo("63060");
+        assertThat(futures.bestBid()).isNull();
+        assertThat(futures.sourceTime()).isEqualTo(AT.plusSeconds(2));
+    }
+
     /** TD 9: many messages between two pushes are one message per destination, the newest by source instant. */
     @Test
     void TD9_manyUpdatesBetweenPushes_areOneMessage_theNewest() {

@@ -151,7 +151,7 @@ class MarketStreamSupervisorTest {
                         "/stream?streams=btcusdt@kline_1m/btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h"
                                 + "/btcusdt@kline_1d/btcusdt@ticker",
                         "/market/stream?streams=btcusdt@kline_1m/btcusdt@kline_15m/btcusdt@kline_1h"
-                                + "/btcusdt@kline_4h/btcusdt@kline_1d/btcusdt@markPrice@1s");
+                                + "/btcusdt@kline_4h/btcusdt@kline_1d/btcusdt@ticker/btcusdt@markPrice@1s");
         assertThat(refreshes).containsExactly(Duration.ofMinutes(5));
     }
 
@@ -324,11 +324,13 @@ class MarketStreamSupervisorTest {
         assertThat(server.paths())
                 .containsExactlyInAnyOrder(
                         "/market/stream?streams=btcusdt@kline_1m/btcusdt@kline_15m/btcusdt@kline_1h"
-                                + "/btcusdt@kline_4h/btcusdt@kline_1d/btcusdt@markPrice@1s/btcusdt@aggTrade",
+                                + "/btcusdt@kline_4h/btcusdt@kline_1d/btcusdt@ticker/btcusdt@markPrice@1s/btcusdt@aggTrade",
                         "/public/stream?streams=btcusdt@bookTicker/btcusdt@depth20@100ms");
         Connection market = connection("/market/stream");
         Connection book = connection("/public/stream");
 
+        // A futures 24-hour ticker is for the screen only: it never takes a Spot ticker's place in the snapshots.
+        market.send(StreamFrames.ticker("BTCUSDT", AT));
         market.send(StreamFrames.aggTrade("BTCUSDT", 9, "79992.30", "0.037", AT, false));
         book.send(StreamFrames.futuresBookTicker("BTCUSDT", 41, "79996.90", "79997.00", AT));
         book.send(StreamFrames.futuresDepth("BTCUSDT", 42, AT));
@@ -348,6 +350,7 @@ class MarketStreamSupervisorTest {
         assertThat(trading.currentDepth(MarketType.FUTURES, btc).orElseThrow().lastUpdateId())
                 .isEqualTo(42);
         assertThat(trading.currentDepth(MarketType.SPOT, btc)).isEmpty();
+        assertThat(latest.ticker(btc)).isEmpty();
     }
 
     /** A lost connection that comes back publishes the reconnection; the first opening does not. */

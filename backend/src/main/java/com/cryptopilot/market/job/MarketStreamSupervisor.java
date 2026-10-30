@@ -263,7 +263,13 @@ public class MarketStreamSupervisor {
                         pipeline.submit(market, target, kline);
                     }
                 }
-                case TickerMessage ticker -> latest.recordTicker(target.pairId(), ticker);
+                case TickerMessage ticker -> {
+                    // The Spot snapshots (spot_market_data) are kept by pair: a futures ticker of the same pair,
+                    // read for the trading screen's 24-hour figures only, must not take a Spot one's place.
+                    if (market == MarketType.SPOT) {
+                        latest.recordTicker(target.pairId(), ticker);
+                    }
+                }
                 case MarkPriceMessage markPrice -> {
                     latest.recordMarkPrice(target.pairId(), markPrice);
                     toMarkListeners(target, markPrice);

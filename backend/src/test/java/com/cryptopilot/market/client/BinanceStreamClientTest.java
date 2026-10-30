@@ -30,7 +30,7 @@ class BinanceStreamClientTest {
     }
 
     @Test
-    void NSF03_aFuturesPair_streamsItsMinuteCandlesItsFourStoredTimeframesAndItsMarkPrice() {
+    void NSF03_aFuturesPair_streamsItsMinuteCandlesItsFourStoredTimeframesItsTickerAndItsMarkPrice() {
         assertThat(BinanceStreamClient.streamsOf(BinanceVenue.USD_M_FUTURES, "ETHUSDT"))
                 .containsExactly(
                         "ethusdt@kline_1m",
@@ -38,6 +38,7 @@ class BinanceStreamClientTest {
                         "ethusdt@kline_1h",
                         "ethusdt@kline_4h",
                         "ethusdt@kline_1d",
+                        "ethusdt@ticker",
                         "ethusdt@markPrice@1s");
     }
 
@@ -62,7 +63,7 @@ class BinanceStreamClientTest {
                     .startsWith(BinanceStreamClient.streamsOf(BinanceVenue.USD_M_FUTURES, "BTCUSDT")
                             .toArray(String[]::new))
                     .endsWith("btcusdt@aggTrade")
-                    .hasSize(7);
+                    .hasSize(8);
             assertThat(client.publicStreamsFor(BinanceVenue.USD_M_FUTURES, "BTCUSDT"))
                     .containsExactly("btcusdt@bookTicker", "btcusdt@depth10@100ms");
         }

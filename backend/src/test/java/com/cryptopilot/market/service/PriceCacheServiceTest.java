@@ -184,6 +184,21 @@ class PriceCacheServiceTest {
     }
 
     /**
+     * TR-38: a futures 24-hour ticker writes its last price to {@code last}, as a futures minute candle does, and
+     * leaves the mark price group as it is.
+     */
+    @Test
+    void TR38_aFuturesTicker_writesItsLastPriceToLast_andLeavesTheMark() {
+        cache.record(MarketType.FUTURES, markPrice("63000", AT.plusSeconds(5)));
+        cache.record(MarketType.FUTURES, ticker("63020", AT.plusSeconds(6)));
+        assertThat(cache.flush()).isEqualTo(2);
+
+        assertThat(redis.<String, String>opsForHash().entries("px:FUTURES:BTCUSDT"))
+                .containsEntry("last", "63020")
+                .containsEntry("mark", "63000");
+    }
+
+    /**
      * D-111 E2/E3: a futures 1-minute candle update writes its close to {@code last} with its own instant
      * {@code lastUpdatedAt} and the same time to live; an older update is refused on that instant, and the mark price
      * group and its {@code updatedAt} are left as they are.

@@ -24,11 +24,13 @@ import tools.jackson.databind.json.JsonMapper;
  *       never stored;
  *   <li>{@code <symbol>@kline_15m}, {@code _1h}, {@code _4h}, {@code _1d} on both markets — the timeframes BR-08
  *       stores;
- *   <li>Spot {@code <symbol>@ticker} — last price, best bid and ask and the 24-hour statistics;
+ *   <li>{@code <symbol>@ticker} on both markets — the last price and the 24-hour statistics, with the best bid
+ *       and ask on Spot only;
  *   <li>futures {@code <symbol>@markPrice@1s} — mark price, index price and the predicted funding rate.
  * </ul>
  *
- * <p>Six streams per pair and market (D-43; {@code kline_1m} added by T-043). A pair carries three more when
+ * <p>Six streams per Spot pair and seven per futures pair (D-43; {@code kline_1m} added by T-043, the futures
+ * {@code @ticker} by TR-38 for the trading screen's 24-hour figures). A pair carries three more when
  * {@code trading} is enabled for its market (TR-03, TR-38): {@code <symbol>@aggTrade} (each trade, for the paper
  * engine and the trades panel), {@code <symbol>@bookTicker} (best bid and ask as they change) and
  * {@code <symbol>@depth20@100ms} (the top levels of the order book). On Futures the last two are {@code /public}
@@ -76,7 +78,10 @@ public final class BinanceStreamClient implements AutoCloseable {
                 MarketInterval.ONE_DAY)) {
             streams.add(s + "@kline_" + timeframe.code());
         }
-        streams.add(venue == BinanceVenue.SPOT ? s + "@ticker" : s + "@markPrice@1s");
+        streams.add(s + "@ticker");
+        if (venue != BinanceVenue.SPOT) {
+            streams.add(s + "@markPrice@1s");
+        }
         return List.copyOf(streams);
     }
 

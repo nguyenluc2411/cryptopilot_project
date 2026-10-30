@@ -73,6 +73,20 @@ class BinanceStreamParserTest {
     }
 
     @Test
+    void TR38_aFuturesTicker_hasNoBestBidOrAsk() {
+        Instant at = Instant.parse("2026-10-30T08:00:00Z");
+        String frame = StreamFrames.ticker("BTCUSDT", at)
+                .replace("\"b\":\"84282.00\",\"B\":\"4.39\",\"a\":\"84282.01\",\"A\":\"7.9\",", "");
+
+        TickerMessage ticker = (TickerMessage) parser.parse(frame).orElseThrow();
+
+        assertThat(ticker.lastPrice()).isEqualTo(new BigDecimal("84282.01"));
+        assertThat(ticker.bestBidPrice()).isNull();
+        assertThat(ticker.bestAskPrice()).isNull();
+        assertThat(ticker.highPrice24h()).isEqualTo(new BigDecimal("84794.01"));
+    }
+
+    @Test
     void NSF03_aTicker_isReadExactly() {
         Instant at = Instant.parse("2026-09-24T10:00:00Z");
 

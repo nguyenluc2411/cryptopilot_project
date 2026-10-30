@@ -144,6 +144,21 @@ public class PriceCacheServiceImpl implements PriceCacheService {
             waitingLast.merge(key(market, kline.symbol()), last, PriceCacheServiceImpl::newer);
             return;
         }
+        if (message instanceof TickerMessage ticker && market == MarketType.FUTURES) {
+            CachedPrice last = new CachedPrice(
+                    market,
+                    ticker.symbol(),
+                    ticker.lastPrice(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    ticker.eventTime());
+            waitingLast.merge(key(market, ticker.symbol()), last, PriceCacheServiceImpl::newer);
+            return;
+        }
         CachedPrice price =
                 switch (message) {
                     case TickerMessage ticker ->

@@ -201,8 +201,9 @@ public final class BinanceStreamParser {
         return new StreamMessage.TickerMessage(
                 symbol(data),
                 BinanceResponseParser.decimal(data.required("c")),
-                BinanceResponseParser.decimal(data.required("b")),
-                BinanceResponseParser.decimal(data.required("a")),
+                // The futures 24-hour ticker carries no best bid and ask.
+                data.has("b") ? BinanceResponseParser.decimal(data.required("b")) : null,
+                data.has("a") ? BinanceResponseParser.decimal(data.required("a")) : null,
                 BinanceResponseParser.decimal(data.required("h")),
                 BinanceResponseParser.decimal(data.required("l")),
                 BinanceResponseParser.decimal(data.required("P")),
