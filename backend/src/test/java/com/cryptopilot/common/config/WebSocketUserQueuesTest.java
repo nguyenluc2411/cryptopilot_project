@@ -23,8 +23,8 @@ class WebSocketUserQueuesTest {
     /** The dot of a Futures queue is a dot, not any character. */
     @Test
     void TR41_aQueueNamedLikeAFuturesOneButNotIt_isRefused() {
-        assertThatThrownBy(() ->
-                        WebSocketConfig.requireAllowed(StompCommand.SUBSCRIBE, "/user/queue/futuresXorders", TRADER))
+        assertThatThrownBy(() -> WebSocketConfig.requireAllowed(
+                        StompCommand.SUBSCRIBE, "/user/queue/futuresXorders", TRADER, List.of()))
                 .isInstanceOf(MessageDeliveryException.class);
     }
 
@@ -32,7 +32,17 @@ class WebSocketUserQueuesTest {
 
     @ParameterizedTest
     @ValueSource(
-            strings = {"positions", "notifications", "orders", "fills", "balances", "futures.orders", "futures.account"
+            strings = {
+                "positions",
+                "notifications",
+                "orders",
+                "fills",
+                "balances",
+                "futures.orders",
+                "futures.account",
+                "futures.algo",
+                "futures.config",
+                "futures.marginCall"
             })
     void UC20_aSignedInSession_subscribesToItsOwnQueue(String queue) {
         assertThatNoException()
