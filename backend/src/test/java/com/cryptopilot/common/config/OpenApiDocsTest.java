@@ -90,6 +90,7 @@ class OpenApiDocsTest {
             "/api/v1/paper/futures/marginType",
             "/api/v1/paper/futures/leverageBracket",
             "/api/v1/paper/futures/order",
+            "/api/v1/paper/futures/order/warnings",
             "/api/v1/paper/futures/allOpenOrders",
             "/api/v1/paper/futures/openOrders",
             "/api/v1/paper/futures/allOrders",
@@ -199,7 +200,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/news-articles/{id}/restore",
             "/api/v1/admin/news-articles/{id}/summarize");
 
-    private static final int OPERATIONS = 208;
+    private static final int OPERATIONS = 209;
 
     @Autowired
     private MockMvc mvc;

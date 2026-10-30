@@ -696,7 +696,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     }
 
     /** Which fields the order type takes, before the pair is looked up. */
-    private static void requireShape(FuturesOrderRequest request) {
+    static void requireShape(FuturesOrderRequest request) {
         if (CONDITIONAL.contains(request.type())) {
             // The exchange's -4120: conditional orders are algo orders (TR-20).
             throw new FieldValidationException(

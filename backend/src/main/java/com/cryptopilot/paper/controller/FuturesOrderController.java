@@ -4,8 +4,10 @@ import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.paper.dto.request.FuturesAmendOrderRequest;
 import com.cryptopilot.paper.dto.request.FuturesOrderRequest;
 import com.cryptopilot.paper.dto.response.FuturesOrderResponse;
+import com.cryptopilot.paper.dto.response.FuturesOrderWarningsResponse;
 import com.cryptopilot.paper.dto.response.FuturesTradeResponse;
 import com.cryptopilot.paper.service.FuturesOrderService;
+import com.cryptopilot.paper.service.FuturesOrderWarningService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -35,12 +37,12 @@ import org.springframework.web.bind.annotation.RestController;
  * are UUIDs and times ISO-8601; a refusal is the project's problem detail, carrying the exchange's code and message as
  * {@code binanceCode} and {@code binanceMsg}. Paper money only: nothing here reaches an exchange.
  *
- * <p>Rule: TR-15, TR-16, TR-25; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-25, TR-26; D-127; Q-T10.
  */
 @Tag(
         name = "Demo trading: Futures orders",
-        description = "LIMIT and MARKET orders of paper Futures, their amendment and their trades (TR-15, TR-16,"
-                + " TR-25)."
+        description = "LIMIT and MARKET orders of paper Futures, their risk warnings, their amendment and their trades"
+                + " (TR-15, TR-16, TR-25, TR-26)."
                 + " Trader with the Futures feature.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
@@ -49,6 +51,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class FuturesOrderController {
 
     private final FuturesOrderService futures;
+    private final FuturesOrderWarningService warnings;
 
     @Operation(summary = "Place a LIMIT or MARKET order. Binance: POST /fapi/v1/order")
     @ApiResponse(
@@ -75,6 +78,25 @@ public class FuturesOrderController {
     public FuturesOrderResponse place(
             @AuthenticationPrincipal Jwt caller, @Valid @RequestBody FuturesOrderRequest request) {
         return futures.place(callerOf(caller), request);
+    }
+
+    @Operation(summary = "The risk warnings of an order before it is placed (the order form; no Binance endpoint)")
+    @ApiResponse(
+            responseCode = "200",
+            description = "cost, budget, the estimated liquidationPrice and the warnings, most severe first:"
+                    + " INSUFFICIENT_MARGIN, SL_BEYOND_LIQUIDATION (BLOCKING); HIGH_LEVERAGE, OVERSIZED_POSITION,"
+                    + " LOW_RR, HIGH_FUNDING_RATE (WARNING); WIDE_STOP_LOSS (INFO). Nothing is placed")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01, MSG15: a field is missing or does not fit the type; PAPER_POSITION_SIDE (-4061)")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
+    @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened or the symbol is unknown")
+    @ApiResponse(responseCode = "503", description = "MARKET_PRICE_UNAVAILABLE (MSG43): no mark price")
+    @PostMapping("/order/warnings")
+    public FuturesOrderWarningsResponse warnings(
+            @AuthenticationPrincipal Jwt caller, @Valid @RequestBody FuturesOrderRequest request) {
+        return warnings.warnings(callerOf(caller), request);
     }
 
     @Operation(summary = "Amend the price and quantity of a working LIMIT order. Binance: PUT /fapi/v1/order")

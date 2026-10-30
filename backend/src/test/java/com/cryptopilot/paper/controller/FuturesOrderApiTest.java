@@ -2,6 +2,7 @@ package com.cryptopilot.paper.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.hamcrest.Matchers.contains;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
@@ -83,11 +84,11 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes;
  * what each committed change pushes on the Trader's Futures queues; what a stale mark price refuses; and the
  * conditional orders, placed, triggered and ended; the liquidation of isolated positions; funding; the amendment of a
- * waiting order and the calculator.
+ * waiting order, the calculator and the order form's risk warnings.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-26, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -2387,6 +2388,94 @@ class FuturesOrderApiTest {
                 .andExpect(jsonPath("$.code").value("PAPER_LEVERAGE"))
                 .andExpect(jsonPath("$.binanceCode").value(-4028));
         calculate(trader(false), "target", body).andExpect(status().isForbidden());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Risk warnings of the order form (TR-26)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * A CONSERVATIVE Trader (max 3x, 0.5 % per trade) at the default 20x cross: a long at 100 with its stop 11 % away
+     * and a take profit of 5 (reward to risk 0.45, minimum 1.5). The cross wallet of 5,000 keeps it from any
+     * liquidation price. Nothing is placed.
+     */
+    @Test
+    void TR26_theFormsWarnings_comeTheMostSevereFirst_andNothingIsPlaced() throws Exception {
+        UUID trader = trader(true);
+
+        warnings(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "LIMIT", "price": "100", "quantity": "1",
+                         "stopLossPrice": "89", "takeProfitPrice": "105"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cost").value(numeric("5")))
+                .andExpect(jsonPath("$.budget").value(numeric("5000")))
+                .andExpect(jsonPath("$.liquidationPrice").value(numeric("0")))
+                .andExpect(jsonPath("$.warnings[*].type").value(contains("HIGH_LEVERAGE", "LOW_RR", "WIDE_STOP_LOSS")))
+                .andExpect(jsonPath("$.warnings[0].severity").value("WARNING"))
+                .andExpect(jsonPath("$.warnings[2].severity").value("INFO"));
+        assertThat(orderCount(trader)).isZero();
+    }
+
+    /**
+     * Isolated 10x, 600 at 100: the cost of 6,000 is above the 5,000 the cross wallet has free, the liquidation price
+     * of the position funded with it is 90.4, so a stop at 90 could never act, and its loss of 6,000 is far above
+     * 0.5 % of the wallet.
+     */
+    @Test
+    void TR26_aStopBeyondTheLiquidationPrice_andAnOrderTheMarginCannotPay_areBlocking() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+
+        warnings(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "LIMIT", "price": "100", "quantity": "600",
+                         "stopLossPrice": "90"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cost").value(numeric("6000")))
+                .andExpect(jsonPath("$.liquidationPrice").value(numeric("90.4")))
+                .andExpect(jsonPath("$.warnings[*].type")
+                        .value(contains(
+                                "INSUFFICIENT_MARGIN", "SL_BEYOND_LIQUIDATION", "HIGH_LEVERAGE", "OVERSIZED_POSITION")))
+                .andExpect(jsonPath("$.warnings[0].severity").value("BLOCKING"));
+    }
+
+    @Test
+    void TR26_aHighFundingRate_warnsTheSideThatPaysIt_andAnOrderThatOnlyReduces_raisesNothing() throws Exception {
+        UUID trader = trader(true);
+        leverage(trader, 3);
+        prices.record(
+                MarketType.FUTURES,
+                new MarkPriceMessage(
+                        symbol,
+                        new BigDecimal("100"),
+                        new BigDecimal("100"),
+                        new BigDecimal("0.002"),
+                        Instant.now().plus(Duration.ofHours(1)),
+                        Instant.now().plusMillis(TICKS.incrementAndGet())));
+        prices.flush();
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        warnings(trader, market("BUY", "1"))
+                .andExpect(jsonPath("$.warnings[*].type").value(contains("HIGH_FUNDING_RATE")));
+        warnings(trader, market("SELL", "1")).andExpect(jsonPath("$.warnings").isEmpty());
+
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        warnings(trader, """
+                        {"symbol": "%s", "side": "SELL", "type": "MARKET", "quantity": "1", "reduceOnly": true}""".formatted(symbol))
+                .andExpect(jsonPath("$.cost").value(numeric("0")))
+                .andExpect(jsonPath("$.warnings").isEmpty());
+    }
+
+    @Test
+    void TR26_theFormsWarnings_needTheFuturesFeature_andAWellShapedOrder() throws Exception {
+        warnings(trader(false), market("BUY", "1")).andExpect(status().isForbidden());
+        warnings(trader(true), """
+                        {"symbol": "%s", "side": "BUY", "type": "LIMIT", "quantity": "1"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.price").value("MSG01"));
+    }
+
+    private ResultActions warnings(UUID trader, String body) throws Exception {
+        return as(trader, post(FUTURES + "/order/warnings"), body);
     }
 
     private ResultActions amend(UUID trader, String orderId, String side, String price, String quantity)
