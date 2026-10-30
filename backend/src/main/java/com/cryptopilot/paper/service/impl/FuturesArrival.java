@@ -111,7 +111,7 @@ class FuturesArrival {
     void limit(PaperAccount account, PaperOrder order, Optional<SpotArrival.Book> book, Instant now) {
         TimeInForce timeInForce = order.getTimeInForce();
         BookSweep.Result sweep = sweep(book, order.getSide(), order.remainingQuantity(), order.getLimitPrice());
-        boolean decidedNow = timeInForce == TimeInForce.IOC || timeInForce == TimeInForce.FOK;
+        boolean decidedNow = timeInForce.immediate();
         if (timeInForce == TimeInForce.GTX && !sweep.isEmpty()) {
             order.expire(SpotArrival.WOULD_TAKE, now);
             return;

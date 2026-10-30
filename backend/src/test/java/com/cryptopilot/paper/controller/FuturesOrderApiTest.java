@@ -2248,6 +2248,24 @@ class FuturesOrderApiTest {
         assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("1");
     }
 
+    /** 8.2.1 rule 1 at a trigger as on placement: an opening stop LIMIT that would not take is placed and waits. */
+    @Test
+    void TR20_onAStalePair_anOpeningStopLimitThatWaits_isPlaced() throws Exception {
+        UUID trader = trader(true);
+        String stop = algoId(algo(trader, """
+                                {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "type": "STOP",
+                                 "triggerPrice": "101", "price": "90", "quantity": "1", "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        staleMark("100");
+        oldDepth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        trigger(trader, stop, OrderSide.BUY, TriggerCondition.AT_OR_ABOVE, "101");
+
+        assertThat(statusOf(stop)).isEqualTo("FILLED");
+        as(trader, get(FUTURES + "/openOrders").param("symbol", symbol), null)
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].status").value("NEW"));
+    }
+
     /** 8.2.1 rule 1: an opening LIMIT that would take is refused on a stale pair, whatever the age of the book. */
     @Test
     void TR22a_aMarketableOpeningLimit_onAStalePairWithAnOldBook_isRefused() throws Exception {

@@ -684,7 +684,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     }
 
     /** Whether a limit price reaches the best price of the other side. */
-    private static boolean crosses(OrderSide side, BigDecimal limit, BigDecimal best) {
+    static boolean crosses(OrderSide side, BigDecimal limit, BigDecimal best) {
         return side == OrderSide.BUY ? limit.compareTo(best) >= 0 : limit.compareTo(best) <= 0;
     }
 

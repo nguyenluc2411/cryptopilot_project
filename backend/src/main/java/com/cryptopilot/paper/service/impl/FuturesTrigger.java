@@ -18,7 +18,6 @@ import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.PositionDirection;
-import com.cryptopilot.paper.model.enums.TimeInForce;
 import com.cryptopilot.paper.model.enums.WorkingType;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
 import com.cryptopilot.paper.service.impl.FuturesMargins.FuturesPair;
@@ -110,19 +109,28 @@ class FuturesTrigger {
         }
         BigDecimal opening =
                 reducing ? BigDecimal.ZERO : FuturesOrderServiceImpl.opening(conditional.getSide(), quantity, size);
-        if (opening.signum() > 0) {
-            Optional<String> refused = refusal(account, conditional, pair, size, opening, book, freshMark);
-            if (refused.isPresent()) {
-                conditional.trigger(at);
-                end(account, conditional, OrderStatus.REJECTED, refused.get(), at);
-                return;
-            }
+        // On a stale pair an opening order that would take is refused, as on placement (8.2.1 rule 1), with or without
+        // a book; one that waits goes on. Checked first, as it reads nothing but prices.
+        if (opening.signum() > 0 && freshMark.isEmpty() && wouldTake(conditional, pair)) {
+            conditional.trigger(at);
+            end(account, conditional, OrderStatus.REJECTED, MARK_STALE, at);
+            return;
         }
         if (book.isEmpty() && decidedOnArrival(conditional)) {
             // No price to fill at now, a stale pair's book as old as its mark among them (8.2.1 rule 2): an order that
             // must fill at once is not spent on one that would expire unfilled, but waits for the next price.
             events.publishEvent(awaiting(conditional));
             return;
+        }
+        if (opening.signum() > 0) {
+            // A stale pair's order that waits is still held to the last mark known, as on placement.
+            Optional<BigDecimal> mark = freshMark.or(() -> market.currentMarkPrice(pair.symbol()));
+            Optional<String> refused = refusal(account, conditional, pair, size, opening, book, mark);
+            if (refused.isPresent()) {
+                conditional.trigger(at);
+                end(account, conditional, OrderStatus.REJECTED, refused.get(), at);
+                return;
+            }
         }
         conditional.trigger(at);
         PaperOrder placed =
@@ -139,8 +147,24 @@ class FuturesTrigger {
     /** Whether the order it places must fill on arrival or end: a MARKET one, or a LIMIT one IOC or FOK. */
     private static boolean decidedOnArrival(PaperOrder conditional) {
         return conditional.getOrderType().isFuturesMarketConditional()
-                || conditional.getTimeInForce() == TimeInForce.IOC
-                || conditional.getTimeInForce() == TimeInForce.FOK;
+                || (conditional.getTimeInForce() != null
+                        && conditional.getTimeInForce().immediate());
+    }
+
+    /**
+     * Whether the order it places would take on arrival, judged on the latest price known however old, the last trade
+     * when no book is left: one decided on arrival always does; a LIMIT one that waits does when its price reaches it.
+     */
+    private boolean wouldTake(PaperOrder conditional, FuturesPair pair) {
+        if (decidedOnArrival(conditional)) {
+            return true;
+        }
+        return arrival.bookFor(pair.pairId(), pair.symbol(), conditional.getSide(), true)
+                .filter(found -> FuturesOrderServiceImpl.crosses(
+                        conditional.getSide(),
+                        conditional.getLimitPrice(),
+                        found.levels().getFirst().price()))
+                .isPresent();
     }
 
     /**
@@ -165,8 +189,10 @@ class FuturesTrigger {
     }
 
     /**
-     * Why the opening part cannot be taken now, if it cannot: a stale mark, a price past PERCENT_PRICE as a placed order
-     * would be refused (plan 8.2), too large a position, too little margin.
+     * Why the opening part cannot be taken now, if it cannot: no mark known at all, a price past PERCENT_PRICE as a
+     * placed order would be refused (plan 8.2), too large a position, too little margin.
+     *
+     * @param mark the current mark, or for an order that waits on a stale pair the last one known
      */
     private Optional<String> refusal(
             PaperAccount account,
