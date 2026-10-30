@@ -93,26 +93,18 @@ class FuturesArrival {
      * Whether an order of {@code side} at {@code price} would take on arrival on a pair whose mark is stale, where 8.2.1
      * rule 1 refuses what opens risk and takes (TR-22a): it would when any price the stream still shows reaches it, the
      * depth, the best bid and ask or the last trade, however old within the market data's own limit, or the book the
-     * order is about to meet, read by the caller, so that the decision and the fill rest on the same data and what is
-     * let through as an order that waits never fills as a taker. A MARKET order always takes; a post-only (GTX) one
-     * never does, being refused or expired rather than taking.
+     * order is about to meet, read by the caller. Deliberately cautious and the same for every time in force, post-only
+     * included: on a stale pair the book an order meets may be emptier than what the stream shows, so an order let
+     * through as one that waits could otherwise rest across a shown price and later fill at its own price through the
+     * market. A MARKET order always takes.
      *
      * @param price the limit price, or {@code null} for a MARKET order
-     * @param timeInForce the LIMIT order's, or {@code null} for a MARKET order
      * @param book the book the order will meet, as the caller read it
      */
     boolean anyPriceReaches(
-            UUID pairId,
-            String symbol,
-            OrderSide side,
-            BigDecimal price,
-            TimeInForce timeInForce,
-            Optional<SpotArrival.Book> book) {
+            UUID pairId, String symbol, OrderSide side, BigDecimal price, Optional<SpotArrival.Book> book) {
         if (price == null) {
             return true;
-        }
-        if (timeInForce == TimeInForce.GTX) {
-            return false;
         }
         boolean buy = side == OrderSide.BUY;
         Optional<BigDecimal> met = book.map(found -> found.levels().getFirst().price());
@@ -126,12 +118,7 @@ class FuturesArrival {
         Optional<BigDecimal> last = market.currentLastPrice(MarketType.FUTURES, symbol);
         return Stream.of(met, depth, top, last)
                 .flatMap(Optional::stream)
-                .anyMatch(known -> crosses(side, price, known));
-    }
-
-    /** Whether a limit price reaches a price of the other side: at or above it for a BUY, at or below for a SELL. */
-    static boolean crosses(OrderSide side, BigDecimal limit, BigDecimal best) {
-        return side == OrderSide.BUY ? limit.compareTo(best) >= 0 : limit.compareTo(best) <= 0;
+                .anyMatch(known -> BookSweep.reaches(side, known, price));
     }
 
     /** What an order of {@code quantity} would take of the book at or better than {@code limit}; nothing without one. */

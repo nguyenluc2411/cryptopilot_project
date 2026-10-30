@@ -156,12 +156,7 @@ class FuturesTrigger {
     /** Whether the order it places would take on arrival, judged as a placed order is on a stale pair. */
     private boolean wouldTake(PaperOrder conditional, FuturesPair pair, Optional<SpotArrival.Book> book) {
         return arrival.anyPriceReaches(
-                pair.pairId(),
-                pair.symbol(),
-                conditional.getSide(),
-                conditional.getLimitPrice(),
-                conditional.getTimeInForce(),
-                book);
+                pair.pairId(), pair.symbol(), conditional.getSide(), conditional.getLimitPrice(), book);
     }
 
     /**

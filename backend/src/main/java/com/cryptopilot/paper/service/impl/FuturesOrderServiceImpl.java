@@ -195,14 +195,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         BigDecimal opening = reducing ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
         // A stale mark is told first, before PERCENT_PRICE, which is judged at the mark (8.2.1).
         if (opening.signum() > 0) {
-            requireFreshMarks(
-                    userId,
-                    pair,
-                    request.side(),
-                    request.price(),
-                    marketOrder ? null : timeInForceOf(request),
-                    book,
-                    markFresh);
+            requireFreshMarks(userId, pair, request.side(), request.price(), book, markFresh);
         }
         requirePercentPrice(
                 pair.filters(), request.side(), request.price(), percentPriceMark(mark, markFresh, opening), book);
@@ -310,7 +303,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         BigDecimal opening = reducing ? BigDecimal.ZERO : opening(order.getSide(), remaining, size);
         // A stale mark is told first, as on placement.
         if (opening.signum() > 0) {
-            requireFreshMarks(userId, pair, order.getSide(), request.price(), order.getTimeInForce(), book, markFresh);
+            requireFreshMarks(userId, pair, order.getSide(), request.price(), book, markFresh);
         }
         requirePercentPrice(
                 filters, order.getSide(), request.price(), percentPriceMark(mark, markFresh, opening), book);
@@ -526,7 +519,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             String key,
             PositionSide positionSide,
             Optional<SpotArrival.Book> book) {
-        TimeInForce timeInForce = request.timeInForce() == null ? TimeInForce.GTC : request.timeInForce();
+        TimeInForce timeInForce = timeInForceOf(request);
         if (timeInForce == TimeInForce.GTX
                 && !FuturesArrival.sweep(book, request.side(), request.quantity(), request.price())
                         .isEmpty()) {
@@ -635,21 +628,19 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     }
 
     /**
-     * What opens risk waits for current marks (8.2.1): on a {@code MARK_STALE} pair a MARKET order or a LIMIT order that
-     * would execute on arrival is refused, as nothing can be checked against the mark, while a LIMIT order that waits
-     * is taken; and while a pair of one of the Trader's cross positions is stale, no order opens risk on another pair.
-     * Closing orders never wait for the mark.
+     * What opens risk waits for current marks (8.2.1): on a {@code MARK_STALE} pair a MARKET order, or a LIMIT order of
+     * any time in force whose price any shown price reaches ({@link FuturesArrival#anyPriceReaches}), is refused, as
+     * nothing can be checked against the mark, while a LIMIT order that waits is taken; and while a pair of one of the
+     * Trader's cross positions is stale, no order opens risk on another pair. Closing orders never wait for the mark.
      */
     private void requireFreshMarks(
             UUID userId,
             FuturesPair pair,
             OrderSide side,
             BigDecimal price,
-            TimeInForce timeInForce,
             Optional<SpotArrival.Book> book,
             boolean markFresh) {
-        if (!markFresh
-                && futuresArrival.anyPriceReaches(pair.pairId(), pair.symbol(), side, price, timeInForce, book)) {
+        if (!markFresh && futuresArrival.anyPriceReaches(pair.pairId(), pair.symbol(), side, price, book)) {
             throw FuturesMargins.staleMark(pair.symbol());
         }
         margins.requireFreshCrossMarks(userId, pair.pairId());
@@ -860,9 +851,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      */
     private FuturesOrderResponse replayOf(PaperOrder placed, FuturesOrderRequest request) {
         FuturesPair pair = margins.pair(request.symbol());
-        TimeInForce timeInForce = request.type() == OrderType.LIMIT && request.timeInForce() == null
-                ? TimeInForce.GTC
-                : request.timeInForce();
+        TimeInForce timeInForce = request.type() == OrderType.LIMIT ? timeInForceOf(request) : request.timeInForce();
         boolean same = placed.getMarketType() == MarketType.FUTURES
                 && placed.getPairId().equals(pair.pairId())
                 && placed.getSide() == request.side()

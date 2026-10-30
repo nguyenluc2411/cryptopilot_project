@@ -67,6 +67,8 @@ import org.hamcrest.Matcher;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -2278,18 +2280,6 @@ class FuturesOrderApiTest {
         assertThat(openPositions(trader)).isZero();
     }
 
-    /** A post-only order never takes, so on a stale pair it is not refused as one that would. */
-    @Test
-    void TR22a_aPostOnlyOpeningOrder_onAStalePair_isNotRefusedAsTaking() throws Exception {
-        UUID trader = trader(true);
-        staleMark("100");
-        oldDepth(List.of(level("100", "5")), List.of(level("99.9", "5")));
-
-        place(trader, limit("BUY", "GTX", "100", "1"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("NEW"));
-    }
-
     /** 8.2.1 rule 1 at a trigger as on placement: an opening stop LIMIT that would not take is placed and waits. */
     @Test
     void TR20_onAStalePair_anOpeningStopLimitThatWaits_isPlaced() throws Exception {
@@ -2630,6 +2620,107 @@ class FuturesOrderApiTest {
         assertThat(sql.sql("""
                                 select ref_type from wallet_ledger_entry
                                  where user_id = ? and entry_type = 'INSURANCE_COVER'""").param(trader).query(String.class).single()).isEqualTo("FUNDING");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Stale-pair invariants (8.2.1 rule 1), over every time in force and every path
+    // ------------------------------------------------------------------------------------------
+
+    /*
+     * The mark is stale at 100 and the stream still shows an ask of 100, older than mark-max-age (5 s) but within the
+     * market data's limit (10 s), so it is no book to fill on. Whatever the time in force, the price and the path, an
+     * opening BUY must neither open a position nor be left waiting at a price that reaches a shown price: I1 and I2 of
+     * assertNoTakerOnAStalePair. 101 reaches the shown ask, 95 does not.
+     */
+
+    @ParameterizedTest(name = "place {0} at {1}")
+    @CsvSource({
+        "GTC, 101",
+        "GTC, 95",
+        "GTD, 101",
+        "GTD, 95",
+        "IOC, 101",
+        "IOC, 95",
+        "FOK, 101",
+        "FOK, 95",
+        "GTX, 101",
+        "GTX, 95"
+    })
+    void TR22a_invariant_aPlacedOpeningOrder_onAStalePair_neverTakes(String timeInForce, String price)
+            throws Exception {
+        UUID trader = trader(true);
+        staleMark("100");
+        oldDepth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        int status = place(trader, openingLimit(timeInForce, price))
+                .andReturn()
+                .getResponse()
+                .getStatus();
+
+        assertThat(status).isNotEqualTo(500);
+        assertNoTakerOnAStalePair(trader);
+    }
+
+    @ParameterizedTest(name = "amend {0} to {1}")
+    @CsvSource({"GTC, 101", "GTC, 96", "GTD, 101", "GTD, 96", "GTX, 101", "GTX, 96"})
+    void TR22a_invariant_anAmendedOpeningOrder_onAStalePair_neverTakes(String timeInForce, String price)
+            throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String waiting = id(place(trader, openingLimit(timeInForce, "95"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW")));
+        staleMark("100");
+        oldDepth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        int status = amend(trader, waiting, "BUY", price, "1")
+                .andReturn()
+                .getResponse()
+                .getStatus();
+
+        assertThat(status).isNotEqualTo(500);
+        assertNoTakerOnAStalePair(trader);
+    }
+
+    @ParameterizedTest(name = "trigger a stop {0} at {1}")
+    @CsvSource({"GTC, 101", "GTC, 95", "IOC, 101", "IOC, 95", "FOK, 101", "FOK, 95", "GTX, 101", "GTX, 95"})
+    void TR22a_invariant_aTriggeredOpeningStop_onAStalePair_neverTakes(String timeInForce, String price)
+            throws Exception {
+        UUID trader = trader(true);
+        String stop =
+                algoId(algo(trader, """
+                                {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "type": "STOP",
+                                 "triggerPrice": "101", "price": "%s", "quantity": "1", "timeInForce": "%s",
+                                 "workingType": "MARK_PRICE"}""".formatted(symbol, price, timeInForce)).andExpect(status().isOk()));
+        staleMark("100");
+        oldDepth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        trigger(trader, stop, OrderSide.BUY, TriggerCondition.AT_OR_ABOVE, "101");
+
+        assertNoTakerOnAStalePair(trader);
+    }
+
+    /** An opening BUY LIMIT of the time in force at the price, GTD with a date an hour ahead. */
+    private String openingLimit(String timeInForce, String price) {
+        String date = timeInForce.equals("GTD")
+                ? ", \"goodTillDate\": \"" + Instant.now().plus(Duration.ofHours(1)) + "\""
+                : "";
+        return """
+                {"symbol": "%s", "side": "BUY", "type": "LIMIT", "timeInForce": "%s", "price": "%s",
+                 "quantity": "1"%s}""".formatted(symbol, timeInForce, price, date);
+    }
+
+    /**
+     * I1: no position was opened on the stale pair. I2: no LIMIT order waits at a price that reaches the shown ask of
+     * 100, which would fill it at its own price through the market on the next trade.
+     */
+    private void assertNoTakerOnAStalePair(UUID trader) {
+        assertThat(openPositions(trader)).isZero();
+        List<BigDecimal> waiting =
+                sql.sql("""
+                        select limit_price from trade_order
+                         where user_id = ? and order_type = 'LIMIT' and order_status in ('NEW', 'PARTIALLY_FILLED')""").param(trader).query(BigDecimal.class).list();
+        assertThat(waiting).allSatisfy(limit -> assertThat(limit).isLessThan(new BigDecimal("100")));
     }
 
     // ------------------------------------------------------------------------------------------
