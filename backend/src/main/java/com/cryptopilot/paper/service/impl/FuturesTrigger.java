@@ -70,6 +70,9 @@ class FuturesTrigger {
     /** Why a conditional order was rejected: its pair's mark price was stale, so no risk could be opened. */
     static final String MARK_STALE = "MARK_STALE";
 
+    /** Why an opening order was not placed at its trigger: its price, or the book's, is past PERCENT_PRICE (TR-39). */
+    static final String PERCENT_PRICE = "PERCENT_PRICE";
+
     private final PaperOrderRepository orders;
     private final FuturesMargins margins;
     private final FuturesArrival arrival;
@@ -141,12 +144,23 @@ class FuturesTrigger {
                 : new PaperOrderAwaitingTrigger(watched);
     }
 
-    /** Why the opening part cannot be taken now, if it cannot: a stale mark, too little margin, too large a position. */
+    /**
+     * Why the opening part cannot be taken now, if it cannot: a stale mark, a price past PERCENT_PRICE as a placed order
+     * would be refused (plan 8.2), too large a position, too little margin.
+     */
     private Optional<String> refusal(
             PaperAccount account, PaperOrder conditional, FuturesPair pair, BigDecimal size, BigDecimal opening) {
         Optional<BigDecimal> mark = margins.freshMark(pair.symbol());
         if (mark.isEmpty()) {
             return Optional.of(MARK_STALE);
+        }
+        BigDecimal judged = conditional.getLimitPrice() != null
+                ? conditional.getLimitPrice()
+                : arrival.bookFor(pair.pairId(), pair.symbol(), conditional.getSide())
+                        .map(found -> found.levels().getFirst().price())
+                        .orElse(null);
+        if (!FuturesOrderServiceImpl.withinPercentPrice(pair.filters(), conditional.getSide(), judged, mark.get())) {
+            return Optional.of(PERCENT_PRICE);
         }
         BigDecimal last =
                 market.currentLastPrice(MarketType.FUTURES, pair.symbol()).orElse(mark.get());

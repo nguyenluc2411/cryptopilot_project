@@ -52,7 +52,7 @@ public class FuturesCalculatorServiceImpl implements FuturesCalculatorService {
     @Override
     @Transactional(readOnly = true)
     public FuturesCalculatorResponse pnl(UUID userId, FuturesPnlCalcRequest request) {
-        FuturesPair pair = pairOf(userId, request.symbol());
+        FuturesPair pair = margins.pair(request.symbol());
         int leverage = requireLeverage(pair, request.leverage());
         BigDecimal initialMargin =
                 FuturesMarginMath.initialMargin(request.quantity().multiply(request.entryPrice()), leverage);
@@ -75,7 +75,7 @@ public class FuturesCalculatorServiceImpl implements FuturesCalculatorService {
     @Override
     @Transactional(readOnly = true)
     public FuturesCalculatorResponse target(UUID userId, FuturesTargetCalcRequest request) {
-        FuturesPair pair = pairOf(userId, request.symbol());
+        FuturesPair pair = margins.pair(request.symbol());
         int leverage = requireLeverage(pair, request.leverage());
         BigDecimal target =
                 FuturesMarginMath.targetPrice(request.side(), request.entryPrice(), leverage, request.roe());
@@ -96,7 +96,7 @@ public class FuturesCalculatorServiceImpl implements FuturesCalculatorService {
     @Override
     @Transactional(readOnly = true)
     public FuturesCalculatorResponse liquidation(UUID userId, FuturesLiquidationCalcRequest request) {
-        FuturesPair pair = pairOf(userId, request.symbol());
+        FuturesPair pair = margins.pair(request.symbol());
         int leverage = requireLeverage(pair, request.leverage());
         if (request.marginType() == MarginType.CROSSED && request.walletBalance() == null) {
             throw new FieldValidationException(
@@ -128,7 +128,7 @@ public class FuturesCalculatorServiceImpl implements FuturesCalculatorService {
     @Override
     @Transactional(readOnly = true)
     public FuturesCalculatorResponse maxOpen(UUID userId, FuturesMaxOpenCalcRequest request) {
-        FuturesPair pair = pairOf(userId, request.symbol());
+        FuturesPair pair = margins.pair(request.symbol());
         int leverage = requireLeverage(pair, request.leverage());
         BigDecimal maxNotional = FuturesMarginMath.maxNotionalAtLeverage(pair.tiers(), leverage);
         BigDecimal price = request.entryPrice();
@@ -159,7 +159,8 @@ public class FuturesCalculatorServiceImpl implements FuturesCalculatorService {
     @Override
     @Transactional(readOnly = true)
     public FuturesCalculatorResponse openPrice(UUID userId, FuturesOpenPriceCalcRequest request) {
-        pairOf(userId, request.symbol());
+        // Read only to refuse a symbol not traded on Futures, as the other tabs do.
+        margins.pair(request.symbol());
         BigDecimal openPrice = FuturesMarginMath.averageOpenPrice(request.lots().stream()
                 .map(lot -> new OpenedLot(lot.price(), lot.quantity()))
                 .toList());
@@ -167,11 +168,6 @@ public class FuturesCalculatorServiceImpl implements FuturesCalculatorService {
                 .map(FuturesOpenPriceCalcRequest.Lot::quantity)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         return new FuturesCalculatorResponse(null, null, null, null, null, null, null, null, null, openPrice, quantity);
-    }
-
-    /** A pair traded on Futures with brackets; Futures is open to every plan, as Spot. */
-    private FuturesPair pairOf(UUID userId, String symbol) {
-        return margins.pair(symbol);
     }
 
     private static int requireLeverage(FuturesPair pair, int leverage) {

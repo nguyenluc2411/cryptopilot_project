@@ -25,7 +25,6 @@ import com.cryptopilot.paper.model.enums.MarginAdjustmentType;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderType;
-import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.model.enums.TimeInForce;
@@ -47,10 +46,12 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * The position actions of TR-17, one-way mode.
@@ -75,6 +76,7 @@ import org.springframework.transaction.annotation.Transactional;
  * History</i>, Binance Developer Center.
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class FuturesPositionServiceImpl implements FuturesPositionService {
 
@@ -93,7 +95,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     private final FuturesMarginAdjustmentRepository adjustments;
     private final FuturesMargins margins;
     private final FuturesOrderService orders;
-    private final FuturesArrival arrival;
+    private final TransactionTemplate transactions;
     private final UserLock lock;
     private final MarketApi market;
     private final PaperUserFeed feed;
@@ -210,15 +212,23 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
                 .toList();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>A close of one pair is one transaction under the Trader's lock. Close all is not: see {@link #closeAll}.
+     */
     @Override
-    @Transactional
     public List<FuturesOrderResponse> close(UUID userId, FuturesClosePositionRequest request) {
-        requireFutures(userId);
-        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         requireShape(request);
         if (request.symbol() == null) {
             return closeAll(userId);
         }
+        return transactions.execute(status -> closeOnPair(userId, request));
+    }
+
+    private List<FuturesOrderResponse> closeOnPair(UUID userId, FuturesClosePositionRequest request) {
+        requireFutures(userId);
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
         FuturesPair pair = margins.pair(request.symbol());
         FuturesAccountConfig account = margins.accountConfig(userId);
         List<FuturesPosition> closed;
@@ -262,41 +272,48 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     }
 
     /**
-     * Closes every open position by MARKET, the oldest first. A pair with no price to close at right now is left open,
-     * so that it does not keep the others open: one refusal would roll the whole request back. Only when no position
-     * can be closed is the request refused.
+     * Closes every open position by MARKET, the oldest first, each in a transaction of its own as if the Trader closed
+     * them one by one: one that cannot be closed now (no price, a refused order, a pair out of service) stays open and
+     * keeps none of the others open. It holds no transaction and no lock itself, as each close takes the Trader's lock.
+     * When none could be closed, the first refusal is the answer.
      */
     private List<FuturesOrderResponse> closeAll(UUID userId) {
+        transactions.executeWithoutResult(status -> requireFutures(userId));
         List<FuturesPosition> open = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN);
         Map<UUID, String> symbols = new LinkedHashMap<>();
         for (PairListing pair : market.pairListings(
                 open.stream().map(FuturesPosition::getPairId).toList())) {
             symbols.put(pair.pairId(), pair.symbol());
         }
-        List<FuturesPosition> closable = open.stream()
-                .filter(position -> arrival.bookFor(
-                                position.getPairId(), symbols.get(position.getPairId()), closingSide(position))
-                        .isPresent())
-                .toList();
-        if (closable.isEmpty() && !open.isEmpty()) {
-            throw new BusinessException(ErrorCode.MARKET_PRICE_UNAVAILABLE, "no current price to close at on FUTURES");
-        }
-        List<FuturesOrderResponse> placed = new ArrayList<>(closable.size());
-        closable.stream()
-                .sorted((a, b) -> a.getOpenedAt().compareTo(b.getOpenedAt()))
-                .forEach(position -> placed.add(orders.place(
+        List<FuturesOrderResponse> placed = new ArrayList<>(open.size());
+        BusinessException firstRefusal = null;
+        for (FuturesPosition position : open.stream()
+                .sorted(Comparator.comparing(FuturesPosition::getOpenedAt))
+                .toList()) {
+            try {
+                placed.add(orders.place(
                         userId,
                         closing(
                                 symbols.get(position.getPairId()),
                                 position,
                                 OrderType.MARKET,
                                 null,
-                                position.getQuantity()))));
+                                position.getQuantity())));
+            } catch (BusinessException refused) {
+                log.info(
+                        "Close all of user {} left position {} open: {}",
+                        userId,
+                        position.getId(),
+                        refused.getMessage());
+                if (firstRefusal == null) {
+                    firstRefusal = refused;
+                }
+            }
+        }
+        if (placed.isEmpty() && firstRefusal != null) {
+            throw firstRefusal;
+        }
         return placed;
-    }
-
-    private static OrderSide closingSide(FuturesPosition position) {
-        return position.getDirection() == PositionDirection.LONG ? OrderSide.SELL : OrderSide.BUY;
     }
 
     /**
@@ -305,7 +322,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
      */
     private static FuturesOrderRequest closing(
             String symbol, FuturesPosition position, OrderType type, BigDecimal price, BigDecimal quantity) {
-        OrderSide side = closingSide(position);
+        OrderSide side = position.getDirection().closingSide();
         boolean oneWay = position.getPositionSide() == PositionSide.BOTH;
         return new FuturesOrderRequest(
                 symbol,

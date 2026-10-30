@@ -40,9 +40,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -50,8 +49,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Applies one execution of a Futures order to the Trader's one-way position, in the caller's transaction, which holds
@@ -84,9 +81,6 @@ class FuturesSettlement {
 
     /** Why an order expired: the isolated position it would open could not be funded at the fill. */
     static final String MARGIN_INSUFFICIENT = "MARGIN_INSUFFICIENT";
-
-    /** The key of the account changes this transaction has announced. */
-    private static final Object ANNOUNCED = new Object();
 
     /** Why a closing conditional order expired: the position it would close was closed. */
     static final String POSITION_CLOSED = "POSITION_CLOSED";
@@ -138,6 +132,35 @@ class FuturesSettlement {
             FillSource source,
             Instant at,
             PositionCloseReason closeReason) {
+        return execute(account, order, price, quantity, liquidity, source, at, closeReason, true);
+    }
+
+    /**
+     * Executes a slice of a FOK order whose whole sweep was found fundable before it began ({@link #wholeRefusal}): the
+     * slices are not funded one by one, so a mark that moves between them cannot leave the order filled in part.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    BigDecimal executeWhole(
+            PaperAccount account,
+            PaperOrder order,
+            BigDecimal price,
+            BigDecimal quantity,
+            Liquidity liquidity,
+            FillSource source,
+            Instant at) {
+        return execute(account, order, price, quantity, liquidity, source, at, PositionCloseReason.MANUAL, false);
+    }
+
+    private BigDecimal execute(
+            PaperAccount account,
+            PaperOrder order,
+            BigDecimal price,
+            BigDecimal quantity,
+            Liquidity liquidity,
+            FillSource source,
+            Instant at,
+            PositionCloseReason closeReason,
+            boolean checkFunding) {
         UUID userId = account.userId();
         FuturesPosition position = margins.openPosition(userId, order.getPairId(), order.getPositionSide());
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
@@ -164,7 +187,16 @@ class FuturesSettlement {
         boolean funded = true;
         if (opened.signum() > 0) {
             funded = open(
-                    account, order, effect.reverses() ? null : position, opened, price, liquidity, source, at, usdt);
+                    account,
+                    order,
+                    effect.reverses() ? null : position,
+                    opened,
+                    price,
+                    liquidity,
+                    source,
+                    at,
+                    usdt,
+                    checkFunding);
         }
         BigDecimal executed = funded ? closed.add(opened) : closed;
         if (executed.signum() > 0) {
@@ -179,7 +211,7 @@ class FuturesSettlement {
             coverCrossDeficit(account, userId, position, usdt);
         }
         margins.recordChange(margins.accountConfig(userId));
-        announce(userId, order.getPairId());
+        events.publishEvent(new FuturesAccountChanged(userId, order.getPairId()));
         return executed;
     }
 
@@ -257,7 +289,7 @@ class FuturesSettlement {
         feed.futuresOrder(account, order);
         trimReduceOnly(account, order.getPairId(), order.getPositionSide(), at);
         margins.recordChange(margins.accountConfig(account.userId()));
-        announce(account.userId(), order.getPairId());
+        events.publishEvent(new FuturesAccountChanged(account.userId(), order.getPairId()));
     }
 
     /**
@@ -313,7 +345,7 @@ class FuturesSettlement {
         entityManager.flush();
         coverCrossDeficit(account, userId, position, usdt);
         margins.recordChange(margins.accountConfig(userId));
-        announce(userId, order.getPairId());
+        events.publishEvent(new FuturesAccountChanged(userId, order.getPairId()));
     }
 
     /** The part of a fill that reduces or closes the position, and the isolated cash flow it makes. */
@@ -393,42 +425,67 @@ class FuturesSettlement {
     }
 
     /**
-     * Whether the isolated margin the slices would open, all of them, fits the cross wallet's free cash now: the check
-     * a FOK order makes before it sweeps, so that it fills whole or not at all (4.3 rule 6). The slices first close what
-     * the position has on the other side, which needs no margin. A cross or reduce-only order always fits.
+     * Why a FOK order cannot fill whole on these slices, checked before it sweeps so that it fills all or nothing (4.3
+     * rule 6): a reducing order larger than what the position has to close, or an isolated opening whose margin, all
+     * slices together, is beyond the cross wallet's free cash. The slices first close what the position has on the
+     * other side, which takes no margin. Empty when it can fill whole.
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    boolean fundable(PaperAccount account, PaperOrder order, List<BookSweep.Slice> slices) {
-        if (order.reducing() || slices.isEmpty()) {
-            return true;
-        }
+    Optional<String> wholeRefusal(PaperAccount account, PaperOrder order, List<BookSweep.Slice> slices) {
         UUID userId = account.userId();
-        PairListing pair = market.pairListings(List.of(order.getPairId())).stream()
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
-        FuturesSymbolConfig config =
-                margins.symbolConfig(userId, pair.pairId(), market.leverageBrackets(pair.pairId()));
-        if (config.getMarginType() != MarginType.ISOLATED) {
-            return true;
-        }
         FuturesPosition position = margins.openPosition(userId, order.getPairId(), order.getPositionSide());
         BigDecimal toClose =
                 closableBy(order.getSide(), position == null ? BigDecimal.ZERO : position.signedQuantity());
-        PositionDirection direction = PositionDirection.openedBy(order.getSide());
+        if (order.reducing()) {
+            return order.remainingQuantity().compareTo(toClose) > 0
+                    ? Optional.of(FuturesArrival.NOT_FILLABLE)
+                    : Optional.empty();
+        }
+        Margining margining = marginingOf(userId, order);
+        if (!margining.isolated()) {
+            return Optional.empty();
+        }
         BigDecimal margin = BigDecimal.ZERO;
         for (BookSweep.Slice slice : slices) {
             BigDecimal closing = slice.quantity().min(toClose);
             toClose = toClose.subtract(closing);
             BigDecimal opening = slice.quantity().subtract(closing);
             if (opening.signum() > 0) {
-                BigDecimal mark = market.currentMarkPrice(pair.symbol()).orElse(slice.price());
-                margin = margin.add(FuturesMarginMath.isolatedFillMargin(
-                        direction, opening, slice.price(), mark, config.getLeverage()));
+                margin = margin.add(isolatedMargin(margining, order, opening, slice.price()));
             }
         }
-        return margin.compareTo(
-                        margins.crossState(userId, order.getId(), true).margin().crossFreeCash())
-                <= 0;
+        return margin.compareTo(crossFreeCash(userId, order)) > 0 ? Optional.of(MARGIN_INSUFFICIENT) : Optional.empty();
+    }
+
+    /** The pair a fill of the order is margined on, and the Trader's settings of it. */
+    private record Margining(PairListing pair, FuturesSymbolConfig config) {
+
+        boolean isolated() {
+            return config.getMarginType() == MarginType.ISOLATED;
+        }
+    }
+
+    private Margining marginingOf(UUID userId, PaperOrder order) {
+        PairListing pair = market.pairListings(List.of(order.getPairId())).stream()
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
+        return new Margining(pair, margins.symbolConfig(userId, pair.pairId(), market.leverageBrackets(pair.pairId())));
+    }
+
+    /** The isolated margin a fill of {@code opened} at {@code price} takes, with its open loss to the mark (4.3). */
+    private BigDecimal isolatedMargin(Margining margining, PaperOrder order, BigDecimal opened, BigDecimal price) {
+        BigDecimal mark = market.currentMarkPrice(margining.pair().symbol()).orElse(price);
+        return FuturesMarginMath.isolatedFillMargin(
+                PositionDirection.openedBy(order.getSide()),
+                opened,
+                price,
+                mark,
+                margining.config().getLeverage());
+    }
+
+    /** The cross wallet's free cash an isolated fill is funded from, the order's own rest not counted as waiting. */
+    private BigDecimal crossFreeCash(UUID userId, PaperOrder order) {
+        return margins.crossState(userId, order.getId(), true).margin().crossFreeCash();
     }
 
     /**
@@ -447,21 +504,17 @@ class FuturesSettlement {
             Liquidity liquidity,
             FillSource source,
             Instant at,
-            CoinListing usdt) {
+            CoinListing usdt,
+            boolean checkFunding) {
         UUID userId = account.userId();
-        PairListing pair = market.pairListings(List.of(order.getPairId())).stream()
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
-        FuturesSymbolConfig config =
-                margins.symbolConfig(userId, pair.pairId(), market.leverageBrackets(pair.pairId()));
+        Margining margining = marginingOf(userId, order);
+        PairListing pair = margining.pair();
+        FuturesSymbolConfig config = margining.config();
         PositionDirection direction = PositionDirection.openedBy(order.getSide());
         BigDecimal margin = BigDecimal.ZERO;
-        if (config.getMarginType() == MarginType.ISOLATED) {
-            BigDecimal mark = market.currentMarkPrice(pair.symbol()).orElse(price);
-            margin = FuturesMarginMath.isolatedFillMargin(direction, opened, price, mark, config.getLeverage());
-            BigDecimal free =
-                    margins.crossState(userId, order.getId(), true).margin().crossFreeCash();
-            if (margin.compareTo(free) > 0) {
+        if (margining.isolated()) {
+            margin = isolatedMargin(margining, order, opened, price);
+            if (checkFunding && margin.compareTo(crossFreeCash(userId, order)) > 0) {
                 return false;
             }
         }
@@ -572,34 +625,6 @@ class FuturesSettlement {
         BigDecimal crossWallet = margins.crossWallet(account.userId(), open);
         if (crossWallet.signum() < 0) {
             wallets.changeFutures(account, pairId, usdt, crossWallet.negate(), LedgerEntryType.INSURANCE_COVER, cause);
-        }
-    }
-
-    /**
-     * Tells the matching engine, once per transaction and pair, that the Trader's account changed: an order that sweeps
-     * twenty levels executes twenty times, and the engine needs to read the levels again only once after the commit.
-     */
-    private void announce(UUID userId, UUID pairId) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            events.publishEvent(new FuturesAccountChanged(userId, pairId));
-            return;
-        }
-        @SuppressWarnings("unchecked")
-        Set<FuturesAccountChanged> announced =
-                (Set<FuturesAccountChanged>) TransactionSynchronizationManager.getResource(ANNOUNCED);
-        if (announced == null) {
-            announced = new HashSet<>();
-            TransactionSynchronizationManager.bindResource(ANNOUNCED, announced);
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCompletion(int status) {
-                    TransactionSynchronizationManager.unbindResourceIfPossible(ANNOUNCED);
-                }
-            });
-        }
-        FuturesAccountChanged change = new FuturesAccountChanged(userId, pairId);
-        if (announced.add(change)) {
-            events.publishEvent(change);
         }
     }
 

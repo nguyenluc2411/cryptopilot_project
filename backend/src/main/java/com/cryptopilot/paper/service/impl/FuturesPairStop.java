@@ -13,7 +13,6 @@ import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.PositionCloseReason;
-import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.repository.FuturesPositionRepository;
@@ -153,7 +152,7 @@ public class FuturesPairStop {
 
     /** Closes the whole position at the mark with a system MARKET order, as a taker. */
     private void close(PaperAccount account, FuturesPosition position, BigDecimal mark, Instant at) {
-        OrderSide side = position.getDirection() == PositionDirection.LONG ? OrderSide.SELL : OrderSide.BUY;
+        OrderSide side = position.getDirection().closingSide();
         PaperOrder order = orders.save(PaperOrder.futuresMarket(
                 account.userId(),
                 position.getPairId(),

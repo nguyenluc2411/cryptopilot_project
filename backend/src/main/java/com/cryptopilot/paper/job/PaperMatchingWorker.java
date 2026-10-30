@@ -184,6 +184,12 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
     private final BlockingQueue<Command> queue = new LinkedBlockingQueue<>();
     private final BlockingQueue<Replay> replays = new LinkedBlockingQueue<>();
 
+    /**
+     * The account changes waiting for the consumer, each queued once while present: an order that sweeps twenty levels
+     * reports its change twenty times, and the levels need reading again only once.
+     */
+    private final Set<FuturesAccountChanged> accountChanges = ConcurrentHashMap.newKeySet();
+
     /** The merged forming range of each pair, waiting for the consumer; its key is queued once while present. */
     private final Map<BookKey, PriceRange> forming = new ConcurrentHashMap<>();
 
@@ -552,7 +558,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
      */
     @TransactionalEventListener
     public void onAccountChanged(FuturesAccountChanged event) {
-        if (running) {
+        if (running && accountChanges.add(event)) {
             queue.offer(new Command.AccountChanged(event.userId(), event.pairId()));
         }
     }
@@ -609,6 +615,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             }
             case Command.TrackMarkTrigger track -> markTriggers.track(track.order());
             case Command.AccountChanged changed -> {
+                // Removed before the read, so a change committed while it runs is queued again.
+                accountChanges.remove(new FuturesAccountChanged(changed.userId(), changed.pairId()));
                 refreshLevels(changed.userId(), changed.pairId());
                 refreshCross(changed.userId());
             }

@@ -26,6 +26,11 @@ public enum PositionDirection {
         return sign;
     }
 
+    /** The side of the order that closes a position of this direction. */
+    public OrderSide closingSide() {
+        return this == LONG ? OrderSide.SELL : OrderSide.BUY;
+    }
+
     /** The direction a fill of this side opens or increases. */
     public static PositionDirection openedBy(OrderSide side) {
         return side == OrderSide.BUY ? LONG : SHORT;

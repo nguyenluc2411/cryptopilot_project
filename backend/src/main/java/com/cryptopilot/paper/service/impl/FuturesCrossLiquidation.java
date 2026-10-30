@@ -16,7 +16,6 @@ import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
-import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -220,7 +219,7 @@ class FuturesCrossLiquidation {
     /** Closes all of the position at its pair's mark with the system's MARKET order. */
     private void close(PaperAccount account, FuturesPosition position, Judgement judgement, Instant at) {
         BigDecimal mark = judgement.marks().get(position.getPairId());
-        OrderSide side = position.getDirection() == PositionDirection.LONG ? OrderSide.SELL : OrderSide.BUY;
+        OrderSide side = position.getDirection().closingSide();
         PaperOrder order = orders.save(PaperOrder.futuresMarket(
                 account.userId(),
                 position.getPairId(),

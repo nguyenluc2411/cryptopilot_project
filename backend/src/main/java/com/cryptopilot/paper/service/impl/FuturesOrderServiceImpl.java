@@ -189,10 +189,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             }
             SpotFilters.requireNotional(filters, valuedAt.multiply(request.quantity()), false, "quantity");
         }
-        // A closing order on a stale pair skips PERCENT_PRICE, a filter judged at the mark (8.2.1 rule 2).
-        if (!reducing || margins.freshMark(pair.symbol()).isPresent()) {
-            requirePercentPrice(filters, request.side(), request.price(), mark, book);
-        }
+        requirePercentPrice(pair, request.side(), request.price(), mark, book, reducing);
         if (request.withTpSl()) {
             requireTpSl(filters, request, request.price() != null ? request.price() : mark != null ? mark : last);
         }
@@ -287,7 +284,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         if (!reducing) {
             SpotFilters.requireNotional(filters, request.price().multiply(request.quantity()), false, "quantity");
         }
-        requirePercentPrice(filters, order.getSide(), request.price(), mark, book);
+        requirePercentPrice(pair, order.getSide(), request.price(), mark, book, reducing);
         BigDecimal size = Optional.ofNullable(margins.openPosition(userId, pair.pairId(), order.getPositionSide()))
                 .map(FuturesPosition::signedQuantity)
                 .orElse(BigDecimal.ZERO);
@@ -713,29 +710,35 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      *
      * @param price the limit price, or {@code null} for a MARKET order
      */
+    private void requirePercentPrice(
+            FuturesPair pair,
+            OrderSide side,
+            BigDecimal price,
+            BigDecimal mark,
+            Optional<SpotArrival.Book> book,
+            boolean closing) {
+        // A closing order on a stale pair skips the filter, which is judged at the mark (8.2.1 rule 2).
+        if (!closing || margins.freshMark(pair.symbol()).isPresent()) {
+            requirePercentPrice(pair.filters(), side, price, mark, book);
+        }
+    }
+
     private static void requirePercentPrice(
             PairFilters filters, OrderSide side, BigDecimal price, BigDecimal mark, Optional<SpotArrival.Book> book) {
-        if (mark == null) {
-            return;
-        }
-        boolean buy = side == OrderSide.BUY;
-        BigDecimal multiplier =
-                buy ? filters.rules().bidMultiplierUp() : filters.rules().askMultiplierDown();
-        if (multiplier == null) {
-            return;
-        }
         boolean marketOrder = price == null;
         BigDecimal judged = marketOrder
                 ? book.map(found -> found.levels().getFirst().price()).orElse(null)
                 : price;
-        if (judged == null) {
+        if (withinPercentPrice(filters, side, judged, mark)) {
             return;
         }
-        BigDecimal bound = mark.multiply(multiplier);
-        if (buy ? judged.compareTo(bound) <= 0 : judged.compareTo(bound) >= 0) {
-            return;
-        }
-        String limit = bound.stripTrailingZeros().toPlainString();
+        boolean buy = side == OrderSide.BUY;
+        String limit = mark.multiply(
+                        buy
+                                ? filters.rules().bidMultiplierUp()
+                                : filters.rules().askMultiplierDown())
+                .stripTrailingZeros()
+                .toPlainString();
         throw marketOrder
                 ? new FuturesRejection(
                         ErrorCode.PAPER_PERCENT_PRICE,
@@ -753,6 +756,23 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                         judged,
                         limit,
                         buy ? SpotFilters.MAX : SpotFilters.MIN);
+    }
+
+    /**
+     * Whether a price of {@code side} meets PERCENT_PRICE: a BUY at most the mark times {@code multiplierUp}, a SELL at
+     * least the mark times {@code multiplierDown}. Met without a mark, a multiplier or a price to judge.
+     *
+     * @param judged the limit price, or the best price of the book a MARKET order takes
+     */
+    static boolean withinPercentPrice(PairFilters filters, OrderSide side, BigDecimal judged, BigDecimal mark) {
+        boolean buy = side == OrderSide.BUY;
+        BigDecimal multiplier =
+                buy ? filters.rules().bidMultiplierUp() : filters.rules().askMultiplierDown();
+        if (mark == null || multiplier == null || judged == null) {
+            return true;
+        }
+        BigDecimal bound = mark.multiply(multiplier);
+        return buy ? judged.compareTo(bound) <= 0 : judged.compareTo(bound) >= 0;
     }
 
     /** Whether an order of {@code side} on {@code positionSide} closes a hedge-mode side (TR-14b). */

@@ -2020,6 +2020,132 @@ class FuturesOrderApiTest {
                 .isEqualTo("MARGIN_INSUFFICIENT");
     }
 
+    /** A reduce-only FOK larger than the position fills nothing rather than the part it could close. */
+    @Test
+    void TR15_aReduceOnlyFok_largerThanThePosition_fillsNothing() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+
+        place(trader, """
+                        {"symbol": "%s", "side": "SELL", "type": "LIMIT", "timeInForce": "FOK", "price": "99",
+                         "quantity": "2", "reduceOnly": true}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.executedQty").value(numeric("0")));
+        assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("1");
+    }
+
+    /** 8.2.1 rule 2 holds for an amendment too: a closing order on a stale pair moves past PERCENT_PRICE. */
+    @Test
+    void TR25_amendingAClosingOrder_onAStalePair_skipsPercentPrice() throws Exception {
+        sql.sql("update crypto_pair set futures_multiplier_up = 1.05, futures_multiplier_down = 0.95 where pair_id = ?")
+                .param(pair)
+                .update();
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String waiting = id(place(trader, """
+                                {"symbol": "%s", "side": "SELL", "type": "LIMIT", "timeInForce": "GTC", "price": "101",
+                                 "quantity": "1", "reduceOnly": true}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW")));
+
+        staleMark("100");
+
+        amend(trader, waiting, "SELL", "94.9", "1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FILLED"));
+        assertThat(openPositions(trader)).isZero();
+    }
+
+    /**
+     * Plan 8.2: a MARKET fill is judged by PERCENT_PRICE before it executes, a triggered stop's too: an opening stop
+     * whose book is past the bound is rejected at its trigger rather than placed.
+     */
+    @Test
+    void TR39_aTriggeredOpeningStop_pastPercentPrice_isRejected() throws Exception {
+        sql.sql("update crypto_pair set futures_multiplier_up = 1.05, futures_multiplier_down = 0.95 where pair_id = ?")
+                .param(pair)
+                .update();
+        UUID trader = trader(true);
+        String id = algoId(algo(trader, """
+                                {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "type": "STOP_MARKET",
+                                 "triggerPrice": "101", "quantity": "1", "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        depth(List.of(level("106", "5")), List.of(level("105.9", "5")));
+
+        trigger(trader, id, OrderSide.BUY, TriggerCondition.AT_OR_ABOVE, "101");
+
+        assertThat(statusOf(id)).isEqualTo("REJECTED");
+        assertThat(sql.sql("select status_reason from trade_order where order_id = ?")
+                        .param(UUID.fromString(id))
+                        .query(String.class)
+                        .single())
+                .isEqualTo("PERCENT_PRICE");
+        assertThat(openPositions(trader)).isZero();
+    }
+
+    /** Close all closes what it can: a pair with no price keeps its position open, and the others still close. */
+    @Test
+    void TR17_closeAll_leavesAnUnpricedPairOpen_andClosesTheOthers() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String other = "FO" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
+        UUID otherPair = secondPair(other);
+        try {
+            otherDepth(otherPair, List.of(level("50", "5")), List.of(level("49.9", "5")));
+            as(trader, post(FUTURES + "/order"), """
+                            {"symbol": "%s", "side": "BUY", "type": "MARKET", "quantity": "1"}""".formatted(other)).andExpect(status().isOk());
+            assertThat(openPositions(trader)).isEqualTo(2);
+            otherDepth(otherPair, List.of(), List.of());
+            redis.delete("px:FUTURES:" + other);
+
+            close(trader, """
+                            {"type": "MARKET"}""")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(1))
+                    .andExpect(jsonPath("$[0].symbol").value(symbol));
+            assertThat(openPositions(trader)).isOne();
+        } finally {
+            removeSecondPair(trader, otherPair);
+        }
+    }
+
+    /**
+     * Rule (B): a late funding fee of an isolated position closed since is paid from the cross wallet only up to what
+     * its wallet gave back at the close; the rest is an insurance cover, even while a cross position is open.
+     */
+    @Test
+    void TR24_aLateFeeOfAClosedIsolatedPosition_beyondWhatItGaveBack_isCovered() throws Exception {
+        UUID trader = trader(true);
+        String other = "FO" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
+        UUID otherPair = secondPair(other);
+        try {
+            otherDepth(otherPair, List.of(level("50", "5")), List.of(level("49.9", "5")));
+            as(trader, post(FUTURES + "/order"), """
+                            {"symbol": "%s", "side": "BUY", "type": "MARKET", "quantity": "1"}""".formatted(other)).andExpect(status().isOk());
+            isolated(trader, 10);
+            depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+            place(trader, market("BUY", "1")).andExpect(status().isOk());
+            backdate(trader, Duration.ofHours(2));
+            settlement(Duration.ofHours(1), "0.001", "100000");
+            place(trader, market("SELL", "1")).andExpect(status().isOk());
+
+            assertThat(funding.run()).isEqualTo(1);
+
+            // Paid 100; the isolated wallet of 10 gave back 9.9 after its loss of 0.1: 90.1 is covered.
+            assertThat(sql.sql("""
+                                    select amount from wallet_ledger_entry
+                                     where user_id = ? and entry_type = 'INSURANCE_COVER' and ref_type = 'FUNDING'""").param(trader).query(BigDecimal.class).single())
+                    .isEqualByComparingTo("90.1");
+            assertThat(wallet(trader)).isEqualByComparingTo("4990");
+            assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+        } finally {
+            removeSecondPair(trader, otherPair);
+        }
+    }
+
     /** Close all with no price for any position's pair is refused whole, and nothing is placed. */
     @Test
     void TR17_closeAll_withNoPriceToCloseAt_isRefused() throws Exception {
@@ -2065,6 +2191,54 @@ class FuturesOrderApiTest {
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
+
+    /** A second Futures pair, one bracket up to 125x, its mark at 50. */
+    private UUID secondPair(String other) {
+        UUID otherPair = new MarketTestData(sql, Instant.now()).pair(other, true, true, "TRADING", "TRADING", 1);
+        sql.sql("""
+                        update crypto_pair set futures_tick_size = 0.1, futures_step_size = 0.001,
+                               futures_min_notional = 5
+                         where pair_id = ?""").param(otherPair).update();
+        sql.sql("""
+                        insert into leverage_bracket (pair_id, bracket_no, notional_floor, notional_cap, max_leverage,
+                                                      maintenance_margin_rate, maintenance_amount, updated_at)
+                        values (?, 1, 0, 3000000, 125, 0.004, 0, now())""").param(otherPair).update();
+        prices.record(
+                MarketType.FUTURES,
+                new MarkPriceMessage(
+                        other,
+                        new BigDecimal("50"),
+                        new BigDecimal("50"),
+                        BigDecimal.ZERO,
+                        Instant.now().plus(Duration.ofHours(1)),
+                        Instant.now().plusMillis(TICKS.incrementAndGet())));
+        prices.flush();
+        return otherPair;
+    }
+
+    /** A Futures depth20 snapshot of the second pair, newer than every earlier one. */
+    private void otherDepth(UUID otherPair, List<PriceLevel> asks, List<PriceLevel> bids) {
+        trading.recordDepth(
+                new OrderBookDepth(MarketType.FUTURES, otherPair, TICKS.incrementAndGet(), bids, asks, Instant.now()));
+    }
+
+    /** Removes the Trader's rows first, as they point at the second pair, then the pair. */
+    private void removeSecondPair(UUID trader, UUID otherPair) {
+        for (String table : List.of(
+                "futures_margin_adjustment",
+                "order_fill",
+                "futures_position",
+                "futures_symbol_config",
+                "trade_order",
+                "order_list",
+                "wallet_ledger_entry")) {
+            sql.sql("delete from " + table + " where user_id = ?").param(trader).update();
+        }
+        sql.sql("delete from leverage_bracket where pair_id = ?")
+                .param(otherPair)
+                .update();
+        new MarketTestData(sql, Instant.now()).remove(otherPair);
+    }
 
     // ------------------------------------------------------------------------------------------
     // Hedge mode (TR-14b)

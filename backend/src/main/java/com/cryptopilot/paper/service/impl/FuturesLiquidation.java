@@ -17,7 +17,6 @@ import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
-import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -137,7 +136,7 @@ class FuturesLiquidation {
             return false;
         }
         cancelOrders(account, position.getPairId(), at);
-        OrderSide side = position.getDirection() == PositionDirection.LONG ? OrderSide.SELL : OrderSide.BUY;
+        OrderSide side = position.getDirection().closingSide();
         PaperOrder order = orders.save(PaperOrder.futuresMarket(
                 account.userId(),
                 position.getPairId(),
