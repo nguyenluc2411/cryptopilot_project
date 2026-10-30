@@ -48,7 +48,9 @@ import com.cryptopilot.paper.service.impl.FuturesPairStop;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
+import java.io.InputStream;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
@@ -68,6 +70,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -2099,6 +2102,135 @@ class FuturesOrderApiTest {
         assertThat(((Timestamp) fill.get("source_time")).toInstant()).isEqualTo(candle);
         assertThat(((Timestamp) fill.get("traded_at")).toInstant()).isAfterOrEqualTo(before);
         assertThat(((Timestamp) position(trader).get("opened_at")).toInstant()).isAfterOrEqualTo(before);
+        as(trader, get(FUTURES + "/userTrades").param("symbol", symbol), null)
+                .andExpect(jsonPath("$[0].sourceTime").isNotEmpty());
+    }
+
+    /**
+     * 8.2.1: a stale mark decides nothing, so PERCENT_PRICE is not judged at it: a close that is not flagged reduce-only
+     * and an opening LIMIT order that waits both go on.
+     */
+    @Test
+    void TR22a_onAStalePair_percentPriceIsNotJudgedAtTheStaleMark() throws Exception {
+        sql.sql("update crypto_pair set futures_multiplier_up = 1.05, futures_multiplier_down = 0.95 where pair_id = ?")
+                .param(pair)
+                .update();
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        staleMark("100");
+
+        place(trader, limit("SELL", "GTC", "94.9", "0.5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FILLED"));
+        depth(List.of(level("110", "5")), List.of(level("109.9", "5")));
+        place(trader, limit("BUY", "GTC", "106", "0.5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW"));
+    }
+
+    /** 8.2.1 rule 2: a close on a stale pair fills on the book alone; a book as old as the mark is no price either. */
+    @Test
+    void TR22a_aCloseOnAStalePair_withAStaleBookToo_isRefused() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        staleMark("100");
+        oldDepth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        place(trader, """
+                        {"symbol": "%s", "side": "SELL", "type": "MARKET", "quantity": "1",
+                         "reduceOnly": true}""".formatted(symbol)).andExpect(status().isServiceUnavailable());
+        assertThat(openPositions(trader)).isOne();
+    }
+
+    /** Plan 9.3 with 8.2.1 rule 2: a cross position whose pair's mark and book are both stale is not closed yet. */
+    @Test
+    void TR23_aCrossPosition_whoseMarkAndBookAreStale_waits() throws Exception {
+        UUID trader = trader(true);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+
+        staleMark("9000");
+        oldDepth(List.of(level("8000.1", "5")), List.of(level("8000", "5")));
+        matching.liquidateCross(trader, pair, Instant.now());
+
+        assertThat(openPositions(trader)).isOne();
+        as(trader, get(FUTURES + "/forceOrders"), null)
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    /** Plan 9.5: a GTD order a replay reached in time is never on record as filled after its good-till date. */
+    @Test
+    void TR44_aReplayedGtdFill_isDatedBeforeTheOrderExpired() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String waiting = id(place(trader, gtd("99", Instant.now().plus(Duration.ofHours(1))))
+                .andExpect(status().isOk()));
+        Instant until = Instant.now().minus(Duration.ofMinutes(5)).truncatedTo(ChronoUnit.MILLIS);
+        sql.sql("update trade_order set good_till_date = ? where order_id = ?")
+                .params(Timestamp.from(until), UUID.fromString(waiting))
+                .update();
+        Instant candle = until.minus(Duration.ofMinutes(5)).truncatedTo(ChronoUnit.MINUTES);
+
+        assertThat(matching.fill(
+                        new RestingOrder(
+                                UUID.fromString(waiting),
+                                trader,
+                                MarketType.FUTURES,
+                                pair,
+                                OrderSide.BUY,
+                                new BigDecimal("99"),
+                                Instant.now().minus(Duration.ofHours(1))),
+                        candle,
+                        FillSource.REPLAY))
+                .isTrue();
+
+        Timestamp traded = sql.sql("select traded_at from order_fill where order_id = ?")
+                .param(UUID.fromString(waiting))
+                .query(Timestamp.class)
+                .single();
+        assertThat(traded.toInstant()).isBefore(until).isAfter(candle);
+    }
+
+    /** V58 works out what an isolated position gave back to the cross wallet as the settlement records it. */
+    @Test
+    void TR24_theBackfillOfWhatAnIsolatedPositionGaveBack_matchesTheSettlement() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        place(trader, market("SELL", "0.4")).andExpect(status().isOk());
+        depth(List.of(level("103.1", "5")), List.of(level("103", "5")));
+        place(trader, market("SELL", "0.6")).andExpect(status().isOk());
+        UUID positionId = sql.sql("select position_id from futures_position where user_id = ?")
+                .param(trader)
+                .query(UUID.class)
+                .single();
+        BigDecimal settled = returnedToCross(positionId);
+        // 10 of margin: 0.4 gave back 4 less 0.04, then 0.6 gave back 6 and 1.8.
+        assertThat(settled).isEqualByComparingTo("11.76");
+
+        sql.sql("update futures_position set returned_to_cross_amount = 0 where position_id = ?")
+                .param(positionId)
+                .update();
+        try (InputStream backfill = new ClassPathResource(
+                        "db/migration/V58__futures_position_returned_to_cross_backfill.sql")
+                .getInputStream()) {
+            String update = new String(backfill.readAllBytes(), StandardCharsets.UTF_8)
+                    .replace("WHERE p.margin_type = 'ISOLATED';", "WHERE p.position_id = ?");
+            sql.sql(update).param(positionId).update();
+        }
+
+        assertThat(returnedToCross(positionId)).isEqualByComparingTo(settled);
+    }
+
+    private BigDecimal returnedToCross(UUID positionId) {
+        return sql.sql("select returned_to_cross_amount from futures_position where position_id = ?")
+                .param(positionId)
+                .query(BigDecimal.class)
+                .single();
     }
 
     /** A reduce-only FOK larger than the position fills nothing rather than the part it could close. */
@@ -2295,6 +2427,17 @@ class FuturesOrderApiTest {
                         Instant.now().plusMillis(TICKS.incrementAndGet())));
         prices.flush();
         return otherPair;
+    }
+
+    /** A Futures depth20 snapshot of the test pair, newer than every earlier one, but read a minute ago. */
+    private void oldDepth(List<PriceLevel> asks, List<PriceLevel> bids) {
+        trading.recordDepth(new OrderBookDepth(
+                MarketType.FUTURES,
+                pair,
+                TICKS.incrementAndGet(),
+                bids,
+                asks,
+                Instant.now().minusSeconds(60)));
     }
 
     /** A Futures depth20 snapshot of the second pair, newer than every earlier one. */

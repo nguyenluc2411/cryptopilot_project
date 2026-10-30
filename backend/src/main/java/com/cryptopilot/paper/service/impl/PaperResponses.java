@@ -123,7 +123,8 @@ final class PaperResponses {
                 fill.getLiquidity() == Liquidity.MAKER,
                 fill.getSide() == OrderSide.BUY,
                 fill.getPositionId(),
-                fill.getTradedAt());
+                fill.getTradedAt(),
+                fill.getSourceTime());
     }
 
     /**

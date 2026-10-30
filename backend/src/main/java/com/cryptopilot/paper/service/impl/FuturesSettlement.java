@@ -324,7 +324,7 @@ class FuturesSettlement {
                                     cover.getId()));
         }
         // What the cross wallet got from the liquidation: what the wallet had left after the loss and the fee.
-        position.returnToCross(realized.subtract(fee).add(flow.insuranceCover()).subtract(flow.isolatedWalletChange()));
+        position.returnToCross(flow.crossChange());
         position.reduce(quantity, mark, realized, PositionCloseReason.LIQUIDATION, at);
         position.addLiquidationFee(fee);
         publishIfClosed(position);
@@ -453,7 +453,7 @@ class FuturesSettlement {
                                         position, type, change, MarginAdjustmentRefType.LEDGER, cover.getId()));
             }
             // What the cross wallet got from this fill: the wallet's share, with the profit or less the loss.
-            position.returnToCross(realized.add(flow.insuranceCover()).subtract(change));
+            position.returnToCross(flow.crossChange());
         }
         position.reduce(closed, price, realized, closeReason, at);
         publishIfClosed(position);
@@ -481,18 +481,19 @@ class FuturesSettlement {
     @Transactional(propagation = Propagation.MANDATORY)
     WholeCheck checkWhole(PaperAccount account, PaperOrder order, List<BookSweep.Slice> slices) {
         UUID userId = account.userId();
-        Margining margining = marginingOf(userId, order);
-        Optional<BigDecimal> mark = market.currentMarkPrice(margining.pair().symbol());
         FuturesPosition position = margins.openPosition(userId, order.getPairId(), order.getPositionSide());
         BigDecimal toClose =
                 closableBy(order.getSide(), position == null ? BigDecimal.ZERO : position.signedQuantity());
         if (order.reducing()) {
+            // It opens nothing, so no margin and no mark.
             return new WholeCheck(
                     order.remainingQuantity().compareTo(toClose) > 0
                             ? Optional.of(FuturesArrival.NOT_FILLABLE)
                             : Optional.empty(),
-                    mark);
+                    Optional.empty());
         }
+        Margining margining = marginingOf(userId, order);
+        Optional<BigDecimal> mark = market.currentMarkPrice(margining.pair().symbol());
         if (!margining.isolated()) {
             return new WholeCheck(Optional.empty(), mark);
         }

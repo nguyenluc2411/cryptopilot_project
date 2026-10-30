@@ -113,7 +113,10 @@ class FuturesCrossLiquidation {
         if (pairId == null || !first.getPairId().equals(pairId)) {
             return Optional.of(first.getPairId());
         }
-        close(account, first, judgement, at);
+        if (!close(account, first, judgement, at)) {
+            // A stale pair with no recent book either: nothing to close it at yet; the safety job tries again.
+            return Optional.empty();
+        }
         Optional<Judgement> after = judge(userId);
         if (after.isEmpty()) {
             // Left to the safety job, which judges the account again once every mark is known.
@@ -181,6 +184,7 @@ class FuturesCrossLiquidation {
             return Optional.of(Judgement.none());
         }
         Map<UUID, BigDecimal> marks = new HashMap<>();
+        Map<UUID, String> symbols = new HashMap<>();
         Set<UUID> current = new LinkedHashSet<>();
         for (PairListing pair : market.pairListings(
                 cross.stream().map(FuturesPosition::getPairId).collect(Collectors.toSet()))) {
@@ -190,6 +194,7 @@ class FuturesCrossLiquidation {
                 return Optional.empty();
             }
             marks.put(pair.pairId(), mark.get());
+            symbols.put(pair.pairId(), pair.symbol());
             if (margins.freshMark(pair.symbol()).isPresent()) {
                 current.add(pair.pairId());
             }
@@ -216,16 +221,33 @@ class FuturesCrossLiquidation {
                         .thenComparing(FuturesPosition::getOpenedAt))
                 .orElseThrow();
         return Optional.of(new Judgement(
-                crossWallet.add(unrealized), maintenance, first, marks, unrealized, unrealizedByPosition));
+                crossWallet.add(unrealized),
+                maintenance,
+                first,
+                marks,
+                symbols,
+                Set.copyOf(current),
+                unrealized,
+                unrealizedByPosition));
     }
 
     /**
      * Closes all of the position with the system's MARKET order: at its pair's mark, or, on a pair whose mark is stale,
      * at the average price of the book it takes (plan 9.3), the stale mark being no price anyone could trade at.
+     *
+     * @return whether it closed; not on a stale pair whose book is as old
      */
-    private void close(PaperAccount account, FuturesPosition position, Judgement judgement, Instant at) {
+    private boolean close(PaperAccount account, FuturesPosition position, Judgement judgement, Instant at) {
         OrderSide side = position.getDirection().closingSide();
-        BigDecimal mark = closingPrice(position, side, judgement.marks().get(position.getPairId()));
+        Optional<BigDecimal> price = closingPrice(position, side, judgement);
+        if (price.isEmpty()) {
+            log.warn(
+                    "TR-23 cross position {} of user {} waits: its pair's mark and book are both stale",
+                    position.getId(),
+                    account.userId());
+            return false;
+        }
+        BigDecimal mark = price.get();
         PaperOrder order = orders.save(PaperOrder.futuresMarket(
                 account.userId(),
                 position.getPairId(),
@@ -250,30 +272,21 @@ class FuturesCrossLiquidation {
                 null,
                 at));
         log.info("TR-23 cross position {} of user {} liquidated at mark {}", position.getId(), account.userId(), mark);
+        return true;
     }
 
     /**
-     * The price a liquidation closes the position at: its pair's mark while current; on a stale pair the average price
-     * of the book for the whole size, the rest past the book at its last level, as a MARKET order fills. Without a book
-     * either, the last mark known is all there is.
+     * The price a liquidation closes the position at: its pair's mark while current, as judged; on a stale pair the
+     * average price of a book the stream showed within {@code mark-max-age} for the whole size, the rest past the book
+     * at its last level, as a MARKET order fills (8.2.1 rule 2, 9.3). Empty when the book is stale too.
      */
-    private BigDecimal closingPrice(FuturesPosition position, OrderSide side, BigDecimal mark) {
-        Optional<String> symbol = market.pairListings(List.of(position.getPairId())).stream()
-                .findFirst()
-                .map(PairListing::symbol);
-        if (symbol.isEmpty() || margins.freshMark(symbol.get()).isPresent()) {
-            return mark;
+    private Optional<BigDecimal> closingPrice(FuturesPosition position, OrderSide side, Judgement judgement) {
+        if (judgement.current().contains(position.getPairId())) {
+            return Optional.of(judgement.marks().get(position.getPairId()));
         }
         BookSweep.Result sweep = FuturesArrival.sweep(
-                arrival.bookFor(position.getPairId(), symbol.get(), side), side, position.getQuantity(), null);
-        if (sweep.isEmpty()) {
-            log.warn(
-                    "TR-23 stale pair {} has no book either: position {} closes at the last mark",
-                    symbol.get(),
-                    position.getId());
-            return mark;
-        }
-        return Rounding.divide(sweep.notional(), sweep.quantity());
+                arrival.freshBookFor(position.getPairId(), side), side, position.getQuantity(), null);
+        return sweep.isEmpty() ? Optional.empty() : Optional.of(Rounding.divide(sweep.notional(), sweep.quantity()));
     }
 
     /** Cancels every open order of the account, on every pair, conditional ones included (plan 4.12 step 2). */
@@ -308,11 +321,14 @@ class FuturesCrossLiquidation {
             BigDecimal maintenance,
             FuturesPosition firstToClose,
             Map<UUID, BigDecimal> marks,
+            Map<UUID, String> symbols,
+            Set<UUID> current,
             BigDecimal unrealized,
             Map<UUID, BigDecimal> unrealizedByPosition) {
 
         static Judgement none() {
-            return new Judgement(BigDecimal.ZERO, BigDecimal.ZERO, null, Map.of(), BigDecimal.ZERO, Map.of());
+            return new Judgement(
+                    BigDecimal.ZERO, BigDecimal.ZERO, null, Map.of(), Map.of(), Set.of(), BigDecimal.ZERO, Map.of());
         }
 
         /** Whether a liquidation is due: a cross position, and a margin balance at or below its maintenance. */

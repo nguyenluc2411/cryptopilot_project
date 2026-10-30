@@ -193,8 +193,13 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         // A stale mark is told first: PERCENT_PRICE is judged at the mark, and a stale one decides nothing (8.2.1).
         if (opening.signum() > 0) {
             requireFreshMarks(userId, pair, request.side(), request.price(), book);
+        } else if (marketOrder && margins.freshMark(pair.symbol()).isEmpty()) {
+            // A close on a stale pair fills on the book alone, which may not be as old as the mark (8.2.1 rule 2).
+            book = Optional.of(futuresArrival
+                    .freshBookFor(pair.pairId(), request.side())
+                    .orElseThrow(() -> priceUnavailable(pair)));
         }
-        requirePercentPrice(pair, request.side(), request.price(), mark, book, reducing);
+        requirePercentPrice(pair, request.side(), request.price(), book);
         if (request.withTpSl()) {
             requireTpSl(filters, request, request.price() != null ? request.price() : mark != null ? mark : last);
         }
@@ -287,7 +292,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         if (!reducing) {
             SpotFilters.requireNotional(filters, request.price().multiply(request.quantity()), false, "quantity");
         }
-        requirePercentPrice(pair, order.getSide(), request.price(), mark, book, reducing);
+        requirePercentPrice(pair, order.getSide(), request.price(), book);
         BigDecimal size = Optional.ofNullable(margins.openPosition(userId, pair.pairId(), order.getPositionSide()))
                 .map(FuturesPosition::signedQuantity)
                 .orElse(BigDecimal.ZERO);
@@ -714,16 +719,11 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      * @param price the limit price, or {@code null} for a MARKET order
      */
     private void requirePercentPrice(
-            FuturesPair pair,
-            OrderSide side,
-            BigDecimal price,
-            BigDecimal mark,
-            Optional<SpotArrival.Book> book,
-            boolean closing) {
-        // A closing order on a stale pair skips the filter, which is judged at the mark (8.2.1 rule 2).
-        if (!closing || margins.freshMark(pair.symbol()).isPresent()) {
-            requirePercentPrice(pair.filters(), side, price, mark, book);
-        }
+            FuturesPair pair, OrderSide side, BigDecimal price, Optional<SpotArrival.Book> book) {
+        // Judged at a current mark only: a stale one decides nothing (8.2.1), what would open risk on it was refused
+        // above, and a close or an order that waits goes on without it.
+        requirePercentPrice(
+                pair.filters(), side, price, margins.freshMark(pair.symbol()).orElse(null), book);
     }
 
     private static void requirePercentPrice(

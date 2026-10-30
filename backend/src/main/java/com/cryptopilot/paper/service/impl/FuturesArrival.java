@@ -4,6 +4,7 @@ import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.model.PaperAccount;
@@ -13,6 +14,7 @@ import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.TimeInForce;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -48,6 +50,8 @@ class FuturesArrival {
     private final FuturesSettlement settlement;
     private final SpotArrival arrival;
     private final MarketApi market;
+    private final PaperFuturesProperties futures;
+    private final Clock clock;
 
     /** The other side of the pair's Futures book an order of {@code side} takes; empty without any current price. */
     Optional<SpotArrival.Book> bookFor(UUID pairId, String symbol, OrderSide side) {
@@ -68,6 +72,30 @@ class FuturesArrival {
         }
         return market.currentLastPrice(MarketType.FUTURES, symbol)
                 .map(last -> new SpotArrival.Book(List.of(new PriceLevel(last, BigDecimal.ZERO)), false));
+    }
+
+    /**
+     * The other side of the pair's Futures book as the stream showed it within {@code mark-max-age}: the depth, else the
+     * best bid and ask; never the last price. What fills a closing order or a liquidation on a pair whose mark is stale,
+     * which may not fill on a book as old as the mark (8.2.1 rule 2); empty when there is none that recent.
+     */
+    Optional<SpotArrival.Book> freshBookFor(UUID pairId, OrderSide side) {
+        Instant oldest = clock.instant().minus(futures.markMaxAge());
+        boolean buy = side == OrderSide.BUY;
+        Optional<List<PriceLevel>> depth = market.currentDepth(MarketType.FUTURES, pairId)
+                .filter(found -> !found.receivedAt().isBefore(oldest))
+                .map(found -> buy ? found.asks() : found.bids())
+                .filter(levels -> !levels.isEmpty());
+        if (depth.isPresent()) {
+            return Optional.of(new SpotArrival.Book(depth.get(), true));
+        }
+        return market.currentBookTop(MarketType.FUTURES, pairId)
+                .filter(found -> !found.receivedAt().isBefore(oldest))
+                .map(found -> buy
+                        ? new PriceLevel(found.askPrice(), found.askQuantity())
+                        : new PriceLevel(found.bidPrice(), found.bidQuantity()))
+                .filter(level -> level.price().signum() > 0)
+                .map(level -> new SpotArrival.Book(List.of(level), true));
     }
 
     /** What an order of {@code quantity} would take of the book at or better than {@code limit}; nothing without one. */

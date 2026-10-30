@@ -230,14 +230,15 @@ public class PaperAccountServiceImpl implements PaperAccountService {
 
     /**
      * A transfer moves the cross wallet: the matching engine reads the Trader's cross account again after the commit,
-     * as for a fill (plan 9.6 rule 3), once per pair of a cross position. With none, it has nothing to read again.
+     * as for a fill (plan 9.6 rule 3). It reads the whole cross account on one change, so one is told, named after any
+     * pair of a cross position; with none, there is nothing to read again. Isolated levels do not move.
      */
     private void announceCrossChange(UUID userId) {
         futuresPositions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN).stream()
                 .filter(position -> position.getMarginType() == MarginType.CROSSED)
                 .map(FuturesPosition::getPairId)
-                .distinct()
-                .forEach(pairId -> events.publishEvent(new FuturesAccountChanged(userId, pairId)));
+                .findFirst()
+                .ifPresent(pairId -> events.publishEvent(new FuturesAccountChanged(userId, pairId)));
     }
 
     /**

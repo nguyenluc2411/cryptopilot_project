@@ -112,7 +112,7 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             }
             // The rest at the limit price, as a maker; what the position does not take ends the order (TR-16). A
             // replayed fill is dated when it is applied, with the candle's time kept apart (plan 9.5).
-            Instant at = source == FillSource.REPLAY ? clock.instant() : tradedAt;
+            Instant at = source == FillSource.REPLAY ? replayedAt(order) : tradedAt;
             if (source == FillSource.REPLAY) {
                 futuresSettlement.executeReplayed(
                         account,
@@ -257,6 +257,17 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         // A stop is never the working order of a group, so no candle is needed to place anything after it.
         lists.afterExecution(account, order, at, source, null);
         return true;
+    }
+
+    /**
+     * When a replayed Futures fill is dated: when it is applied (plan 9.5), but never past the order's good-till date,
+     * which the candle it was decided on came before: a GTD order reached in time is not on record as filled after it
+     * expired.
+     */
+    private Instant replayedAt(PaperOrder order) {
+        Instant now = clock.instant();
+        Instant until = order.getGoodTillDate();
+        return until != null && !until.isAfter(now) ? until.minusMillis(1) : now;
     }
 
     /**

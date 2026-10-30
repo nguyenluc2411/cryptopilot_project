@@ -141,16 +141,11 @@ public class PaperFill extends BaseEntity {
     }
 
     /**
-     * A fill of a Futures order: part or all of an execution, on one position.
-     *
-     * @param positionId the position it acts on
-     * @param realizedPnl what it realised, zero when it opened or increased the position
-     */
-    /**
      * A Futures fill a replay applied takes the price of a candle earlier than when it is applied (plan 9.5): it is
      * dated when applied, and keeps the candle's time here, to show at what time's price it filled. Nothing for a live
      * fill, which leaves {@code sourceTime} {@code null}.
      *
+     * @param candleTime the time of the candle whose price a replay took, or {@code null} for a live fill
      * @return this fill
      */
     public PaperFill takenFrom(Instant candleTime) {
@@ -163,6 +158,12 @@ public class PaperFill extends BaseEntity {
         return this;
     }
 
+    /**
+     * A fill of a Futures order: part or all of an execution, on one position.
+     *
+     * @param positionId the position it acts on
+     * @param realizedPnl what it realised, zero when it opened or increased the position
+     */
     public static PaperFill futures(PaperOrder order, Execution execution, UUID positionId, BigDecimal realizedPnl) {
         if (order.getMarketType() != MarketType.FUTURES) {
             throw new IllegalArgumentException("order " + order.getId() + " is not a Futures order");

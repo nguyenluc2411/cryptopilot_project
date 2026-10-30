@@ -24,7 +24,9 @@ import java.util.UUID;
  * @param maker whether it rested in the book
  * @param buyer whether it bought
  * @param positionId the position it acted on (CryptoPilot's, so the position history can be followed)
- * @param time when it executed
+ * @param time when it executed; for a fill a replay applied, when it was applied
+ * @param sourceTime for a fill a replay applied, the time of the candle whose price it took; {@code null} for a live
+ *     fill (CryptoPilot's, plan 9.5)
  */
 public record FuturesTradeResponse(
         UUID id,
@@ -41,4 +43,5 @@ public record FuturesTradeResponse(
         boolean maker,
         boolean buyer,
         UUID positionId,
-        Instant time) {}
+        Instant time,
+        Instant sourceTime) {}
