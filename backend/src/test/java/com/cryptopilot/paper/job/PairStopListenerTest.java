@@ -6,9 +6,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.market.PairMarketDisabled;
 import com.cryptopilot.market.event.SpotPairStoppedTrading;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.service.impl.FuturesPairStop;
 import com.cryptopilot.paper.service.impl.PairStopCancellation;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -26,7 +30,8 @@ class PairStopListenerTest {
             new SpotPairStoppedTrading(PAIR, "XYZUSDT", ExchangeStatus.NOT_TRADING);
 
     private final PairStopCancellation cancellation = mock(PairStopCancellation.class);
-    private final PairStopListener listener = new PairStopListener(cancellation);
+    private final FuturesPairStop futures = mock(FuturesPairStop.class);
+    private final PairStopListener listener = new PairStopListener(cancellation, futures);
 
     @Test
     void TR02_anAccountThatFails_doesNotStopTheOthers_andTheDeliveryFailsForARetry() {
@@ -46,5 +51,33 @@ class PairStopListenerTest {
         when(cancellation.accountsWithOrders(PAIR)).thenReturn(List.of(UUID.randomUUID()));
 
         assertThatCode(() -> listener.on(STOPPED)).doesNotThrowAnyException();
+    }
+
+    /** TR-46: a Futures market taken out of service ends the Futures of each account, one failing not the others. */
+    @Test
+    void TR46_aFuturesMarketDisabled_endsEachAccountsFutures_andRetriesAFailure() {
+        UUID first = UUID.randomUUID();
+        UUID failing = UUID.randomUUID();
+        PairMarketDisabled disabled = new PairMarketDisabled(PAIR, "XYZUSDT", MarketType.FUTURES, Instant.now());
+        when(futures.accountsOn(PAIR)).thenReturn(List.of(first, failing));
+        when(futures.stop(failing, PAIR)).thenThrow(new IllegalStateException("no mark"));
+
+        assertThatIllegalStateException()
+                .isThrownBy(() -> listener.on(disabled))
+                .withMessageContaining("1 accounts");
+        verify(futures).stop(first, PAIR);
+
+        when(futures.accountsOn(PAIR)).thenReturn(List.of(first));
+        assertThatCode(() -> listener.on(disabled)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void TR02_aSpotMarketDisabled_cancelsItsOrders() {
+        UUID trader = UUID.randomUUID();
+        when(cancellation.accountsWithOrders(PAIR)).thenReturn(List.of(trader));
+
+        listener.on(new PairMarketDisabled(PAIR, "XYZUSDT", MarketType.SPOT, Instant.now()));
+
+        verify(cancellation).cancel(trader, PAIR);
     }
 }

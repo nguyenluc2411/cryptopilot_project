@@ -7,9 +7,11 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -70,6 +72,17 @@ public final class LiquidationBook {
         return pair.values().stream()
                 .filter(level -> level.marginCallReachedBy(mark))
                 .toList();
+    }
+
+    /** The Traders with a level watched on the pair (TR-46). */
+    public Set<UUID> holders(UUID pairId) {
+        Map<UUID, LiquidationLevel> pair = levels.get(key(pairId));
+        if (pair == null) {
+            return Set.of();
+        }
+        Set<UUID> holders = new HashSet<>();
+        pair.values().forEach(level -> holders.add(level.userId()));
+        return holders;
     }
 
     /** Whether any level of the pair is watched. */

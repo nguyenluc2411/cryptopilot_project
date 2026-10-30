@@ -228,8 +228,7 @@ class FuturesCrossLiquidation {
         PaperOrder order = orders.save(PaperOrder.futuresMarket(
                 account.userId(),
                 position.getPairId(),
-                FuturesLiquidation.AUTOCLOSE + at.toEpochMilli() + "-"
-                        + position.getId().toString().substring(0, 8),
+                FuturesLiquidation.closingKey(FuturesLiquidation.AUTOCLOSE, at, position.getId()),
                 side,
                 position.getPositionSide(),
                 position.getQuantity(),

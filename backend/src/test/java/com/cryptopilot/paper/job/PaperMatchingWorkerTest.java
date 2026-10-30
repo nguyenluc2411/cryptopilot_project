@@ -18,6 +18,7 @@ import static org.mockito.Mockito.when;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.cryptopilot.market.LeverageBracketsReplaced;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
@@ -1000,6 +1001,33 @@ class PaperMatchingWorkerTest {
 
         verify(matching, timeout(WAIT)).marginCall(trader, null, null, MINUTE_1);
         verify(matching, never()).liquidateCross(any(), any(), any());
+    }
+
+    /**
+     * TR-46: brackets replaced on a pair, the engine reads again the levels and the cross snapshot of every Trader it
+     * watches there, isolated or cross, and of no one else.
+     */
+    @Test
+    void TR46_bracketsReplaced_readTheLevelsOfThePairsTradersAgain() {
+        UUID isolated = UUID.randomUUID();
+        UUID cross = UUID.randomUUID();
+        UUID elsewhere = UUID.randomUUID();
+        UUID otherPair = UUID.randomUUID();
+        when(matching.liquidationLevels())
+                .thenReturn(List.of(
+                        new LiquidationLevel(
+                                UUID.randomUUID(), isolated, PAIR, PositionDirection.LONG, new BigDecimal("95")),
+                        new LiquidationLevel(
+                                UUID.randomUUID(), elsewhere, otherPair, PositionDirection.LONG, new BigDecimal("9"))));
+        when(matching.crossAccounts()).thenReturn(List.of(crossAccount(cross, otherPair)));
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onBracketsReplaced(new LeverageBracketsReplaced(PAIR, "BTCUSDT", MINUTE_1));
+
+        verify(matching, timeout(WAIT)).liquidationLevels(isolated, PAIR);
+        verify(matching, timeout(WAIT)).liquidationLevels(cross, PAIR);
+        verify(matching, timeout(WAIT)).crossAccount(cross);
+        verify(matching, after(200).never()).liquidationLevels(elsewhere, PAIR);
     }
 
     private static CrossAccount crossAccount(UUID trader, UUID other) {

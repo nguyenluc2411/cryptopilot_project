@@ -65,6 +65,15 @@ class FuturesLiquidation {
     /** The client order id prefix of a liquidation order, as the exchange's. */
     static final String AUTOCLOSE = "autoclose-";
 
+    /**
+     * The client order id of an order the system places to close a position: the prefix, the instant in milliseconds
+     * and the random end of the position's id. Not its start, which is the time a UUIDv7 was made: two positions
+     * opened in the same millisecond, the two sides of a hedge among them, would share it. At most 36 characters.
+     */
+    static String closingKey(String prefix, Instant at, UUID positionId) {
+        return prefix + at.toEpochMilli() + "-" + positionId.toString().substring(24);
+    }
+
     /** Why an order was cancelled: its position was liquidated. */
     static final String LIQUIDATION = "LIQUIDATION";
 
@@ -131,8 +140,7 @@ class FuturesLiquidation {
         PaperOrder order = orders.save(PaperOrder.futuresMarket(
                 account.userId(),
                 position.getPairId(),
-                AUTOCLOSE + at.toEpochMilli() + "-"
-                        + position.getId().toString().substring(0, 8),
+                closingKey(AUTOCLOSE, at, position.getId()),
                 side,
                 position.getPositionSide(),
                 position.getQuantity(),

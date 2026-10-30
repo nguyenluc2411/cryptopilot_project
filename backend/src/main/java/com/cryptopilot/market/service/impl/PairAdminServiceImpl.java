@@ -8,6 +8,7 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.market.LeverageBracketsReplaced;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.OpenPositionCheck;
 import com.cryptopilot.market.PairMarketDisabled;
@@ -268,7 +269,11 @@ public class PairAdminServiceImpl implements PairAdminService {
             requireWithinFirstBracket(pair.getMaxLeverage(), tiers, "brackets[0].maxLeverage");
         }
         List<LeverageTier> before = brackets.findByPair(pair.getId());
-        brackets.replace(pair.getId(), tiers, adminId, clock.instant());
+        Instant now = clock.instant();
+        brackets.replace(pair.getId(), tiers, adminId, now);
+        // Open paper Futures positions keep trading on the new brackets: their liquidation price and maintenance
+        // margin follow at once (plan 9.7).
+        events.publishEvent(new LeverageBracketsReplaced(pair.getId(), pair.getSymbol(), now));
         admin.audit(new AuditEntry(
                 adminId,
                 before.isEmpty() ? AuditAction.CONFIGURATION_CREATED : AuditAction.CONFIGURATION_CHANGED,

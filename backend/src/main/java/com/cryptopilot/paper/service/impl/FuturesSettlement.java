@@ -113,6 +113,23 @@ class FuturesSettlement {
             Liquidity liquidity,
             FillSource source,
             Instant at) {
+        return execute(account, order, price, quantity, liquidity, source, at, PositionCloseReason.MANUAL);
+    }
+
+    /**
+     * As {@link #execute(PaperAccount, PaperOrder, BigDecimal, BigDecimal, Liquidity, FillSource, Instant)}, a position
+     * it closes being closed for {@code closeReason}: SYSTEM when the pair was taken out of service (TR-46).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    BigDecimal execute(
+            PaperAccount account,
+            PaperOrder order,
+            BigDecimal price,
+            BigDecimal quantity,
+            Liquidity liquidity,
+            FillSource source,
+            Instant at,
+            PositionCloseReason closeReason) {
         UUID userId = account.userId();
         FuturesPosition position = margins.openPosition(userId, order.getPairId(), order.getPositionSide());
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
@@ -129,7 +146,7 @@ class FuturesSettlement {
         CoinListing usdt = margins.usdt();
         BigDecimal closed = effect.closedQuantity();
         if (closed.signum() > 0) {
-            close(account, order, position, effect, price, liquidity, source, at, usdt);
+            close(account, order, position, effect, price, liquidity, source, at, usdt, closeReason);
             if (effect.reverses()) {
                 // The closed row must reach the database before the new one, as only one position may be open.
                 entityManager.flush();
@@ -304,7 +321,8 @@ class FuturesSettlement {
             Liquidity liquidity,
             FillSource source,
             Instant at,
-            CoinListing usdt) {
+            CoinListing usdt,
+            PositionCloseReason closeReason) {
         BigDecimal closed = effect.closedQuantity();
         BigDecimal realized = effect.realizedPnl();
         BigDecimal sizeBefore = position.getQuantity();
@@ -352,7 +370,7 @@ class FuturesSettlement {
                                         position, type, change, MarginAdjustmentRefType.LEDGER, cover.getId()));
             }
         }
-        position.reduce(closed, price, realized, PositionCloseReason.MANUAL, at);
+        position.reduce(closed, price, realized, closeReason, at);
         publishIfClosed(position);
     }
 

@@ -53,5 +53,15 @@ public interface FuturesPositionRepository extends Repository<FuturesPosition, U
             + " and p.closedAt >= :from and p.closedAt < :to order by p.closedAt desc, p.id desc")
     List<FuturesPosition> closedOfPair(UUID userId, UUID pairId, Instant from, Instant to, Pageable pageable);
 
+    /** The Traders with an open position of the pair: those a stop or new brackets of the pair concern (TR-46). */
+    @Query("select distinct p.userId from FuturesPosition p where p.pairId = :pairId"
+            + " and p.positionStatus = com.cryptopilot.paper.model.enums.PositionStatus.OPEN")
+    List<UUID> findHolderIds(UUID pairId);
+
+    /** The pairs with an open position: those the pair-stop sweep looks at (TR-46). */
+    @Query("select distinct p.pairId from FuturesPosition p"
+            + " where p.positionStatus = com.cryptopilot.paper.model.enums.PositionStatus.OPEN")
+    List<UUID> findHeldPairIds();
+
     FuturesPosition save(FuturesPosition position);
 }

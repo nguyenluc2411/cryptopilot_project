@@ -1,5 +1,6 @@
 package com.cryptopilot.paper.job;
 
+import com.cryptopilot.market.LeverageBracketsReplaced;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarkPriceListener;
 import com.cryptopilot.market.MarketApi;
@@ -556,6 +557,17 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
     }
 
+    /**
+     * A pair's leverage brackets were replaced (TR-46, plan 9.7): the liquidation levels and cross snapshots of every
+     * Trader the engine watches on the pair are read again on the consumer thread, on the new brackets.
+     */
+    @TransactionalEventListener
+    public void onBracketsReplaced(LeverageBracketsReplaced event) {
+        if (running) {
+            queue.offer(new Command.BracketsReplaced(event.pairId()));
+        }
+    }
+
     /** A cancelled order leaves the book. */
     @TransactionalEventListener
     public void onCanceled(PaperOrderCanceled event) {
@@ -599,6 +611,14 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             case Command.AccountChanged changed -> {
                 refreshLevels(changed.userId(), changed.pairId());
                 refreshCross(changed.userId());
+            }
+            case Command.BracketsReplaced replaced -> {
+                Set<UUID> holders = new HashSet<>(liquidations.holders(replaced.pairId()));
+                holders.addAll(crossHolders.getOrDefault(replaced.pairId(), Set.of()));
+                for (UUID userId : holders) {
+                    refreshLevels(userId, replaced.pairId());
+                    refreshCross(userId);
+                }
             }
             case Command.ForceClose force -> crossStep(force.userId(), force.pairId(), clock.instant());
             case Command.ResumeLiquidations resume -> resume(resume.startedBefore());
@@ -1608,6 +1628,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
         /** Resume the cross liquidations that started before {@code startedBefore} and still run (TR-23). */
         record ResumeLiquidations(Instant startedBefore) implements Command {}
+
+        /** Read the liquidation levels of every Trader watched on a pair again, its brackets replaced (TR-46). */
+        record BracketsReplaced(UUID pairId) implements Command {}
 
         /** Read a Trader's liquidation levels on a pair again (TR-22). */
         record AccountChanged(UUID userId, UUID pairId) implements Command {}

@@ -43,6 +43,7 @@ import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.FuturesOrderService;
 import com.cryptopilot.paper.service.FuturesPositionWarningService;
 import com.cryptopilot.paper.service.PaperMatchingService;
+import com.cryptopilot.paper.service.impl.FuturesPairStop;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -91,11 +92,11 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * what each committed change pushes on the Trader's Futures queues; what a stale mark price refuses; and the
  * conditional orders, placed, triggered and ended; the liquidation of isolated positions; funding; the amendment of a
  * waiting order, the calculator and the order form's risk warnings; the warnings of held positions; GTD orders and
- * the commission.
+ * the commission; a pair taken out of service.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-26, TR-27, TR-41, TR-44; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-26, TR-27, TR-41, TR-44, TR-46; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -142,6 +143,9 @@ class FuturesOrderApiTest {
 
     @Autowired
     private FuturesOrderService futuresOrders;
+
+    @Autowired
+    private FuturesPairStop pairStop;
 
     @Autowired
     private ApplicationEvents closedEvents;
@@ -2601,6 +2605,96 @@ class FuturesOrderApiTest {
                 .andExpect(jsonPath("$.symbol").value(symbol))
                 .andExpect(jsonPath("$.makerCommissionRate").value(numeric("0")))
                 .andExpect(jsonPath("$.takerCommissionRate").value(numeric("0")));
+    }
+
+    /**
+     * TR-39 (plan 10.4): the stored Futures bounds refuse a LIMIT order above LOT_SIZE's maxQty or below PRICE_FILTER's
+     * minPrice, and a MARKET order above MARKET_LOT_SIZE's maxQty, never rounding them.
+     */
+    @Test
+    void TR39_theFuturesPriceAndQuantityBounds_areChecked() throws Exception {
+        sql.sql("""
+                        update crypto_pair set futures_min_price = 1, futures_max_qty = 10, futures_market_max_qty = 2
+                         where pair_id = ?""").param(pair).update();
+        UUID trader = trader(true);
+        depth(List.of(level("100", "50")), List.of(level("99.9", "50")));
+
+        place(trader, limit("BUY", "GTC", "99", "11"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PAPER_LOT_SIZE"));
+        place(trader, limit("BUY", "GTC", "0.5", "11"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PAPER_PRICE_FILTER"));
+        place(trader, market("BUY", "3"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PAPER_MARKET_LOT_SIZE"));
+        place(trader, market("BUY", "2")).andExpect(status().isOk());
+        assertThat(orderCount(trader)).isEqualTo(1);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // A pair taken out of service (TR-46)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Plan 9.7: the pair's waiting order and conditional order are cancelled with PAIR_NOT_TRADING, then the isolated
+     * long of 1 at 100 is closed at the mark of 102 by the system: +2 realised, its wallet released, closed as SYSTEM.
+     * Run again, it does nothing.
+     */
+    @Test
+    void TR46_aPairOutOfService_cancelsItsOrders_andClosesItsPositionsAtTheMark() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String waiting = id(place(trader, limit("BUY", "GTC", "90", "1")).andExpect(status().isOk()));
+        String stop = algoId(algo(trader, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "90", "closePosition": true, "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        mark("102");
+        closedEvents.clear();
+
+        assertThat(pairStop.pairsInUse()).contains(pair);
+        assertThat(pairStop.accountsOn(pair)).containsExactly(trader);
+        assertThat(pairStop.outOfService(pair)).isFalse();
+        assertThat(pairStop.outOfService(UUID.randomUUID())).isTrue();
+        assertThat(pairStop.stop(trader, pair)).isEqualTo(3);
+        assertThat(pairStop.stop(trader, pair)).isZero();
+
+        for (String orderId : List.of(waiting, stop)) {
+            assertThat(sql.sql("select order_status || ':' || status_reason from trade_order where order_id = ?")
+                            .param(UUID.fromString(orderId))
+                            .query(String.class)
+                            .single())
+                    .isEqualTo("CANCELED:PAIR_NOT_TRADING");
+        }
+        Map<String, Object> closed = sql.sql("select * from futures_position where user_id = ?")
+                .param(trader)
+                .query()
+                .singleRow();
+        assertThat(closed.get("position_status")).isEqualTo("CLOSED");
+        assertThat(closed.get("close_reason")).isEqualTo("SYSTEM");
+        assertThat((BigDecimal) closed.get("close_avg_price")).isEqualByComparingTo("102");
+        assertThat(wallet(trader)).isEqualByComparingTo("5002");
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+        assertThat(closedEvents.stream(PaperPositionClosed.class))
+                .singleElement()
+                .satisfies(event -> assertThat(event.closeReason()).isEqualTo("SYSTEM"));
+        assertThat(pairStop.accountsOn(pair)).isEmpty();
+    }
+
+    /** In hedge mode both sides are closed, each by its closing side. */
+    @Test
+    void TR46_inHedgeMode_bothSidesAreClosed() throws Exception {
+        UUID trader = trader(true);
+        positionMode(trader, true).andExpect(status().isOk());
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, hedge("BUY", "LONG", "1")).andExpect(status().isOk());
+        place(trader, hedge("SELL", "SHORT", "1")).andExpect(status().isOk());
+
+        assertThat(pairStop.stop(trader, pair)).isEqualTo(2);
+
+        assertThat(openPositions(trader)).isZero();
     }
 
     private String gtd(String price, Instant date) {
