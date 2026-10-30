@@ -42,6 +42,7 @@ import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -273,9 +274,10 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
 
     /**
      * Closes every open position by MARKET, the oldest first, each in a transaction of its own as if the Trader closed
-     * them one by one: one that cannot be closed now (no price, a refused order, a pair out of service) stays open and
-     * keeps none of the others open. It holds no transaction and no lock itself, as each close takes the Trader's lock.
-     * When none could be closed, the first refusal is the answer.
+     * them one by one: under the Trader's lock the position is read again, so a close is built from what it holds then,
+     * and one that is gone since needs nothing. One that cannot be closed now (no price, a refused order, a pair out of
+     * service) stays open and keeps none of the others open. When none could be closed, the first refusal is the
+     * answer; the client reads the positions again to see what is left.
      */
     private List<FuturesOrderResponse> closeAll(UUID userId) {
         transactions.executeWithoutResult(status -> requireFutures(userId));
@@ -291,14 +293,9 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
                 .sorted(Comparator.comparing(FuturesPosition::getOpenedAt))
                 .toList()) {
             try {
-                placed.add(orders.place(
-                        userId,
-                        closing(
-                                symbols.get(position.getPairId()),
-                                position,
-                                OrderType.MARKET,
-                                null,
-                                position.getQuantity())));
+                transactions
+                        .execute(status -> closeWhole(userId, position.getId(), symbols.get(position.getPairId())))
+                        .ifPresent(placed::add);
             } catch (BusinessException refused) {
                 log.info(
                         "Close all of user {} left position {} open: {}",
@@ -314,6 +311,16 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
             throw firstRefusal;
         }
         return placed;
+    }
+
+    /** Closes all of one position by MARKET under the Trader's lock, as it stands now; nothing if it closed since. */
+    private Optional<FuturesOrderResponse> closeWhole(UUID userId, UUID positionId, String symbol) {
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        return positions
+                .findById(positionId)
+                .filter(FuturesPosition::isOpen)
+                .map(position -> orders.place(
+                        userId, closing(symbol, position, OrderType.MARKET, null, position.getQuantity())));
     }
 
     /**

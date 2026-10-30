@@ -104,8 +104,10 @@ class FuturesTrigger {
         }
         BigDecimal opening =
                 reducing ? BigDecimal.ZERO : FuturesOrderServiceImpl.opening(conditional.getSide(), quantity, size);
+        // Read once: the price PERCENT_PRICE judges is the one the placed order takes.
+        Optional<SpotArrival.Book> book = arrival.bookFor(pair.pairId(), pair.symbol(), conditional.getSide());
         if (opening.signum() > 0) {
-            Optional<String> refused = refusal(account, conditional, pair, size, opening);
+            Optional<String> refused = refusal(account, conditional, pair, size, opening, book);
             if (refused.isPresent()) {
                 end(account, conditional, OrderStatus.REJECTED, refused.get(), at);
                 return;
@@ -114,7 +116,6 @@ class FuturesTrigger {
         PaperOrder placed =
                 orders.save(placedOrder(conditional, quantity, reducing).placedBy(conditional));
         end(account, conditional, OrderStatus.FILLED, TRIGGERED, at);
-        Optional<SpotArrival.Book> book = arrival.bookFor(pair.pairId(), pair.symbol(), placed.getSide());
         if (conditional.getOrderType().isFuturesMarketConditional()) {
             arrival.market(account, placed, book, at);
         } else {
@@ -149,16 +150,19 @@ class FuturesTrigger {
      * would be refused (plan 8.2), too large a position, too little margin.
      */
     private Optional<String> refusal(
-            PaperAccount account, PaperOrder conditional, FuturesPair pair, BigDecimal size, BigDecimal opening) {
+            PaperAccount account,
+            PaperOrder conditional,
+            FuturesPair pair,
+            BigDecimal size,
+            BigDecimal opening,
+            Optional<SpotArrival.Book> book) {
         Optional<BigDecimal> mark = margins.freshMark(pair.symbol());
         if (mark.isEmpty()) {
             return Optional.of(MARK_STALE);
         }
         BigDecimal judged = conditional.getLimitPrice() != null
                 ? conditional.getLimitPrice()
-                : arrival.bookFor(pair.pairId(), pair.symbol(), conditional.getSide())
-                        .map(found -> found.levels().getFirst().price())
-                        .orElse(null);
+                : book.map(found -> found.levels().getFirst().price()).orElse(null);
         if (!FuturesOrderServiceImpl.withinPercentPrice(pair.filters(), conditional.getSide(), judged, mark.get())) {
             return Optional.of(PERCENT_PRICE);
         }

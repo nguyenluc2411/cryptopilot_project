@@ -28,6 +28,7 @@ import com.cryptopilot.paper.dto.response.FuturesAlgoOrderResponse;
 import com.cryptopilot.paper.dto.response.FuturesConfigUpdateResponse;
 import com.cryptopilot.paper.dto.response.FuturesMarginCallResponse;
 import com.cryptopilot.paper.dto.response.FuturesOrderUpdateResponse;
+import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperPositionClosed;
 import com.cryptopilot.paper.job.FuturesFundingJob;
 import com.cryptopilot.paper.model.CrossAccount;
@@ -2018,6 +2019,86 @@ class FuturesOrderApiTest {
                         .query(String.class)
                         .single())
                 .isEqualTo("MARGIN_INSUFFICIENT");
+    }
+
+    /** Plan 9.6 rule 3: a transfer moves the cross wallet, so the engine reads the cross account again after it. */
+    @Test
+    void TR18_aTransfer_tellsTheEngineTheCrossAccountChanged() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        closedEvents.clear();
+
+        as(trader, post("/api/v1/paper/transfers"), """
+                        {"asset": "USDT", "from": "FUTURES", "amount": "100"}""").andExpect(status().isCreated());
+
+        assertThat(closedEvents.stream(FuturesAccountChanged.class))
+                .containsExactly(new FuturesAccountChanged(trader, pair));
+    }
+
+    /** 8.2.1: on a stale pair an opening order is told the mark is stale, not judged against it by PERCENT_PRICE. */
+    @Test
+    void TR22a_anOpeningOrder_onAStalePair_isToldTheMarkIsStale_beforePercentPrice() throws Exception {
+        sql.sql("update crypto_pair set futures_multiplier_up = 1.05, futures_multiplier_down = 0.95 where pair_id = ?")
+                .param(pair)
+                .update();
+        UUID trader = trader(true);
+        staleMark("100");
+        depth(List.of(level("110", "5")), List.of(level("109.9", "5")));
+
+        place(trader, market("BUY", "1")).andExpect(status().isServiceUnavailable());
+    }
+
+    /** Plan 9.3: a cross position on a stale pair is liquidated at the price of the book it takes, not the stale mark. */
+    @Test
+    void TR23_aCrossPositionOnAStalePair_isLiquidatedAtTheBook() throws Exception {
+        UUID trader = trader(true);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+
+        staleMark("9000");
+        depth(List.of(level("8000.1", "5")), List.of(level("8000", "0.05"), level("7000", "5")));
+        matching.liquidateCross(trader, pair, Instant.now());
+
+        // 0.05 at 8,000 and 0.05 at 7,000.
+        as(trader, get(FUTURES + "/forceOrders"), null)
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].avgPrice").value(numeric("7500")));
+        assertThat(openPositions(trader)).isZero();
+    }
+
+    /** Plan 9.5: a replayed fill is dated when it is applied and keeps the time of the candle whose price it took. */
+    @Test
+    void TR42_aReplayedFill_isDatedWhenApplied_andKeepsItsCandleTime() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String waiting = id(place(trader, limit("BUY", "GTC", "99", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW")));
+        Instant candle = Instant.now().minus(Duration.ofMinutes(10)).truncatedTo(ChronoUnit.MINUTES);
+        Instant before = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+
+        assertThat(matching.fill(
+                        new RestingOrder(
+                                UUID.fromString(waiting),
+                                trader,
+                                MarketType.FUTURES,
+                                pair,
+                                OrderSide.BUY,
+                                new BigDecimal("99"),
+                                Instant.now().minus(Duration.ofHours(1))),
+                        candle,
+                        FillSource.REPLAY))
+                .isTrue();
+
+        Map<String, Object> fill = sql.sql("select traded_at, source_time from order_fill where order_id = ?")
+                .param(UUID.fromString(waiting))
+                .query()
+                .singleRow();
+        assertThat(((Timestamp) fill.get("source_time")).toInstant()).isEqualTo(candle);
+        assertThat(((Timestamp) fill.get("traded_at")).toInstant()).isAfterOrEqualTo(before);
+        assertThat(((Timestamp) position(trader).get("opened_at")).toInstant()).isAfterOrEqualTo(before);
     }
 
     /** A reduce-only FOK larger than the position fills nothing rather than the part it could close. */

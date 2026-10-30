@@ -29,11 +29,9 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -55,8 +53,9 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>An open isolated position takes the fee in its isolated wallet by rule (B) of plan 4.3: received or paid, a
  *       payment beyond the wallet being an insurance cover; the matching engine reads its liquidation level again. A
  *       cross position, or one closed since, takes it in the cross wallet. An isolated one closed since pays from the
- *       cross wallet only what its wallet gave back to it, as if the wallet had paid before it closed: the rest is an
- *       insurance cover, so an isolated loss never reaches the cross wallet (rule (B)). A payment that leaves the cross
+ *       cross wallet only what its wallet gave back to it and has not paid yet ({@code returned_to_cross_amount}), as
+ *       if the wallet had paid before it closed: the rest is an insurance cover, so an isolated loss never reaches the
+ *       cross wallet (rule (B)). A payment that leaves the cross
  *       wallet below zero with no cross position open is an insurance cover too (4.3 rule 5).
  * </ul>
  *
@@ -65,10 +64,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class FuturesFunding {
-
-    /** The changes of an isolated wallet a reduction or the close made, of which the cross wallet got the rest. */
-    private static final Set<MarginAdjustmentType> CLOSING_ADJUSTMENTS =
-            EnumSet.of(MarginAdjustmentType.RELEASE, MarginAdjustmentType.LOSS_ABSORB, MarginAdjustmentType.CLOSE);
 
     private final FuturesPositionRepository positions;
     private final PaperFillRepository fills;
@@ -149,18 +144,15 @@ public class FuturesFunding {
                 LedgerEntryType.FUNDING_FEE,
                 Ref.to(LedgerRefType.FUNDING, reference));
         position.addFunding(fee);
-        if (!position.isOpen() && fee.signum() < 0) {
+        if (!position.isOpen()) {
             Ref byFunding = Ref.to(LedgerRefType.FUNDING, reference);
             if (position.getMarginType() == MarginType.ISOLATED) {
-                BigDecimal beyond =
-                        fee.negate().subtract(givenBackLeft(position, reference).max(BigDecimal.ZERO));
-                if (beyond.signum() > 0) {
-                    wallets.changeFutures(
-                            account, position.getPairId(), usdt, beyond, LedgerEntryType.INSURANCE_COVER, byFunding);
-                }
+                payAsTheIsolatedWallet(account, position, fee, byFunding, usdt);
             }
-            // With no cross position left to recover it, a cross wallet below zero is covered (4.3 rule 5).
-            futuresSettlement.coverCrossDeficit(account, position.getPairId(), byFunding, usdt);
+            if (fee.signum() < 0) {
+                // With no cross position left to recover it, a cross wallet below zero is covered (4.3 rule 5).
+                futuresSettlement.coverCrossDeficit(account, position.getPairId(), byFunding, usdt);
+            }
         }
         if (position.isOpen() && position.getMarginType() == MarginType.ISOLATED) {
             IsolatedCashFlow flow = FuturesMarginMath.fundingFlow(position.getIsolatedWalletAmount(), fee);
@@ -199,45 +191,24 @@ public class FuturesFunding {
     }
 
     /**
-     * What a closed isolated position's wallet gave back to the cross wallet and is still there to pay a late fee from.
-     * Each reduction and the close took their share out of the wallet, with the insurance cover of a loss beyond it,
-     * and their realised profit or loss settled against it (rule (A)); the fees of its settlements written after it
-     * closed, but for the one at hand, were paid from what came back.
+     * A late fee of an isolated position closed since, by rule (B), as if its wallet had settled it before giving the
+     * rest back: received, it is part of what came back; paid, the cross wallet pays it only out of what the position
+     * gave back and has not yet paid, and the rest is an insurance cover.
      */
-    private BigDecimal givenBackLeft(FuturesPosition position, UUID current) {
-        List<FuturesMarginAdjustment> taken =
-                adjustments.findByPositionIdOrderByCreatedAtAscIdAsc(position.getId()).stream()
-                        .filter(adjustment -> CLOSING_ADJUSTMENTS.contains(adjustment.getAdjustmentType()))
-                        .toList();
-        List<UUID> coverIds = taken.stream()
-                .filter(adjustment -> adjustment.getRefType() == MarginAdjustmentRefType.LEDGER)
-                .map(FuturesMarginAdjustment::getRefId)
-                .toList();
-        BigDecimal covered = coverIds.isEmpty()
-                ? BigDecimal.ZERO
-                : ledger.findByIdIn(coverIds).stream()
-                        .map(PaperLedgerEntry::getAmount)
-                        .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal released = taken.stream()
-                .map(adjustment -> adjustment.getAmount().negate())
-                .reduce(covered.add(position.getRealizedPnlAmount()), BigDecimal::add);
-        List<UUID> references = market
-                .fundingHistory(position.getPairId(), position.getOpenedAt(), position.getClosedAt())
-                .settlements()
-                .stream()
-                .map(settlement -> referenceOf(new Owed(position.getId(), position.getUserId(), settlement)))
-                .filter(reference -> !reference.equals(current))
-                .toList();
-        BigDecimal paidLate = references.isEmpty()
-                ? BigDecimal.ZERO
-                : ledger
-                        .findByRefTypeAndEntryTypeAndRefIdIn(
-                                LedgerRefType.FUNDING, LedgerEntryType.FUNDING_FEE, references)
-                        .stream()
-                        .filter(entry -> !entry.getCreatedAt().isBefore(position.getClosedAt()))
-                        .map(PaperLedgerEntry::getAmount)
-                        .reduce(BigDecimal.ZERO, BigDecimal::add);
-        return released.add(paidLate);
+    private void payAsTheIsolatedWallet(
+            PaperAccount account, FuturesPosition position, BigDecimal fee, Ref byFunding, CoinListing usdt) {
+        if (fee.signum() > 0) {
+            position.returnToCross(fee);
+            return;
+        }
+        BigDecimal fromCross =
+                fee.negate().min(position.getReturnedToCrossAmount().max(BigDecimal.ZERO));
+        position.returnToCross(fromCross.negate());
+        BigDecimal beyond = fee.negate().subtract(fromCross);
+        if (beyond.signum() > 0) {
+            wallets.changeFutures(
+                    account, position.getPairId(), usdt, beyond, LedgerEntryType.INSURANCE_COVER, byFunding);
+        }
     }
 
     /** The id a funding fee is written under: one per position and settlement instant. */

@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.service.impl;
 
 import com.cryptopilot.admin.SystemSettingApi;
+import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.TradablePair;
@@ -12,6 +13,7 @@ import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.FuturesRiskNotice;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
+import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.MarginType;
@@ -70,6 +72,7 @@ class FuturesCrossLiquidation {
     private final PaperOrderRepository orders;
     private final FuturesMargins margins;
     private final FuturesSettlement settlement;
+    private final FuturesArrival arrival;
     private final FuturesOrderLists tpSl;
     private final PaperUserFeed feed;
     private final MarketApi market;
@@ -216,10 +219,13 @@ class FuturesCrossLiquidation {
                 crossWallet.add(unrealized), maintenance, first, marks, unrealized, unrealizedByPosition));
     }
 
-    /** Closes all of the position at its pair's mark with the system's MARKET order. */
+    /**
+     * Closes all of the position with the system's MARKET order: at its pair's mark, or, on a pair whose mark is stale,
+     * at the average price of the book it takes (plan 9.3), the stale mark being no price anyone could trade at.
+     */
     private void close(PaperAccount account, FuturesPosition position, Judgement judgement, Instant at) {
-        BigDecimal mark = judgement.marks().get(position.getPairId());
         OrderSide side = position.getDirection().closingSide();
+        BigDecimal mark = closingPrice(position, side, judgement.marks().get(position.getPairId()));
         PaperOrder order = orders.save(PaperOrder.futuresMarket(
                 account.userId(),
                 position.getPairId(),
@@ -244,6 +250,30 @@ class FuturesCrossLiquidation {
                 null,
                 at));
         log.info("TR-23 cross position {} of user {} liquidated at mark {}", position.getId(), account.userId(), mark);
+    }
+
+    /**
+     * The price a liquidation closes the position at: its pair's mark while current; on a stale pair the average price
+     * of the book for the whole size, the rest past the book at its last level, as a MARKET order fills. Without a book
+     * either, the last mark known is all there is.
+     */
+    private BigDecimal closingPrice(FuturesPosition position, OrderSide side, BigDecimal mark) {
+        Optional<String> symbol = market.pairListings(List.of(position.getPairId())).stream()
+                .findFirst()
+                .map(PairListing::symbol);
+        if (symbol.isEmpty() || margins.freshMark(symbol.get()).isPresent()) {
+            return mark;
+        }
+        BookSweep.Result sweep = FuturesArrival.sweep(
+                arrival.bookFor(position.getPairId(), symbol.get(), side), side, position.getQuantity(), null);
+        if (sweep.isEmpty()) {
+            log.warn(
+                    "TR-23 stale pair {} has no book either: position {} closes at the last mark",
+                    symbol.get(),
+                    position.getId());
+            return mark;
+        }
+        return Rounding.divide(sweep.notional(), sweep.quantity());
     }
 
     /** Cancels every open order of the account, on every pair, conditional ones included (plan 4.12 step 2). */

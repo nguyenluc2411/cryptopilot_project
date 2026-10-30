@@ -81,7 +81,7 @@ class FuturesArrival {
     @Transactional(propagation = Propagation.MANDATORY)
     void market(PaperAccount account, PaperOrder order, Optional<SpotArrival.Book> book, Instant now) {
         BookSweep.Result sweep = sweep(book, order.getSide(), order.remainingQuantity(), null);
-        execute(account, order, sweep, now, false);
+        execute(account, order, sweep, now, Optional.empty());
         if (order.isOpen()) {
             order.expire(NOT_FILLABLE, now);
         }
@@ -104,13 +104,12 @@ class FuturesArrival {
             return;
         }
         // A FOK order is checked whole before it sweeps: nothing fills rather than a part (4.3 rule 6).
-        boolean whole = timeInForce == TimeInForce.FOK;
-        if (whole) {
-            Optional<String> refused = settlement.wholeRefusal(account, order, sweep.slices());
-            if (refused.isPresent()) {
-                order.expire(refused.get(), now);
-                return;
-            }
+        Optional<FuturesSettlement.WholeCheck> whole = timeInForce == TimeInForce.FOK
+                ? Optional.of(settlement.checkWhole(account, order, sweep.slices()))
+                : Optional.empty();
+        if (whole.isPresent() && whole.get().refusal().isPresent()) {
+            order.expire(whole.get().refusal().get(), now);
+            return;
         }
         execute(account, order, sweep, now, whole);
         if (!order.isOpen()) {
@@ -127,16 +126,20 @@ class FuturesArrival {
     /**
      * Applies each level of a sweep as a live execution, as a taker, until the order ends.
      *
-     * @param whole whether the whole sweep was found fundable before it began, as a FOK order's is
+     * @param whole the check that found the whole sweep fundable before it began, as a FOK order's is; empty otherwise
      */
-    private void execute(PaperAccount account, PaperOrder order, BookSweep.Result sweep, Instant at, boolean whole) {
+    private void execute(
+            PaperAccount account,
+            PaperOrder order,
+            BookSweep.Result sweep,
+            Instant at,
+            Optional<FuturesSettlement.WholeCheck> whole) {
         for (BookSweep.Slice slice : sweep.slices()) {
             if (!order.isOpen()) {
                 return;
             }
-            if (whole) {
-                settlement.executeWhole(
-                        account, order, slice.price(), slice.quantity(), Liquidity.TAKER, FillSource.LIVE, at);
+            if (whole.isPresent()) {
+                settlement.executeWhole(account, order, slice.price(), slice.quantity(), at, whole.get());
             } else {
                 settlement.execute(
                         account, order, slice.price(), slice.quantity(), Liquidity.TAKER, FillSource.LIVE, at);

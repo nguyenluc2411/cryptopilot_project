@@ -110,16 +110,23 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 // is tracked anew.
                 return false;
             }
-            // The rest at the limit price, as a maker; what the position does not take ends the order (TR-16).
-            futuresSettlement.execute(
-                    account,
-                    order,
-                    order.getLimitPrice(),
-                    order.remainingQuantity(),
-                    Liquidity.MAKER,
-                    source,
-                    tradedAt);
-            futuresTpSl.settle(account, order, tradedAt);
+            // The rest at the limit price, as a maker; what the position does not take ends the order (TR-16). A
+            // replayed fill is dated when it is applied, with the candle's time kept apart (plan 9.5).
+            Instant at = source == FillSource.REPLAY ? clock.instant() : tradedAt;
+            if (source == FillSource.REPLAY) {
+                futuresSettlement.executeReplayed(
+                        account,
+                        order,
+                        order.getLimitPrice(),
+                        order.remainingQuantity(),
+                        Liquidity.MAKER,
+                        at,
+                        tradedAt);
+            } else {
+                futuresSettlement.execute(
+                        account, order, order.getLimitPrice(), order.remainingQuantity(), Liquidity.MAKER, source, at);
+            }
+            futuresTpSl.settle(account, order, at);
             log.info(
                     "TR-16 paper Futures order {} filled at {} ({}, {}): {}",
                     order.getId(),
@@ -236,7 +243,8 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         }
         PaperOrder order = found.get();
         if (order.getMarketType() == MarketType.FUTURES) {
-            futuresTrigger.execute(account, order, at, source);
+            // A replay reached the trigger in the past; the order it places takes the book now (plan 9.5).
+            futuresTrigger.execute(account, order, source == FillSource.REPLAY ? clock.instant() : at, source);
             return true;
         }
         if (cancelledAsNotTrading(account, order)) {

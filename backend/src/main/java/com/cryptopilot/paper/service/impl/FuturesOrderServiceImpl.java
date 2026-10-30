@@ -189,13 +189,16 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             }
             SpotFilters.requireNotional(filters, valuedAt.multiply(request.quantity()), false, "quantity");
         }
+        BigDecimal opening = reducing ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
+        // A stale mark is told first: PERCENT_PRICE is judged at the mark, and a stale one decides nothing (8.2.1).
+        if (opening.signum() > 0) {
+            requireFreshMarks(userId, pair, request.side(), request.price(), book);
+        }
         requirePercentPrice(pair, request.side(), request.price(), mark, book, reducing);
         if (request.withTpSl()) {
             requireTpSl(filters, request, request.price() != null ? request.price() : mark != null ? mark : last);
         }
-        BigDecimal opening = reducing ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
         if (opening.signum() > 0) {
-            requireFreshMarks(userId, pair, request.side(), request.price(), book);
             requireMargin(userId, pair, request.side(), request.price(), size, opening, last, mark, null);
         }
         String key = request.newClientOrderId() == null ? UuidV7.next().toString() : request.newClientOrderId();

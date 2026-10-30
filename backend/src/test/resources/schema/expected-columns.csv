@@ -279,6 +279,7 @@ futures_position,position_side,character varying,,,NO
 futures_position,position_status,character varying,,,NO
 futures_position,quantity,numeric,28,12,NO
 futures_position,realized_pnl_amount,numeric,28,8,NO
+futures_position,returned_to_cross_amount,numeric,28,8,NO
 futures_position,updated_at,timestamp with time zone,,,NO
 futures_position,user_id,uuid,,,NO
 futures_position,version,bigint,64,0,NO

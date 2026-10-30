@@ -88,13 +88,6 @@ public interface PaperLedgerEntryRepository extends Repository<PaperLedgerEntry,
     /** Whether an entry of this type points at this reference: a funding fee already written (TR-24). */
     boolean existsByRefTypeAndRefIdAndEntryType(LedgerRefType refType, UUID refId, LedgerEntryType entryType);
 
-    /** The entries of these ids: the insurance covers an isolated wallet's changes point at (TR-24). */
-    List<PaperLedgerEntry> findByIdIn(Collection<UUID> ids);
-
-    /** The entries of this type that point at any of these references: the funding fees of a position (TR-24). */
-    List<PaperLedgerEntry> findByRefTypeAndEntryTypeAndRefIdIn(
-            LedgerRefType refType, LedgerEntryType entryType, Collection<UUID> refIds);
-
     PaperLedgerEntry save(PaperLedgerEntry entry);
 
     /**

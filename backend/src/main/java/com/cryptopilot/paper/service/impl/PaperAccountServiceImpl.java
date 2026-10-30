@@ -20,9 +20,11 @@ import com.cryptopilot.paper.dto.response.LedgerEntryResponse;
 import com.cryptopilot.paper.dto.response.PaperAccountResponse;
 import com.cryptopilot.paper.dto.response.TransferResponse;
 import com.cryptopilot.paper.dto.response.WalletResponse;
+import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperLedgerEntry;
 import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
+import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.model.LedgerQuery;
 import com.cryptopilot.paper.model.OpenedAccount;
 import com.cryptopilot.paper.model.PaperAccount;
@@ -30,7 +32,10 @@ import com.cryptopilot.paper.model.RecordedTransfer;
 import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.LedgerRefType;
+import com.cryptopilot.paper.model.enums.MarginType;
+import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.model.enums.WalletType;
+import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperBalanceRepository;
 import com.cryptopilot.paper.repository.PaperLedgerEntryRepository;
@@ -55,6 +60,7 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -95,6 +101,8 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     private final PaperLedgerEntryRepository ledger;
     private final PaperWallets wallets;
     private final FuturesMargins futuresMargins;
+    private final FuturesPositionRepository futuresPositions;
+    private final ApplicationEventPublisher events;
     private final PaperUserFeed feed;
     private final UserLock lock;
     private final PaperAccountProperties properties;
@@ -214,9 +222,22 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         wallets.debit(account, request.from(), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
         wallets.credit(account, other(request.from()), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
         feed.futuresAccount(account);
+        announceCrossChange(account.userId());
         PaperLedgerEntry debit = ledger.findTransfer(account.userId(), key)
                 .orElseThrow(() -> new IllegalStateException("transfer " + key + " was not written"));
         return new RecordedTransfer(transferOf(debit, coin.symbol()), true);
+    }
+
+    /**
+     * A transfer moves the cross wallet: the matching engine reads the Trader's cross account again after the commit,
+     * as for a fill (plan 9.6 rule 3), once per pair of a cross position. With none, it has nothing to read again.
+     */
+    private void announceCrossChange(UUID userId) {
+        futuresPositions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN).stream()
+                .filter(position -> position.getMarginType() == MarginType.CROSSED)
+                .map(FuturesPosition::getPairId)
+                .distinct()
+                .forEach(pairId -> events.publishEvent(new FuturesAccountChanged(userId, pairId)));
     }
 
     /**

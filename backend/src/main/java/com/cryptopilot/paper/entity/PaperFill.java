@@ -82,6 +82,9 @@ public class PaperFill extends BaseEntity {
     @Column(name = "traded_at", nullable = false, updatable = false)
     private Instant tradedAt;
 
+    @Column(name = "source_time")
+    private Instant sourceTime;
+
     /** The USDT value of one unit of the quote coin the fill was valued at (D-96); {@code null} when none was known. */
     @Column(name = "quote_usdt_price", precision = 28, scale = 12, updatable = false)
     private BigDecimal quoteUsdtPrice;
@@ -143,6 +146,23 @@ public class PaperFill extends BaseEntity {
      * @param positionId the position it acts on
      * @param realizedPnl what it realised, zero when it opened or increased the position
      */
+    /**
+     * A Futures fill a replay applied takes the price of a candle earlier than when it is applied (plan 9.5): it is
+     * dated when applied, and keeps the candle's time here, to show at what time's price it filled. Nothing for a live
+     * fill, which leaves {@code sourceTime} {@code null}.
+     *
+     * @return this fill
+     */
+    public PaperFill takenFrom(Instant candleTime) {
+        if (candleTime != null) {
+            if (fillSource != FillSource.REPLAY) {
+                throw new IllegalStateException("only a replayed fill takes the price of a candle");
+            }
+            sourceTime = candleTime;
+        }
+        return this;
+    }
+
     public static PaperFill futures(PaperOrder order, Execution execution, UUID positionId, BigDecimal realizedPnl) {
         if (order.getMarketType() != MarketType.FUTURES) {
             throw new IllegalArgumentException("order " + order.getId() + " is not a Futures order");

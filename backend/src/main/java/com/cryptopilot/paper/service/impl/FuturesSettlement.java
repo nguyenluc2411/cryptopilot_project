@@ -132,12 +132,42 @@ class FuturesSettlement {
             FillSource source,
             Instant at,
             PositionCloseReason closeReason) {
-        return execute(account, order, price, quantity, liquidity, source, at, closeReason, true);
+        return execute(account, order, price, quantity, liquidity, source, at, closeReason, Optional.empty(), null);
     }
 
     /**
-     * Executes a slice of a FOK order whose whole sweep was found fundable before it began ({@link #wholeRefusal}): the
-     * slices are not funded one by one, so a mark that moves between them cannot leave the order filled in part.
+     * Executes a resting order a replay reached (plan 9.5): dated when it is applied, so that the position's life follows
+     * the order the database changed in, and keeping the time of the candle whose price it took.
+     *
+     * @param at when the fill is applied, now
+     * @param candleTime the time of the candle it was decided on
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    BigDecimal executeReplayed(
+            PaperAccount account,
+            PaperOrder order,
+            BigDecimal price,
+            BigDecimal quantity,
+            Liquidity liquidity,
+            Instant at,
+            Instant candleTime) {
+        return execute(
+                account,
+                order,
+                price,
+                quantity,
+                liquidity,
+                FillSource.REPLAY,
+                at,
+                PositionCloseReason.MANUAL,
+                Optional.empty(),
+                candleTime);
+    }
+
+    /**
+     * Executes a slice of a FOK order whose whole sweep was found fundable before it began ({@link #checkWhole}): the
+     * slices are not funded one by one, and each takes its margin at the mark the check used, so the order can neither
+     * stop part way nor move more margin than the check allowed.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     BigDecimal executeWhole(
@@ -145,10 +175,19 @@ class FuturesSettlement {
             PaperOrder order,
             BigDecimal price,
             BigDecimal quantity,
-            Liquidity liquidity,
-            FillSource source,
-            Instant at) {
-        return execute(account, order, price, quantity, liquidity, source, at, PositionCloseReason.MANUAL, false);
+            Instant at,
+            WholeCheck check) {
+        return execute(
+                account,
+                order,
+                price,
+                quantity,
+                Liquidity.TAKER,
+                FillSource.LIVE,
+                at,
+                PositionCloseReason.MANUAL,
+                Optional.of(check),
+                null);
     }
 
     private BigDecimal execute(
@@ -160,7 +199,8 @@ class FuturesSettlement {
             FillSource source,
             Instant at,
             PositionCloseReason closeReason,
-            boolean checkFunding) {
+            Optional<WholeCheck> whole,
+            Instant candleTime) {
         UUID userId = account.userId();
         FuturesPosition position = margins.openPosition(userId, order.getPairId(), order.getPositionSide());
         BigDecimal size = position == null ? BigDecimal.ZERO : position.signedQuantity();
@@ -177,7 +217,7 @@ class FuturesSettlement {
         CoinListing usdt = margins.usdt();
         BigDecimal closed = effect.closedQuantity();
         if (closed.signum() > 0) {
-            close(account, order, position, effect, price, liquidity, source, at, usdt, closeReason);
+            close(account, order, position, effect, price, liquidity, source, at, candleTime, usdt, closeReason);
             if (effect.reverses()) {
                 // The closed row must reach the database before the new one, as only one position may be open.
                 entityManager.flush();
@@ -195,8 +235,9 @@ class FuturesSettlement {
                     liquidity,
                     source,
                     at,
+                    candleTime,
                     usdt,
-                    checkFunding);
+                    whole);
         }
         BigDecimal executed = funded ? closed.add(opened) : closed;
         if (executed.signum() > 0) {
@@ -282,6 +323,8 @@ class FuturesSettlement {
                                     MarginAdjustmentRefType.LEDGER,
                                     cover.getId()));
         }
+        // What the cross wallet got from the liquidation: what the wallet had left after the loss and the fee.
+        position.returnToCross(realized.subtract(fee).add(flow.insuranceCover()).subtract(flow.isolatedWalletChange()));
         position.reduce(quantity, mark, realized, PositionCloseReason.LIQUIDATION, at);
         position.addLiquidationFee(fee);
         publishIfClosed(position);
@@ -358,16 +401,19 @@ class FuturesSettlement {
             Liquidity liquidity,
             FillSource source,
             Instant at,
+            Instant candleTime,
             CoinListing usdt,
             PositionCloseReason closeReason) {
         BigDecimal closed = effect.closedQuantity();
         BigDecimal realized = effect.realizedPnl();
         BigDecimal sizeBefore = position.getQuantity();
         PaperFill fill = fills.save(PaperFill.futures(
-                order,
-                execution(price, closed, liquidity, source, at, usdt, commissionOf(commission, order, liquidity)),
-                position.getId(),
-                realized));
+                        order,
+                        execution(
+                                price, closed, liquidity, source, at, usdt, commissionOf(commission, order, liquidity)),
+                        position.getId(),
+                        realized)
+                .takenFrom(candleTime));
         feed.futuresFill(account, order, fill);
         if (realized.signum() != 0) {
             wallets.changeFutures(
@@ -406,6 +452,8 @@ class FuturesSettlement {
                                 : FuturesMarginAdjustment.of(
                                         position, type, change, MarginAdjustmentRefType.LEDGER, cover.getId()));
             }
+            // What the cross wallet got from this fill: the wallet's share, with the profit or less the loss.
+            position.returnToCross(realized.add(flow.insuranceCover()).subtract(change));
         }
         position.reduce(closed, price, realized, closeReason, at);
         publishIfClosed(position);
@@ -425,25 +473,28 @@ class FuturesSettlement {
     }
 
     /**
-     * Why a FOK order cannot fill whole on these slices, checked before it sweeps so that it fills all or nothing (4.3
-     * rule 6): a reducing order larger than what the position has to close, or an isolated opening whose margin, all
-     * slices together, is beyond the cross wallet's free cash. The slices first close what the position has on the
-     * other side, which takes no margin. Empty when it can fill whole.
+     * Whether a FOK order can fill whole on these slices, checked before it sweeps so that it fills all or nothing (4.3
+     * rule 6). It cannot when it reduces and is larger than what the position has to close, or when it opens an
+     * isolated position whose margin, all slices together at one mark, is beyond the cross wallet's free cash. The
+     * slices first close what the position has on the other side, which takes no margin.
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    Optional<String> wholeRefusal(PaperAccount account, PaperOrder order, List<BookSweep.Slice> slices) {
+    WholeCheck checkWhole(PaperAccount account, PaperOrder order, List<BookSweep.Slice> slices) {
         UUID userId = account.userId();
+        Margining margining = marginingOf(userId, order);
+        Optional<BigDecimal> mark = market.currentMarkPrice(margining.pair().symbol());
         FuturesPosition position = margins.openPosition(userId, order.getPairId(), order.getPositionSide());
         BigDecimal toClose =
                 closableBy(order.getSide(), position == null ? BigDecimal.ZERO : position.signedQuantity());
         if (order.reducing()) {
-            return order.remainingQuantity().compareTo(toClose) > 0
-                    ? Optional.of(FuturesArrival.NOT_FILLABLE)
-                    : Optional.empty();
+            return new WholeCheck(
+                    order.remainingQuantity().compareTo(toClose) > 0
+                            ? Optional.of(FuturesArrival.NOT_FILLABLE)
+                            : Optional.empty(),
+                    mark);
         }
-        Margining margining = marginingOf(userId, order);
         if (!margining.isolated()) {
-            return Optional.empty();
+            return new WholeCheck(Optional.empty(), mark);
         }
         BigDecimal margin = BigDecimal.ZERO;
         for (BookSweep.Slice slice : slices) {
@@ -451,11 +502,23 @@ class FuturesSettlement {
             toClose = toClose.subtract(closing);
             BigDecimal opening = slice.quantity().subtract(closing);
             if (opening.signum() > 0) {
-                margin = margin.add(isolatedMargin(margining, order, opening, slice.price()));
+                margin = margin.add(isolatedMargin(margining, order, opening, slice.price(), mark));
             }
         }
-        return margin.compareTo(crossFreeCash(userId, order)) > 0 ? Optional.of(MARGIN_INSUFFICIENT) : Optional.empty();
+        return new WholeCheck(
+                margin.compareTo(crossFreeCash(userId, order)) > 0
+                        ? Optional.of(MARGIN_INSUFFICIENT)
+                        : Optional.empty(),
+                mark);
     }
+
+    /**
+     * The check of a FOK order before it sweeps.
+     *
+     * @param refusal why it cannot fill whole; empty when it can
+     * @param mark the mark it was judged at, at which its slices take their margin; empty without one
+     */
+    record WholeCheck(Optional<String> refusal, Optional<BigDecimal> mark) {}
 
     /** The pair a fill of the order is margined on, and the Trader's settings of it. */
     private record Margining(PairListing pair, FuturesSymbolConfig config) {
@@ -473,13 +536,13 @@ class FuturesSettlement {
     }
 
     /** The isolated margin a fill of {@code opened} at {@code price} takes, with its open loss to the mark (4.3). */
-    private BigDecimal isolatedMargin(Margining margining, PaperOrder order, BigDecimal opened, BigDecimal price) {
-        BigDecimal mark = market.currentMarkPrice(margining.pair().symbol()).orElse(price);
+    private BigDecimal isolatedMargin(
+            Margining margining, PaperOrder order, BigDecimal opened, BigDecimal price, Optional<BigDecimal> mark) {
         return FuturesMarginMath.isolatedFillMargin(
                 PositionDirection.openedBy(order.getSide()),
                 opened,
                 price,
-                mark,
+                mark.orElse(price),
                 margining.config().getLeverage());
     }
 
@@ -504,8 +567,9 @@ class FuturesSettlement {
             Liquidity liquidity,
             FillSource source,
             Instant at,
+            Instant candleTime,
             CoinListing usdt,
-            boolean checkFunding) {
+            Optional<WholeCheck> whole) {
         UUID userId = account.userId();
         Margining margining = marginingOf(userId, order);
         PairListing pair = margining.pair();
@@ -513,8 +577,10 @@ class FuturesSettlement {
         PositionDirection direction = PositionDirection.openedBy(order.getSide());
         BigDecimal margin = BigDecimal.ZERO;
         if (margining.isolated()) {
-            margin = isolatedMargin(margining, order, opened, price);
-            if (checkFunding && margin.compareTo(crossFreeCash(userId, order)) > 0) {
+            // A FOK slice was funded whole beforehand, at the check's mark; any other fill is funded now.
+            Optional<BigDecimal> mark = whole.isPresent() ? whole.get().mark() : market.currentMarkPrice(pair.symbol());
+            margin = isolatedMargin(margining, order, opened, price, mark);
+            if (whole.isEmpty() && margin.compareTo(crossFreeCash(userId, order)) > 0) {
                 return false;
             }
         }
@@ -538,10 +604,12 @@ class FuturesSettlement {
             target.increase(opened, entry);
         }
         PaperFill fill = fills.save(PaperFill.futures(
-                order,
-                execution(price, opened, liquidity, source, at, usdt, commissionOf(commission, order, liquidity)),
-                target.getId(),
-                BigDecimal.ZERO));
+                        order,
+                        execution(
+                                price, opened, liquidity, source, at, usdt, commissionOf(commission, order, liquidity)),
+                        target.getId(),
+                        BigDecimal.ZERO)
+                .takenFrom(candleTime));
         feed.futuresFill(account, order, fill);
         if (margin.signum() > 0) {
             target.adjustIsolatedWallet(margin);

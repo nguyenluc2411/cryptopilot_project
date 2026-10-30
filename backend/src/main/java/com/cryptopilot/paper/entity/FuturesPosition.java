@@ -90,6 +90,9 @@ public class FuturesPosition extends BaseEntity {
     @Column(name = "liquidation_fee_amount", nullable = false, precision = 28, scale = 8)
     private BigDecimal liquidationFeeAmount;
 
+    @Column(name = "returned_to_cross_amount", nullable = false, precision = 28, scale = 8)
+    private BigDecimal returnedToCrossAmount;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "position_status", nullable = false, length = 32)
     private PositionStatus positionStatus;
@@ -132,6 +135,7 @@ public class FuturesPosition extends BaseEntity {
         this.commissionAmount = BigDecimal.ZERO;
         this.fundingAmount = BigDecimal.ZERO;
         this.liquidationFeeAmount = BigDecimal.ZERO;
+        this.returnedToCrossAmount = BigDecimal.ZERO;
         this.positionStatus = PositionStatus.OPEN;
         this.openedAt = Objects.requireNonNull(openedAt, "openedAt must not be null");
     }
@@ -229,6 +233,17 @@ public class FuturesPosition extends BaseEntity {
     /** Adds a funding fee it paid (negative) or received (positive) (TR-24). */
     public void addFunding(BigDecimal fee) {
         fundingAmount = fundingAmount.add(fee);
+    }
+
+    /**
+     * Adds what the cross wallet got back from the isolated wallet, or, negative, a late funding fee it paid in its
+     * place (TR-24, rule (B)): the most a fee settled after the close may still take from the cross wallet.
+     */
+    public void returnToCross(BigDecimal amount) {
+        if (marginType != MarginType.ISOLATED) {
+            throw new IllegalStateException("only an isolated wallet gives back to the cross wallet");
+        }
+        returnedToCrossAmount = returnedToCrossAmount.add(amount);
     }
 
     /** Adds the clearance fee its liquidation took (TR-22). */
