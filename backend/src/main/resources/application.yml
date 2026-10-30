@@ -388,10 +388,7 @@ cryptopilot:
       # case, the form an environment variable binds to, so CRYPTOPILOT_PAPER_ACCOUNT_SPOTGRANT_USDT replaces usdt
       # here instead of adding a second key. At most 8 decimals; the Futures wallet holds USDT only (USDⓈ-M).
       spot-grant:
-        usdt: 10000
-        btc: 0.1
-        eth: 1
-        bnb: 10
+        usdt: 5000
       futures-grant:
         usdt: 5000
     order:

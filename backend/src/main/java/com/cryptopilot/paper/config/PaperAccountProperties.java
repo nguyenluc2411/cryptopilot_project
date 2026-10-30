@@ -28,7 +28,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *
  * <p>Rule: TR-04; Q-T5.
  *
- * @param spotGrant coin symbol to amount the Spot wallet is opened with, e.g. {@code usdt: 10000}
+ * @param spotGrant coin symbol to amount the Spot wallet is opened with, e.g. {@code usdt: 5000}
  * @param futuresGrant coin symbol to amount the Futures wallet is opened with; USDT only
  */
 @ConfigurationProperties("cryptopilot.paper.account")
