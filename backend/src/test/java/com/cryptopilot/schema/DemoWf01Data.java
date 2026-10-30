@@ -15,7 +15,7 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * <p>Rule: DEMO-01; BR-26, BR-27, BR-62.
  */
-final class DemoWf01Data {
+public final class DemoWf01Data {
 
     /** The data file of the loader. */
     static final Path FILE = Path.of("..", "deploy", "demo", "wf01.json");
@@ -29,7 +29,7 @@ final class DemoWf01Data {
         this.root = root;
     }
 
-    static DemoWf01Data read() {
+    public static DemoWf01Data read() {
         try {
             return new DemoWf01Data(JsonMapper.builder().build().readTree(Files.readString(FILE)));
         } catch (java.io.IOException failure) {
@@ -38,19 +38,19 @@ final class DemoWf01Data {
     }
 
     /** The symbols of the pairs, in the file's order. */
-    List<String> symbols() {
+    public List<String> symbols() {
         List<String> symbols = new ArrayList<>();
         root.get("pairs").forEach(pair -> symbols.add(pair.get("symbol").asString()));
         return symbols;
     }
 
     /** The pair's leverage ceiling. */
-    int maxLeverage(String symbol) {
+    public int maxLeverage(String symbol) {
         return pair(symbol).get("maxLeverage").asInt();
     }
 
     /** The pair's brackets as the administrator's request carries them, maintenance amount included. */
-    List<LeverageBracketRequest> brackets(String symbol) {
+    public List<LeverageBracketRequest> brackets(String symbol) {
         List<LeverageBracketRequest> rows = new ArrayList<>();
         pair(symbol)
                 .get("brackets")
@@ -64,7 +64,7 @@ final class DemoWf01Data {
     }
 
     /** The {@code freePlans} block: how many ACTIVE plans demo.free gets, and how they are placed. */
-    JsonNode freePlans() {
+    public JsonNode freePlans() {
         return root.get("freePlans");
     }
 
