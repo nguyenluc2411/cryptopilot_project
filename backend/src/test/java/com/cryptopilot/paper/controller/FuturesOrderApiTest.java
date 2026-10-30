@@ -2185,6 +2185,60 @@ class FuturesOrderApiTest {
         trigger(trader, stop, OrderSide.SELL, TriggerCondition.AT_OR_BELOW, "95");
 
         assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("1");
+        // The stop is not spent on an order with nothing to fill at: it waits for the next price.
+        assertThat(statusOf(stop)).isEqualTo("NEW");
+    }
+
+    /** 8.2.1 rule 1: an opening LIMIT that would take is refused on a stale pair, whatever the age of the book. */
+    @Test
+    void TR22a_aMarketableOpeningLimit_onAStalePairWithAnOldBook_isRefused() throws Exception {
+        UUID trader = trader(true);
+        staleMark("100");
+        oldDepth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        place(trader, limit("BUY", "GTC", "101", "1")).andExpect(status().isServiceUnavailable());
+        assertThat(orderCount(trader)).isZero();
+    }
+
+    /**
+     * Plan 9.3: a cross liquidation under way stays so while the next position to close has no recent price, so the
+     * safety job, which resumes accounts in liquidation, closes it once there is one.
+     */
+    @Test
+    void TR23_aLiquidationUnderWay_staysSo_whileThePairToCloseHasNoPrice() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String other = "FO" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
+        UUID otherPair = secondPair(other);
+        try {
+            otherDepth(otherPair, List.of(level("50", "500")), List.of(level("49.9", "500")));
+            as(trader, post(FUTURES + "/order"), """
+                            {"symbol": "%s", "side": "BUY", "type": "MARKET", "quantity": "100"}""".formatted(other)).andExpect(status().isOk());
+            mark("50");
+            otherDepth(otherPair, List.of(), List.of());
+            redis.delete("px:FUTURES:" + other);
+            prices.record(
+                    MarketType.FUTURES,
+                    new MarkPriceMessage(
+                            other,
+                            new BigDecimal("0.4"),
+                            new BigDecimal("0.4"),
+                            BigDecimal.ZERO,
+                            Instant.now().plus(Duration.ofHours(1)),
+                            Instant.now().minusSeconds(30)));
+            prices.flush();
+
+            // The pair with a current mark goes first and closes; the stale one is next and has nothing to close at.
+            assertThat(matching.liquidateCross(trader, pair, Instant.now())).contains(otherPair);
+            assertThat(matching.liquidateCross(trader, otherPair, Instant.now()))
+                    .isEmpty();
+
+            assertThat(openPositions(trader)).isOne();
+            assertThat(liquidatingSince(trader)).isNotNull();
+        } finally {
+            removeSecondPair(trader, otherPair);
+        }
     }
 
     /** TR-44: a GTD order whose good-till date came before the replayed candle is not filled by it. */
@@ -2487,7 +2541,10 @@ class FuturesOrderApiTest {
         return otherPair;
     }
 
-    /** A Futures depth20 snapshot of the test pair, newer than every earlier one, but read a minute ago. */
+    /**
+     * A Futures depth20 snapshot of the test pair, newer than every earlier one, read 7 s ago: still served by the market
+     * data (max-age 10 s), but older than mark-max-age (5 s), so too old to fill on beside a stale mark.
+     */
     private void oldDepth(List<PriceLevel> asks, List<PriceLevel> bids) {
         trading.recordDepth(new OrderBookDepth(
                 MarketType.FUTURES,
@@ -2495,7 +2552,7 @@ class FuturesOrderApiTest {
                 TICKS.incrementAndGet(),
                 bids,
                 asks,
-                Instant.now().minusSeconds(60)));
+                Instant.now().minusSeconds(7)));
     }
 
     /** A Futures depth20 snapshot of the second pair, newer than every earlier one. */

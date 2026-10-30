@@ -85,7 +85,18 @@ class FuturesTrigger {
     @Transactional(propagation = Propagation.MANDATORY)
     void execute(PaperAccount account, PaperOrder conditional, Instant at, FillSource source) {
         FuturesPair pair = margins.pair(symbolOf(conditional));
-        if (conditional.isPriceProtect() && !withinProtection(pair.symbol())) {
+        // Read once: the mark decides the protection, the book, the stale-mark refusal and PERCENT_PRICE alike.
+        Optional<BigDecimal> freshMark = margins.freshMark(pair.symbol());
+        if (conditional.isPriceProtect() && !withinProtection(pair.symbol(), freshMark)) {
+            events.publishEvent(awaiting(conditional));
+            return;
+        }
+        // The price the placed order takes is the one PERCENT_PRICE judges.
+        Optional<SpotArrival.Book> book =
+                arrival.bookFor(pair.pairId(), pair.symbol(), conditional.getSide(), freshMark.isPresent());
+        if (conditional.getOrderType().isFuturesMarketConditional() && book.isEmpty()) {
+            // No price to fill at now, a stale pair's book as old as its mark among them (8.2.1 rule 2): it is not
+            // spent on an order that would expire unfilled, but waits for the next price.
             events.publishEvent(awaiting(conditional));
             return;
         }
@@ -104,10 +115,8 @@ class FuturesTrigger {
         }
         BigDecimal opening =
                 reducing ? BigDecimal.ZERO : FuturesOrderServiceImpl.opening(conditional.getSide(), quantity, size);
-        // Read once: the price PERCENT_PRICE judges is the one the placed order takes.
-        Optional<SpotArrival.Book> book = arrival.bookFor(pair.pairId(), pair.symbol(), conditional.getSide());
         if (opening.signum() > 0) {
-            Optional<String> refused = refusal(account, conditional, pair, size, opening, book);
+            Optional<String> refused = refusal(account, conditional, pair, size, opening, book, freshMark);
             if (refused.isPresent()) {
                 end(account, conditional, OrderStatus.REJECTED, refused.get(), at);
                 return;
@@ -155,8 +164,8 @@ class FuturesTrigger {
             FuturesPair pair,
             BigDecimal size,
             BigDecimal opening,
-            Optional<SpotArrival.Book> book) {
-        Optional<BigDecimal> mark = margins.freshMark(pair.symbol());
+            Optional<SpotArrival.Book> book,
+            Optional<BigDecimal> mark) {
         if (mark.isEmpty()) {
             return Optional.of(MARK_STALE);
         }
@@ -189,8 +198,7 @@ class FuturesTrigger {
     }
 
     /** Whether the mark and the last price are close enough for a protected order to trigger. */
-    private boolean withinProtection(String symbol) {
-        Optional<BigDecimal> mark = margins.freshMark(symbol);
+    private boolean withinProtection(String symbol, Optional<BigDecimal> mark) {
         Optional<BigDecimal> last = market.currentLastPrice(MarketType.FUTURES, symbol);
         if (mark.isEmpty() || last.isEmpty()) {
             return false;

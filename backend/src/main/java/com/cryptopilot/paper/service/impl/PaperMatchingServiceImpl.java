@@ -110,12 +110,13 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
                 // is tracked anew.
                 return false;
             }
-            // The rest at the limit price, as a maker; what the position does not take ends the order (TR-16). A
-            // replayed fill is dated when it is applied, with the candle's time kept apart (plan 9.5).
             if (order.expiredBy(tradedAt)) {
                 // Its good-till date came before the price reached it: the GTD job expires it (TR-44).
                 return false;
             }
+            // The rest at the limit price, as a maker; what the position does not take ends the order (TR-16). A
+            // replayed fill is dated when it is applied, with the candle's time kept apart (plan 9.5), even when that
+            // is past the good-till date of an order the candle reached in time.
             Instant at = source == FillSource.REPLAY ? clock.instant() : tradedAt;
             if (source == FillSource.REPLAY) {
                 futuresSettlement.executeReplayed(

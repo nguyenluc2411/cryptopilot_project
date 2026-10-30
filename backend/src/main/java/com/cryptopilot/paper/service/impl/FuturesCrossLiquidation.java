@@ -102,10 +102,10 @@ class FuturesCrossLiquidation {
         FuturesPosition first = judgement.firstToClose();
         Optional<BigDecimal> price = closingPrice(first, first.getDirection().closingSide(), judgement);
         if (price.isEmpty()) {
-            // Only stale pairs with no recent book either: nothing to close at. The account is not held in liquidation
-            // meanwhile, so the Trader may still act; the safety job judges it again (plan 9.3).
-            log.warn("TR-23 cross liquidation of user {} waits: its pairs' marks and books are stale", userId);
-            end(config);
+            // A stale pair with no recent book either: nothing to close at yet (8.2.1 rule 2). A liquidation not begun
+            // does not begin, so the account is not held for nothing; one under way stays so, and the safety job, which
+            // resumes every account in liquidation, tries again (plan 9.3).
+            log.warn("TR-23 cross liquidation of user {} waits: no recent price to close at", userId);
             return Optional.empty();
         }
         if (!config.liquidating()) {

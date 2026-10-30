@@ -33,7 +33,9 @@ import org.springframework.transaction.annotation.Transactional;
  * order, as the exchange refuses them; an order placed by a trigger cannot be refused, so it ends.
  *
  * <p>The other side of the book is the current depth20, or without one the best bid and ask as a single level, or the
- * last price, whose depth is not known. A MARKET order, or an IOC or FOK one, without any current price expires.
+ * last price, whose depth is not known. On a pair whose mark is stale it is only a depth or a best bid and ask the
+ * stream showed within {@code mark-max-age}, never the last price (8.2.1 rule 2). A MARKET order, or an IOC or FOK one,
+ * without any current price expires.
  *
  * <p>Runs inside the caller's transaction, which holds the Trader's lock.
  *

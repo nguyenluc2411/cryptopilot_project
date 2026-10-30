@@ -195,7 +195,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         BigDecimal opening = reducing ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
         // A stale mark is told first, before PERCENT_PRICE, which is judged at the mark (8.2.1).
         if (opening.signum() > 0) {
-            requireFreshMarks(userId, pair, request.side(), request.price(), book, markFresh);
+            requireFreshMarks(userId, pair, request.side(), request.price(), markFresh);
         }
         requirePercentPrice(
                 pair.filters(), request.side(), request.price(), percentPriceMark(mark, markFresh, opening), book);
@@ -301,10 +301,13 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                     ErrorCode.PAPER_REDUCE_ONLY_REJECTED, -2022, "ReduceOnly Order is rejected.", "reduceOnly");
         }
         BigDecimal opening = reducing ? BigDecimal.ZERO : opening(order.getSide(), remaining, size);
+        // A stale mark is told first, as on placement.
+        if (opening.signum() > 0) {
+            requireFreshMarks(userId, pair, order.getSide(), request.price(), markFresh);
+        }
         requirePercentPrice(
                 filters, order.getSide(), request.price(), percentPriceMark(mark, markFresh, opening), book);
         if (opening.signum() > 0) {
-            requireFreshMarks(userId, pair, order.getSide(), request.price(), book, markFresh);
             requireMargin(userId, pair, order.getSide(), request.price(), size, opening, last, mark, order.getId());
         }
         if (order.amend(request.price(), request.quantity(), now)) {
@@ -630,14 +633,11 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      * is taken; and while a pair of one of the Trader's cross positions is stale, no order opens risk on another pair.
      * Closing orders never wait for the mark.
      */
-    private void requireFreshMarks(
-            UUID userId,
-            FuturesPair pair,
-            OrderSide side,
-            BigDecimal price,
-            Optional<SpotArrival.Book> book,
-            boolean markFresh) {
+    private void requireFreshMarks(UUID userId, FuturesPair pair, OrderSide side, BigDecimal price, boolean markFresh) {
         if (!markFresh) {
+            // Whether it would take is judged on the book as last shown, however old: one too old to fill on still says
+            // the order is not one that waits.
+            Optional<SpotArrival.Book> book = futuresArrival.bookFor(pair.pairId(), pair.symbol(), side, true);
             boolean takes = price == null
                     || book.filter(found -> found.shown()
                                     && crosses(
@@ -718,14 +718,6 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     }
 
     /**
-     * {@code PERCENT_PRICE} of Futures (TR-39, plan 5.1): a BUY at most the mark times {@code multiplierUp}
-     * ({@code -4016}), a SELL at least the mark times {@code multiplierDown} ({@code -4024}); a MARKET order is judged
-     * by the best price of the book it takes ({@code -4131}). Without a mark, or a book for a MARKET order, nothing is
-     * checked: the order is then refused or valued by the stale-mark rules.
-     *
-     * @param price the limit price, or {@code null} for a MARKET order
-     */
-    /**
      * The mark PERCENT_PRICE judges an order at: the current one. On a stale pair, an order that opens risk is still
      * held to the last mark known, the only bound there is, so that one resting far from the market cannot later fill
      * at its own price; one that only closes is judged by nothing, as a stale mark decides nothing for it (8.2.1 rule
@@ -735,6 +727,14 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         return markFresh || opening.signum() > 0 ? mark : null;
     }
 
+    /**
+     * {@code PERCENT_PRICE} of Futures (TR-39, plan 5.1): a BUY at most the mark times {@code multiplierUp}
+     * ({@code -4016}), a SELL at least the mark times {@code multiplierDown} ({@code -4024}); a MARKET order is judged
+     * by the best price of the book it takes ({@code -4131}). Without a mark, or a book for a MARKET order, nothing is
+     * checked: the order is then refused or valued by the stale-mark rules.
+     *
+     * @param price the limit price, or {@code null} for a MARKET order
+     */
     private static void requirePercentPrice(
             PairFilters filters, OrderSide side, BigDecimal price, BigDecimal mark, Optional<SpotArrival.Book> book) {
         boolean marketOrder = price == null;
