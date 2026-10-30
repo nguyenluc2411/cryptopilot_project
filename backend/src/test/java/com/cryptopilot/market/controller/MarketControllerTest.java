@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.cryptopilot.billing.model.enums.PlanTier;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.OrderBookDepth;
@@ -15,6 +16,7 @@ import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.support.FixedClockConfig;
+import com.cryptopilot.support.PlanTraders;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.jayway.jsonpath.JsonPath;
 import java.math.BigDecimal;
@@ -34,18 +36,23 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
  * The market data API of UC-09 end to end, against the migrated schema: which pairs are listed and how they page,
  * which candles come back and how a client pages through them, how the snapshot blocks and the sparse metric series
  * of D-45 are answered — a row with metrics only included — and which requests are refused, with which message.
  *
- * <p>The application's clock is fixed ({@link FixedClockConfig}), and the data is written relative to it.
+ * <p>The futures metrics and the metric blocks of the futures stats are read here as a PRO Trader, whose plan includes
+ * them; who else may read them is {@link PlanGatesApiTest}. The application's clock is fixed
+ * ({@link FixedClockConfig}), and the data is written relative to it.
  *
- * <p>Rule: UC-09, BR-07, BR-08, BR-10, BR-11; NSF-03, NSF-04; SRS 3.1.3, 3.3.1, 3.3.3; D-45, D-46.
+ * <p>Rule: UC-09, BR-07, BR-08, BR-10, BR-11; NSF-03, NSF-04; SRS 3.1.3, 3.3.1, 3.3.3; D-45, D-46, D-60.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -63,19 +70,25 @@ class MarketControllerTest {
     @Autowired
     private TradingMarketData trading;
 
+    @Autowired
+    private JwtEncoder jwtEncoder;
+
     private MarketTestData data;
+    private PlanTraders traders;
     private Instant minute;
 
     @BeforeEach
     void setUp() {
         minute = FixedClockConfig.NOW.truncatedTo(ChronoUnit.MINUTES);
         data = new MarketTestData(sql, minute);
+        traders = new PlanTraders(sql, jwtEncoder, FixedClockConfig.NOW);
     }
 
     @AfterEach
     void clear() {
         sql.sql("delete from funding_rate_history").update();
         data.clear();
+        traders.clear();
     }
 
     // ------------------------------------------------------------------ pairs
@@ -318,7 +331,7 @@ class MarketControllerTest {
         metricsRow(btc, metricsMinute, "95800.386", "1.2346");
         settlement(btc, minute.minus(Duration.ofHours(2)), "0.00001422");
 
-        mvc.perform(get(BASE + "/futures/BTCUSDT/stats"))
+        mvc.perform(asPro(get(BASE + "/futures/BTCUSDT/stats")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.price.asOf").value(priceMinute.toString()))
                 .andExpect(jsonPath("$.price.markPrice").value("63055.500000000000"))
@@ -338,7 +351,7 @@ class MarketControllerTest {
         UUID btc = data.pair("BTCUSDT", false, true, null, "TRADING", 0);
         metricsRow(btc, minute.minus(Duration.ofMinutes(5)), "95800.386", "1.2346");
 
-        mvc.perform(get(BASE + "/futures/BTCUSDT/stats"))
+        mvc.perform(asPro(get(BASE + "/futures/BTCUSDT/stats")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.price").doesNotExist())
                 .andExpect(jsonPath("$.openInterest.openInterest").value("95800.386000000000"))
@@ -362,9 +375,9 @@ class MarketControllerTest {
         openInterest(btc, start.plus(Duration.ofMinutes(5)), "101.5");
         ratio(btc, start.plus(Duration.ofMinutes(5)), "1.1");
 
-        mvc.perform(get(BASE + "/futures/BTCUSDT/metrics")
+        mvc.perform(asPro(get(BASE + "/futures/BTCUSDT/metrics")
                         .param("from", start.toString())
-                        .param("to", minute.toString()))
+                        .param("to", minute.toString())))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.from").value(start.toString()))
                 .andExpect(jsonPath("$.to").value(minute.toString()))
@@ -391,7 +404,7 @@ class MarketControllerTest {
         settlement(btc, minute.minus(Duration.ofDays(2)), "0.0001");
         settlement(btc, minute.minus(Duration.ofHours(4)), "0.0002");
 
-        mvc.perform(get(BASE + "/futures/BTCUSDT/metrics"))
+        mvc.perform(asPro(get(BASE + "/futures/BTCUSDT/metrics")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.openInterest.length()").value(1))
                 .andExpect(jsonPath("$.fundingSettlements.length()").value(1))
@@ -411,17 +424,18 @@ class MarketControllerTest {
         String path = BASE + "/futures/BTCUSDT/metrics";
         Instant earlier = minute.minus(Duration.ofHours(1));
 
-        assertMsg01(mvc.perform(get(path).param("from", minute.toString()).param("to", earlier.toString())));
-        assertMsg01(mvc.perform(get(path).param("from", earlier.toString()).param("to", earlier.toString())));
+        assertMsg01(mvc.perform(asPro(get(path).param("from", minute.toString()).param("to", earlier.toString()))));
+        assertMsg01(
+                mvc.perform(asPro(get(path).param("from", earlier.toString()).param("to", earlier.toString()))));
         assertMsg01(mvc.perform(
-                get(path).param("to", minute.plus(Duration.ofMinutes(10)).toString())));
+                asPro(get(path).param("to", minute.plus(Duration.ofMinutes(10)).toString()))));
         assertMsg01(mvc.perform(
-                get(path).param("from", minute.minus(Duration.ofDays(8)).toString())));
-        mvc.perform(get(path)
+                asPro(get(path).param("from", minute.minus(Duration.ofDays(8)).toString()))));
+        mvc.perform(asPro(get(path)
                         .param("from", minute.minus(Duration.ofDays(7)).toString())
-                        .param("to", minute.toString()))
+                        .param("to", minute.toString())))
                 .andExpect(status().isOk());
-        assertMsg41(mvc.perform(get(BASE + "/futures/NOPEUSDT/metrics")));
+        assertMsg41(mvc.perform(asPro(get(BASE + "/futures/NOPEUSDT/metrics"))));
     }
 
     // ------------------------------------------------------------------ access
@@ -493,13 +507,18 @@ class MarketControllerTest {
         data.pair("BTCUSDT", true, true, "TRADING", "TRADING", 0);
 
         mvc.perform(get(BASE + "/pairs").param("market", "spot")).andExpect(status().isOk());
-        mvc.perform(get(BASE + "/futures/BTCUSDT/metrics")).andExpect(status().isOk());
+        mvc.perform(get(BASE + "/futures/BTCUSDT/stats")).andExpect(status().isOk());
         mvc.perform(post(BASE + "/pairs")).andExpect(status().isUnauthorized());
         mvc.perform(put(BASE + "/spot/BTCUSDT/stats")).andExpect(status().isUnauthorized());
         mvc.perform(delete(BASE + "/futures/BTCUSDT/metrics")).andExpect(status().isUnauthorized());
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /** The request as a PRO Trader, whose plan includes {@code FUTURES_ANALYSIS}. */
+    private MockHttpServletRequestBuilder asPro(MockHttpServletRequestBuilder request) {
+        return request.header(HttpHeaders.AUTHORIZATION, traders.bearer(PlanTier.PRO));
+    }
 
     private static void assertMsg01(ResultActions result) throws Exception {
         result.andExpect(status().isBadRequest())

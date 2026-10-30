@@ -1,5 +1,6 @@
 package com.cryptopilot.market.controller;
 
+import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.market.dto.response.CandlesResponse;
 import com.cryptopilot.market.dto.response.DepthResponse;
@@ -15,10 +16,14 @@ import com.cryptopilot.market.service.TradingDataService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import java.time.Instant;
+import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -28,12 +33,14 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * The public market data of UC-09: the enabled pairs, their closed candles, their latest statistics and the futures
  * metrics. Read-only and open to a Guest, as the filter chain grants {@code GET /api/v1/market/**} (SRS 3.1.3, "Query
- * Public Data"); the computed analysis of SCR-10 and SCR-11 is not here but under {@code /analysis/**}.
+ * Public Data"); the computed analysis of SCR-10 and SCR-11 is not here but under {@code /analysis/**}. The futures
+ * metrics and the open interest, long/short and settlement blocks of the futures stats are the exception: they need
+ * a plan with {@code FUTURES_ANALYSIS} (D-60), so a token, when sent, is read for the caller's plan.
  *
  * <p>Times are ISO 8601 in UTC, decimals are strings (TECHNICAL_DESIGN 8). A value not stored yet is absent from the
  * answer, never zero.
  *
- * <p>Rule: UC-09, BR-07, BR-08, BR-10, BR-11; SRS 3.1.3, 3.3.1; TECHNICAL_DESIGN 8; D-45, D-46.
+ * <p>Rule: UC-09, BR-07, BR-08, BR-10, BR-11, BR-62; SRS 3.1.3, 3.3.1; TECHNICAL_DESIGN 8; D-45, D-46, D-60.
  */
 @Tag(
         name = "Market data",
@@ -126,27 +133,36 @@ public class MarketController {
     }
 
     /** The latest stored mark price, open interest, long/short ratio and settlement of a futures pair (D-45). */
-    @Operation(summary = "Latest stored price, open interest, long/short ratio and settlement (D-45)")
+    @Operation(
+            summary = "Latest stored price, open interest, long/short ratio and settlement (D-45)",
+            description = "The price block is public. The openInterest, longShortRatio and lastFundingSettlement blocks"
+                    + " need a plan with FUTURES_ANALYSIS (D-60) and are null for a Guest or any other plan.")
     @ApiResponse(
             responseCode = "200",
-            description = "The statistics; each block has its own instant and is absent until stored")
+            description = "The statistics; each block has its own instant and is null until stored or without the plan")
     @ApiResponse(
             responseCode = "404",
             description = "MSG41: no pair with that symbol is enabled on that market (BR-07)")
     @GetMapping("/futures/{symbol}/stats")
-    public FuturesStatsResponse futuresStats(@PathVariable String symbol) {
-        return stats.futuresStats(symbol);
+    public FuturesStatsResponse futuresStats(@AuthenticationPrincipal Jwt caller, @PathVariable String symbol) {
+        return stats.futuresStats(symbol, callerOf(caller));
     }
 
     /** The open interest, long/short ratio and settled funding series of a futures pair over {@code [from, to)}. */
-    @Operation(summary = "Sparse futures metric series over a range (D-45, BR-10)")
+    @Operation(
+            summary = "Sparse futures metric series over a range (D-45, BR-10)",
+            description = "Needs a Trader whose plan includes FUTURES_ANALYSIS (D-60).")
     @ApiResponse(responseCode = "200", description = "The series")
     @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(responseCode = "401", description = "MSG44: no token was sent")
+    @ApiResponse(responseCode = "403", description = "MSG29: the caller's plan does not include FUTURES_ANALYSIS")
+    @SecurityRequirement(name = OpenApiConfig.BEARER)
     @ApiResponse(
             responseCode = "404",
             description = "MSG41: no pair with that symbol is enabled on that market (BR-07)")
     @GetMapping("/futures/{symbol}/metrics")
     public FuturesMetricsResponse futuresMetrics(
+            @AuthenticationPrincipal Jwt caller,
             @PathVariable String symbol,
             @Parameter(description = "Earliest instant, ISO 8601 UTC, inclusive") @RequestParam(required = false)
                     Instant from,
@@ -155,6 +171,10 @@ public class MarketController {
                                     "Instant the values must be before, ISO 8601 UTC; default now, never in the future")
                     @RequestParam(required = false)
                     Instant to) {
-        return stats.futuresMetrics(symbol, from, to);
+        return stats.futuresMetrics(symbol, from, to, callerOf(caller));
+    }
+
+    private static UUID callerOf(Jwt caller) {
+        return caller == null ? null : UUID.fromString(caller.getSubject());
     }
 }

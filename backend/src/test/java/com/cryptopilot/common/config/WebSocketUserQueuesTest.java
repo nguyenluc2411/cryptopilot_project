@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.security.Principal;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -35,14 +36,15 @@ class WebSocketUserQueuesTest {
             })
     void UC20_aSignedInSession_subscribesToItsOwnQueue(String queue) {
         assertThatNoException()
-                .isThrownBy(
-                        () -> WebSocketConfig.requireAllowed(StompCommand.SUBSCRIBE, "/user/queue/" + queue, TRADER));
+                .isThrownBy(() -> WebSocketConfig.requireAllowed(
+                        StompCommand.SUBSCRIBE, "/user/queue/" + queue, TRADER, List.of()));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"positions", "notifications"})
     void UC20_aGuest_isRefused(String queue) {
-        assertThatThrownBy(() -> WebSocketConfig.requireAllowed(StompCommand.SUBSCRIBE, "/user/queue/" + queue, null))
+        assertThatThrownBy(() ->
+                        WebSocketConfig.requireAllowed(StompCommand.SUBSCRIBE, "/user/queue/" + queue, null, List.of()))
                 .isInstanceOf(MessageDeliveryException.class)
                 .hasMessageContaining("sign in to subscribe");
     }
@@ -52,7 +54,7 @@ class WebSocketUserQueuesTest {
     void UC20_anotherUsersQueue_isRefused(String queue) {
         String other = "/user/" + UUID.randomUUID() + "/queue/" + queue;
 
-        assertThatThrownBy(() -> WebSocketConfig.requireAllowed(StompCommand.SUBSCRIBE, other, TRADER))
+        assertThatThrownBy(() -> WebSocketConfig.requireAllowed(StompCommand.SUBSCRIBE, other, TRADER, List.of()))
                 .isInstanceOf(MessageDeliveryException.class)
                 .hasMessageContaining("not a public market topic");
     }

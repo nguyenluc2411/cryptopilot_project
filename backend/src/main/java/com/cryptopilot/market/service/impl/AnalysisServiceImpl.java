@@ -1,5 +1,9 @@
 package com.cryptopilot.market.service.impl;
 
+import com.cryptopilot.billing.EntitlementApi;
+import com.cryptopilot.billing.model.enums.Feature;
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.calculator.SetupComponents;
@@ -48,10 +52,16 @@ import org.springframework.transaction.annotation.Transactional;
  * while no module provides that source, it is {@link #DEFAULT_STYLE}. On Futures the dominant side of the trend is
  * read beside the score from the stored EMAs and the close of the same candle in {@code ohlcv}, and never stored.
  *
+ * <p>The caller's plan decides two things (D-60): the Futures analysis as a whole needs {@code FUTURES_ANALYSIS} and is
+ * refused with MSG29 without it, before anything is read; the component scores need {@code SCORE_COMPONENTS}, and
+ * without it both component blocks are withheld and marked locked while the total score is still answered (CR-08). A
+ * call without a caller has no plan.
+ *
  * <p>The same weighting serves other modules through {@link #closedCandleSetupScore}: the score of the latest closed
  * candle of one timeframe under a preset they name, which a plan stores at activation (D-112).
  *
- * <p>Rule: UC-10, UC-11, BR-07, BR-08, BR-12, BR-13, BR-14, BR-70; SRS 3.3.2; TECHNICAL_DESIGN 7.4; D-53, D-112.
+ * <p>Rule: UC-10, UC-11, BR-07, BR-08, BR-12, BR-13, BR-14, BR-62, BR-70; SRS 3.3.2, CR-08; TECHNICAL_DESIGN 7.4,
+ * 7.12; D-53, D-60, D-112.
  */
 @Service
 public class AnalysisServiceImpl implements AnalysisService {
@@ -68,6 +78,7 @@ public class AnalysisServiceImpl implements AnalysisService {
     private final SetupScoreProperties presets;
     private final ObjectProvider<SetupStyleSource> styles;
     private final Clock clock;
+    private final EntitlementApi entitlements;
 
     public AnalysisServiceImpl(
             MarketRequests requests,
@@ -75,13 +86,15 @@ public class AnalysisServiceImpl implements AnalysisService {
             OhlcvRepository candles,
             SetupScoreProperties presets,
             ObjectProvider<SetupStyleSource> styles,
-            Clock clock) {
+            Clock clock,
+            EntitlementApi entitlements) {
         this.requests = requests;
         this.indicators = indicators;
         this.candles = candles;
         this.presets = presets;
         this.styles = styles;
         this.clock = clock;
+        this.entitlements = entitlements;
     }
 
     @Override
@@ -90,6 +103,10 @@ public class AnalysisServiceImpl implements AnalysisService {
         MarketType type = MarketRequests.market(market);
         String tf = MarketRequests.timeframe(timeframe == null ? DEFAULT_TIMEFRAME : timeframe)
                 .code();
+        if (type == MarketType.FUTURES) {
+            requireFuturesAnalysis(userId);
+        }
+        boolean locked = userId == null || !entitlements.hasFeature(userId, Feature.SCORE_COMPONENTS);
         CryptoPair pair = requests.enabledPair(type, symbol);
         Optional<StoredIndicators> row = indicators.latest(pair.getId(), type, tf);
         StylePreset preset = presets.preset(styleOf(userId));
@@ -104,8 +121,20 @@ public class AnalysisServiceImpl implements AnalysisService {
                 row.map(AnalysisServiceImpl::indicators).orElse(IndicatorsResponse.NONE),
                 row.map(StoredIndicators::nearestSupport).orElse(null),
                 row.map(StoredIndicators::nearestResistance).orElse(null),
-                components(type, row.map(StoredIndicators::components).orElse(null)),
-                setupScore(type, preset, pair.getId(), scored.orElse(null)));
+                locked,
+                locked
+                        ? null
+                        : components(type, row.map(StoredIndicators::components).orElse(null)),
+                setupScore(type, preset, pair.getId(), scored.orElse(null), locked));
+    }
+
+    /** MSG29 for a plan without the Futures analysis; MSG44 for a call without a caller, who has no plan at all. */
+    private void requireFuturesAnalysis(UUID userId) {
+        if (userId == null) {
+            throw new BusinessException(
+                    ErrorCode.AUTHENTICATION_REQUIRED, "the Futures analysis needs a Trader's plan");
+        }
+        entitlements.requireFeature(userId, Feature.FUTURES_ANALYSIS);
     }
 
     /**
@@ -168,18 +197,35 @@ public class AnalysisServiceImpl implements AnalysisService {
         return source.styleOf(userId).orElse(DEFAULT_STYLE);
     }
 
-    private SetupScoreResponse setupScore(MarketType type, StylePreset preset, UUID pairId, StoredIndicators row) {
+    private SetupScoreResponse setupScore(
+            MarketType type, StylePreset preset, UUID pairId, StoredIndicators row, boolean locked) {
         if (row == null) {
             return type == MarketType.SPOT
                     ? new SpotSetupScoreResponse(
-                            null, preset.style(), preset.version(), preset.timeframe(), null, spot(null))
+                            null,
+                            preset.style(),
+                            preset.version(),
+                            preset.timeframe(),
+                            null,
+                            locked ? null : spot(null))
                     : new FuturesSetupScoreResponse(
-                            null, preset.style(), preset.version(), preset.timeframe(), null, futures(null), null);
+                            null,
+                            preset.style(),
+                            preset.version(),
+                            preset.timeframe(),
+                            null,
+                            locked ? null : futures(null),
+                            null);
         }
         if (type == MarketType.SPOT) {
             SetupScore s = SetupScoreCalculator.score(preset, row.components(), null);
             return new SpotSetupScoreResponse(
-                    s.score(), s.style(), s.presetVersion(), s.timeframe(), row.openTime(), spot(row.components()));
+                    s.score(),
+                    s.style(),
+                    s.presetVersion(),
+                    s.timeframe(),
+                    row.openTime(),
+                    locked ? null : spot(row.components()));
         }
         SetupScore s = SetupScoreCalculator.score(preset, row.components(), dominantSide(pairId, row));
         return new FuturesSetupScoreResponse(
@@ -188,7 +234,7 @@ public class AnalysisServiceImpl implements AnalysisService {
                 s.presetVersion(),
                 s.timeframe(),
                 row.openTime(),
-                futures(row.components()),
+                locked ? null : futures(row.components()),
                 s.dominantSide());
     }
 
@@ -227,7 +273,7 @@ public class AnalysisServiceImpl implements AnalysisService {
         return value == null ? null : value.doubleValue();
     }
 
-    private static ComponentScoresResponse components(MarketType type, ComponentScores c) {
+    static ComponentScoresResponse components(MarketType type, ComponentScores c) {
         return type == MarketType.SPOT ? spot(c) : futures(c);
     }
 
@@ -244,7 +290,7 @@ public class AnalysisServiceImpl implements AnalysisService {
                         c.formulaVersion(), c.trend(), c.momentum(), c.volume(), c.level(), c.derivatives());
     }
 
-    private static IndicatorsResponse indicators(StoredIndicators r) {
+    static IndicatorsResponse indicators(StoredIndicators r) {
         return new IndicatorsResponse(
                 r.sma20(),
                 r.ema20(),

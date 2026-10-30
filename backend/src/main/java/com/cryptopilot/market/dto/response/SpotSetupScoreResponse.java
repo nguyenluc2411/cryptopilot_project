@@ -14,7 +14,7 @@ import java.time.Instant;
  * @param presetVersion the version of that preset
  * @param timeframe the preset's timeframe, which the components were read on
  * @param openTime the open time of the candle the components belong to, or {@code null} when none is stored
- * @param components the components the score was weighted from
+ * @param components the components the score was weighted from, or {@code null} when the plan locks them
  */
 public record SpotSetupScoreResponse(
         Integer score,

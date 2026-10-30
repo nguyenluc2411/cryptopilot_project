@@ -1,7 +1,10 @@
 package com.cryptopilot.common.config;
 
+import com.cryptopilot.common.service.TopicSubscriptionGuard;
 import java.security.Principal;
+import java.util.List;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
@@ -44,7 +47,8 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
  * {@code /user/queue/balances} (TR-08), to its paper Futures {@code /user/queue/futures.orders} and
  * {@code /user/queue/futures.account} (TR-41), to the changes of its plans' positions {@code /user/queue/positions} and to its
  * notifications {@code /user/queue/notifications}; the broker delivers there only what was sent to that session's
- * user. Every other subscription and every {@code SEND} is refused.
+ * user. A topic that a module publishes for some users only — the analysis of NSF-05 (D-126) — is decided by that
+ * module's {@link TopicSubscriptionGuard}. Every other subscription and every {@code SEND} is refused.
  *
  * <h2>Order and slow clients</h2>
  *
@@ -59,7 +63,7 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
  *
  * <p>A browser may open {@code /ws} only from an origin of {@link CorsProperties}, the same list the REST API uses.
  *
- * <p>Rule: TECHNICAL_DESIGN 5.3 and 9; ADR-005; D-33; D-50; TR-08.
+ * <p>Rule: TECHNICAL_DESIGN 5.3 and 9; ADR-005; D-33; D-50; D-126; TR-08.
  * <p>Reference: Spring Framework reference documentation, "WebSocket &gt; STOMP" (simple broker, channel
  * interceptors, {@code setPreservePublishOrder}, send time and buffer limits).
  */
@@ -87,16 +91,19 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final CorsProperties origins;
     private final JwtDecoder tokens;
     private final Converter<Jwt, AbstractAuthenticationToken> callers;
+    private final ObjectProvider<TopicSubscriptionGuard> guards;
 
     public WebSocketConfig(
             RealtimeProperties properties,
             CorsProperties origins,
             JwtDecoder tokens,
-            Converter<Jwt, AbstractAuthenticationToken> callers) {
+            Converter<Jwt, AbstractAuthenticationToken> callers,
+            ObjectProvider<TopicSubscriptionGuard> guards) {
         this.properties = properties;
         this.origins = origins;
         this.tokens = tokens;
         this.callers = callers;
+        this.guards = guards;
     }
 
     @Override
@@ -141,7 +148,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                         frame.setUser(caller(authorization));
                     }
                 }
-                requireAllowed(frame.getCommand(), frame.getDestination(), frame.getUser());
+                requireAllowed(
+                        frame.getCommand(),
+                        frame.getDestination(),
+                        frame.getUser(),
+                        guards.orderedStream().toList());
                 return message;
             }
         });
@@ -165,15 +176,24 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     }
 
     /**
-     * Refuses any {@code SEND}, a subscription to a user queue without a signed-in user, and any other subscription
-     * outside the public market topics.
+     * Refuses any {@code SEND}, a subscription that the guard governing its destination refuses, a subscription to a
+     * user queue without a signed-in user, and any other subscription outside the public market topics.
      */
-    static void requireAllowed(StompCommand command, String destination, Principal user) {
+    static void requireAllowed(
+            StompCommand command, String destination, Principal user, List<TopicSubscriptionGuard> guards) {
         if (command == StompCommand.SEND) {
             throw new MessageDeliveryException("no application destination accepts messages");
         }
         if (command != StompCommand.SUBSCRIBE) {
             return;
+        }
+        if (destination != null) {
+            for (TopicSubscriptionGuard guard : guards) {
+                if (guard.governs(destination)) {
+                    guard.requireAllowed(destination, user);
+                    return;
+                }
+            }
         }
         if (destination != null && USER_QUEUES.matcher(destination).matches()) {
             if (user == null) {
