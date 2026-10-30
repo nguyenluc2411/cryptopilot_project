@@ -11,5 +11,9 @@ public enum LedgerRefType {
     ORDER,
     FILL,
     TRANSFER,
-    USER
+    USER,
+    /** A Futures position: its realized profit, fees and insurance cover (D-127). */
+    POSITION,
+    /** A funding settlement of a Futures position; the id names the position and the settlement (D-127). */
+    FUNDING
 }

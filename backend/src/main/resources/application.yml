@@ -331,6 +331,10 @@ cryptopilot:
         # TR-03: each Spot pair also streams @aggTrade, @bookTicker and @depth20@100ms for the paper engine and the
         # trading screen: nine streams a pair instead of six.
         enabled: true
+        # TR-38: each Futures pair streams them too: @aggTrade under /market, @bookTicker and @depth20@100ms under
+        # /public, the only route that serves them (checked live 2026-10-29).
+        futures: true
+        futures-public-url: wss://fstream.binance.com/public
         depth-levels: 20
         # A best bid and ask or depth older than this is not served as current (a lost stream).
         max-age: 10s
@@ -357,15 +361,34 @@ cryptopilot:
           max-total-open-risk-percent: 6
           min-setup-score-to-alert: 55
   paper:
+    futures:
+      # TR-22a, plan 8.2.1: a mark price older than this means a lost stream; its pair is MARK_STALE, where only
+      # closing and cancelling go on. An isolated position funded meanwhile counts each stale cross position at its
+      # loss less this share of its notional.
+      mark-max-age: 5s
+      stale-mark-haircut: 0.01
+      # TR-20: a conditional order with priceProtect waits while mark and last differ by more than this share.
+      trigger-protect: 0.05
+      # TR-23, plan 9.3: a cross liquidation still running after this is judged again and resumed by a safety job,
+      # which runs this often (and once at start).
+      liquidation-max-duration: 30s
+      # TR-43, plan 4.10: a margin call at this margin ratio (maintenance over margin balance), at most once per
+      # cooldown for a position or a cross account.
+      margin-call-ratio: 0.8
+      margin-call-cooldown: 30m
+      # TR-27: every position-warning-interval, a held position whose mark is within near-liquidation-percent (of the
+      # mark) of its liquidation price is warned, at most once per cooldown; one held stop-loss-grace without a stop
+      # loss is warned once.
+      near-liquidation-percent: 5
+      stop-loss-grace: 5m
+      position-warning-cooldown: 30m
+      position-warning-interval: 1m
     account:
       # TR-04, Q-T5: the virtual funds a paper account is opened with, granted once; there is no reset. Keys in lower
       # case, the form an environment variable binds to, so CRYPTOPILOT_PAPER_ACCOUNT_SPOTGRANT_USDT replaces usdt
       # here instead of adding a second key. At most 8 decimals; the Futures wallet holds USDT only (USDⓈ-M).
       spot-grant:
-        usdt: 10000
-        btc: 0.1
-        eth: 1
-        bnb: 10
+        usdt: 5000
       futures-grant:
         usdt: 5000
     order:
@@ -382,6 +405,12 @@ cryptopilot:
       # until this time of the day.
       retry-interval: 5m
       retry-until: "23:55"
+    funding:
+      # TR-24, plan 9.4: the funding of every open (or lately closed) paper Futures position is settled from the stored
+      # settlements; idempotent per position and settlement. Off here, on in the dev and prod profiles.
+      enabled: false
+      interval: 1m
+      lookback: 2d
     grant-cost:
       # PT-R13: the granted coins that had no price at the opening get their cost once they have one. Off here, on in
       # the dev and prod profiles.

@@ -119,7 +119,18 @@ crypto_pair,created_at,timestamp with time zone,,,NO
 crypto_pair,display_order,integer,32,0,NO
 crypto_pair,futures_exchange_status,character varying,,,YES
 crypto_pair,futures_exchange_status_raw,text,,,YES
+crypto_pair,futures_market_max_qty,numeric,28,12,YES
+crypto_pair,futures_market_min_qty,numeric,28,12,YES
+crypto_pair,futures_market_step_size,numeric,28,12,YES
+crypto_pair,futures_max_num_algo_orders,integer,32,0,YES
+crypto_pair,futures_max_num_orders,integer,32,0,YES
+crypto_pair,futures_max_price,numeric,28,12,YES
+crypto_pair,futures_max_qty,numeric,28,12,YES
 crypto_pair,futures_min_notional,numeric,28,8,YES
+crypto_pair,futures_min_price,numeric,28,12,YES
+crypto_pair,futures_min_qty,numeric,28,12,YES
+crypto_pair,futures_multiplier_down,numeric,28,12,YES
+crypto_pair,futures_multiplier_up,numeric,28,12,YES
 crypto_pair,futures_step_size,numeric,28,12,YES
 crypto_pair,futures_tick_size,numeric,28,12,YES
 crypto_pair,is_futures_enabled,boolean,,,NO
@@ -218,6 +229,24 @@ funding_rate_history,funding_rate,numeric,12,8,NO
 funding_rate_history,funding_time,timestamp with time zone,,,NO
 funding_rate_history,mark_price,numeric,28,12,NO
 funding_rate_history,pair_id,uuid,,,NO
+futures_account_config,created_at,timestamp with time zone,,,NO
+futures_account_config,dual_side_position,boolean,,,NO
+futures_account_config,liquidating_since,timestamp with time zone,,,YES
+futures_account_config,updated_at,timestamp with time zone,,,NO
+futures_account_config,user_id,uuid,,,NO
+futures_account_config,version,bigint,64,0,NO
+futures_margin_adjustment,adjustment_id,uuid,,,NO
+futures_margin_adjustment,adjustment_type,character varying,,,NO
+futures_margin_adjustment,amount,numeric,28,8,NO
+futures_margin_adjustment,created_at,timestamp with time zone,,,NO
+futures_margin_adjustment,iw_after_amount,numeric,28,8,NO
+futures_margin_adjustment,pair_id,uuid,,,NO
+futures_margin_adjustment,position_id,uuid,,,NO
+futures_margin_adjustment,ref_id,uuid,,,YES
+futures_margin_adjustment,ref_type,character varying,,,YES
+futures_margin_adjustment,updated_at,timestamp with time zone,,,NO
+futures_margin_adjustment,user_id,uuid,,,NO
+futures_margin_adjustment,version,bigint,64,0,NO
 futures_market_data,funding_rate,numeric,12,8,YES
 futures_market_data,index_price,numeric,28,12,YES
 futures_market_data,long_account_ratio,numeric,12,8,YES
@@ -229,6 +258,39 @@ futures_market_data,open_interest_value,numeric,28,8,YES
 futures_market_data,pair_id,uuid,,,NO
 futures_market_data,short_account_ratio,numeric,12,8,YES
 futures_market_data,snapshot_time,timestamp with time zone,,,NO
+futures_position,close_avg_price,numeric,28,12,YES
+futures_position,close_reason,character varying,,,YES
+futures_position,closed_at,timestamp with time zone,,,YES
+futures_position,closed_quantity,numeric,28,12,NO
+futures_position,commission_amount,numeric,28,8,NO
+futures_position,created_at,timestamp with time zone,,,NO
+futures_position,direction,character varying,,,NO
+futures_position,entry_price,numeric,28,12,NO
+futures_position,funding_amount,numeric,28,8,NO
+futures_position,isolated_wallet_amount,numeric,28,8,YES
+futures_position,leverage,integer,32,0,NO
+futures_position,liquidation_fee_amount,numeric,28,8,NO
+futures_position,margin_type,character varying,,,NO
+futures_position,max_quantity,numeric,28,12,NO
+futures_position,opened_at,timestamp with time zone,,,NO
+futures_position,pair_id,uuid,,,NO
+futures_position,position_id,uuid,,,NO
+futures_position,position_side,character varying,,,NO
+futures_position,position_status,character varying,,,NO
+futures_position,quantity,numeric,28,12,NO
+futures_position,realized_pnl_amount,numeric,28,8,NO
+futures_position,returned_to_cross_amount,numeric,28,8,NO
+futures_position,updated_at,timestamp with time zone,,,NO
+futures_position,user_id,uuid,,,NO
+futures_position,version,bigint,64,0,NO
+futures_symbol_config,created_at,timestamp with time zone,,,NO
+futures_symbol_config,leverage,integer,32,0,NO
+futures_symbol_config,margin_type,character varying,,,NO
+futures_symbol_config,pair_id,uuid,,,NO
+futures_symbol_config,symbol_config_id,uuid,,,NO
+futures_symbol_config,updated_at,timestamp with time zone,,,NO
+futures_symbol_config,user_id,uuid,,,NO
+futures_symbol_config,version,bigint,64,0,NO
 legacy_paper_account,account_id,uuid,,,NO
 legacy_paper_account,created_at,timestamp with time zone,,,NO
 legacy_paper_account,position_mode,character varying,,,NO
@@ -355,12 +417,14 @@ order_fill,liquidity,character varying,,,NO
 order_fill,market_type,character varying,,,NO
 order_fill,order_id,uuid,,,NO
 order_fill,pair_id,uuid,,,NO
+order_fill,position_id,uuid,,,YES
 order_fill,position_side,character varying,,,YES
 order_fill,quote_amount,numeric,28,8,NO
 order_fill,quote_usdt_price,numeric,28,12,YES
 order_fill,quote_usdt_price_source,character varying,,,YES
 order_fill,realized_pnl_amount,numeric,28,8,YES
 order_fill,side,character varying,,,NO
+order_fill,source_time,timestamp with time zone,,,YES
 order_fill,traded_at,timestamp with time zone,,,NO
 order_fill,updated_at,timestamp with time zone,,,NO
 order_fill,user_id,uuid,,,NO
@@ -375,7 +439,8 @@ order_list,pair_id,uuid,,,NO
 order_list,updated_at,timestamp with time zone,,,NO
 order_list,user_id,uuid,,,NO
 order_list,version,bigint,64,0,NO
-order_matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
+order_matching_watermark,last_candle_open_time,timestamp with time zone,,,YES
+order_matching_watermark,last_mark_candle_open_time,timestamp with time zone,,,YES
 order_matching_watermark,market_type,character varying,,,NO
 order_matching_watermark,pair_id,uuid,,,NO
 order_matching_watermark,updated_at,timestamp with time zone,,,NO
@@ -494,6 +559,8 @@ technical_indicator,volume_score,numeric,5,2,YES
 technical_indicator,volume_sma_20,numeric,28,10,YES
 trade_order,activated_at,timestamp with time zone,,,YES
 trade_order,activation_price,numeric,28,12,YES
+trade_order,amend_count,integer,32,0,NO
+trade_order,amended_at,timestamp with time zone,,,YES
 trade_order,avg_price,numeric,28,12,YES
 trade_order,callback_rate,numeric,12,8,YES
 trade_order,client_order_id,character varying,,,NO
@@ -502,6 +569,7 @@ trade_order,closed_at,timestamp with time zone,,,YES
 trade_order,created_at,timestamp with time zone,,,NO
 trade_order,cum_quote_amount,numeric,28,8,NO
 trade_order,executed_quantity,numeric,28,12,NO
+trade_order,good_till_date,timestamp with time zone,,,YES
 trade_order,limit_price,numeric,28,12,YES
 trade_order,list_id,uuid,,,YES
 trade_order,market_type,character varying,,,NO
@@ -510,10 +578,13 @@ trade_order,order_status,character varying,,,NO
 trade_order,order_type,character varying,,,NO
 trade_order,orig_quantity,numeric,28,12,YES
 trade_order,pair_id,uuid,,,NO
+trade_order,parent_order_id,uuid,,,YES
 trade_order,plan_id,uuid,,,YES
 trade_order,position_side,character varying,,,YES
+trade_order,price_protect,boolean,,,NO
 trade_order,quote_order_amount,numeric,28,8,YES
 trade_order,reduce_only,boolean,,,NO
+trade_order,self_trade_prevention_mode,character varying,,,YES
 trade_order,side,character varying,,,NO
 trade_order,status_reason,character varying,,,YES
 trade_order,stop_price,numeric,28,12,YES
@@ -720,6 +791,7 @@ wallet_ledger_entry,coin_id,uuid,,,NO
 wallet_ledger_entry,created_at,timestamp with time zone,,,NO
 wallet_ledger_entry,entry_id,uuid,,,NO
 wallet_ledger_entry,entry_type,character varying,,,NO
+wallet_ledger_entry,pair_id,uuid,,,YES
 wallet_ledger_entry,ref_id,uuid,,,YES
 wallet_ledger_entry,ref_type,character varying,,,YES
 wallet_ledger_entry,updated_at,timestamp with time zone,,,NO

@@ -30,7 +30,7 @@ class BinanceStreamClientTest {
     }
 
     @Test
-    void NSF03_aFuturesPair_streamsItsMinuteCandlesItsFourStoredTimeframesAndItsMarkPrice() {
+    void NSF03_aFuturesPair_streamsItsMinuteCandlesItsFourStoredTimeframesItsTickerAndItsMarkPrice() {
         assertThat(BinanceStreamClient.streamsOf(BinanceVenue.USD_M_FUTURES, "ETHUSDT"))
                 .containsExactly(
                         "ethusdt@kline_1m",
@@ -38,14 +38,19 @@ class BinanceStreamClientTest {
                         "ethusdt@kline_1h",
                         "ethusdt@kline_4h",
                         "ethusdt@kline_1d",
+                        "ethusdt@ticker",
                         "ethusdt@markPrice@1s");
     }
 
-    /** TR-03: a Spot pair adds its trades, best bid and ask and depth; a futures pair adds nothing yet. */
+    /**
+     * TR-03, TR-38: a Spot pair adds its trades, best bid and ask and depth; a futures pair adds its trades to its
+     * /market streams and puts its best bid and ask and depth on the /public route.
+     */
     @Test
     void TR03_withTradingStreams_aSpotPairAddsItsTradesBookTickerAndDepth() {
         try (BinanceStreamClient client = new BinanceStreamClient(
-                properties(new BinanceStreamProperties.Trading(true, 10, Duration.ofSeconds(10), 50)),
+                properties(new BinanceStreamProperties.Trading(
+                        true, true, URI.create("wss://fstream.binance.com/public"), 10, Duration.ofSeconds(10), 50)),
                 JsonMapper.builder().build(),
                 Clock.systemUTC())) {
             assertThat(client.streamsFor(BinanceVenue.SPOT, "BTCUSDT"))
@@ -53,22 +58,34 @@ class BinanceStreamClientTest {
                             .toArray(String[]::new))
                     .endsWith("btcusdt@aggTrade", "btcusdt@bookTicker", "btcusdt@depth10@100ms")
                     .hasSize(9);
+            assertThat(client.publicStreamsFor(BinanceVenue.SPOT, "BTCUSDT")).isEmpty();
             assertThat(client.streamsFor(BinanceVenue.USD_M_FUTURES, "BTCUSDT"))
-                    .isEqualTo(BinanceStreamClient.streamsOf(BinanceVenue.USD_M_FUTURES, "BTCUSDT"));
+                    .startsWith(BinanceStreamClient.streamsOf(BinanceVenue.USD_M_FUTURES, "BTCUSDT")
+                            .toArray(String[]::new))
+                    .endsWith("btcusdt@aggTrade")
+                    .hasSize(8);
+            assertThat(client.publicStreamsFor(BinanceVenue.USD_M_FUTURES, "BTCUSDT"))
+                    .containsExactly("btcusdt@bookTicker", "btcusdt@depth10@100ms");
         }
         try (BinanceStreamClient client = new BinanceStreamClient(
-                properties(new BinanceStreamProperties.Trading(false, 20, Duration.ofSeconds(10), 50)),
+                properties(new BinanceStreamProperties.Trading(
+                        false, false, URI.create("wss://fstream.binance.com/public"), 20, Duration.ofSeconds(10), 50)),
                 JsonMapper.builder().build(),
                 Clock.systemUTC())) {
             assertThat(client.streamsFor(BinanceVenue.SPOT, "BTCUSDT"))
                     .isEqualTo(BinanceStreamClient.streamsOf(BinanceVenue.SPOT, "BTCUSDT"));
+            assertThat(client.streamsFor(BinanceVenue.USD_M_FUTURES, "BTCUSDT"))
+                    .isEqualTo(BinanceStreamClient.streamsOf(BinanceVenue.USD_M_FUTURES, "BTCUSDT"));
+            assertThat(client.publicStreamsFor(BinanceVenue.USD_M_FUTURES, "BTCUSDT"))
+                    .isEmpty();
         }
     }
 
     @Test
     void TR03_theDepthCarriesOnlyTheLevelsBinanceOffers() {
         assertThatIllegalArgumentException()
-                .isThrownBy(() -> new BinanceStreamProperties.Trading(true, 15, Duration.ofSeconds(10), 50))
+                .isThrownBy(() -> new BinanceStreamProperties.Trading(
+                        true, true, URI.create("wss://fstream.binance.com/public"), 15, Duration.ofSeconds(10), 50))
                 .withMessageContaining("5, 10 or 20");
     }
 
@@ -107,7 +124,8 @@ class BinanceStreamClientTest {
                 Duration.ofMinutes(2),
                 4,
                 10000,
-                new BinanceStreamProperties.Trading(false, 20, Duration.ofSeconds(10), 50));
+                new BinanceStreamProperties.Trading(
+                        false, false, URI.create("wss://fstream.binance.com/public"), 20, Duration.ofSeconds(10), 50));
         BinanceStreamShard.Listener ignore = new BinanceStreamShard.Listener() {
             @Override
             public void onMessage(StreamMessage message) {}
@@ -129,6 +147,9 @@ class BinanceStreamClientTest {
                                     ignore)
                             .uri())
                     .hasToString("wss://fstream.binance.com/market/stream?streams=btcusdt@markPrice@1s");
+            assertThat(client.publicShard("FUTURES-PUBLIC-1", java.util.List.of("btcusdt@bookTicker"), ignore)
+                            .uri())
+                    .hasToString("wss://fstream.binance.com/public/stream?streams=btcusdt@bookTicker");
         }
     }
 }

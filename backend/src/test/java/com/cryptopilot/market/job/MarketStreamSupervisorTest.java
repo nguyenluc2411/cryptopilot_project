@@ -93,6 +93,7 @@ class MarketStreamSupervisorTest {
     private final List<MarkPrice> marks = new CopyOnWriteArrayList<>();
     private final List<MarkPriceListener> markListeners = new CopyOnWriteArrayList<>(List.of(marks::add));
     private boolean tradingStreams;
+    private boolean futuresTradingStreams;
     private TradingMarketData trading;
     private MarketUpdateService updates = (market, message) -> {
         realtime.add(message);
@@ -150,7 +151,7 @@ class MarketStreamSupervisorTest {
                         "/stream?streams=btcusdt@kline_1m/btcusdt@kline_15m/btcusdt@kline_1h/btcusdt@kline_4h"
                                 + "/btcusdt@kline_1d/btcusdt@ticker",
                         "/market/stream?streams=btcusdt@kline_1m/btcusdt@kline_15m/btcusdt@kline_1h"
-                                + "/btcusdt@kline_4h/btcusdt@kline_1d/btcusdt@markPrice@1s");
+                                + "/btcusdt@kline_4h/btcusdt@kline_1d/btcusdt@ticker/btcusdt@markPrice@1s");
         assertThat(refreshes).containsExactly(Duration.ofMinutes(5));
     }
 
@@ -307,6 +308,51 @@ class MarketStreamSupervisorTest {
                 .hasAtLeastOneElementOfType(StreamMessage.DepthMessage.class);
     }
 
+    /**
+     * TR-38: a Futures pair's trades go on its /market connection, its best bid and ask and depth on a /public one of
+     * their own; what either reads is routed as on Spot, under the Futures market.
+     */
+    @Test
+    void TR38_futuresTradingStreams_splitBetweenTheMarketAndPublicRoutes_andAreRouted() {
+        futuresTradingStreams = true;
+        supervisor = supervisor(true, 100);
+
+        supervisor.refresh(MarketType.FUTURES);
+        server.awaitConnection(2);
+
+        assertThat(supervisor.shards(MarketType.FUTURES)).hasSize(2);
+        assertThat(server.paths())
+                .containsExactlyInAnyOrder(
+                        "/market/stream?streams=btcusdt@kline_1m/btcusdt@kline_15m/btcusdt@kline_1h"
+                                + "/btcusdt@kline_4h/btcusdt@kline_1d/btcusdt@ticker/btcusdt@markPrice@1s/btcusdt@aggTrade",
+                        "/public/stream?streams=btcusdt@bookTicker/btcusdt@depth20@100ms");
+        Connection market = connection("/market/stream");
+        Connection book = connection("/public/stream");
+
+        // A futures 24-hour ticker is for the screen only: it never takes a Spot ticker's place in the snapshots.
+        market.send(StreamFrames.ticker("BTCUSDT", AT));
+        market.send(StreamFrames.aggTrade("BTCUSDT", 9, "79992.30", "0.037", AT, false));
+        book.send(StreamFrames.futuresBookTicker("BTCUSDT", 41, "79996.90", "79997.00", AT));
+        book.send(StreamFrames.futuresDepth("BTCUSDT", 42, AT));
+
+        await(
+                () -> trading.currentDepth(MarketType.FUTURES, btc).isPresent()
+                        && trading.currentBookTop(MarketType.FUTURES, btc).isPresent()
+                        && !trades.isEmpty(),
+                "the futures trade, book top and depth");
+        assertThat(trades).singleElement().satisfies(trade -> {
+            assertThat(trade.market()).isEqualTo(MarketType.FUTURES);
+            assertThat(trade.pairId()).isEqualTo(btc);
+            assertThat(trade.price()).isEqualByComparingTo("79992.30");
+        });
+        assertThat(trading.currentBookTop(MarketType.FUTURES, btc).orElseThrow().askPrice())
+                .isEqualByComparingTo("79997.00");
+        assertThat(trading.currentDepth(MarketType.FUTURES, btc).orElseThrow().lastUpdateId())
+                .isEqualTo(42);
+        assertThat(trading.currentDepth(MarketType.SPOT, btc)).isEmpty();
+        assertThat(latest.ticker(btc)).isEmpty();
+    }
+
     /** A lost connection that comes back publishes the reconnection; the first opening does not. */
     /**
      * The realtime fan-out sees every message; and when it fails on every one of them — a Redis or a broker that is
@@ -457,7 +503,13 @@ class MarketStreamSupervisorTest {
                 Duration.ofMinutes(2),
                 2,
                 100,
-                new BinanceStreamProperties.Trading(tradingStreams, 20, Duration.ofSeconds(10), 50));
+                new BinanceStreamProperties.Trading(
+                        tradingStreams,
+                        futuresTradingStreams,
+                        server.baseUrl("/public"),
+                        20,
+                        Duration.ofSeconds(10),
+                        50));
         trading = new TradingMarketData(properties, Clock.systemUTC());
         streams = new BinanceStreamClient(properties, JsonMapper.builder().build(), Clock.systemUTC());
         return new MarketStreamSupervisor(

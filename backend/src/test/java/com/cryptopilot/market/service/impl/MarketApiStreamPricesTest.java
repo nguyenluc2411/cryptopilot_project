@@ -19,6 +19,7 @@ import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -71,7 +72,8 @@ class MarketApiStreamPricesTest {
                 mock(CoinWriter.class),
                 mock(TradingMarketData.class),
                 mock(FuturesMetricsRepository.class),
-                mock(AnalysisService.class));
+                mock(AnalysisService.class),
+                Clock.systemUTC());
     }
 
     @AfterEach

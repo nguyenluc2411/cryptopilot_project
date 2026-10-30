@@ -1,0 +1,11 @@
+# Loaded only when no profile is active, which is how the tests run; never on a server, where a profile is set and
+# this file is not on the classpath. The tests keep the opening grant their figures are written against: Spot
+# 10 000 USDT, 0.1 BTC, 1 ETH and 10 BNB, Futures 5 000 USDT (TR-04). The application grants 5 000 USDT to each wallet.
+cryptopilot:
+  paper:
+    account:
+      spot-grant:
+        usdt: 10000
+        btc: 0.1
+        eth: 1
+        bnb: 10

@@ -20,9 +20,11 @@ import com.cryptopilot.paper.dto.response.LedgerEntryResponse;
 import com.cryptopilot.paper.dto.response.PaperAccountResponse;
 import com.cryptopilot.paper.dto.response.TransferResponse;
 import com.cryptopilot.paper.dto.response.WalletResponse;
+import com.cryptopilot.paper.entity.FuturesPosition;
 import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperLedgerEntry;
 import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
+import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.model.LedgerQuery;
 import com.cryptopilot.paper.model.OpenedAccount;
 import com.cryptopilot.paper.model.PaperAccount;
@@ -30,7 +32,10 @@ import com.cryptopilot.paper.model.RecordedTransfer;
 import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.LedgerRefType;
+import com.cryptopilot.paper.model.enums.MarginType;
+import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.model.enums.WalletType;
+import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperBalanceRepository;
 import com.cryptopilot.paper.repository.PaperLedgerEntryRepository;
@@ -55,6 +60,7 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -94,6 +100,10 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     private final PaperBalanceRepository balances;
     private final PaperLedgerEntryRepository ledger;
     private final PaperWallets wallets;
+    private final FuturesMargins futuresMargins;
+    private final FuturesPositionRepository futuresPositions;
+    private final ApplicationEventPublisher events;
+    private final PaperUserFeed feed;
     private final UserLock lock;
     private final PaperAccountProperties properties;
     private final MarketApi market;
@@ -205,12 +215,51 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         }
         String key = request.clientTransferId() == null ? UuidV7.next().toString() : request.clientTransferId();
         // A transfer is its two entries: they share its id and its key (D-117).
+        if (request.from() == WalletType.FUTURES) {
+            requireWithdrawable(account, coin, request.amount());
+        }
         Ref ref = Ref.transfer(UuidV7.next(), key);
         wallets.debit(account, request.from(), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
         wallets.credit(account, other(request.from()), coin, request.amount(), LedgerEntryType.TRANSFER, ref);
+        feed.futuresAccount(account);
+        announceCrossChange(account.userId());
         PaperLedgerEntry debit = ledger.findTransfer(account.userId(), key)
                 .orElseThrow(() -> new IllegalStateException("transfer " + key + " was not written"));
         return new RecordedTransfer(transferOf(debit, coin.symbol()), true);
+    }
+
+    /**
+     * A transfer moves the cross wallet: the matching engine reads the Trader's cross account again after the commit,
+     * as for a fill (plan 9.6 rule 3). It reads the whole cross account on one change, so one is told, named after any
+     * pair of a cross position; with none, there is nothing to read again. Isolated levels do not move.
+     */
+    private void announceCrossChange(UUID userId) {
+        futuresPositions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN).stream()
+                .filter(position -> position.getMarginType() == MarginType.CROSSED)
+                .map(FuturesPosition::getPairId)
+                .findFirst()
+                .ifPresent(pairId -> events.publishEvent(new FuturesAccountChanged(userId, pairId)));
+    }
+
+    /**
+     * What leaves the Futures wallet is at most its {@code maxWithdrawAmount}: neither the margin its positions and
+     * open orders need nor unrealized profit leaves the account (TR-18, plan 4.7). Without a mark price of a pair with a
+     * position it cannot be known, and the transfer is refused ({@code MARKET_PRICE_UNAVAILABLE}).
+     */
+    private void requireWithdrawable(PaperAccount account, CoinListing coin, BigDecimal amount) {
+        // What can be withdrawn depends on every cross mark (8.2.1 rule 3).
+        futuresMargins.requireFreshCrossMarks(account.userId(), null);
+        BigDecimal withdrawable =
+                futuresMargins.crossState(account.userId(), null).margin().maxWithdrawAmount();
+        if (amount.compareTo(withdrawable) > 0) {
+            throw new BusinessException(
+                    ErrorCode.PAPER_INSUFFICIENT_BALANCE,
+                    "FUTURES " + coin.symbol() + " can transfer out at most " + withdrawable.toPlainString() + ", "
+                            + amount.toPlainString() + " asked",
+                    coin.symbol(),
+                    amount.toPlainString(),
+                    withdrawable.toPlainString());
+        }
     }
 
     /** The wallet a transfer out of {@code from} enters: the Spot and the Futures wallet trade places. */

@@ -6,8 +6,10 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
+import com.cryptopilot.paper.model.enums.PositionSide;
 import com.cryptopilot.paper.model.enums.TimeInForce;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
+import com.cryptopilot.paper.model.enums.WorkingType;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -30,7 +32,11 @@ import lombok.Getter;
  * of the exchange's book it takes on arrival (TR-06, Q-T7), and a waiting LIMIT order the rest of its quantity at
  * once when the market reaches it. Part executed, it is {@code PARTIALLY_FILLED} and still works. An order of a
  * group (OCO, OTO, OTOCO) points at it (TR-10); the pending order of an OTO or OTOCO is {@code PENDING_NEW} until its
- * working order fills. The position side of Futures is left unmapped until that stage uses it.
+ * working order fills.
+ *
+ * <p>A Futures MARKET or LIMIT order (TR-15) has a position side, {@code BOTH} in one-way mode, and may be reduce-only;
+ * it holds nothing back, as the margin of Futures orders is derived ({@code FuturesMargins}), and each of its fills
+ * belongs to a position.
  *
  * <p>What a working order holds back is not stored: it follows from the order and what of it is left, so
  * {@link #lockedAmount()} gives the same figure at a fill, at a cancel and after a restart.
@@ -48,6 +54,9 @@ public class PaperOrder extends BaseEntity {
 
     /** Why a filled order is flagged: it took more than the depth shown, the rest at the last level's price (Q-T7). */
     public static final String DEPTH_EXHAUSTED = "DEPTH_EXHAUSTED";
+
+    /** The most amendments of one order, as the exchange allows (plan 5.7). */
+    public static final int MAX_AMENDMENTS = 10_000;
 
     @Column(name = "user_id", nullable = false, updatable = false)
     private UUID userId;
@@ -86,12 +95,30 @@ public class PaperOrder extends BaseEntity {
     @Column(name = "time_in_force", length = 32, updatable = false)
     private TimeInForce timeInForce;
 
-    @Column(name = "limit_price", precision = 28, scale = 12, updatable = false)
+    /** The limit price; a working Futures LIMIT order's may be amended (TR-25). */
+    /** When a GTD order expires (TR-44); {@code null} for every other time in force. */
+    @Column(name = "good_till_date", updatable = false)
+    private Instant goodTillDate;
+
+    @Column(name = "limit_price", precision = 28, scale = 12)
     private BigDecimal limitPrice;
 
     /** A Spot stop's stopPrice: its trigger, or the activation of a trailing stop; {@code null} without one. */
     @Column(name = "stop_price", precision = 28, scale = 12, updatable = false)
     private BigDecimal stopPrice;
+
+    /** The price a Futures conditional order watches: the last or the mark price (TR-20); {@code null} otherwise. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "working_type", length = 32, updatable = false)
+    private WorkingType workingType;
+
+    /** Whether a Futures conditional order waits while the mark and the last price are too far apart (TR-20). */
+    @Column(name = "price_protect", nullable = false, updatable = false)
+    private boolean priceProtect;
+
+    /** The Futures conditional order that placed this order once triggered (TR-20); {@code null} for every other. */
+    @Column(name = "parent_order_id", updatable = false)
+    private UUID parentOrderId;
 
     /** The side of the last price a stop's condition is met on, fixed by its type and side; otherwise null. */
     @Enumerated(EnumType.STRING)
@@ -118,8 +145,22 @@ public class PaperOrder extends BaseEntity {
     @Column(name = "activated_at")
     private Instant activatedAt;
 
-    /** The quantity asked for, or {@code null} for a MARKET buy sized by what it spends. */
-    @Column(name = "orig_quantity", precision = 28, scale = 12, updatable = false)
+    /**
+     * When a Futures LIMIT order was last amended to a new price or a larger quantity, from which it waits again at its
+     * price (TR-25); {@code null} for an order never amended so.
+     */
+    @Column(name = "amended_at")
+    private Instant amendedAt;
+
+    /** How many times the order was amended (TR-25), at most {@link #MAX_AMENDMENTS}. */
+    @Column(name = "amend_count", nullable = false)
+    private int amendCount;
+
+    /**
+     * The quantity asked for, or {@code null} for a MARKET buy sized by what it spends; a working Futures LIMIT order's
+     * may be amended (TR-25).
+     */
+    @Column(name = "orig_quantity", precision = 28, scale = 12)
     private BigDecimal origQuantity;
 
     /** What a MARKET buy "by total" spends, in the quote asset; otherwise {@code null}. */
@@ -134,6 +175,11 @@ public class PaperOrder extends BaseEntity {
 
     @Column(name = "avg_price", precision = 28, scale = 12)
     private BigDecimal avgPrice;
+
+    /** The Futures position side the order acts on, {@code BOTH} in one-way mode; {@code null} on Spot. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "position_side", length = 32, updatable = false)
+    private PositionSide positionSide;
 
     @Column(name = "reduce_only", nullable = false, updatable = false)
     private boolean reduceOnly;
@@ -312,6 +358,215 @@ public class PaperOrder extends BaseEntity {
     }
 
     /**
+     * A Futures MARKET order (TR-15).
+     *
+     * @param quantity positive, on the pair's step
+     * @param reduceOnly whether it may only make the position smaller
+     */
+    public static PaperOrder futuresMarket(
+            UUID userId,
+            UUID pairId,
+            String clientOrderId,
+            OrderSide side,
+            PositionSide positionSide,
+            BigDecimal quantity,
+            boolean reduceOnly) {
+        return new PaperOrder(
+                        userId, pairId, clientOrderId, side, OrderType.MARKET, null, null, positive(quantity), null)
+                .futures(positionSide, reduceOnly);
+    }
+
+    /**
+     * A Futures LIMIT order (TR-15).
+     *
+     * @param timeInForce GTC, IOC, FOK or GTX
+     * @param price positive, on the pair's tick
+     * @param quantity positive, on the pair's step
+     * @param reduceOnly whether it may only make the position smaller
+     */
+    public static PaperOrder futuresLimit(
+            UUID userId,
+            UUID pairId,
+            String clientOrderId,
+            OrderSide side,
+            PositionSide positionSide,
+            TimeInForce timeInForce,
+            BigDecimal price,
+            BigDecimal quantity,
+            boolean reduceOnly) {
+        return new PaperOrder(
+                        userId,
+                        pairId,
+                        clientOrderId,
+                        side,
+                        OrderType.LIMIT,
+                        Objects.requireNonNull(timeInForce, "a LIMIT order has a time in force"),
+                        positive(price),
+                        positive(quantity),
+                        null)
+                .futures(positionSide, reduceOnly);
+    }
+
+    /**
+     * A Futures conditional order (TR-20): STOP or TAKE_PROFIT, which places a LIMIT order at {@code price} once
+     * triggered, or STOP_MARKET or TAKE_PROFIT_MARKET, which places a MARKET order. The side of the price it triggers on
+     * follows from its type and side.
+     *
+     * @param timeInForce for STOP and TAKE_PROFIT; {@code null} for the market kinds
+     * @param triggerPrice the exchange's triggerPrice, on the pair's tick
+     * @param price for STOP and TAKE_PROFIT, on the pair's tick; {@code null} for the market kinds
+     * @param quantity positive, on the pair's step; {@code null} with {@code closePosition}
+     * @param closePosition whether it closes the whole position when triggered (market kinds only)
+     */
+    public static PaperOrder futuresConditional(
+            UUID userId,
+            UUID pairId,
+            String clientOrderId,
+            OrderType type,
+            OrderSide side,
+            PositionSide positionSide,
+            TimeInForce timeInForce,
+            BigDecimal triggerPrice,
+            BigDecimal price,
+            BigDecimal quantity,
+            WorkingType workingType,
+            boolean priceProtect,
+            boolean reduceOnly,
+            boolean closePosition) {
+        if (!type.isFuturesConditional()) {
+            throw new IllegalArgumentException(type + " is not a Futures conditional order");
+        }
+        boolean market = type.isFuturesMarketConditional();
+        if (market != (price == null) || market != (timeInForce == null)) {
+            throw new IllegalArgumentException(type + " takes a price and a time in force only as a limit kind");
+        }
+        if (closePosition != (quantity == null) || (closePosition && (!market || reduceOnly))) {
+            throw new IllegalArgumentException("closePosition takes no quantity, no reduceOnly and a market kind");
+        }
+        PaperOrder order = new PaperOrder(
+                        userId,
+                        pairId,
+                        clientOrderId,
+                        side,
+                        type,
+                        timeInForce,
+                        market ? null : positive(price),
+                        quantity == null ? null : positive(quantity),
+                        null)
+                .futures(positionSide, reduceOnly);
+        order.stopPrice = positive(triggerPrice);
+        order.triggerCondition = type.futuresTriggerConditionFor(side);
+        order.workingType = Objects.requireNonNull(workingType, "workingType must not be null");
+        order.priceProtect = priceProtect;
+        order.closePosition = closePosition;
+        return order;
+    }
+
+    /**
+     * A Futures TRAILING_STOP_MARKET (TR-21, plan 5.4): it follows the best price since it started, the highest for a
+     * SELL and the lowest for a BUY, and triggers once the price comes back from it by {@code callbackRate} percent;
+     * with an {@code activatePrice} it starts once the price reaches it (at or above for a SELL, at or below for a
+     * BUY), without one at the first price after its placement. Once triggered it places a MARKET order.
+     *
+     * @param activatePrice where it starts following, on the pair's tick; {@code null} for at once
+     * @param callbackRate the pull-back in percent, e.g. {@code 1} for 1 %
+     * @param quantity positive, on the pair's step
+     */
+    public static PaperOrder futuresTrailing(
+            UUID userId,
+            UUID pairId,
+            String clientOrderId,
+            OrderSide side,
+            PositionSide positionSide,
+            BigDecimal activatePrice,
+            BigDecimal callbackRate,
+            BigDecimal quantity,
+            WorkingType workingType,
+            boolean reduceOnly) {
+        PaperOrder order = new PaperOrder(
+                        userId,
+                        pairId,
+                        clientOrderId,
+                        side,
+                        OrderType.TRAILING_STOP_MARKET,
+                        null,
+                        null,
+                        positive(quantity),
+                        null)
+                .futures(positionSide, reduceOnly);
+        order.stopPrice = activatePrice == null ? null : positive(activatePrice);
+        order.callbackRate = positive(callbackRate);
+        order.triggerCondition = OrderType.TRAILING_STOP_MARKET.futuresTriggerConditionFor(side);
+        order.workingType = Objects.requireNonNull(workingType, "workingType must not be null");
+        return order;
+    }
+
+    /** Marks the order as placed by a triggered Futures conditional order. Called before it is first stored. */
+    public PaperOrder placedBy(PaperOrder conditional) {
+        if (!conditional.getOrderType().isFuturesConditional() || marketType != MarketType.FUTURES) {
+            throw new IllegalArgumentException("only a Futures conditional order places a Futures order");
+        }
+        this.parentOrderId = conditional.getId();
+        return this;
+    }
+
+    /**
+     * Whether the order can only make its Futures position smaller: reduce-only, or in hedge mode a SELL on the LONG
+     * side or a BUY on the SHORT side (TR-14b, plan 4.4), which never reverses the position.
+     */
+    public boolean reducing() {
+        return reduceOnly || closesHedgeSide();
+    }
+
+    /** Whether, in hedge mode, the order closes its side: SELL on LONG or BUY on SHORT (TR-14b). */
+    public boolean closesHedgeSide() {
+        return (positionSide == PositionSide.LONG && side == OrderSide.SELL)
+                || (positionSide == PositionSide.SHORT && side == OrderSide.BUY);
+    }
+
+    /** Whether the order is a Futures conditional order (TR-20). */
+    public boolean isConditional() {
+        return orderType.isFuturesConditional();
+    }
+
+    /**
+     * Ends a triggered Futures conditional order: FILLED once it placed the order it carries, the exchange's
+     * TRIGGERED; or EXPIRED or REJECTED with the reason the trigger could not place it.
+     */
+    public void endTrigger(OrderStatus status, String reason, Instant at) {
+        requireOpen("ended");
+        if (!isConditional() || triggeredAt == null) {
+            throw new IllegalStateException("order " + getId() + " is not a triggered conditional order");
+        }
+        end(status, reason, at);
+    }
+
+    /**
+     * Sets when a GTD LIMIT order expires (TR-44). Called before it is first stored.
+     *
+     * @param goodTillDate the instant it expires at
+     */
+    public PaperOrder goodTill(Instant goodTillDate) {
+        if (timeInForce != TimeInForce.GTD || this.goodTillDate != null || executedQuantity.signum() != 0) {
+            throw new IllegalStateException("order " + getId() + " is " + timeInForce + ", not a new GTD order");
+        }
+        this.goodTillDate = Objects.requireNonNull(goodTillDate, "goodTillDate");
+        return this;
+    }
+
+    /** Whether a working GTD order is due to expire at {@code at} (TR-44). */
+    public boolean expiredBy(Instant at) {
+        return goodTillDate != null && isOpen() && !at.isBefore(goodTillDate);
+    }
+
+    private PaperOrder futures(PositionSide positionSide, boolean reduceOnly) {
+        this.marketType = MarketType.FUTURES;
+        this.positionSide = Objects.requireNonNull(positionSide, "a Futures order has a position side");
+        this.reduceOnly = reduceOnly;
+        return this;
+    }
+
+    /**
      * Places the order in a group (TR-10). Called before it is first stored.
      *
      * @param pending whether it waits, PENDING_NEW, until its group's working order fills
@@ -362,9 +617,9 @@ public class PaperOrder extends BaseEntity {
         return orderType != OrderType.MARKET;
     }
 
-    /** Whether the order is a Spot stop: STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT or TAKE_PROFIT_LIMIT. */
+    /** Whether the order waits for a trigger: a Spot stop, or a Futures conditional order (TR-20). */
     public boolean isTriggered() {
-        return orderType.isSpotStop();
+        return marketType == MarketType.SPOT ? orderType.isSpotStop() : orderType.isFuturesConditional();
     }
 
     /** Whether the order still waits for the price to trigger it. */
@@ -384,12 +639,16 @@ public class PaperOrder extends BaseEntity {
 
     /**
      * When the order started waiting at its limit price: for a stop when it triggered, for a pending order of a group
-     * when it was activated, otherwise when it was placed. A price traded before then never fills it (D-77).
+     * when it was activated, for an amended Futures order when it was amended to a new price or a larger quantity,
+     * otherwise when it was placed. A price traded before then never fills it (D-77).
      *
      * <p>Reference: Akidau, T. et al. (2015). The Dataflow Model. <i>PVLDB</i>, 8(12), 1792-1803 (event time, not
      * processing time: the same instant live and after a restart).
      */
     public Instant restingSince() {
+        if (amendedAt != null) {
+            return amendedAt;
+        }
         if (triggeredAt != null) {
             return triggeredAt;
         }
@@ -493,6 +752,39 @@ public class PaperOrder extends BaseEntity {
             throw new IllegalStateException("order " + getId() + " has executed nothing to complete");
         }
         end(OrderStatus.FILLED, null, at);
+    }
+
+    /**
+     * Amends a working Futures LIMIT order in place (TR-25, plan 5.7): its price and the quantity asked for, which stays
+     * above what has executed. A new price or a larger quantity makes it wait again from {@code at}, behind what was
+     * there before, as the exchange's order loses its place; a smaller quantity at the same price keeps its place.
+     *
+     * @param price positive, on the pair's tick
+     * @param quantity more than the executed quantity, on the pair's step
+     * @return whether the order waits again from {@code at}
+     */
+    public boolean amend(BigDecimal price, BigDecimal quantity, Instant at) {
+        requireOpen("amended");
+        if (marketType != MarketType.FUTURES || orderType != OrderType.LIMIT) {
+            throw new IllegalStateException(
+                    "order " + getId() + " is a " + marketType + " " + orderType + " order and cannot be amended");
+        }
+        if (amendCount >= MAX_AMENDMENTS) {
+            throw new IllegalStateException("order " + getId() + " was amended " + amendCount + " times already");
+        }
+        positive(price);
+        if (positive(quantity).compareTo(executedQuantity) <= 0) {
+            throw new IllegalArgumentException("order " + getId() + " has executed " + executedQuantity.toPlainString()
+                    + ", not less than " + quantity.toPlainString());
+        }
+        boolean requeued = limitPrice.compareTo(price) != 0 || quantity.compareTo(origQuantity) > 0;
+        limitPrice = price;
+        origQuantity = quantity;
+        amendCount++;
+        if (requeued) {
+            amendedAt = Objects.requireNonNull(at, "at must not be null");
+        }
+        return requeued;
     }
 
     /** Flags a filled order that took more than the depth shown, the rest at the last level's price (Q-T7). */

@@ -37,50 +37,74 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     @Transactional(readOnly = true)
     Optional<PaperOrder> findByUserIdAndClientOrderId(UUID userId, String clientOrderId);
 
-    /** The account's orders in these statuses, newest first. */
+    /** The working GTD orders whose date has come, earliest first (TR-44). */
     @Transactional(readOnly = true)
-    List<PaperOrder> findByUserIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
-            UUID userId, Collection<OrderStatus> statuses);
+    List<PaperOrder> findByGoodTillDateLessThanEqualAndOrderStatusInOrderByGoodTillDateAsc(
+            Instant at, Collection<OrderStatus> statuses);
 
-    /** The account's orders of one pair in these statuses, oldest first. */
-    List<PaperOrder> findByUserIdAndPairIdAndOrderStatusInOrderByCreatedAtAscIdAsc(
-            UUID userId, UUID pairId, Collection<OrderStatus> statuses);
+    /** The account's orders on one market in these statuses, newest first. */
+    @Transactional(readOnly = true)
+    List<PaperOrder> findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
+            UUID userId, MarketType marketType, Collection<OrderStatus> statuses);
+
+    /** The account's order of this id on one market. */
+    @Transactional(readOnly = true)
+    Optional<PaperOrder> findByIdAndUserIdAndMarketType(UUID orderId, UUID userId, MarketType marketType);
+
+    /** The account's order of this client order id on one market. */
+    @Transactional(readOnly = true)
+    Optional<PaperOrder> findByUserIdAndClientOrderIdAndMarketType(
+            UUID userId, String clientOrderId, MarketType marketType);
 
     /** The account's orders of one pair on one market in these statuses, oldest first. */
     List<PaperOrder> findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
             UUID userId, UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
 
     /**
-     * One page of an account's orders in these statuses, placed in {@code [from, to)}, newest first. No parameter is
-     * null, so PostgreSQL can type every one.
+     * One page of an account's orders on one market in these statuses, placed in {@code [from, to)}, newest first.
+     * No parameter is null, so PostgreSQL can type every one.
      */
     @Transactional(readOnly = true)
     @Query(
-            value = "select o from PaperOrder o where o.userId = :userId and o.orderStatus in :statuses"
-                    + " and o.createdAt >= :from and o.createdAt < :to order by o.createdAt desc, o.id desc",
-            countQuery = "select count(o) from PaperOrder o where o.userId = :userId"
+            value = "select o from PaperOrder o where o.userId = :userId and o.marketType = :marketType"
+                    + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to"
+                    + " order by o.createdAt desc, o.id desc",
+            countQuery = "select count(o) from PaperOrder o where o.userId = :userId and o.marketType = :marketType"
                     + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to")
-    Page<PaperOrder> search(UUID userId, Collection<OrderStatus> statuses, Instant from, Instant to, Pageable pageable);
+    Page<PaperOrder> search(
+            UUID userId,
+            MarketType marketType,
+            Collection<OrderStatus> statuses,
+            Instant from,
+            Instant to,
+            Pageable pageable);
 
     /** As {@link #search}, for one pair. */
     @Transactional(readOnly = true)
     @Query(
             value = "select o from PaperOrder o where o.userId = :userId and o.pairId = :pairId"
-                    + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to"
-                    + " order by o.createdAt desc, o.id desc",
+                    + " and o.marketType = :marketType and o.orderStatus in :statuses and o.createdAt >= :from"
+                    + " and o.createdAt < :to order by o.createdAt desc, o.id desc",
             countQuery = "select count(o) from PaperOrder o where o.userId = :userId and o.pairId = :pairId"
-                    + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to")
+                    + " and o.marketType = :marketType and o.orderStatus in :statuses and o.createdAt >= :from"
+                    + " and o.createdAt < :to")
     Page<PaperOrder> searchPair(
-            UUID userId, UUID pairId, Collection<OrderStatus> statuses, Instant from, Instant to, Pageable pageable);
+            UUID userId,
+            UUID pairId,
+            MarketType marketType,
+            Collection<OrderStatus> statuses,
+            Instant from,
+            Instant to,
+            Pageable pageable);
 
     /**
      * Every working order of every account that waits at its limit price, which the matching engine starts its books
      * from: LIMIT and LIMIT_MAKER orders, and STOP_LOSS_LIMIT and TAKE_PROFIT_LIMIT orders that have triggered,
-     * waiting since then.
+     * waiting since then; an amended Futures LIMIT order since its amendment (TR-25).
      */
     @Transactional(readOnly = true)
     @Query("select new com.cryptopilot.paper.model.RestingOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
-            + " o.limitPrice, coalesce(o.triggeredAt, o.activatedAt, o.createdAt)) from PaperOrder o"
+            + " o.limitPrice, coalesce(o.amendedAt, o.triggeredAt, o.activatedAt, o.createdAt)) from PaperOrder o"
             + " where o.orderStatus in :statuses and (o.orderType in (com.cryptopilot.paper.model.enums.OrderType.LIMIT,"
             + " com.cryptopilot.paper.model.enums.OrderType.LIMIT_MAKER) or (o.orderType in"
             + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS_LIMIT,"
@@ -88,18 +112,42 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     List<RestingOrder> findResting(Collection<OrderStatus> statuses);
 
     /**
-     * Every Spot stop that still waits for its trigger, which the engine starts watching from: a pending stop of a
-     * group from its activation, the others from their placement (D-77).
+     * Every order that still waits for the last price to trigger it, which the engine starts watching from: the Spot
+     * stops, a pending stop of a group from its activation and the others from their placement (D-77), and the Futures
+     * conditional orders that watch the last price (TR-20).
      */
     @Transactional(readOnly = true)
-    @Query(
-            "select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
-                    + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice,"
-                    + " coalesce(o.activatedAt, o.createdAt)) from PaperOrder o"
-                    + " where o.orderStatus in :statuses and o.triggeredAt is null and o.orderType in"
-                    + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS, com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS_LIMIT,"
-                    + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_LIMIT)")
+    @Query("select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
+            + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice,"
+            + " coalesce(o.activatedAt, o.createdAt)) from PaperOrder o"
+            + " where o.orderStatus in :statuses and o.triggeredAt is null and ((o.marketType ="
+            + " com.cryptopilot.market.model.enums.MarketType.SPOT and o.orderType in"
+            + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS, com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS_LIMIT,"
+            + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_LIMIT))"
+            + " or (o.marketType = com.cryptopilot.market.model.enums.MarketType.FUTURES and o.orderType in"
+            + " (com.cryptopilot.paper.model.enums.OrderType.STOP, com.cryptopilot.paper.model.enums.OrderType.STOP_MARKET,"
+            + " com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT, com.cryptopilot.paper.model.enums.OrderType.TAKE_PROFIT_MARKET,"
+            + " com.cryptopilot.paper.model.enums.OrderType.TRAILING_STOP_MARKET)"
+            + " and o.workingType = com.cryptopilot.paper.model.enums.WorkingType.LAST_PRICE))")
     List<TriggerOrder> findAwaitingTrigger(Collection<OrderStatus> statuses);
+
+    /** Every Futures conditional order that still waits for the mark price to trigger it (TR-20). */
+    @Transactional(readOnly = true)
+    @Query("select new com.cryptopilot.paper.model.TriggerOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
+            + " o.triggerCondition, o.stopPrice, o.callbackRate, o.trailingExtremePrice,"
+            + " coalesce(o.activatedAt, o.createdAt))"
+            + " from PaperOrder o where o.orderStatus in :statuses and o.triggeredAt is null"
+            + " and o.marketType = com.cryptopilot.market.model.enums.MarketType.FUTURES"
+            + " and o.workingType = com.cryptopilot.paper.model.enums.WorkingType.MARK_PRICE")
+    List<TriggerOrder> findAwaitingMarkTrigger(Collection<OrderStatus> statuses);
+
+    /** The order a Futures conditional order placed once triggered, if it did. */
+    @Transactional(readOnly = true)
+    Optional<PaperOrder> findByParentOrderId(UUID parentOrderId);
+
+    /** The orders the Futures conditional orders placed once triggered. */
+    @Transactional(readOnly = true)
+    List<PaperOrder> findByParentOrderIdIn(Collection<UUID> parentOrderIds);
 
     /** The orders of a group, as they were placed. */
     @Transactional(readOnly = true)

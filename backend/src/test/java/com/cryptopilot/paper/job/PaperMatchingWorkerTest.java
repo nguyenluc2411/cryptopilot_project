@@ -2,8 +2,10 @@ package com.cryptopilot.paper.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -16,22 +18,30 @@ import static org.mockito.Mockito.when;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.cryptopilot.market.LeverageBracketsReplaced;
+import com.cryptopilot.market.LeverageTier;
+import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
+import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperOrderAwaitingTrigger;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperOrderRested;
+import com.cryptopilot.paper.model.CrossAccount;
+import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.LimitFillMode;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.MutableTestClock;
@@ -66,6 +76,18 @@ class PaperMatchingWorkerTest {
     private static final Instant MINUTE_2 = MINUTE_0.plusSeconds(120);
     private static final Instant MINUTE_5 = MINUTE_0.plusSeconds(300);
     private static final long WAIT = Duration.ofSeconds(5).toMillis();
+    private static final PaperFuturesProperties FUTURES_PROPERTIES = new PaperFuturesProperties(
+            Duration.ofSeconds(5),
+            new BigDecimal("0.01"),
+            new BigDecimal("0.05"),
+            new BigDecimal("20"),
+            Duration.ofSeconds(30),
+            new BigDecimal("0.8"),
+            Duration.ofMinutes(30),
+            new BigDecimal("5"),
+            Duration.ofMinutes(5),
+            Duration.ofMinutes(30),
+            Duration.ofMinutes(1));
 
     private final PaperMatchingService matching = mock(PaperMatchingService.class);
     private final MarketApi market = mock(MarketApi.class);
@@ -82,7 +104,9 @@ class PaperMatchingWorkerTest {
     @BeforeEach
     void noCandlesToReplayByDefault() {
         when(market.closedMinuteKlines(any(), any(), any())).thenReturn(MinuteKlineBatch.of(List.of()));
+        when(market.closedMarkPriceKlines(any(), any())).thenReturn(MinuteKlineBatch.of(List.of()));
         when(matching.watermark(any(), any())).thenReturn(Optional.empty());
+        when(matching.markWatermark(any())).thenReturn(Optional.empty());
         when(matching.fill(any(), any(), any(), any())).thenReturn(true);
     }
 
@@ -701,6 +725,95 @@ class PaperMatchingWorkerTest {
         verifyNoInteractions(matching);
     }
 
+    /** TR-20: a mark price reaches the conditional orders that watch the mark, and only those. */
+    @Test
+    void TR20_aMark_triggersTheConditionalOrdersOnTheMark_atItsTime() {
+        TriggerOrder onMark = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("95"),
+                null,
+                null,
+                PLACED);
+        TriggerOrder onLast = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("95"),
+                null,
+                null,
+                PLACED);
+        when(matching.markTriggerOrders()).thenReturn(List.of(onMark));
+        when(matching.triggerOrders()).thenReturn(List.of(onLast));
+        when(matching.trigger(any(), any(), any(), any(), any())).thenReturn(true);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("96"), MINUTE_1));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("94.5"), MINUTE_1.plusSeconds(1)));
+
+        verify(matching, timeout(WAIT))
+                .trigger(onMark, MINUTE_1.plusSeconds(1), new BigDecimal("95"), FillSource.LIVE, null);
+        verify(matching, never()).trigger(eq(onLast), any(), any(), any(), any());
+    }
+
+    /** TR-22: a mark reaching a liquidation level liquidates it; one the database no longer bears out is read again. */
+    @Test
+    void TR22_aMarkReachingALevel_liquidatesIt_andAStaleLevelIsReadAgain() {
+        UUID trader = UUID.randomUUID();
+        LiquidationLevel reached =
+                new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("95"));
+        LiquidationLevel short_ =
+                new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.SHORT, new BigDecimal("120"));
+        when(matching.liquidationLevels()).thenReturn(List.of(reached, short_));
+        when(matching.liquidate(any(), any(), any())).thenReturn(false);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("94"), MINUTE_1));
+
+        verify(matching, timeout(WAIT)).liquidate(reached, new BigDecimal("94"), MINUTE_1);
+        verify(matching, timeout(WAIT)).liquidationLevels(trader, PAIR);
+        verify(matching, never()).liquidate(eq(short_), any(), any());
+    }
+
+    /** TR-21: a trailing stop on the mark follows the peak and triggers on the pull-back of its callback. */
+    @Test
+    void TR21_aTrailingStopOnTheMark_followsThePeak_andTriggersOnThePullBack() {
+        TriggerOrder trailing = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_ABOVE,
+                null,
+                new BigDecimal("1"),
+                null,
+                PLACED);
+        when(matching.markTriggerOrders()).thenReturn(List.of(trailing));
+        when(matching.trigger(any(), any(), any(), any(), any())).thenReturn(true);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("105"), MINUTE_1.plusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("104"), MINUTE_1.plusSeconds(2)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("103.9"), MINUTE_1.plusSeconds(3)));
+
+        verify(matching, timeout(WAIT))
+                .trigger(
+                        eq(trailing),
+                        eq(MINUTE_1.plusSeconds(3)),
+                        argThat(price -> price.compareTo(new BigDecimal("103.95")) == 0),
+                        any(),
+                        any());
+    }
+
     @Test
     void TR02_aSecondStart_doesNothing() {
         worker = started(properties(true, false, Duration.ofMinutes(10)));
@@ -710,6 +823,226 @@ class PaperMatchingWorkerTest {
         assertThat(started).hasSize(2);
     }
 
+    /**
+     * TR-42: at start, a pair with a stop on the mark is caught up from the minute it was placed: its mark candles run
+     * now, the pair stays caught up until the minute of the first live mark is replayed and two live marks followed.
+     */
+    @Test
+    void TR42_atStart_theMarkCandles_areReplayed_andThePairGoesLive_afterItsMinuteAndTwoMarks() {
+        TriggerOrder stop = new TriggerOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                PAIR,
+                OrderSide.SELL,
+                TriggerCondition.AT_OR_BELOW,
+                new BigDecimal("95"),
+                null,
+                null,
+                PLACED);
+        when(matching.markTriggerOrders()).thenReturn(List.of(stop));
+        when(matching.trigger(any(), any(), any(), any(), any())).thenReturn(true);
+        when(market.closedMarkPriceKlines(PAIR, MINUTE_0))
+                .thenReturn(MinuteKlineBatch.of(List.of(
+                        markKline(MINUTE_0, "100", "101", "99", "100"),
+                        markKline(MINUTE_1, "100", "100.5", "94", "96"))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+
+        verify(matching, timeout(WAIT)).markCatchingUp(PAIR, true);
+        // Below 95 in the second candle: triggered now, on the state of now.
+        verify(matching, timeout(WAIT)).trigger(stop, MINUTE_2, new BigDecimal("95"), FillSource.REPLAY, null);
+        verify(matching, timeout(WAIT)).advanceMarkWatermark(PAIR, MINUTE_1);
+
+        // The minute of the first live mark is still running: the pair waits for its candle.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), MINUTE_2.plusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), MINUTE_2.plusSeconds(2)));
+        verify(matching, after(200).never()).markCatchingUp(PAIR, false);
+
+        Instant minute3 = MINUTE_2.plus(Duration.ofMinutes(1));
+        when(market.closedMarkPriceKlines(PAIR, MINUTE_2))
+                .thenReturn(MinuteKlineBatch.of(List.of(markKline(MINUTE_2, "96", "97", "96", "97"))));
+        clock.set(minute3.plusSeconds(1));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), minute3.plusSeconds(1)));
+        verify(matching, timeout(WAIT)).advanceMarkWatermark(PAIR, MINUTE_2);
+        verify(matching, after(200).never()).markCatchingUp(PAIR, false);
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), minute3.plusSeconds(2)));
+        verify(matching, timeout(WAIT)).markCatchingUp(PAIR, false);
+    }
+
+    /**
+     * TR-42: live, a mark of a watched pair that comes too long after the previous holds the pair: it is caught up
+     * from the minute of the last mark, and the mark held liquidates nothing meanwhile. Marks without a gap close
+     * their minute.
+     */
+    @Test
+    void TR42_aGapInTheMarks_startsACatchUp_fromTheMinuteOfTheLastMark() {
+        UUID trader = UUID.randomUUID();
+        LiquidationLevel level =
+                new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("95"));
+        when(matching.liquidationLevels(trader, PAIR)).thenReturn(List.of(level));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        worker.onAccountChanged(new FuturesAccountChanged(trader, PAIR));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1.minusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1));
+        verify(matching, timeout(WAIT)).advanceMarkWatermark(PAIR, MINUTE_0);
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("94"), MINUTE_1.plusSeconds(10)));
+
+        verify(matching, timeout(WAIT)).markCatchingUp(PAIR, true);
+        verify(market, timeout(WAIT).atLeastOnce()).closedMarkPriceKlines(PAIR, MINUTE_1);
+        verify(matching, after(200).never()).liquidate(any(), any(), any());
+        // The candle of that minute is not out yet: asked for again only when a live mark comes.
+        verify(market, atMost(1)).closedMarkPriceKlines(PAIR, MINUTE_1);
+    }
+
+    /** TR-42: a mark candle runs open, the extreme nearer the open, the other extreme, close. */
+    @Test
+    void TR42_aMarkCandle_runsOpen_theNearerExtreme_theOther_andClose() {
+        assertThat(PaperMatchingWorker.markPath(markKline(MINUTE_0, "100", "100.5", "94", "96")))
+                .extracting(MarkPrice::price)
+                .containsExactly(
+                        new BigDecimal("100"), new BigDecimal("100.5"), new BigDecimal("94"), new BigDecimal("96"));
+        assertThat(PaperMatchingWorker.markPath(markKline(MINUTE_0, "100", "106", "99", "105")))
+                .extracting(MarkPrice::price)
+                .containsExactly(
+                        new BigDecimal("100"), new BigDecimal("99"), new BigDecimal("106"), new BigDecimal("105"));
+        assertThat(PaperMatchingWorker.markPath(markKline(MINUTE_0, "100", "106", "99", "105")))
+                .extracting(MarkPrice::eventTime)
+                .isSorted()
+                .allMatch(at -> !at.isBefore(MINUTE_0) && at.isBefore(MINUTE_1));
+    }
+
+    /**
+     * TR-23: a mark that puts a Trader's cross snapshot at or below its maintenance asks for a step of the liquidation
+     * on that pair; the position named on another pair is force-closed in that pair's turn, and the snapshot is read
+     * again.
+     */
+    @Test
+    void TR23_aMarkPuttingACrossAccountPastMaintenance_asksForAStep_andForceClosesTheNamedPair() {
+        UUID trader = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        when(matching.crossAccounts()).thenReturn(List.of(crossAccount(trader, other)));
+        when(matching.liquidateCross(trader, PAIR, MINUTE_1)).thenReturn(Optional.of(other));
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(other, new BigDecimal("100"), MINUTE_0));
+        // 5,000 + 0.1 × (20,000 − 60,000) = 1,000 is above the maintenance.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("20000"), MINUTE_0.plusSeconds(1)));
+        verify(matching, after(200).never()).liquidateCross(eq(trader), any(), any());
+
+        // 5,000 + 0.1 × (10,000 − 60,000) = 0 is not.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("10000"), MINUTE_1));
+
+        verify(matching, timeout(WAIT)).liquidateCross(trader, PAIR, MINUTE_1);
+        verify(matching, timeout(WAIT)).liquidateCross(eq(trader), eq(other), any());
+        verify(matching, timeout(WAIT).atLeastOnce()).crossAccount(trader);
+    }
+
+    /** TR-23: at start, and when asked, a liquidation still running is judged again and its next pair force-closed. */
+    @Test
+    void TR23_aRunningLiquidation_isResumed_atStartAndWhenAsked() {
+        UUID trader = UUID.randomUUID();
+        when(matching.liquidatingSince(any())).thenReturn(List.of(trader));
+        when(matching.liquidateCross(trader, null, MINUTE_2)).thenReturn(Optional.of(PAIR));
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        verify(matching, timeout(WAIT)).liquidatingSince(MINUTE_2);
+        verify(matching, timeout(WAIT)).liquidateCross(trader, PAIR, MINUTE_2);
+
+        worker.resumeLiquidations();
+
+        verify(matching, timeout(WAIT)).liquidatingSince(MINUTE_2.minusSeconds(30));
+        verify(matching, timeout(WAIT).times(2)).liquidateCross(trader, PAIR, MINUTE_2);
+    }
+
+    /**
+     * TR-43: a mark past an isolated position's margin call price, short of its liquidation price, asks for a margin
+     * call, once per cooldown; a mark that reaches the liquidation price liquidates instead.
+     */
+    @Test
+    void TR43_aMarkPastTheMarginCallPrice_asksForACall_oncePerCooldown() {
+        UUID trader = UUID.randomUUID();
+        LiquidationLevel level = new LiquidationLevel(
+                UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("94"), new BigDecimal("96"));
+        when(matching.liquidationLevels()).thenReturn(List.of(level));
+        when(matching.marginCall(any(), any(), any(), any())).thenReturn(true);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("97"), MINUTE_1));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("95.5"), MINUTE_1.plusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("95"), MINUTE_1.plusSeconds(2)));
+
+        verify(matching, timeout(WAIT))
+                .marginCall(trader, level.positionId(), new BigDecimal("95.5"), MINUTE_1.plusSeconds(1));
+        verify(matching, after(200).times(1)).marginCall(any(), any(), any(), any());
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("95"), MINUTE_1.plus(Duration.ofMinutes(31))));
+        verify(matching, timeout(WAIT).times(2)).marginCall(any(), any(), any(), any());
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("93"), MINUTE_2.plus(Duration.ofMinutes(40))));
+        verify(matching, timeout(WAIT)).liquidate(eq(level), any(), any());
+        verify(matching, after(200).times(2)).marginCall(any(), any(), any(), any());
+    }
+
+    /** TR-43: a cross snapshot whose ratio reaches 80 %, short of liquidation, asks for a call of the cross positions. */
+    @Test
+    void TR43_aCrossSnapshotPastTheRatio_asksForACrossCall() {
+        UUID trader = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        when(matching.crossAccounts()).thenReturn(List.of(crossAccount(trader, other)));
+        when(matching.marginCall(any(), any(), any(), any())).thenReturn(true);
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onMarkPrice(new MarkPrice(other, new BigDecimal("100"), MINUTE_0));
+        // 5,000 + 0.1 × (10,045 − 60,000) = 4.5 against a maintenance of 4.018: 89 %.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("10045"), MINUTE_1));
+
+        verify(matching, timeout(WAIT)).marginCall(trader, null, null, MINUTE_1);
+        verify(matching, never()).liquidateCross(any(), any(), any());
+    }
+
+    /**
+     * TR-46: brackets replaced on a pair, the engine reads again the levels and the cross snapshot of every Trader it
+     * watches there, isolated or cross, and of no one else.
+     */
+    @Test
+    void TR46_bracketsReplaced_readTheLevelsOfThePairsTradersAgain() {
+        UUID isolated = UUID.randomUUID();
+        UUID cross = UUID.randomUUID();
+        UUID elsewhere = UUID.randomUUID();
+        UUID otherPair = UUID.randomUUID();
+        when(matching.liquidationLevels())
+                .thenReturn(List.of(
+                        new LiquidationLevel(
+                                UUID.randomUUID(), isolated, PAIR, PositionDirection.LONG, new BigDecimal("95")),
+                        new LiquidationLevel(
+                                UUID.randomUUID(), elsewhere, otherPair, PositionDirection.LONG, new BigDecimal("9"))));
+        when(matching.crossAccounts()).thenReturn(List.of(crossAccount(cross, otherPair)));
+        worker = started(properties(true, false, Duration.ofMinutes(10)));
+
+        worker.onBracketsReplaced(new LeverageBracketsReplaced(PAIR, "BTCUSDT", MINUTE_1));
+
+        verify(matching, timeout(WAIT)).liquidationLevels(isolated, PAIR);
+        verify(matching, timeout(WAIT)).liquidationLevels(cross, PAIR);
+        verify(matching, timeout(WAIT)).crossAccount(cross);
+        verify(matching, after(200).never()).liquidationLevels(elsewhere, PAIR);
+    }
+
+    private static CrossAccount crossAccount(UUID trader, UUID other) {
+        List<LeverageTier> tiers = List.of(new LeverageTier(
+                1, BigDecimal.ZERO, new BigDecimal("1000000"), 125, new BigDecimal("0.004"), BigDecimal.ZERO));
+        return new CrossAccount(
+                trader,
+                new BigDecimal("5000"),
+                List.of(
+                        new CrossAccount.Leg(
+                                PAIR, PositionDirection.LONG, new BigDecimal("0.1"), new BigDecimal("60000"), tiers),
+                        new CrossAccount.Leg(
+                                other, PositionDirection.LONG, BigDecimal.ONE, new BigDecimal("100"), tiers)));
+    }
+
     private PaperMatchingWorker started(PaperMatchingProperties properties) {
         PaperMatchingWorker created = worker(properties);
         created.start();
@@ -717,7 +1050,7 @@ class PaperMatchingWorkerTest {
     }
 
     private PaperMatchingWorker worker(PaperMatchingProperties properties) {
-        return new PaperMatchingWorker(matching, market, properties, clock, recording);
+        return new PaperMatchingWorker(matching, market, properties, FUTURES_PROPERTIES, clock, recording);
     }
 
     private static PaperMatchingProperties properties(boolean enabled, boolean replay, Duration deadline) {
@@ -842,5 +1175,18 @@ class PaperMatchingWorkerTest {
                 new BigDecimal(high),
                 closed,
                 open.plusSeconds(closed ? 59 : 10));
+    }
+
+    private static MinuteKline markKline(Instant open, String first, String high, String low, String close) {
+        return new MinuteKline(
+                MarketType.FUTURES,
+                PAIR,
+                open,
+                new BigDecimal(low),
+                new BigDecimal(high),
+                new BigDecimal(close),
+                true,
+                open.plusSeconds(59),
+                new BigDecimal(first));
     }
 }

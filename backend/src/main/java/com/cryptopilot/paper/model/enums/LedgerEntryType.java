@@ -26,5 +26,7 @@ public enum LedgerEntryType {
     TRANSFER,
 
     /** The clearance fee of a liquidation. */
-    LIQUIDATION_FEE
+    LIQUIDATION_FEE,
+    /** The loss beyond a position's margin, which the insurance fund takes so the wallet stays whole (D-127). */
+    INSURANCE_COVER
 }

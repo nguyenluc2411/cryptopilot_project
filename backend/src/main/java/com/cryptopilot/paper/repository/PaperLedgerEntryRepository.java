@@ -2,9 +2,11 @@ package com.cryptopilot.paper.repository;
 
 import com.cryptopilot.paper.entity.PaperLedgerEntry;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
+import com.cryptopilot.paper.model.enums.LedgerRefType;
 import com.cryptopilot.paper.model.enums.WalletType;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -64,6 +66,28 @@ public interface PaperLedgerEntryRepository extends Repository<PaperLedgerEntry,
     Optional<PaperLedgerEntry> findTransfer(UUID userId, String clientTransferId);
 
     /** Writes an entry. Not transactional here; the unit of work is the calling service's. */
+    /**
+     * The Trader's Futures wallet entries of these types written in {@code [from, to)}, newest first (TR-19). No
+     * parameter is null.
+     */
+    @Transactional(readOnly = true)
+    @Query("select e from PaperLedgerEntry e where e.userId = :userId"
+            + " and e.walletType = com.cryptopilot.paper.model.enums.WalletType.FUTURES and e.entryType in :types"
+            + " and e.createdAt >= :from and e.createdAt < :to order by e.createdAt desc, e.id desc")
+    List<PaperLedgerEntry> searchFutures(
+            UUID userId, Collection<LedgerEntryType> types, Instant from, Instant to, Pageable pageable);
+
+    /** As {@link #searchFutures}, for the entries of one pair. */
+    @Transactional(readOnly = true)
+    @Query("select e from PaperLedgerEntry e where e.userId = :userId and e.pairId = :pairId"
+            + " and e.walletType = com.cryptopilot.paper.model.enums.WalletType.FUTURES and e.entryType in :types"
+            + " and e.createdAt >= :from and e.createdAt < :to order by e.createdAt desc, e.id desc")
+    List<PaperLedgerEntry> searchFuturesPair(
+            UUID userId, UUID pairId, Collection<LedgerEntryType> types, Instant from, Instant to, Pageable pageable);
+
+    /** Whether an entry of this type points at this reference: a funding fee already written (TR-24). */
+    boolean existsByRefTypeAndRefIdAndEntryType(LedgerRefType refType, UUID refId, LedgerEntryType entryType);
+
     PaperLedgerEntry save(PaperLedgerEntry entry);
 
     /**
