@@ -103,6 +103,11 @@ class FuturesArrival {
             order.expire(NOT_FILLABLE, now);
             return;
         }
+        // A FOK order checks its whole isolated margin before it sweeps: nothing fills rather than a part (4.3 rule 6).
+        if (timeInForce == TimeInForce.FOK && !settlement.fundable(account, order, sweep.slices())) {
+            order.expire(FuturesSettlement.MARGIN_INSUFFICIENT, now);
+            return;
+        }
         execute(account, order, sweep, now);
         if (!order.isOpen()) {
             flagPastBook(order, sweep, book);

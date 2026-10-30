@@ -1925,6 +1925,144 @@ class FuturesOrderApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Review fixes
+    // ------------------------------------------------------------------------------------------
+
+    /** A MARKET order with a take profit on a pair with no mark nor last price waits for the mark, it does not fail. */
+    @Test
+    void TR20_aTakeProfit_onAPairWithoutAnyPrice_waitsForTheMark() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        redis.delete("px:FUTURES:" + symbol);
+
+        place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "MARKET", "quantity": "1",
+                         "takeProfitPrice": "110"}""".formatted(symbol)).andExpect(status().isServiceUnavailable());
+        assertThat(orderCount(trader)).isZero();
+    }
+
+    /** 8.2.1 rule 2: on a stale pair a closing order skips PERCENT_PRICE, which is judged at the mark. */
+    @Test
+    void TR22a_aClosingOrder_onAStalePair_skipsPercentPrice() throws Exception {
+        sql.sql("update crypto_pair set futures_multiplier_up = 1.05, futures_multiplier_down = 0.95 where pair_id = ?")
+                .param(pair)
+                .update();
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+
+        place(trader, """
+                        {"symbol": "%s", "side": "SELL", "type": "LIMIT", "timeInForce": "GTC", "price": "94.9",
+                         "quantity": "1", "reduceOnly": true}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.binanceCode").value(-4024));
+        staleMark("100");
+        place(trader, """
+                        {"symbol": "%s", "side": "SELL", "type": "LIMIT", "timeInForce": "GTC", "price": "94.9",
+                         "quantity": "1", "reduceOnly": true}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FILLED"));
+        assertThat(openPositions(trader)).isZero();
+    }
+
+    /** Plan 4.12 step 2: a liquidation cancels an order with its take profit and stop loss, and their group ends. */
+    @Test
+    void TR22_aLiquidation_endsTheGroupOfAnOrderWithItsTakeProfitAndStopLoss() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        mark("60000");
+        depth(List.of(level("60000", "5")), List.of(level("59999.9", "5")));
+        place(trader, market("BUY", "0.1")).andExpect(status().isOk());
+        String waiting = id(place(trader, """
+                                {"symbol": "%s", "side": "BUY", "type": "LIMIT", "timeInForce": "GTC", "price": "55000",
+                                 "quantity": "0.1", "takeProfitPrice": "60000", "stopLossPrice": "50000"}""".formatted(symbol)).andExpect(status().isOk()));
+        UUID list = sql.sql("select list_id from trade_order where order_id = ?")
+                .param(UUID.fromString(waiting))
+                .query(UUID.class)
+                .single();
+        UUID positionId = (UUID) position(trader).get("position_id");
+
+        assertThat(liquidate(trader, positionId, "54216.9")).isTrue();
+
+        assertThat(statusOf(waiting)).isEqualTo("CANCELED");
+        assertThat(sql.sql("select count(*) from trade_order where list_id = ? and order_status <> 'CANCELED'")
+                        .param(list)
+                        .query(Long.class)
+                        .single())
+                .isZero();
+        assertThat(sql.sql("select list_status from order_list where list_id = ?")
+                        .param(list)
+                        .query(String.class)
+                        .single())
+                .isEqualTo("ALL_DONE");
+    }
+
+    /**
+     * 4.3 rule 6: an isolated SELL FOK that takes bids above its price needs more margin than its price showed; it is
+     * checked whole before the sweep, so it fills all or nothing rather than a part.
+     */
+    @Test
+    void TR15_anIsolatedFok_thatCannotFundItsWholeSweep_fillsNothing() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        depth(List.of(level("130.1", "5")), List.of(level("130", "300"), level("120", "150")));
+
+        place(trader, limit("SELL", "FOK", "100", "450"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.executedQty").value(numeric("0")));
+        assertThat(openPositions(trader)).isZero();
+        assertThat(wallet(trader)).isEqualByComparingTo("5000");
+        assertThat(sql.sql("select status_reason from trade_order where user_id = ?")
+                        .param(trader)
+                        .query(String.class)
+                        .single())
+                .isEqualTo("MARGIN_INSUFFICIENT");
+    }
+
+    /** Close all with no price for any position's pair is refused whole, and nothing is placed. */
+    @Test
+    void TR17_closeAll_withNoPriceToCloseAt_isRefused() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        long placed = orderCount(trader);
+        depth(List.of(), List.of());
+        redis.delete("px:FUTURES:" + symbol);
+
+        close(trader, """
+                        {"type": "MARKET"}""")
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MARKET_PRICE_UNAVAILABLE"));
+        assertThat(orderCount(trader)).isEqualTo(placed);
+        assertThat(openPositions(trader)).isOne();
+    }
+
+    /**
+     * 4.3 rule 5: a funding fee paid from the cross wallet, late, after the cross position closed, leaves it below zero
+     * with no cross position to recover it; an insurance cover named after the funding makes it whole.
+     */
+    @Test
+    void TR24_aLateFundingFee_beyondTheCrossWallet_isCovered_onceNoCrossPositionIsLeft() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        backdate(trader, Duration.ofHours(2));
+        settlement(Duration.ofHours(1), "0.001", "10000000");
+        place(trader, market("SELL", "1")).andExpect(status().isOk());
+        assertThat(openPositions(trader)).isZero();
+
+        assertThat(funding.run()).isEqualTo(1);
+
+        // Paid 10,000 on a wallet of 4,999.9: 5,000.1 covered.
+        assertThat(wallet(trader)).isEqualByComparingTo("0");
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+        assertThat(sql.sql("""
+                                select ref_type from wallet_ledger_entry
+                                 where user_id = ? and entry_type = 'INSURANCE_COVER'""").param(trader).query(String.class).single()).isEqualTo("FUNDING");
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
 

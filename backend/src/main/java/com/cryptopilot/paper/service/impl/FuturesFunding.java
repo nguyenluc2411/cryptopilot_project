@@ -52,7 +52,9 @@ import org.springframework.transaction.annotation.Transactional;
  *       keeps from being written twice: running again, or on two instances, charges nothing twice.
  *   <li>An open isolated position takes the fee in its isolated wallet by rule (B) of plan 4.3: received or paid, a
  *       payment beyond the wallet being an insurance cover; the matching engine reads its liquidation level again. A
- *       cross position, or one closed since, takes it in the cross wallet.
+ *       cross position, or one closed since, takes it in the cross wallet: for an isolated one closed since, as if
+ *       its wallet had paid it before giving the rest back. A payment that leaves the cross wallet below zero with no
+ *       cross position open is an insurance cover (4.3 rule 5).
  * </ul>
  *
  * <p>Rule: TR-24; BR-11; D-127.
@@ -68,6 +70,7 @@ public class FuturesFunding {
     private final PaperAccountRepository accounts;
     private final PaperWallets wallets;
     private final FuturesMargins margins;
+    private final FuturesSettlement futuresSettlement;
     private final PaperUserFeed feed;
     private final UserLock lock;
     private final MarketApi market;
@@ -139,7 +142,13 @@ public class FuturesFunding {
                 LedgerEntryType.FUNDING_FEE,
                 Ref.to(LedgerRefType.FUNDING, reference));
         position.addFunding(fee);
-        if (position.isOpen() && position.getMarginType() == MarginType.ISOLATED) {
+        boolean isolatedWallet = position.isOpen() && position.getMarginType() == MarginType.ISOLATED;
+        if (!isolatedWallet && fee.signum() < 0) {
+            // Paid from the cross wallet: with no cross position left to recover it, a deficit is covered (4.3 rule 5).
+            futuresSettlement.coverCrossDeficit(
+                    account, position.getPairId(), Ref.to(LedgerRefType.FUNDING, reference), usdt);
+        }
+        if (isolatedWallet) {
             IsolatedCashFlow flow = FuturesMarginMath.fundingFlow(position.getIsolatedWalletAmount(), fee);
             PaperLedgerEntry cover = null;
             if (flow.insuranceCover().signum() > 0) {

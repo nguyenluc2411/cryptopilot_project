@@ -15,7 +15,9 @@ import com.cryptopilot.paper.repository.PaperOrderListRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -118,6 +120,20 @@ class FuturesOrderLists {
             }
         }
         list.done();
+    }
+
+    /**
+     * After a liquidation cancelled every order of the groups at once, opening orders and their two alike: the groups
+     * end, and nothing of them is placed for a position that no longer stands (plan 4.12 step 2).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    void endAll(Collection<PaperOrder> cancelled) {
+        cancelled.stream()
+                .map(PaperOrder::getListId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .forEach(id ->
+                        lists.findById(id).filter(PaperOrderList::isExecuting).ifPresent(PaperOrderList::done));
     }
 
     /** Places a pending take profit or stop loss now, or rejects it when its condition is already met. */

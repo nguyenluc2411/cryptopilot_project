@@ -38,6 +38,7 @@ import com.cryptopilot.paper.repository.PaperFillRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
 import com.cryptopilot.paper.service.FuturesOrderService;
 import com.cryptopilot.paper.service.impl.FuturesMargins.FuturesPair;
+import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -130,6 +131,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     private final MarketApi market;
     private final ApplicationEventPublisher events;
     private final PaperUserFeed feed;
+    private final EntityManager entityManager;
     private final Clock clock;
 
     @Override
@@ -187,7 +189,10 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             }
             SpotFilters.requireNotional(filters, valuedAt.multiply(request.quantity()), false, "quantity");
         }
-        requirePercentPrice(filters, request.side(), request.price(), mark, book);
+        // A closing order on a stale pair skips PERCENT_PRICE, a filter judged at the mark (8.2.1 rule 2).
+        if (!reducing || margins.freshMark(pair.symbol()).isPresent()) {
+            requirePercentPrice(filters, request.side(), request.price(), mark, book);
+        }
         if (request.withTpSl()) {
             requireTpSl(filters, request, request.price() != null ? request.price() : mark != null ? mark : last);
         }
@@ -350,8 +355,10 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             return false;
         }
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, due.get().getUserId());
-        // Read again under the lock: a fill or a cancel committed meanwhile is seen.
-        PaperOrder order = orders.findById(orderId).orElseThrow();
+        // Read again under the lock: a fill or a cancel committed meanwhile is seen. findById alone would answer the
+        // instance already held by this transaction.
+        PaperOrder order = due.get();
+        entityManager.refresh(order);
         if (!order.expiredBy(at)) {
             return false;
         }
@@ -643,21 +650,28 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         Map<String, String> errors = new LinkedHashMap<>();
         if (request.takeProfitPrice() != null) {
             SpotFilters.requirePrice(filters, request.takeProfitPrice(), "takeProfitPrice");
-            int side = request.takeProfitPrice().compareTo(reference);
-            if (reference != null && (buy ? side <= 0 : side >= 0)) {
+            if (reference != null && wrongSide(request.takeProfitPrice().compareTo(reference), buy)) {
                 errors.put("takeProfitPrice", "MSG15");
             }
         }
         if (request.stopLossPrice() != null) {
             SpotFilters.requirePrice(filters, request.stopLossPrice(), "stopLossPrice");
-            int side = request.stopLossPrice().compareTo(reference);
-            if (reference != null && (buy ? side >= 0 : side <= 0)) {
+            if (reference != null && wrongSide(request.stopLossPrice().compareTo(reference), !buy)) {
                 errors.put("stopLossPrice", "MSG15");
             }
         }
         if (!errors.isEmpty()) {
             throw new FieldValidationException("a take profit or stop loss on the wrong side of the order", errors);
         }
+    }
+
+    /**
+     * Whether a price compared with the order's price is on the wrong side of it.
+     *
+     * @param above whether the price must be above the order's price
+     */
+    private static boolean wrongSide(int comparison, boolean above) {
+        return above ? comparison <= 0 : comparison >= 0;
     }
 
     /** Whether a limit price reaches the best price of the other side. */

@@ -25,7 +25,8 @@ import org.springframework.validation.annotation.Validated;
  * @param spotUrl the Spot stream host, e.g. {@code wss://stream.binance.com:9443}
  * @param futuresUrl the futures stream host with its route, e.g. {@code wss://fstream.binance.com/market}
  * @param maxStreamsPerConnection streams per combined connection (7.1 step 1: 100; the exchange allows 1,024); at
- *     least the six of one pair, which are never split
+ *     least the most one pair opens on a main connection, which is never split: nine on Spot with trading on
+ *     (six of NSF-03, aggTrade, bookTicker, depth), eight on Futures (seven and aggTrade)
  * @param connectTimeout how long an opening handshake may take
  * @param reconnect the back-off after a lost connection
  * @param renewAfter when a connection is replaced, before the exchange's 24-hour limit ends it
@@ -49,7 +50,7 @@ public record BinanceStreamProperties(
         @NotNull @DefaultValue("wss://fstream.binance.com/market")
         URI futuresUrl,
 
-        @Min(6) @Max(1024) @DefaultValue("100") int maxStreamsPerConnection,
+        @Min(9) @Max(1024) @DefaultValue("100") int maxStreamsPerConnection,
         @NotNull @DefaultValue("10s") Duration connectTimeout,
         @NotNull @Valid @DefaultValue Reconnect reconnect,
         @NotNull @DefaultValue("23h") Duration renewAfter,

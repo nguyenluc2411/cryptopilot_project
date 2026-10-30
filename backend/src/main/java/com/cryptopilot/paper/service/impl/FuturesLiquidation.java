@@ -90,6 +90,7 @@ class FuturesLiquidation {
     private final PaperOrderRepository orders;
     private final FuturesSettlement settlement;
     private final PaperUserFeed feed;
+    private final FuturesOrderLists tpSl;
     private final MarketApi market;
     private final SystemSettingApi settings;
     private final ApplicationEventPublisher events;
@@ -167,12 +168,14 @@ class FuturesLiquidation {
 
     /** Cancels every open order of the Trader on the pair, conditional ones included. */
     private void cancelOrders(PaperAccount account, UUID pairId, Instant at) {
-        for (PaperOrder order : orders.findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
-                account.userId(), pairId, MarketType.FUTURES, CANCELLED_ON_LIQUIDATION)) {
+        List<PaperOrder> cancelled = orders.findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
+                account.userId(), pairId, MarketType.FUTURES, CANCELLED_ON_LIQUIDATION);
+        for (PaperOrder order : cancelled) {
             order.cancel(LIQUIDATION, at);
             feed.futuresOrder(account, order);
             events.publishEvent(new PaperOrderCanceled(order.getId()));
         }
+        tpSl.endAll(cancelled);
     }
 
     /** The level of an isolated position: its liquidation price from its own wallet (plan 4.5). */

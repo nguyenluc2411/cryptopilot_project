@@ -15,6 +15,7 @@ import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperPositionClosed;
+import com.cryptopilot.paper.matching.BookSweep;
 import com.cryptopilot.paper.model.IsolatedCashFlow;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.PositionFill;
@@ -39,7 +40,9 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +50,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Applies one execution of a Futures order to the Trader's one-way position, in the caller's transaction, which holds
@@ -79,6 +84,9 @@ class FuturesSettlement {
 
     /** Why an order expired: the isolated position it would open could not be funded at the fill. */
     static final String MARGIN_INSUFFICIENT = "MARGIN_INSUFFICIENT";
+
+    /** The key of the account changes this transaction has announced. */
+    private static final Object ANNOUNCED = new Object();
 
     /** Why a closing conditional order expired: the position it would close was closed. */
     static final String POSITION_CLOSED = "POSITION_CLOSED";
@@ -171,7 +179,7 @@ class FuturesSettlement {
             coverCrossDeficit(account, userId, position, usdt);
         }
         margins.recordChange(margins.accountConfig(userId));
-        events.publishEvent(new FuturesAccountChanged(userId, order.getPairId()));
+        announce(userId, order.getPairId());
         return executed;
     }
 
@@ -249,7 +257,7 @@ class FuturesSettlement {
         feed.futuresOrder(account, order);
         trimReduceOnly(account, order.getPairId(), order.getPositionSide(), at);
         margins.recordChange(margins.accountConfig(account.userId()));
-        events.publishEvent(new FuturesAccountChanged(account.userId(), order.getPairId()));
+        announce(account.userId(), order.getPairId());
     }
 
     /**
@@ -277,11 +285,8 @@ class FuturesSettlement {
         BigDecimal realized = FuturesMarginMath.applyFill(
                         position.signedQuantity(), position.getEntryPrice(), order.getSide(), quantity, mark)
                 .realizedPnl();
-        BigDecimal isolated = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN).stream()
-                .filter(open -> open.getMarginType() == MarginType.ISOLATED)
-                .map(FuturesPosition::getIsolatedWalletAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal crossWallet = margins.futuresWallet(userId).subtract(isolated);
+        BigDecimal crossWallet =
+                margins.crossWallet(userId, positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN));
         BigDecimal fee = FuturesMarginMath.liquidationFee(
                 quantity.multiply(mark),
                 feeRate,
@@ -308,7 +313,7 @@ class FuturesSettlement {
         entityManager.flush();
         coverCrossDeficit(account, userId, position, usdt);
         margins.recordChange(margins.accountConfig(userId));
-        events.publishEvent(new FuturesAccountChanged(userId, order.getPairId()));
+        announce(userId, order.getPairId());
     }
 
     /** The part of a fill that reduces or closes the position, and the isolated cash flow it makes. */
@@ -385,6 +390,45 @@ class FuturesSettlement {
                     position.getRealizedPnlAmount(),
                     position.getClosedAt()));
         }
+    }
+
+    /**
+     * Whether the isolated margin the slices would open, all of them, fits the cross wallet's free cash now: the check
+     * a FOK order makes before it sweeps, so that it fills whole or not at all (4.3 rule 6). The slices first close what
+     * the position has on the other side, which needs no margin. A cross or reduce-only order always fits.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    boolean fundable(PaperAccount account, PaperOrder order, List<BookSweep.Slice> slices) {
+        if (order.reducing() || slices.isEmpty()) {
+            return true;
+        }
+        UUID userId = account.userId();
+        PairListing pair = market.pairListings(List.of(order.getPairId())).stream()
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("pair " + order.getPairId() + " is not stored"));
+        FuturesSymbolConfig config =
+                margins.symbolConfig(userId, pair.pairId(), market.leverageBrackets(pair.pairId()));
+        if (config.getMarginType() != MarginType.ISOLATED) {
+            return true;
+        }
+        FuturesPosition position = margins.openPosition(userId, order.getPairId(), order.getPositionSide());
+        BigDecimal toClose =
+                closableBy(order.getSide(), position == null ? BigDecimal.ZERO : position.signedQuantity());
+        PositionDirection direction = PositionDirection.openedBy(order.getSide());
+        BigDecimal margin = BigDecimal.ZERO;
+        for (BookSweep.Slice slice : slices) {
+            BigDecimal closing = slice.quantity().min(toClose);
+            toClose = toClose.subtract(closing);
+            BigDecimal opening = slice.quantity().subtract(closing);
+            if (opening.signum() > 0) {
+                BigDecimal mark = market.currentMarkPrice(pair.symbol()).orElse(slice.price());
+                margin = margin.add(FuturesMarginMath.isolatedFillMargin(
+                        direction, opening, slice.price(), mark, config.getLeverage()));
+            }
+        }
+        return margin.compareTo(
+                        margins.crossState(userId, order.getId(), true).margin().crossFreeCash())
+                <= 0;
     }
 
     /**
@@ -512,22 +556,50 @@ class FuturesSettlement {
         if (closed == null || closed.isOpen() || closed.getMarginType() != MarginType.CROSSED) {
             return;
         }
-        BigDecimal isolated = BigDecimal.ZERO;
-        for (FuturesPosition open : positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN)) {
-            if (open.getMarginType() == MarginType.CROSSED) {
-                return;
-            }
-            isolated = isolated.add(open.getIsolatedWalletAmount());
+        coverCrossDeficit(account, closed.getPairId(), Ref.to(LedgerRefType.POSITION, closed.getId()), usdt);
+    }
+
+    /**
+     * With no cross position open, a cross wallet below zero is made good by an insurance cover named after the cash
+     * flow that took it there (4.3 rule 5): a cross close, or a funding fee the cross wallet paid.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    void coverCrossDeficit(PaperAccount account, UUID pairId, Ref cause, CoinListing usdt) {
+        List<FuturesPosition> open = positions.findByUserIdAndPositionStatus(account.userId(), PositionStatus.OPEN);
+        if (open.stream().anyMatch(position -> position.getMarginType() == MarginType.CROSSED)) {
+            return;
         }
-        BigDecimal crossWallet = margins.futuresWallet(userId).subtract(isolated);
+        BigDecimal crossWallet = margins.crossWallet(account.userId(), open);
         if (crossWallet.signum() < 0) {
-            wallets.changeFutures(
-                    account,
-                    closed.getPairId(),
-                    usdt,
-                    crossWallet.negate(),
-                    LedgerEntryType.INSURANCE_COVER,
-                    Ref.to(LedgerRefType.POSITION, closed.getId()));
+            wallets.changeFutures(account, pairId, usdt, crossWallet.negate(), LedgerEntryType.INSURANCE_COVER, cause);
+        }
+    }
+
+    /**
+     * Tells the matching engine, once per transaction and pair, that the Trader's account changed: an order that sweeps
+     * twenty levels executes twenty times, and the engine needs to read the levels again only once after the commit.
+     */
+    private void announce(UUID userId, UUID pairId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            events.publishEvent(new FuturesAccountChanged(userId, pairId));
+            return;
+        }
+        @SuppressWarnings("unchecked")
+        Set<FuturesAccountChanged> announced =
+                (Set<FuturesAccountChanged>) TransactionSynchronizationManager.getResource(ANNOUNCED);
+        if (announced == null) {
+            announced = new HashSet<>();
+            TransactionSynchronizationManager.bindResource(ANNOUNCED, announced);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    TransactionSynchronizationManager.unbindResourceIfPossible(ANNOUNCED);
+                }
+            });
+        }
+        FuturesAccountChanged change = new FuturesAccountChanged(userId, pairId);
+        if (announced.add(change)) {
+            events.publishEvent(change);
         }
     }
 

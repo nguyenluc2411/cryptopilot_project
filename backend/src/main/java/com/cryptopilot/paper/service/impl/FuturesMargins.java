@@ -353,12 +353,10 @@ class FuturesMargins {
             Map<UUID, BigDecimal> marks,
             BigDecimal openOrderInitialMargin) {
         BigDecimal wallet = futuresWallet(userId);
-        BigDecimal isolated = BigDecimal.ZERO;
         BigDecimal unrealized = BigDecimal.ZERO;
         BigDecimal initial = BigDecimal.ZERO;
         for (FuturesPosition position : openPositions) {
             if (position.getMarginType() == MarginType.ISOLATED) {
-                isolated = isolated.add(position.getIsolatedWalletAmount());
                 continue;
             }
             BigDecimal mark = marks.get(position.getPairId());
@@ -367,7 +365,8 @@ class FuturesMargins {
             initial = initial.add(
                     FuturesMarginMath.initialMargin(position.getQuantity().multiply(mark), position.getLeverage()));
         }
-        return new FuturesCrossState(wallet, wallet.subtract(isolated), unrealized, initial, openOrderInitialMargin);
+        return new FuturesCrossState(
+                wallet, wallet.subtract(isolatedWallets(openPositions)), unrealized, initial, openOrderInitialMargin);
     }
 
     /** The margin of every open Futures order of the Trader but the one excluded, pair by pair. */
@@ -398,6 +397,24 @@ class FuturesMargins {
                     market.currentMarkPrice(pair.symbol()).orElse(null)));
         }
         return total;
+    }
+
+    /**
+     * The cross wallet: the Futures wallet less what the open isolated positions hold (plan 4.3). The one place this is
+     * worked out, so that a liquidation, a cover and the account read it alike.
+     *
+     * @param openPositions the Trader's open positions, every margin type
+     */
+    BigDecimal crossWallet(UUID userId, List<FuturesPosition> openPositions) {
+        return futuresWallet(userId).subtract(isolatedWallets(openPositions));
+    }
+
+    /** What the open isolated positions among those given hold in their isolated wallets. */
+    static BigDecimal isolatedWallets(List<FuturesPosition> openPositions) {
+        return openPositions.stream()
+                .filter(position -> position.getMarginType() == MarginType.ISOLATED)
+                .map(FuturesPosition::getIsolatedWalletAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /** The Futures wallet balance, the sum of its ledger; may be below zero (D-127). */

@@ -71,6 +71,7 @@ class FuturesCrossLiquidation {
     private final PaperOrderRepository orders;
     private final FuturesMargins margins;
     private final FuturesSettlement settlement;
+    private final FuturesOrderLists tpSl;
     private final PaperUserFeed feed;
     private final MarketApi market;
     private final SystemSettingApi settings;
@@ -151,12 +152,7 @@ class FuturesCrossLiquidation {
         if (legs.isEmpty()) {
             return Optional.empty();
         }
-        BigDecimal isolated = open.stream()
-                .filter(position -> position.getMarginType() == MarginType.ISOLATED)
-                .map(FuturesPosition::getIsolatedWalletAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        return Optional.of(
-                new CrossAccount(userId, margins.futuresWallet(userId).subtract(isolated), legs));
+        return Optional.of(new CrossAccount(userId, margins.crossWallet(userId, open), legs));
     }
 
     /**
@@ -254,13 +250,15 @@ class FuturesCrossLiquidation {
     /** Cancels every open order of the account, on every pair, conditional ones included (plan 4.12 step 2). */
     private void cancelOrders(PaperAccount account, Instant at) {
         Set<UUID> pairs = new LinkedHashSet<>();
-        for (PaperOrder order : orders.findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
-                account.userId(), MarketType.FUTURES, FuturesLiquidation.CANCELLED_ON_LIQUIDATION)) {
+        List<PaperOrder> cancelled = orders.findByUserIdAndMarketTypeAndOrderStatusInOrderByCreatedAtDescIdDesc(
+                account.userId(), MarketType.FUTURES, FuturesLiquidation.CANCELLED_ON_LIQUIDATION);
+        for (PaperOrder order : cancelled) {
             order.cancel(FuturesLiquidation.LIQUIDATION, at);
             feed.futuresOrder(account, order);
             events.publishEvent(new PaperOrderCanceled(order.getId()));
             pairs.add(order.getPairId());
         }
+        tpSl.endAll(cancelled);
         pairs.forEach(pair -> events.publishEvent(new FuturesAccountChanged(account.userId(), pair)));
     }
 

@@ -93,6 +93,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     private final FuturesMarginAdjustmentRepository adjustments;
     private final FuturesMargins margins;
     private final FuturesOrderService orders;
+    private final FuturesArrival arrival;
     private final UserLock lock;
     private final MarketApi market;
     private final PaperUserFeed feed;
@@ -260,7 +261,11 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
         return orders.place(userId, closing(pair.symbol(), position, request.type(), request.price(), quantity));
     }
 
-    /** Closes every open position by MARKET, the oldest first. */
+    /**
+     * Closes every open position by MARKET, the oldest first. A pair with no price to close at right now is left open,
+     * so that it does not keep the others open: one refusal would roll the whole request back. Only when no position
+     * can be closed is the request refused.
+     */
     private List<FuturesOrderResponse> closeAll(UUID userId) {
         List<FuturesPosition> open = positions.findByUserIdAndPositionStatus(userId, PositionStatus.OPEN);
         Map<UUID, String> symbols = new LinkedHashMap<>();
@@ -268,8 +273,16 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
                 open.stream().map(FuturesPosition::getPairId).toList())) {
             symbols.put(pair.pairId(), pair.symbol());
         }
-        List<FuturesOrderResponse> placed = new ArrayList<>(open.size());
-        open.stream()
+        List<FuturesPosition> closable = open.stream()
+                .filter(position -> arrival.bookFor(
+                                position.getPairId(), symbols.get(position.getPairId()), closingSide(position))
+                        .isPresent())
+                .toList();
+        if (closable.isEmpty() && !open.isEmpty()) {
+            throw new BusinessException(ErrorCode.MARKET_PRICE_UNAVAILABLE, "no current price to close at on FUTURES");
+        }
+        List<FuturesOrderResponse> placed = new ArrayList<>(closable.size());
+        closable.stream()
                 .sorted((a, b) -> a.getOpenedAt().compareTo(b.getOpenedAt()))
                 .forEach(position -> placed.add(orders.place(
                         userId,
@@ -282,13 +295,17 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
         return placed;
     }
 
+    private static OrderSide closingSide(FuturesPosition position) {
+        return position.getDirection() == PositionDirection.LONG ? OrderSide.SELL : OrderSide.BUY;
+    }
+
     /**
      * The order on the other side of the position: reduce-only in one-way mode; in hedge mode the side's closing order,
      * which takes no {@code reduceOnly} (TR-14b).
      */
     private static FuturesOrderRequest closing(
             String symbol, FuturesPosition position, OrderType type, BigDecimal price, BigDecimal quantity) {
-        OrderSide side = position.getDirection() == PositionDirection.LONG ? OrderSide.SELL : OrderSide.BUY;
+        OrderSide side = closingSide(position);
         boolean oneWay = position.getPositionSide() == PositionSide.BOTH;
         return new FuturesOrderRequest(
                 symbol,
