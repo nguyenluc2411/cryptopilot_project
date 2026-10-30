@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Stream;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -86,6 +87,32 @@ class FuturesArrival {
         }
         return market.currentLastPrice(MarketType.FUTURES, symbol)
                 .map(last -> new SpotArrival.Book(List.of(new PriceLevel(last, BigDecimal.ZERO)), false));
+    }
+
+    /**
+     * Whether an order of {@code side} at {@code price} would take on arrival on a pair whose mark is stale, where 8.2.1
+     * rule 1 refuses what opens risk and takes (TR-22a): it would when any price the stream still shows reaches it, the
+     * depth, the best bid and ask or the last trade, however old within the market data's own limit, so that what is
+     * let through as an order that waits can never fill as a taker. A MARKET order always takes.
+     *
+     * @param price the limit price, or {@code null} for a MARKET order
+     */
+    boolean anyPriceReaches(UUID pairId, String symbol, OrderSide side, BigDecimal price) {
+        if (price == null) {
+            return true;
+        }
+        boolean buy = side == OrderSide.BUY;
+        Optional<BigDecimal> depth = market.currentDepth(MarketType.FUTURES, pairId)
+                .map(found -> buy ? found.asks() : found.bids())
+                .filter(levels -> !levels.isEmpty())
+                .map(levels -> levels.getFirst().price());
+        Optional<BigDecimal> top = market.currentBookTop(MarketType.FUTURES, pairId)
+                .map(found -> buy ? found.askPrice() : found.bidPrice())
+                .filter(best -> best.signum() > 0);
+        Optional<BigDecimal> last = market.currentLastPrice(MarketType.FUTURES, symbol);
+        return Stream.of(depth, top, last)
+                .flatMap(Optional::stream)
+                .anyMatch(known -> buy ? price.compareTo(known) >= 0 : price.compareTo(known) <= 0);
     }
 
     /** What an order of {@code quantity} would take of the book at or better than {@code limit}; nothing without one. */

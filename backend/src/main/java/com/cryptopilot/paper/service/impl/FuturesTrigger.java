@@ -43,8 +43,11 @@ import org.springframework.transaction.annotation.Transactional;
  *       position to close it expires.
  *   <li>The part that would open or increase a position is checked now, as the exchange checks margin when a
  *       conditional order triggers rather than when it is placed: against the available balance (cross) or the cross
- *       wallet's free cash (isolated), and the leverage's largest notional; on a {@code MARK_STALE} pair it is not
- *       taken. Refused, the conditional order is REJECTED with the reason.
+ *       wallet's free cash (isolated), and the leverage's largest notional; on a {@code MARK_STALE} pair one that
+ *       would take is not taken, while a LIMIT one that waits is, held to the last mark known, as a placed order is
+ *       (8.2.1 rule 1). Refused, the conditional order is REJECTED with the reason.
+ *   <li>An order that must fill on arrival (MARKET, or LIMIT IOC or FOK) with no price to fill at, a stale pair's book
+ *       as old as its mark among them, is not placed: the conditional order is watched again for the next price.
  *   <li>Otherwise it places the order it carries, a MARKET or a LIMIT order pointing back at it, ends FILLED (the
  *       exchange's TRIGGERED) and the placed order meets the book as any order placed now ({@link FuturesArrival}).
  * </ol>
@@ -110,7 +113,8 @@ class FuturesTrigger {
         BigDecimal opening =
                 reducing ? BigDecimal.ZERO : FuturesOrderServiceImpl.opening(conditional.getSide(), quantity, size);
         // On a stale pair an opening order that would take is refused, as on placement (8.2.1 rule 1), with or without
-        // a book; one that waits goes on. Checked first, as it reads nothing but prices.
+        // a book; one that waits goes on, an IOC or FOK one then expiring as on placement. Checked first, as it reads
+        // nothing but prices.
         if (opening.signum() > 0 && freshMark.isEmpty() && wouldTake(conditional, pair)) {
             conditional.trigger(at);
             end(account, conditional, OrderStatus.REJECTED, MARK_STALE, at);
@@ -147,24 +151,13 @@ class FuturesTrigger {
     /** Whether the order it places must fill on arrival or end: a MARKET one, or a LIMIT one IOC or FOK. */
     private static boolean decidedOnArrival(PaperOrder conditional) {
         return conditional.getOrderType().isFuturesMarketConditional()
-                || (conditional.getTimeInForce() != null
-                        && conditional.getTimeInForce().immediate());
+                || conditional.getTimeInForce().immediate();
     }
 
-    /**
-     * Whether the order it places would take on arrival, judged on the latest price known however old, the last trade
-     * when no book is left: one decided on arrival always does; a LIMIT one that waits does when its price reaches it.
-     */
+    /** Whether the order it places would take on arrival, judged as a placed order is on a stale pair. */
     private boolean wouldTake(PaperOrder conditional, FuturesPair pair) {
-        if (decidedOnArrival(conditional)) {
-            return true;
-        }
-        return arrival.bookFor(pair.pairId(), pair.symbol(), conditional.getSide(), true)
-                .filter(found -> FuturesOrderServiceImpl.crosses(
-                        conditional.getSide(),
-                        conditional.getLimitPrice(),
-                        found.levels().getFirst().price()))
-                .isPresent();
+        return arrival.anyPriceReaches(
+                pair.pairId(), pair.symbol(), conditional.getSide(), conditional.getLimitPrice());
     }
 
     /**

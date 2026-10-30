@@ -390,7 +390,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
             Optional<SpotArrival.Book> book) {
         SpotFilters.requireNotional(pair.filters(), terms.price().multiply(terms.quantity()), false, "quantity");
         TimeInForce timeInForce = terms.timeInForce();
-        if (book.isEmpty() && (timeInForce == TimeInForce.IOC || timeInForce == TimeInForce.FOK)) {
+        if (book.isEmpty() && timeInForce.immediate()) {
             throw priceUnavailable(pair);
         }
         PaperOrder order = orders.save(PaperOrder.spotLimit(

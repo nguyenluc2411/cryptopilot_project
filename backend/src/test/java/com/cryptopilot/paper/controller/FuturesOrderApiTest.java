@@ -16,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.OrderBookDepth.PriceLevel;
@@ -2246,6 +2247,35 @@ class FuturesOrderApiTest {
                         .single())
                 .isEqualTo("MARK_STALE");
         assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("1");
+    }
+
+    /**
+     * 8.2.1 rule 1: on a stale pair whether an opening order would take is judged on every price still shown, so a newer
+     * best ask that reaches it refuses it even when the older depth does not, by hand or at a trigger alike.
+     */
+    @Test
+    void TR22a_anOpeningOrderReachedByAnyPriceShown_onAStalePair_isRefused() throws Exception {
+        UUID trader = trader(true);
+        String stop = algoId(algo(trader, """
+                                {"algoType": "CONDITIONAL", "symbol": "%s", "side": "BUY", "type": "STOP",
+                                 "triggerPrice": "101", "price": "90", "quantity": "1", "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk()));
+        staleMark("100");
+        oldDepth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        trading.recordBookTop(new BookTop(
+                MarketType.FUTURES,
+                pair,
+                TICKS.incrementAndGet(),
+                new BigDecimal("88.9"),
+                new BigDecimal("5"),
+                new BigDecimal("89"),
+                new BigDecimal("5"),
+                Instant.now()));
+
+        place(trader, limit("BUY", "GTC", "90", "1")).andExpect(status().isServiceUnavailable());
+        trigger(trader, stop, OrderSide.BUY, TriggerCondition.AT_OR_ABOVE, "101");
+
+        assertThat(statusOf(stop)).isEqualTo("REJECTED");
+        assertThat(openPositions(trader)).isZero();
     }
 
     /** 8.2.1 rule 1 at a trigger as on placement: an opening stop LIMIT that would not take is placed and waits. */
