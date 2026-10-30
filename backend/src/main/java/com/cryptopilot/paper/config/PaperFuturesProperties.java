@@ -14,7 +14,7 @@ import org.springframework.validation.annotation.Validated;
  * {@code cryptopilot.paper.futures}. The exchange streams the mark every second, so one older than {@code markMaxAge}
  * means a lost stream: its pair is {@code MARK_STALE}, where only closing and cancelling go on.
  *
- * <p>Rule: TR-20, TR-22a; D-127.
+ * <p>Rule: TR-20, TR-22a, TR-27, TR-43; D-127.
  *
  * @param markMaxAge the oldest mark price a decision that opens risk is taken on
  * @param staleMarkHaircut the share of a stale pair's notional taken off the cross wallet's free cash, on top of any
@@ -29,6 +29,11 @@ import org.springframework.validation.annotation.Validated;
  * @param marginCallRatio the margin ratio, maintenance margin over margin balance, at which a margin call is sent
  *     (plan 4.10: the exchange publishes none; 80 % is the level it advises acting at)
  * @param marginCallCooldown how long after a margin call the same position, or the same cross account, gets none
+ * @param nearLiquidationPercent how close the mark may come to a position's liquidation price, in percent of the mark,
+ *     before the Trader is warned (TR-27)
+ * @param stopLossGrace how long a position may be held without a stop loss before the Trader is warned (TR-27)
+ * @param positionWarningCooldown how long after a near-liquidation warning the same position gets none (TR-27)
+ * @param positionWarningInterval how often the held positions are looked at for those warnings (TR-27)
  */
 @Validated
 @ConfigurationProperties(prefix = "cryptopilot.paper.futures")
@@ -51,4 +56,13 @@ public record PaperFuturesProperties(
         @DefaultValue("0.8")
         BigDecimal marginCallRatio,
 
-        @NotNull @DefaultValue("30m") Duration marginCallCooldown) {}
+        @NotNull @DefaultValue("30m") Duration marginCallCooldown,
+
+        @NotNull @DecimalMin(value = "0", inclusive = false) @DecimalMax("100") @DefaultValue("5")
+        BigDecimal nearLiquidationPercent,
+
+        @NotNull @DefaultValue("5m") Duration stopLossGrace,
+
+        @NotNull @DefaultValue("30m") Duration positionWarningCooldown,
+
+        @NotNull @DefaultValue("1m") Duration positionWarningInterval) {}

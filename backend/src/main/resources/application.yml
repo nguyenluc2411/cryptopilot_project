@@ -376,6 +376,13 @@ cryptopilot:
       # cooldown for a position or a cross account.
       margin-call-ratio: 0.8
       margin-call-cooldown: 30m
+      # TR-27: every position-warning-interval, a held position whose mark is within near-liquidation-percent (of the
+      # mark) of its liquidation price is warned, at most once per cooldown; one held stop-loss-grace without a stop
+      # loss is warned once.
+      near-liquidation-percent: 5
+      stop-loss-grace: 5m
+      position-warning-cooldown: 30m
+      position-warning-interval: 1m
     account:
       # TR-04, Q-T5: the virtual funds a paper account is opened with, granted once; there is no reset. Keys in lower
       # case, the form an environment variable binds to, so CRYPTOPILOT_PAPER_ACCOUNT_SPOTGRANT_USDT replaces usdt

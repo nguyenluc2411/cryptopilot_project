@@ -28,6 +28,7 @@ import com.cryptopilot.paper.dto.response.FuturesAlgoOrderResponse;
 import com.cryptopilot.paper.dto.response.FuturesConfigUpdateResponse;
 import com.cryptopilot.paper.dto.response.FuturesMarginCallResponse;
 import com.cryptopilot.paper.dto.response.FuturesOrderUpdateResponse;
+import com.cryptopilot.paper.event.PaperPositionClosed;
 import com.cryptopilot.paper.job.FuturesFundingJob;
 import com.cryptopilot.paper.model.CrossAccount;
 import com.cryptopilot.paper.model.LiquidationLevel;
@@ -39,6 +40,7 @@ import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
+import com.cryptopilot.paper.service.FuturesPositionWarningService;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -72,6 +74,8 @@ import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.ResultMatcher;
@@ -84,15 +88,16 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes;
  * what each committed change pushes on the Trader's Futures queues; what a stale mark price refuses; and the
  * conditional orders, placed, triggered and ended; the liquidation of isolated positions; funding; the amendment of a
- * waiting order, the calculator and the order form's risk warnings.
+ * waiting order, the calculator and the order form's risk warnings; the warnings of held positions.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-26, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-26, TR-27, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestcontainersConfig.class)
+@RecordApplicationEvents
 class FuturesOrderApiTest {
 
     private static final String FUTURES = "/api/v1/paper/futures";
@@ -128,6 +133,12 @@ class FuturesOrderApiTest {
 
     @Autowired
     private FuturesFundingJob funding;
+
+    @Autowired
+    private FuturesPositionWarningService positionWarnings;
+
+    @Autowired
+    private ApplicationEvents closedEvents;
 
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
@@ -2465,6 +2476,45 @@ class FuturesOrderApiTest {
                 .andExpect(jsonPath("$.warnings").isEmpty());
     }
 
+    /**
+     * An order that adds to a held position is judged on the position after it: isolated 10x, long 1 at 100 with 10 in
+     * its wallet, one more at 100 brings 10 more, so 2 at 100 on 20 are liquidated at 90.4.
+     */
+    @Test
+    void TR26_anOrderAddingToAPosition_isJudgedOnThePositionAfterIt() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+
+        warnings(trader, limit("BUY", "GTC", "100", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cost").value(numeric("10")))
+                .andExpect(jsonPath("$.liquidationPrice").value(numeric("90.4")));
+    }
+
+    /**
+     * In hedge mode the other side of the pair is one of the other cross positions the estimate counts; an order that
+     * closes a side raises nothing.
+     */
+    @Test
+    void TR26_inHedgeMode_theOtherSideCounts_andClosingASideRaisesNothing() throws Exception {
+        UUID trader = trader(true);
+        leverage(trader, 3);
+        positionMode(trader, true).andExpect(status().isOk());
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, hedge("BUY", "LONG", "1")).andExpect(status().isOk());
+        place(trader, hedge("SELL", "SHORT", "1")).andExpect(status().isOk());
+
+        warnings(trader, hedge("BUY", "LONG", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.liquidationPrice").value(numeric("0")))
+                .andExpect(jsonPath("$.warnings").isEmpty());
+        warnings(trader, hedge("SELL", "LONG", "1"))
+                .andExpect(jsonPath("$.cost").value(numeric("0")))
+                .andExpect(jsonPath("$.warnings").isEmpty());
+    }
+
     @Test
     void TR26_theFormsWarnings_needTheFuturesFeature_andAWellShapedOrder() throws Exception {
         warnings(trader(false), market("BUY", "1")).andExpect(status().isForbidden());
@@ -2472,6 +2522,71 @@ class FuturesOrderApiTest {
                         {"symbol": "%s", "side": "BUY", "type": "LIMIT", "quantity": "1"}""".formatted(symbol))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.price").value("MSG01"));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Warnings of held positions, and the close event (TR-27)
+    // ------------------------------------------------------------------------------------------
+
+    /** A position held past the 5-minute grace without a stop loss is warned once; one with a stop never is. */
+    @Test
+    void TR27_aPositionHeldWithoutAStopLoss_isWarnedOnce() throws Exception {
+        UUID bare = trader(true);
+        UUID covered = trader(true);
+        depth(List.of(level("100", "50")), List.of(level("99.9", "50")));
+        place(bare, market("BUY", "1")).andExpect(status().isOk());
+        place(covered, market("BUY", "1")).andExpect(status().isOk());
+        algo(covered, """
+                        {"algoType": "CONDITIONAL", "symbol": "%s", "side": "SELL", "type": "STOP_MARKET",
+                         "triggerPrice": "90", "closePosition": true, "workingType": "MARK_PRICE"}""".formatted(symbol)).andExpect(status().isOk());
+
+        assertThat(positionWarnings.warn(bare, Instant.now())).isZero();
+        Instant later = Instant.now().plus(Duration.ofMinutes(6));
+        assertThat(positionWarnings.warn(bare, later)).isEqualTo(1);
+        assertThat(positionWarnings.warn(bare, later.plusSeconds(60))).isZero();
+        assertThat(positionWarnings.warn(covered, later)).isZero();
+        assertThat(positionWarnings.holders()).contains(bare, covered);
+        await().atMost(Duration.ofSeconds(10)).until(() -> notices(bare).contains("No stop loss"));
+    }
+
+    /**
+     * Isolated 10x, long 1 at 100: liquidated at 90.4. At a mark of 94 the room left is 3.6 of 94, 3.8 %, within 5 %:
+     * warned, then not again before the 30-minute cooldown.
+     */
+    @Test
+    void TR27_aPositionNearItsLiquidationPrice_isWarned_atMostOncePerCooldown() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        Instant now = Instant.now();
+
+        assertThat(positionWarnings.warn(trader, now)).isZero();
+        mark("94");
+        assertThat(positionWarnings.warn(trader, now)).isEqualTo(1);
+        assertThat(positionWarnings.warn(trader, now.plus(Duration.ofMinutes(1))))
+                .isZero();
+        await().atMost(Duration.ofSeconds(10)).until(() -> notices(trader).contains("Near liquidation"));
+    }
+
+    @Test
+    void TR27_aPositionClosed_isPublished_withHowItClosed() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String positionId = position(trader).get("position_id").toString();
+        closedEvents.clear();
+
+        place(trader, market("SELL", "1")).andExpect(status().isOk());
+
+        assertThat(closedEvents.stream(PaperPositionClosed.class))
+                .singleElement()
+                .satisfies(closed -> {
+                    assertThat(closed.positionId()).hasToString(positionId);
+                    assertThat(closed.closeReason()).isEqualTo("MANUAL");
+                    // Bought at 100, sold at 99.9.
+                    assertThat(closed.realizedPnl()).isEqualByComparingTo("-0.1");
+                });
     }
 
     private ResultActions warnings(UUID trader, String body) throws Exception {

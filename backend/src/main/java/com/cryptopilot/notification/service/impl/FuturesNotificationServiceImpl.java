@@ -39,6 +39,13 @@ public class FuturesNotificationServiceImpl implements FuturesNotificationServic
             content = subject + (cross ? " reached" : " position reached") + " a margin ratio of "
                     + percent(notice.marginRatio()) + "%" + (cross ? "" : " at mark " + plain(notice.price()))
                     + ". Add margin or reduce the position to avoid liquidation.";
+        } else if (notice.kind() == FuturesRiskNotice.Kind.NEAR_LIQUIDATION) {
+            title = "Near liquidation";
+            content = subject + " position is near its liquidation price " + plain(notice.liquidationPrice())
+                    + " at mark " + plain(notice.price()) + ". Add margin, reduce the position or set a stop loss.";
+        } else if (notice.kind() == FuturesRiskNotice.Kind.NO_STOP_LOSS) {
+            title = "No stop loss";
+            content = subject + " position has no stop loss. Set one to limit the loss if the price turns.";
         } else {
             title = "Position liquidated";
             content = subject + " position was liquidated at " + plain(notice.price()) + ".";

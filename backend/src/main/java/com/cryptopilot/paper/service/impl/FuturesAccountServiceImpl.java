@@ -381,6 +381,25 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
         return new Snapshot(valued, pending, orderMargins, cross, crossMaintenance, crossRatio);
     }
 
+    /**
+     * The Trader's open positions with their symbol, mark and liquidation price, the figures {@code positionRisk} shows
+     * (TR-27). Read without the Trader's plan being checked: the system looks, not the Trader.
+     *
+     * @throws com.cryptopilot.common.exception.BusinessException {@code MARKET_PRICE_UNAVAILABLE} while a pair of them
+     *     has no mark
+     */
+    @Transactional(readOnly = true)
+    public List<HeldPosition> heldPositions(UUID userId) {
+        Snapshot snapshot = snapshot(userId);
+        return snapshot.positions().stream()
+                .map(valued -> new HeldPosition(
+                        valued.position(),
+                        valued.symbol(),
+                        valued.mark(),
+                        risk(valued, snapshot).liquidationPrice()))
+                .toList();
+    }
+
     private FuturesPositionRiskResponse risk(Valued valued, Snapshot snapshot) {
         FuturesPosition position = valued.position();
         BigDecimal orderMargin = snapshot.orderMargin(valued);
@@ -497,6 +516,13 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
         entitlements.requireFeature(userId, Feature.FUTURES_ANALYSIS);
         accounts.findByUserId(userId).orElseThrow(() -> new ResourceNotFoundException("PaperAccount", userId));
     }
+
+    /**
+     * An open position as the position warnings read it (TR-27).
+     *
+     * @param liquidationPrice zero when no price liquidates it
+     */
+    record HeldPosition(FuturesPosition position, String symbol, BigDecimal mark, BigDecimal liquidationPrice) {}
 
     /** An open position valued at its mark. */
     private record Valued(

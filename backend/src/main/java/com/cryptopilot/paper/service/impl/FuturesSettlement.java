@@ -14,6 +14,7 @@ import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.event.FuturesAccountChanged;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
+import com.cryptopilot.paper.event.PaperPositionClosed;
 import com.cryptopilot.paper.model.IsolatedCashFlow;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.PositionFill;
@@ -223,6 +224,7 @@ class FuturesSettlement {
         }
         position.reduce(quantity, mark, realized, PositionCloseReason.LIQUIDATION, at);
         position.addLiquidationFee(fee);
+        publishIfClosed(position);
         order.fill(quantity, mark, Rounding.toAmount(mark.multiply(quantity)), at);
         feed.futuresOrder(account, order);
         trimReduceOnly(account, order.getPairId(), order.getPositionSide(), at);
@@ -280,6 +282,7 @@ class FuturesSettlement {
         }
         position.reduce(quantity, mark, realized, PositionCloseReason.LIQUIDATION, at);
         position.addLiquidationFee(fee);
+        publishIfClosed(position);
         order.fill(quantity, mark, Rounding.toAmount(mark.multiply(quantity)), at);
         feed.futuresOrder(account, order);
         entityManager.flush();
@@ -344,6 +347,20 @@ class FuturesSettlement {
             }
         }
         position.reduce(closed, price, realized, PositionCloseReason.MANUAL, at);
+        publishIfClosed(position);
+    }
+
+    /** Tells whoever follows positions that this one closed, once nothing of it is left (plan 9.1 step 8). */
+    private void publishIfClosed(FuturesPosition position) {
+        if (!position.isOpen()) {
+            events.publishEvent(new PaperPositionClosed(
+                    position.getUserId(),
+                    position.getId(),
+                    position.getPairId(),
+                    position.getCloseReason().name(),
+                    position.getRealizedPnlAmount(),
+                    position.getClosedAt()));
+        }
     }
 
     /**

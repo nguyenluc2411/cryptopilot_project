@@ -82,7 +82,11 @@ class PaperMatchingWorkerTest {
             new BigDecimal("20"),
             Duration.ofSeconds(30),
             new BigDecimal("0.8"),
-            Duration.ofMinutes(30));
+            Duration.ofMinutes(30),
+            new BigDecimal("5"),
+            Duration.ofMinutes(5),
+            Duration.ofMinutes(30),
+            Duration.ofMinutes(1));
 
     private final PaperMatchingService matching = mock(PaperMatchingService.class);
     private final MarketApi market = mock(MarketApi.class);
