@@ -13,6 +13,7 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
+import com.cryptopilot.paper.dto.request.FuturesAmendOrderRequest;
 import com.cryptopilot.paper.dto.request.FuturesOrderRequest;
 import com.cryptopilot.paper.dto.response.FuturesOrderResponse;
 import com.cryptopilot.paper.dto.response.FuturesTradeResponse;
@@ -178,14 +179,14 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
             }
             SpotFilters.requireNotional(filters, valuedAt.multiply(request.quantity()), false, "quantity");
         }
-        requirePercentPrice(filters, request, mark, book);
+        requirePercentPrice(filters, request.side(), request.price(), mark, book);
         if (request.withTpSl()) {
             requireTpSl(filters, request, request.price() != null ? request.price() : mark != null ? mark : last);
         }
         BigDecimal opening = reducing ? BigDecimal.ZERO : opening(request.side(), request.quantity(), size);
         if (opening.signum() > 0) {
-            requireFreshMarks(userId, pair, request, book);
-            requireMargin(userId, pair, request, size, opening, last, mark);
+            requireFreshMarks(userId, pair, request.side(), request.price(), book);
+            requireMargin(userId, pair, request.side(), request.price(), size, opening, last, mark, null);
         }
         String key = request.newClientOrderId() == null ? UuidV7.next().toString() : request.newClientOrderId();
         PaperOrder order = marketOrder
@@ -214,6 +215,93 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                     ErrorCode.PAPER_ORDER_NOT_OPEN, -2011, "Unknown order sent.", order.getOrderStatus());
         }
         cancelWorking(account, order, clock.instant());
+        return PaperResponses.futuresOrder(order, pair.symbol());
+    }
+
+    @Override
+    @Transactional
+    public FuturesOrderResponse amend(UUID userId, FuturesAmendOrderRequest request) {
+        PaperAccount account = requireFutures(userId);
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        if (margins.accountConfig(userId).liquidating()) {
+            throw new FuturesRejection(ErrorCode.PAPER_USER_IN_LIQUIDATION, -2023, "User in liquidation mode now.");
+        }
+        if (request.priceMatch() != null && !request.priceMatch().equals("NONE")) {
+            throw new FieldValidationException("priceMatch is not simulated", Map.of("priceMatch", "MSG15"));
+        }
+        FuturesPair pair = margins.pair(request.symbol());
+        PaperOrder order = find(userId, pair, request.orderId(), request.origClientOrderId());
+        if (!order.isOpen()) {
+            throw new FuturesRejection(
+                    ErrorCode.PAPER_ORDER_NOT_OPEN, -2011, "Unknown order sent.", order.getOrderStatus());
+        }
+        Map<String, String> errors = new LinkedHashMap<>();
+        if (order.getOrderType() != OrderType.LIMIT) {
+            errors.put("orderId", "MSG15");
+        }
+        if (order.getSide() != request.side()) {
+            errors.put("side", "MSG15");
+        }
+        if (!errors.isEmpty()) {
+            throw new FieldValidationException("only a LIMIT order of the same side can be amended", errors);
+        }
+        if (order.getAmendCount() >= PaperOrder.MAX_AMENDMENTS) {
+            throw new FuturesRejection(ErrorCode.PAPER_MAX_AMENDMENTS, -5026, "Exceed maximum modify order limit.");
+        }
+        if (order.getLimitPrice().compareTo(request.price()) == 0
+                && order.getOrigQuantity().compareTo(request.quantity()) == 0) {
+            throw new FuturesRejection(ErrorCode.PAPER_ORDER_UNCHANGED, -5027, "No need to modify the order.");
+        }
+        // A new price or quantity the filters refuse leaves the order as it was.
+        PairFilters filters = pair.filters();
+        SpotFilters.requirePrice(filters, request.price(), "price");
+        SpotFilters.requireQuantity(filters, request.quantity(), "quantity");
+        Instant now = clock.instant();
+        BigDecimal remaining = request.quantity().subtract(order.getExecutedQuantity());
+        Optional<SpotArrival.Book> book = futuresArrival.bookFor(pair.pairId(), pair.symbol(), order.getSide());
+        if (remaining.signum() <= 0
+                || (order.getTimeInForce() == TimeInForce.GTX
+                        && !FuturesArrival.sweep(book, order.getSide(), remaining, request.price())
+                                .isEmpty())) {
+            // The exchange cancels rather than amends: nothing would be left to wait, or a post-only order would take.
+            cancelWorking(account, order, now);
+            return PaperResponses.futuresOrder(order, pair.symbol());
+        }
+        BigDecimal mark = market.currentMarkPrice(pair.symbol()).orElse(null);
+        BigDecimal last =
+                market.currentLastPrice(MarketType.FUTURES, pair.symbol()).orElse(mark);
+        boolean reducing = order.reducing();
+        if (!reducing) {
+            SpotFilters.requireNotional(filters, request.price().multiply(request.quantity()), false, "quantity");
+        }
+        requirePercentPrice(filters, order.getSide(), request.price(), mark, book);
+        BigDecimal size = Optional.ofNullable(margins.openPosition(userId, pair.pairId(), order.getPositionSide()))
+                .map(FuturesPosition::signedQuantity)
+                .orElse(BigDecimal.ZERO);
+        if (order.closesHedgeSide() && remaining.compareTo(FuturesSettlement.closableBy(order.getSide(), size)) > 0) {
+            throw new FuturesRejection(
+                    ErrorCode.PAPER_REDUCE_ONLY_REJECTED, -2022, "ReduceOnly Order is rejected.", "reduceOnly");
+        }
+        BigDecimal opening = reducing ? BigDecimal.ZERO : opening(order.getSide(), remaining, size);
+        if (opening.signum() > 0) {
+            requireFreshMarks(userId, pair, order.getSide(), request.price(), book);
+            requireMargin(userId, pair, order.getSide(), request.price(), size, opening, last, mark, order.getId());
+        }
+        if (order.amend(request.price(), request.quantity(), now)) {
+            // It waits again at its new price, as a new order would: the engine drops the copy it tracks, and the
+            // order takes what the book now offers at that price, as a taker, before it waits.
+            events.publishEvent(new PaperOrderCanceled(order.getId()));
+            futuresArrival.limit(account, order, book, now);
+            tpSl.settle(account, order, now);
+        }
+        feed.futuresOrder(account, order);
+        log.debug(
+                "Paper Futures order {} {} amended to {} at {}: {}",
+                order.getId(),
+                pair.symbol(),
+                order.getOrigQuantity(),
+                order.getLimitPrice(),
+                order.getOrderStatus());
         return PaperResponses.futuresOrder(order, pair.symbol());
     }
 
@@ -418,25 +506,27 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
 
     /**
      * The part of an order that would open or increase a position must be paid for, and the position after it must
-     * stay within the leverage's largest notional (4.6 … 4.8).
+     * stay within the leverage's largest notional (4.6 … 4.8). An amended order is costed against what the account has
+     * without its own margin before the amendment, {@code excludedOrderId}; a new one passes {@code null}.
      */
     private void requireMargin(
             UUID userId,
             FuturesPair pair,
-            FuturesOrderRequest request,
+            OrderSide side,
+            BigDecimal price,
             BigDecimal size,
             BigDecimal opening,
             BigDecimal last,
-            BigDecimal mark) {
+            BigDecimal mark,
+            UUID excludedOrderId) {
         if (mark == null || last == null) {
             throw priceUnavailable(pair);
         }
         FuturesSymbolConfig config = margins.symbolConfig(userId, pair.pairId(), pair.tiers());
         int leverage = config.getLeverage();
-        BigDecimal held = PositionDirection.openedBy(request.side()).sign().signum() == size.signum()
-                ? size.abs()
-                : BigDecimal.ZERO;
-        BigDecimal valuedAt = request.price() != null ? request.price() : mark;
+        BigDecimal held =
+                PositionDirection.openedBy(side).sign().signum() == size.signum() ? size.abs() : BigDecimal.ZERO;
+        BigDecimal valuedAt = price != null ? price : mark;
         BigDecimal notional = held.add(opening).multiply(valuedAt);
         if (notional.compareTo(FuturesMarginMath.maxNotionalAtLeverage(pair.tiers(), leverage)) > 0) {
             throw new FuturesRejection(
@@ -444,8 +534,9 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                     -2027,
                     "Exceeded the maximum allowable position at current leverage.");
         }
-        BigDecimal cost = FuturesMarginMath.orderCost(request.side(), opening, request.price(), last, mark, leverage);
-        FuturesAccountMargin margin = margins.crossState(userId, null).margin();
+        BigDecimal cost = FuturesMarginMath.orderCost(side, opening, price, last, mark, leverage);
+        FuturesAccountMargin margin =
+                margins.crossState(userId, excludedOrderId).margin();
         BigDecimal budget =
                 config.getMarginType() == MarginType.CROSSED ? margin.availableBalance() : margin.crossFreeCash();
         if (cost.compareTo(budget) > 0) {
@@ -465,13 +556,13 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      * Closing orders never wait for the mark.
      */
     private void requireFreshMarks(
-            UUID userId, FuturesPair pair, FuturesOrderRequest request, Optional<SpotArrival.Book> book) {
+            UUID userId, FuturesPair pair, OrderSide side, BigDecimal price, Optional<SpotArrival.Book> book) {
         if (margins.freshMark(pair.symbol()).isEmpty()) {
-            boolean takes = request.type() == OrderType.MARKET
+            boolean takes = price == null
                     || book.filter(found -> found.shown()
                                     && crosses(
-                                            request.side(),
-                                            request.price(),
+                                            side,
+                                            price,
                                             found.levels().getFirst().price()))
                             .isPresent();
             if (takes) {
@@ -544,27 +635,29 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
      * ({@code -4016}), a SELL at least the mark times {@code multiplierDown} ({@code -4024}); a MARKET order is judged
      * by the best price of the book it takes ({@code -4131}). Without a mark, or a book for a MARKET order, nothing is
      * checked: the order is then refused or valued by the stale-mark rules.
+     *
+     * @param price the limit price, or {@code null} for a MARKET order
      */
     private static void requirePercentPrice(
-            PairFilters filters, FuturesOrderRequest request, BigDecimal mark, Optional<SpotArrival.Book> book) {
+            PairFilters filters, OrderSide side, BigDecimal price, BigDecimal mark, Optional<SpotArrival.Book> book) {
         if (mark == null) {
             return;
         }
-        boolean buy = request.side() == OrderSide.BUY;
+        boolean buy = side == OrderSide.BUY;
         BigDecimal multiplier =
                 buy ? filters.rules().bidMultiplierUp() : filters.rules().askMultiplierDown();
         if (multiplier == null) {
             return;
         }
-        boolean marketOrder = request.type() == OrderType.MARKET;
-        BigDecimal price = marketOrder
+        boolean marketOrder = price == null;
+        BigDecimal judged = marketOrder
                 ? book.map(found -> found.levels().getFirst().price()).orElse(null)
-                : request.price();
-        if (price == null) {
+                : price;
+        if (judged == null) {
             return;
         }
         BigDecimal bound = mark.multiply(multiplier);
-        if (buy ? price.compareTo(bound) <= 0 : price.compareTo(bound) >= 0) {
+        if (buy ? judged.compareTo(bound) <= 0 : judged.compareTo(bound) >= 0) {
             return;
         }
         String limit = bound.stripTrailingZeros().toPlainString();
@@ -574,7 +667,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                         -4131,
                         "The counterparty's best price does not meet the PERCENT_PRICE filter limit.",
                         "price",
-                        price,
+                        judged,
                         limit,
                         buy ? SpotFilters.MAX : SpotFilters.MIN)
                 : new FuturesRejection(
@@ -582,7 +675,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
                         buy ? -4016 : -4024,
                         "Limit price can't be " + (buy ? "higher" : "lower") + " than " + limit + ".",
                         "price",
-                        price,
+                        judged,
                         limit,
                         buy ? SpotFilters.MAX : SpotFilters.MIN);
     }

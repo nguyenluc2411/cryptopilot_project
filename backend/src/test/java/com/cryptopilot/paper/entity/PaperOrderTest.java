@@ -290,4 +290,50 @@ class PaperOrderTest {
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> PaperFill.futures(spot, execution, position, BigDecimal.ZERO));
     }
+
+    @Test
+    void TR25_aFuturesLimit_isAmendedInPlace_andWaitsAgainOnlyForANewPriceOrALargerQuantity() {
+        PaperOrder order = futuresLimit("100", "2");
+
+        assertThat(order.amend(new BigDecimal("100"), BigDecimal.ONE, AT)).isFalse();
+        assertThat(order.getAmendedAt()).isNull();
+        assertThat(order.amend(new BigDecimal("100"), new BigDecimal("3"), AT)).isTrue();
+        assertThat(order.amend(new BigDecimal("99"), new BigDecimal("3"), AT.plusSeconds(1)))
+                .isTrue();
+
+        assertThat(order.getLimitPrice()).isEqualByComparingTo("99");
+        assertThat(order.getOrigQuantity()).isEqualByComparingTo("3");
+        assertThat(order.getAmendCount()).isEqualTo(3);
+        assertThat(order.restingSince()).isEqualTo(AT.plusSeconds(1));
+    }
+
+    @Test
+    void TR25_onlyAWorkingFuturesLimit_isAmended_toMoreThanWhatExecuted() {
+        PaperOrder spot = limit(OrderSide.BUY, "100", "1");
+        PaperOrder market =
+                PaperOrder.futuresMarket(ACCOUNT, PAIR, "m", OrderSide.BUY, PositionSide.BOTH, BigDecimal.ONE, false);
+        PaperOrder partly = futuresLimit("100", "2");
+        partly.fill(BigDecimal.ONE, new BigDecimal("100"), new BigDecimal("100"), AT);
+        PaperOrder ended = futuresLimit("100", "2");
+        ended.cancel(AT);
+
+        assertThatIllegalStateException().isThrownBy(() -> spot.amend(new BigDecimal("99"), BigDecimal.ONE, AT));
+        assertThatIllegalStateException().isThrownBy(() -> market.amend(new BigDecimal("99"), BigDecimal.ONE, AT));
+        assertThatIllegalStateException().isThrownBy(() -> ended.amend(new BigDecimal("99"), BigDecimal.ONE, AT));
+        assertThatIllegalArgumentException().isThrownBy(() -> partly.amend(new BigDecimal("99"), BigDecimal.ONE, AT));
+        assertThatIllegalArgumentException().isThrownBy(() -> partly.amend(BigDecimal.ZERO, new BigDecimal("3"), AT));
+    }
+
+    private static PaperOrder futuresLimit(String price, String quantity) {
+        return PaperOrder.futuresLimit(
+                ACCOUNT,
+                PAIR,
+                "f-" + UUID.randomUUID(),
+                OrderSide.BUY,
+                PositionSide.BOTH,
+                TimeInForce.GTC,
+                new BigDecimal(price),
+                new BigDecimal(quantity),
+                false);
+    }
 }

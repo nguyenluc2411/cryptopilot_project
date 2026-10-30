@@ -415,6 +415,18 @@ public enum ErrorCode {
     PAPER_REDUCE_ONLY_REJECTED(HttpStatus.CONFLICT, "MSG43"),
 
     /**
+     * A working Futures LIMIT order was amended as often as the exchange allows, 10,000 times ({@code -5026}). Borrows
+     * MSG43 like {@link #PAPER_ORDER_WOULD_TAKE} (A-38). 409: the order refuses it; a new order is accepted.
+     */
+    PAPER_MAX_AMENDMENTS(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * An amendment of a Futures order that changes neither its price nor its quantity ({@code -5027}). Borrows MSG43
+     * like {@link #PAPER_ORDER_WOULD_TAKE} (A-38). 409: the order already is what was asked.
+     */
+    PAPER_ORDER_UNCHANGED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
      * A Futures order's position side does not fit the position mode ({@code -4061}): one-way takes BOTH, hedge LONG
      * or SHORT. 400 with MSG15, the text of a value not allowed.
      */

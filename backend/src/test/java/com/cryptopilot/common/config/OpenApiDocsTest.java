@@ -107,6 +107,11 @@ class OpenApiDocsTest {
             "/api/v1/paper/futures/forceOrders",
             "/api/v1/paper/futures/income",
             "/api/v1/paper/futures/positionHistory",
+            "/api/v1/paper/futures/calculator/pnl",
+            "/api/v1/paper/futures/calculator/target",
+            "/api/v1/paper/futures/calculator/liquidation",
+            "/api/v1/paper/futures/calculator/maxOpen",
+            "/api/v1/paper/futures/calculator/openPrice",
             "/api/v1/watchlist",
             "/api/v1/watchlist/{id}",
             "/api/v1/alerts",
@@ -194,7 +199,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/news-articles/{id}/restore",
             "/api/v1/admin/news-articles/{id}/summarize");
 
-    private static final int OPERATIONS = 202;
+    private static final int OPERATIONS = 208;
 
     @Autowired
     private MockMvc mvc;

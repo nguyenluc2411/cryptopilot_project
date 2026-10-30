@@ -95,11 +95,11 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     /**
      * Every working order of every account that waits at its limit price, which the matching engine starts its books
      * from: LIMIT and LIMIT_MAKER orders, and STOP_LOSS_LIMIT and TAKE_PROFIT_LIMIT orders that have triggered,
-     * waiting since then.
+     * waiting since then; an amended Futures LIMIT order since its amendment (TR-25).
      */
     @Transactional(readOnly = true)
     @Query("select new com.cryptopilot.paper.model.RestingOrder(o.id, o.userId, o.marketType, o.pairId, o.side,"
-            + " o.limitPrice, coalesce(o.triggeredAt, o.activatedAt, o.createdAt)) from PaperOrder o"
+            + " o.limitPrice, coalesce(o.amendedAt, o.triggeredAt, o.activatedAt, o.createdAt)) from PaperOrder o"
             + " where o.orderStatus in :statuses and (o.orderType in (com.cryptopilot.paper.model.enums.OrderType.LIMIT,"
             + " com.cryptopilot.paper.model.enums.OrderType.LIMIT_MAKER) or (o.orderType in"
             + " (com.cryptopilot.paper.model.enums.OrderType.STOP_LOSS_LIMIT,"

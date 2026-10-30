@@ -551,6 +551,8 @@ technical_indicator,volume_score,numeric,5,2,YES
 technical_indicator,volume_sma_20,numeric,28,10,YES
 trade_order,activated_at,timestamp with time zone,,,YES
 trade_order,activation_price,numeric,28,12,YES
+trade_order,amend_count,integer,32,0,NO
+trade_order,amended_at,timestamp with time zone,,,YES
 trade_order,avg_price,numeric,28,12,YES
 trade_order,callback_rate,numeric,12,8,YES
 trade_order,client_order_id,character varying,,,NO

@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.paper.model.IsolatedCashFlow;
+import com.cryptopilot.paper.model.OpenedLot;
 import com.cryptopilot.paper.model.PositionFill;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.PositionDirection;
@@ -199,5 +200,31 @@ class FuturesMarginMathTest {
                 leverage,
                 new BigDecimal(mmr),
                 cum == null ? null : new BigDecimal(cum));
+    }
+
+    @Test
+    void TR25_roeTargetPriceAndOpenPrice() {
+        assertThat(FuturesMarginMath.roePercent(new BigDecimal("5"), new BigDecimal("20")))
+                .isEqualByComparingTo("25");
+        assertThat(FuturesMarginMath.roePercent(BigDecimal.ONE, BigDecimal.ZERO))
+                .isEqualByComparingTo("0");
+        // 10x, +30 %: 3 % of the entry.
+        assertThat(FuturesMarginMath.targetPrice(
+                        PositionDirection.LONG, new BigDecimal("200"), 10, new BigDecimal("30")))
+                .isEqualByComparingTo("206");
+        assertThat(FuturesMarginMath.targetPrice(
+                        PositionDirection.SHORT, new BigDecimal("200"), 10, new BigDecimal("-30")))
+                .isEqualByComparingTo("206");
+        assertThat(FuturesMarginMath.targetPrice(
+                        PositionDirection.SHORT, new BigDecimal("200"), 1, new BigDecimal("150")))
+                .isEqualByComparingTo("0");
+        assertThat(FuturesMarginMath.averageOpenPrice(List.of(
+                        new OpenedLot(new BigDecimal("90"), new BigDecimal("1")),
+                        new OpenedLot(new BigDecimal("120"), new BigDecimal("2")))))
+                .isEqualByComparingTo("110");
+        assertThatIllegalArgumentException().isThrownBy(() -> FuturesMarginMath.averageOpenPrice(List.of()));
+        assertThatIllegalArgumentException()
+                .isThrownBy(() ->
+                        FuturesMarginMath.averageOpenPrice(List.of(new OpenedLot(BigDecimal.ONE, BigDecimal.ZERO))));
     }
 }

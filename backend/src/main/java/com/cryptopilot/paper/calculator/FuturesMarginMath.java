@@ -4,6 +4,7 @@ import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.paper.model.FuturesAccountMargin;
 import com.cryptopilot.paper.model.IsolatedCashFlow;
+import com.cryptopilot.paper.model.OpenedLot;
 import com.cryptopilot.paper.model.PendingOrderMargin;
 import com.cryptopilot.paper.model.PositionFill;
 import com.cryptopilot.paper.model.enums.OrderSide;
@@ -407,6 +408,59 @@ public final class FuturesMarginMath {
         return marginBalance.signum() <= 0
                 ? Optional.empty()
                 : Optional.of(Rounding.divide(maintenanceMargin, marginBalance));
+    }
+
+    // ------------------------------------------------------------------ calculator
+
+    /**
+     * The return on the initial margin, in percent: {@code ROE = PnL / IM × 100} (plan 4.2); zero for no margin.
+     *
+     * <p>Rule: TR-25.
+     */
+    public static BigDecimal roePercent(BigDecimal pnl, BigDecimal initialMargin) {
+        if (initialMargin.signum() == 0) {
+            return BigDecimal.ZERO.setScale(2);
+        }
+        return Rounding.divide(pnl.multiply(BigDecimal.valueOf(100)), initialMargin)
+                .setScale(2, RoundingMode.HALF_EVEN);
+    }
+
+    /**
+     * The exit price at which a position opened at {@code entryPrice} makes {@code roePercent} on its initial margin:
+     * {@code T = E × (1 + side × ROE / (100 × L))}, from {@code ROE = side × Q × (T − E) / (Q × E / L)}. Zero when no
+     * positive price reaches it (a long losing more than its margin allows).
+     *
+     * <p>Rule: TR-25.
+     */
+    public static BigDecimal targetPrice(
+            PositionDirection direction, BigDecimal entryPrice, int leverage, BigDecimal roePercent) {
+        requirePositive(entryPrice, "entryPrice");
+        BigDecimal move = Rounding.divide(
+                direction.sign().multiply(roePercent), BigDecimal.valueOf(100L * requireLeverage(leverage)));
+        BigDecimal target = entryPrice.multiply(BigDecimal.ONE.add(move));
+        return target.signum() <= 0 ? BigDecimal.ZERO : toPrice(target);
+    }
+
+    /**
+     * The entry price of a position opened in several fills, the quantity-weighted mean {@code Σ(P × Q) / ΣQ}.
+     *
+     * <p>Rule: TR-25.
+     *
+     * @param lots each a price and a quantity, both positive
+     */
+    public static BigDecimal averageOpenPrice(List<OpenedLot> lots) {
+        if (lots.isEmpty()) {
+            throw new IllegalArgumentException("no lot to average");
+        }
+        BigDecimal value = BigDecimal.ZERO;
+        BigDecimal quantity = BigDecimal.ZERO;
+        for (OpenedLot lot : lots) {
+            requirePositive(lot.price(), "price");
+            requirePositive(lot.quantity(), "quantity");
+            value = value.add(lot.price().multiply(lot.quantity()));
+            quantity = quantity.add(lot.quantity());
+        }
+        return toPrice(Rounding.divide(value, quantity));
     }
 
     // ------------------------------------------------------------------ liquidation price

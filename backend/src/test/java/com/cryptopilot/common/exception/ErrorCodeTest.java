@@ -73,6 +73,8 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.PAPER_USER_IN_LIQUIDATION, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_INSUFFICIENT_MARGIN, "MSG01 400"),
             Map.entry(ErrorCode.PAPER_REDUCE_ONLY_REJECTED, "MSG43 409"),
+            Map.entry(ErrorCode.PAPER_MAX_AMENDMENTS, "MSG43 409"),
+            Map.entry(ErrorCode.PAPER_ORDER_UNCHANGED, "MSG43 409"),
             Map.entry(ErrorCode.PAPER_POSITION_SIDE, "MSG15 400"),
             Map.entry(ErrorCode.PAPER_POSITION_MARGIN, "MSG43 409"),
             Map.entry(ErrorCode.MEDIA_INVALID, "MSG32 400"),

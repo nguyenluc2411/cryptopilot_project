@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -81,11 +82,12 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * position, the Futures wallet, the isolated wallet and its audit rows; then the positions and the account read at
  * the mark, the transfer out limited by what can be withdrawn, the margin of an isolated position and the closes;
  * what each committed change pushes on the Trader's Futures queues; what a stale mark price refuses; and the
- * conditional orders, placed, triggered and ended; the liquidation of isolated positions; and funding.
+ * conditional orders, placed, triggered and ended; the liquidation of isolated positions; funding; the amendment of a
+ * waiting order and the calculator.
  *
  * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
  *
- * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-41; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-41; D-127; Q-T10.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -2147,6 +2149,262 @@ class FuturesOrderApiTest {
         assertThat(call.marginType()).isEqualTo(MarginType.CROSSED);
         assertThat(call.marginBalance()).isEqualByComparingTo("4.5");
         await().atMost(Duration.ofSeconds(10)).until(() -> notices(trader).contains("Margin call"));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Amending a waiting LIMIT order (TR-25)
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Plan 5.7: a new price and a larger quantity are stored in place, the order waits again from the amendment, and
+     * the copy the engine tracked before it never fills: only the amended order does, at its new price.
+     */
+    @Test
+    void TR25_anAmendedOrder_waitsAtItsNewPrice_andTheOldCopyNeverFills() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String id = id(place(trader, limit("BUY", "GTC", "98", "1")).andExpect(status().isOk()));
+        Instant placed = Instant.now().minusSeconds(1);
+
+        amend(trader, id, "BUY", "97", "2")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEW"))
+                .andExpect(jsonPath("$.price").value(numeric("97")))
+                .andExpect(jsonPath("$.origQty").value(numeric("2")));
+
+        Map<String, Object> row = orderRow(id);
+        assertThat(row.get("amend_count")).isEqualTo(1);
+        Instant amendedAt = ((Timestamp) row.get("amended_at")).toInstant();
+        assertThat(matching.fill(
+                        new RestingOrder(
+                                UUID.fromString(id),
+                                trader,
+                                MarketType.FUTURES,
+                                pair,
+                                OrderSide.BUY,
+                                new BigDecimal("98"),
+                                placed),
+                        Instant.now(),
+                        FillSource.LIVE))
+                .isFalse();
+        assertThat(matching.fill(
+                        new RestingOrder(
+                                UUID.fromString(id),
+                                trader,
+                                MarketType.FUTURES,
+                                pair,
+                                OrderSide.BUY,
+                                new BigDecimal("97"),
+                                amendedAt),
+                        Instant.now(),
+                        FillSource.LIVE))
+                .isTrue();
+        assertThat(statusOf(id)).isEqualTo("FILLED");
+        assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("2");
+        assertThat((BigDecimal) position(trader).get("entry_price")).isEqualByComparingTo("97");
+    }
+
+    /** A smaller quantity at the same price keeps the order's place: the copy the engine tracks still fills it. */
+    @Test
+    void TR25_aSmallerQuantity_keepsTheOrdersPlace() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String id = id(place(trader, limit("BUY", "GTC", "98", "2")).andExpect(status().isOk()));
+
+        amend(trader, id, "BUY", "98", "1").andExpect(status().isOk());
+
+        assertThat(orderRow(id).get("amended_at")).isNull();
+        assertThat(matching.fill(
+                        new RestingOrder(
+                                UUID.fromString(id),
+                                trader,
+                                MarketType.FUTURES,
+                                pair,
+                                OrderSide.BUY,
+                                new BigDecimal("98"),
+                                Instant.now().minusSeconds(1)),
+                        Instant.now(),
+                        FillSource.LIVE))
+                .isTrue();
+        assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("1");
+    }
+
+    @Test
+    void TR25_aNewPriceThatReachesTheBook_executesAsATaker() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String id = id(place(trader, limit("BUY", "GTC", "98", "1")).andExpect(status().isOk()));
+
+        amend(trader, id, "BUY", "100", "1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FILLED"))
+                .andExpect(jsonPath("$.avgPrice").value(numeric("100")));
+        as(trader, get(FUTURES + "/userTrades").param("symbol", symbol), null)
+                .andExpect(jsonPath("$[0].maker").value(false));
+    }
+
+    /**
+     * Plan 5.7: the exchange cancels rather than amends a partly filled order asked for no more than it executed, and
+     * a post-only order its new price would execute.
+     */
+    @Test
+    void TR25_noMoreThanWhatExecuted_orAPostOnlyThatWouldTake_cancelsTheOrder() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "0.4"), level("100.5", "5")), List.of(level("99.9", "5")));
+        String partly = id(place(trader, limit("BUY", "GTC", "100", "1"))
+                .andExpect(jsonPath("$.status").value("PARTIALLY_FILLED")));
+        String postOnly = id(place(trader, limit("BUY", "GTX", "99", "1")).andExpect(status().isOk()));
+
+        amend(trader, partly, "BUY", "100", "0.4")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELED"))
+                .andExpect(jsonPath("$.executedQty").value(numeric("0.4")));
+        amend(trader, postOnly, "BUY", "100.5", "1")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELED"));
+        assertThat((BigDecimal) position(trader).get("quantity")).isEqualByComparingTo("0.4");
+    }
+
+    /** A refused amendment leaves the order as it was. */
+    @Test
+    void TR25_refusals_leaveTheOrderAsItWas() throws Exception {
+        UUID trader = trader(true);
+        leverage(trader, 1);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String id = id(place(trader, limit("BUY", "GTC", "98", "10")).andExpect(status().isOk()));
+
+        amend(trader, id, "BUY", "98", "10")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_UNCHANGED"))
+                .andExpect(jsonPath("$.binanceCode").value(-5027));
+        amend(trader, id, "BUY", "97.05", "10")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PAPER_PRICE_FILTER"));
+        amend(trader, id, "SELL", "97", "10")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.side").value("MSG15"));
+        // 60 at 98, 1x: 5,880 of the 5,000.
+        amend(trader, id, "BUY", "98", "60")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.binanceCode").value(-2019));
+        Map<String, Object> row = orderRow(id);
+        assertThat((BigDecimal) row.get("limit_price")).isEqualByComparingTo("98");
+        assertThat((BigDecimal) row.get("orig_quantity")).isEqualByComparingTo("10");
+        assertThat(row.get("amend_count")).isEqualTo(0);
+
+        // The order's own margin is not counted against it: 4,900 of the 5,000.
+        amend(trader, id, "BUY", "98", "50").andExpect(status().isOk());
+        as(trader, delete(FUTURES + "/order").param("symbol", symbol).param("orderId", id), null)
+                .andExpect(status().isOk());
+        amend(trader, id, "BUY", "97", "50")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_NOT_OPEN"))
+                .andExpect(jsonPath("$.binanceCode").value(-2011));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Calculator (TR-25)
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void TR25_calculator_pnlAndTargetPrice() throws Exception {
+        UUID trader = trader(true);
+
+        calculate(trader, "pnl", """
+                        {"symbol": "%s", "side": "LONG", "leverage": 10, "entryPrice": "100", "exitPrice": "110",
+                         "quantity": "1"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.initialMargin").value(numeric("10")))
+                .andExpect(jsonPath("$.pnl").value(numeric("10")))
+                .andExpect(jsonPath("$.roe").value(numeric("100")))
+                .andExpect(jsonPath("$.maxPositionAtLeverage").value(numeric("3000000")));
+        calculate(trader, "pnl", """
+                        {"symbol": "%s", "side": "SHORT", "leverage": 10, "entryPrice": "100", "exitPrice": "110",
+                         "quantity": "1"}""".formatted(symbol))
+                .andExpect(jsonPath("$.pnl").value(numeric("-10")))
+                .andExpect(jsonPath("$.roe").value(numeric("-100")));
+        calculate(trader, "target", """
+                        {"symbol": "%s", "side": "LONG", "leverage": 10, "entryPrice": "100", "roe": "50"}""".formatted(symbol))
+                .andExpect(jsonPath("$.targetPrice").value(numeric("105")));
+        calculate(trader, "target", """
+                        {"symbol": "%s", "side": "SHORT", "leverage": 10, "entryPrice": "100", "roe": "50"}""".formatted(symbol))
+                .andExpect(jsonPath("$.targetPrice").value(numeric("95")));
+        // A long loses at most its margin: no price makes -1,000 % at 10x.
+        calculate(trader, "target", """
+                        {"symbol": "%s", "side": "LONG", "leverage": 10, "entryPrice": "100", "roe": "-1000"}""".formatted(symbol))
+                .andExpect(jsonPath("$.targetPrice").value(numeric("0")));
+    }
+
+    @Test
+    void TR25_calculator_liquidationMaxOpenAndOpenPrice() throws Exception {
+        UUID trader = trader(true);
+
+        // Isolated, margin = IM 10: LP = (10 − 100) / (1 × (0.004 − 1)) = 90.36…, rounded up to 90.4.
+        calculate(trader, "liquidation", """
+                        {"symbol": "%s", "side": "LONG", "marginType": "ISOLATED", "leverage": 10,
+                         "entryPrice": "100", "quantity": "1"}""".formatted(symbol))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.liquidationPrice").value(numeric("90.4")))
+                .andExpect(jsonPath("$.walletBalance").value(numeric("10")));
+        calculate(trader, "liquidation", """
+                        {"symbol": "%s", "side": "LONG", "marginType": "CROSSED", "leverage": 10,
+                         "entryPrice": "100", "quantity": "1"}""".formatted(symbol))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.walletBalance").value("MSG01"));
+        // 125x allows 50,000: 501 at 100 is past it.
+        calculate(trader, "liquidation", """
+                        {"symbol": "%s", "side": "LONG", "marginType": "CROSSED", "leverage": 125,
+                         "entryPrice": "100", "quantity": "501", "walletBalance": "1000"}""".formatted(symbol))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.binanceCode").value(-2027));
+
+        // 1,000 at 10x: 100 long at 100; a short costed at 100.15 opens 99.850.
+        calculate(trader, "maxOpen", """
+                        {"symbol": "%s", "side": "LONG", "leverage": 10, "entryPrice": "100",
+                         "walletBalance": "1000"}""".formatted(symbol))
+                .andExpect(jsonPath("$.maxQuantity").value(numeric("100")))
+                .andExpect(jsonPath("$.maxNotional").value(numeric("10000")));
+        calculate(trader, "maxOpen", """
+                        {"symbol": "%s", "side": "SHORT", "leverage": 10, "entryPrice": "100",
+                         "walletBalance": "1000"}""".formatted(symbol))
+                .andExpect(jsonPath("$.maxQuantity").value(numeric("99.85")));
+
+        calculate(trader, "openPrice", """
+                        {"symbol": "%s", "lots": [{"price": "100", "quantity": "1"},
+                                                  {"price": "110", "quantity": "3"}]}""".formatted(symbol))
+                .andExpect(jsonPath("$.openPrice").value(numeric("107.5")))
+                .andExpect(jsonPath("$.quantity").value(numeric("4")));
+        assertThat(orderCount(trader)).isZero();
+    }
+
+    @Test
+    void TR25_calculator_refusesALeverageAboveThePairs_andATraderWithoutFutures() throws Exception {
+        String body = """
+                {"symbol": "%s", "side": "LONG", "leverage": 126, "entryPrice": "100", "roe": "10"}""".formatted(symbol);
+
+        calculate(trader(true), "target", body)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("PAPER_LEVERAGE"))
+                .andExpect(jsonPath("$.binanceCode").value(-4028));
+        calculate(trader(false), "target", body).andExpect(status().isForbidden());
+    }
+
+    private ResultActions amend(UUID trader, String orderId, String side, String price, String quantity)
+            throws Exception {
+        return as(trader, put(FUTURES + "/order"), """
+                {"symbol": "%s", "orderId": "%s", "side": "%s", "price": "%s",
+                 "quantity": "%s"}""".formatted(symbol, orderId, side, price, quantity));
+    }
+
+    private ResultActions calculate(UUID trader, String tab, String body) throws Exception {
+        return as(trader, post(FUTURES + "/calculator/" + tab), body);
+    }
+
+    private Map<String, Object> orderRow(String orderId) {
+        return sql.sql("select * from trade_order where order_id = ?")
+                .param(UUID.fromString(orderId))
+                .query()
+                .singleRow();
     }
 
     private List<String> notices(UUID trader) {

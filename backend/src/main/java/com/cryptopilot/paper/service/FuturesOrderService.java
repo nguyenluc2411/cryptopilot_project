@@ -1,5 +1,6 @@
 package com.cryptopilot.paper.service;
 
+import com.cryptopilot.paper.dto.request.FuturesAmendOrderRequest;
 import com.cryptopilot.paper.dto.request.FuturesOrderRequest;
 import com.cryptopilot.paper.dto.response.FuturesOrderResponse;
 import com.cryptopilot.paper.dto.response.FuturesTradeResponse;
@@ -25,6 +26,16 @@ public interface FuturesOrderService {
 
     /** Cancels one working order of the pair, named by its id or its client order id. */
     FuturesOrderResponse cancel(UUID userId, String symbol, UUID orderId, String origClientOrderId);
+
+    /**
+     * Amends a working LIMIT order of the pair, named by its id or its client order id, to a new price and quantity
+     * (TR-25, plan 5.7). A price or quantity the filters or the margin refuse leaves it as it was; a quantity no more
+     * than what executed, or a post-only order the new price would execute, cancels it, as the exchange does.
+     *
+     * @return the order after the amendment: waiting, executed as far as the book allowed at its new price, or
+     *     cancelled
+     */
+    FuturesOrderResponse amend(UUID userId, FuturesAmendOrderRequest request);
 
     /** Cancels every working order of the pair. */
     List<FuturesOrderResponse> cancelAll(UUID userId, String symbol);

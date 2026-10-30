@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.controller;
 
 import com.cryptopilot.common.config.OpenApiConfig;
+import com.cryptopilot.paper.dto.request.FuturesAmendOrderRequest;
 import com.cryptopilot.paper.dto.request.FuturesOrderRequest;
 import com.cryptopilot.paper.dto.response.FuturesOrderResponse;
 import com.cryptopilot.paper.dto.response.FuturesTradeResponse;
@@ -21,6 +22,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -33,11 +35,12 @@ import org.springframework.web.bind.annotation.RestController;
  * are UUIDs and times ISO-8601; a refusal is the project's problem detail, carrying the exchange's code and message as
  * {@code binanceCode} and {@code binanceMsg}. Paper money only: nothing here reaches an exchange.
  *
- * <p>Rule: TR-15, TR-16; D-127; Q-T10.
+ * <p>Rule: TR-15, TR-16, TR-25; D-127; Q-T10.
  */
 @Tag(
         name = "Demo trading: Futures orders",
-        description = "LIMIT and MARKET orders of paper Futures in one-way mode, and their trades (TR-15, TR-16)."
+        description = "LIMIT and MARKET orders of paper Futures, their amendment and their trades (TR-15, TR-16,"
+                + " TR-25)."
                 + " Trader with the Futures feature.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
@@ -72,6 +75,33 @@ public class FuturesOrderController {
     public FuturesOrderResponse place(
             @AuthenticationPrincipal Jwt caller, @Valid @RequestBody FuturesOrderRequest request) {
         return futures.place(callerOf(caller), request);
+    }
+
+    @Operation(summary = "Amend the price and quantity of a working LIMIT order. Binance: PUT /fapi/v1/order")
+    @ApiResponse(
+            responseCode = "200",
+            description = "The order after the amendment: waiting at its new price, executed as far as the book"
+                    + " allowed, or CANCELED when the new quantity is no more than what executed or a GTX order would"
+                    + " execute")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01, MSG15: a field is missing, the order is not a LIMIT order or the side is not its own;"
+                    + " PAPER_PRICE_FILTER, PAPER_LOT_SIZE, PAPER_NOTIONAL, PAPER_PERCENT_PRICE: a filter of the pair;"
+                    + " PAPER_INSUFFICIENT_MARGIN (-2019). The order is left as it was")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "403", description = "MSG29: the plan has no Futures feature")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such order of the pair (the exchange's -2013)")
+    @ApiResponse(
+            responseCode = "409",
+            description = "PAPER_ORDER_NOT_OPEN (-2011): the order has ended; PAPER_ORDER_UNCHANGED (-5027): same"
+                    + " price and quantity; PAPER_MAX_AMENDMENTS (-5026): amended 10,000 times;"
+                    + " PAPER_MAX_POSITION_AT_LEVERAGE (-2027); PAPER_REDUCE_ONLY_REJECTED (-2022);"
+                    + " PAPER_USER_IN_LIQUIDATION (-2023)")
+    @ApiResponse(responseCode = "503", description = "MARKET_PRICE_UNAVAILABLE (MSG43): the mark is stale")
+    @PutMapping("/order")
+    public FuturesOrderResponse amend(
+            @AuthenticationPrincipal Jwt caller, @Valid @RequestBody FuturesAmendOrderRequest request) {
+        return futures.amend(callerOf(caller), request);
     }
 
     @Operation(summary = "Cancel a working order. Binance: DELETE /fapi/v1/order")

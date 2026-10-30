@@ -105,6 +105,11 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
         }
         PaperOrder order = found.get();
         if (order.getMarketType() == MarketType.FUTURES) {
+            if (order.getAmendedAt() != null && resting.placedAt().isBefore(order.getAmendedAt())) {
+                // Amended since the engine tracked it (TR-25): the copy the engine reached is gone, the amended order
+                // is tracked anew.
+                return false;
+            }
             // The rest at the limit price, as a maker; what the position does not take ends the order (TR-16).
             futuresSettlement.execute(
                     account,

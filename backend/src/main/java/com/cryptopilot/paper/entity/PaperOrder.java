@@ -55,6 +55,9 @@ public class PaperOrder extends BaseEntity {
     /** Why a filled order is flagged: it took more than the depth shown, the rest at the last level's price (Q-T7). */
     public static final String DEPTH_EXHAUSTED = "DEPTH_EXHAUSTED";
 
+    /** The most amendments of one order, as the exchange allows (plan 5.7). */
+    public static final int MAX_AMENDMENTS = 10_000;
+
     @Column(name = "user_id", nullable = false, updatable = false)
     private UUID userId;
 
@@ -92,7 +95,8 @@ public class PaperOrder extends BaseEntity {
     @Column(name = "time_in_force", length = 32, updatable = false)
     private TimeInForce timeInForce;
 
-    @Column(name = "limit_price", precision = 28, scale = 12, updatable = false)
+    /** The limit price; a working Futures LIMIT order's may be amended (TR-25). */
+    @Column(name = "limit_price", precision = 28, scale = 12)
     private BigDecimal limitPrice;
 
     /** A Spot stop's stopPrice: its trigger, or the activation of a trailing stop; {@code null} without one. */
@@ -137,8 +141,22 @@ public class PaperOrder extends BaseEntity {
     @Column(name = "activated_at")
     private Instant activatedAt;
 
-    /** The quantity asked for, or {@code null} for a MARKET buy sized by what it spends. */
-    @Column(name = "orig_quantity", precision = 28, scale = 12, updatable = false)
+    /**
+     * When a Futures LIMIT order was last amended to a new price or a larger quantity, from which it waits again at its
+     * price (TR-25); {@code null} for an order never amended so.
+     */
+    @Column(name = "amended_at")
+    private Instant amendedAt;
+
+    /** How many times the order was amended (TR-25), at most {@link #MAX_AMENDMENTS}. */
+    @Column(name = "amend_count", nullable = false)
+    private int amendCount;
+
+    /**
+     * The quantity asked for, or {@code null} for a MARKET buy sized by what it spends; a working Futures LIMIT order's
+     * may be amended (TR-25).
+     */
+    @Column(name = "orig_quantity", precision = 28, scale = 12)
     private BigDecimal origQuantity;
 
     /** What a MARKET buy "by total" spends, in the quote asset; otherwise {@code null}. */
@@ -599,12 +617,16 @@ public class PaperOrder extends BaseEntity {
 
     /**
      * When the order started waiting at its limit price: for a stop when it triggered, for a pending order of a group
-     * when it was activated, otherwise when it was placed. A price traded before then never fills it (D-77).
+     * when it was activated, for an amended Futures order when it was amended to a new price or a larger quantity,
+     * otherwise when it was placed. A price traded before then never fills it (D-77).
      *
      * <p>Reference: Akidau, T. et al. (2015). The Dataflow Model. <i>PVLDB</i>, 8(12), 1792-1803 (event time, not
      * processing time: the same instant live and after a restart).
      */
     public Instant restingSince() {
+        if (amendedAt != null) {
+            return amendedAt;
+        }
         if (triggeredAt != null) {
             return triggeredAt;
         }
@@ -708,6 +730,39 @@ public class PaperOrder extends BaseEntity {
             throw new IllegalStateException("order " + getId() + " has executed nothing to complete");
         }
         end(OrderStatus.FILLED, null, at);
+    }
+
+    /**
+     * Amends a working Futures LIMIT order in place (TR-25, plan 5.7): its price and the quantity asked for, which stays
+     * above what has executed. A new price or a larger quantity makes it wait again from {@code at}, behind what was
+     * there before, as the exchange's order loses its place; a smaller quantity at the same price keeps its place.
+     *
+     * @param price positive, on the pair's tick
+     * @param quantity more than the executed quantity, on the pair's step
+     * @return whether the order waits again from {@code at}
+     */
+    public boolean amend(BigDecimal price, BigDecimal quantity, Instant at) {
+        requireOpen("amended");
+        if (marketType != MarketType.FUTURES || orderType != OrderType.LIMIT) {
+            throw new IllegalStateException(
+                    "order " + getId() + " is a " + marketType + " " + orderType + " order and cannot be amended");
+        }
+        if (amendCount >= MAX_AMENDMENTS) {
+            throw new IllegalStateException("order " + getId() + " was amended " + amendCount + " times already");
+        }
+        positive(price);
+        if (positive(quantity).compareTo(executedQuantity) <= 0) {
+            throw new IllegalArgumentException("order " + getId() + " has executed " + executedQuantity.toPlainString()
+                    + ", not less than " + quantity.toPlainString());
+        }
+        boolean requeued = limitPrice.compareTo(price) != 0 || quantity.compareTo(origQuantity) > 0;
+        limitPrice = price;
+        origQuantity = quantity;
+        amendCount++;
+        if (requeued) {
+            amendedAt = Objects.requireNonNull(at, "at must not be null");
+        }
+        return requeued;
     }
 
     /** Flags a filled order that took more than the depth shown, the rest at the last level's price (Q-T7). */
