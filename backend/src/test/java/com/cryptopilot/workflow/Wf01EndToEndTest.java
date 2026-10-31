@@ -214,10 +214,7 @@ class Wf01EndToEndTest {
         feed.stop();
         worker.stop();
         clock.set(START);
-        for (String symbol : pairs.keySet()) {
-            // The price cache is shared with the suite; an entry newer than this test's clock would hide its prices.
-            redis.delete(List.of("px:SPOT:" + symbol, "px:FUTURES:" + symbol));
-        }
+        removeCachedPrices();
         settlements.set(List.of());
         doAnswer(call -> funding(call.getArgument(1), call.getArgument(2)))
                 .when(market)
@@ -249,6 +246,19 @@ class Wf01EndToEndTest {
             sql.sql("delete from trading_plan where user_id = ?").param(trader).update();
         }
         sql.sql("delete from matching_watermark").update();
+        removeCachedPrices();
+    }
+
+    /**
+     * The price cache is shared with the whole suite, and it keeps an entry only while no newer one arrives
+     * ({@code WRITE_IF_NEWER}). This class streams prices at its own clock, which can be ahead of the wall clock, so
+     * an entry it leaves would hide the prices of the next class, and one left by another class would hide this
+     * test's. Cleared before and after every test.
+     */
+    private void removeCachedPrices() {
+        for (String symbol : pairs.keySet()) {
+            redis.delete(List.of("px:SPOT:" + symbol, "px:FUTURES:" + symbol));
+        }
     }
 
     // ------------------------------------------------------------------------------------------
