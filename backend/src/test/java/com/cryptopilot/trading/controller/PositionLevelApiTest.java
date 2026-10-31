@@ -19,6 +19,7 @@ import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.support.ClosedKlines;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.entity.TradingPlan;
@@ -582,17 +583,7 @@ class PositionLevelApiTest {
     }
 
     private MinuteKline closedKline(int minute, String open, String low, String high) {
-        Instant openTime = minute(minute);
-        return new MinuteKline(
-                MarketType.FUTURES,
-                pair,
-                openTime,
-                new BigDecimal(low),
-                new BigDecimal(high),
-                new BigDecimal(high),
-                true,
-                openTime.plusSeconds(60).minusMillis(1),
-                new BigDecimal(open));
+        return ClosedKlines.closed(MarketType.FUTURES, pair, minute(minute), open, low, high);
     }
 
     private MinuteKline forming(int minute, String open, String low, String high) {
