@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketBroadcastService;
+import com.cryptopilot.support.StompRecorder;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.jayway.jsonpath.JsonPath;
 import java.lang.reflect.Type;
@@ -31,12 +32,9 @@ import org.springframework.messaging.converter.MessageConverter;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
-import org.springframework.messaging.simp.stomp.ConnectionLostException;
-import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
-import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
@@ -176,7 +174,7 @@ class MarketHubTest {
 
         client.session.subscribe("/topic/secret", new Inbox(null));
 
-        awaitRefused(client, "not a public market topic");
+        client.recorder().awaitRefused(client.session(), "not a public market topic");
         assertThat(subscribers("/topic/secret")).isZero();
     }
 
@@ -187,7 +185,7 @@ class MarketHubTest {
 
         client.session.send("/app/anything", "hello");
 
-        awaitRefused(client, "no application destination accepts messages");
+        client.recorder().awaitRefused(client.session(), "no application destination accepts messages");
     }
 
     // ------------------------------------------------------------------ helpers
@@ -211,21 +209,6 @@ class MarketHubTest {
         broadcast.pushUpdates();
     }
 
-    /**
-     * Waits for the server to end a refused session. The server sends an ERROR frame and closes the connection at
-     * once; when another send to that session is still in progress, Spring's session decorator leaves the ERROR frame
-     * queued and the close discards it, so the client sees only the connection lost. Both outcomes are a refusal: the
-     * connection is closed by the server, and any ERROR frame that does arrive gives the reason.
-     */
-    private static void awaitRefused(Client client, String reason) {
-        // An ERROR frame that was written is read before the close; once the connection is lost, nothing else arrives.
-        await(() -> !client.failures.isEmpty(), "the server to close the session");
-        assertThat(client.failures)
-                .allSatisfy(failure -> assertThat(failure).isInstanceOf(ConnectionLostException.class));
-        assertThat(client.session.isConnected()).isFalse();
-        assertThat(client.errors).allSatisfy(message -> assertThat(message).contains(reason));
-    }
-
     /** Waits until the broker has exactly {@code count} subscriptions to a destination. */
     private void awaitSubscribers(String destination, int count) {
         await(() -> subscribers(destination) == count, count + " subscriptions to " + destination);
@@ -244,44 +227,15 @@ class MarketHubTest {
         WebSocketStompClient stomp = new WebSocketStompClient(new StandardWebSocketClient());
         stomp.setMessageConverter(new TextConverter());
         clients.add(stomp);
-        List<String> errors = new CopyOnWriteArrayList<>();
-        List<Throwable> failures = new CopyOnWriteArrayList<>();
-        StompSession session = stomp.connectAsync("ws://localhost:" + port + "/ws", new StompSessionHandlerAdapter() {
-                    @Override
-                    public void handleFrame(StompHeaders headers, Object payload) {
-                        errors.add(String.valueOf(headers.getFirst("message")));
-                        signal();
-                    }
-
-                    @Override
-                    public void handleTransportError(StompSession session, Throwable exception) {
-                        failures.add(exception);
-                        signal();
-                    }
-
-                    @Override
-                    public void handleException(
-                            StompSession session,
-                            StompCommand command,
-                            StompHeaders headers,
-                            byte[] payload,
-                            Throwable exception) {
-                        failures.add(exception);
-                        signal();
-                    }
-
-                    @Override
-                    public Type getPayloadType(StompHeaders headers) {
-                        return String.class;
-                    }
-                })
+        StompRecorder recorder = new StompRecorder();
+        StompSession session = stomp.connectAsync("ws://localhost:" + port + "/ws", recorder)
                 .get(5, TimeUnit.SECONDS); // ends when the session connects; the bound only stops a hang
         sessions.add(session);
-        return new Client(session, errors, failures);
+        return new Client(session, recorder);
     }
 
-    /** A connected session, the messages of the ERROR frames it received, and the failures it reported. */
-    private record Client(StompSession session, List<String> errors, List<Throwable> failures) {}
+    /** A connected session and what its handler recorded. */
+    private record Client(StompSession session, StompRecorder recorder) {}
 
     /** The messages of one subscription, optionally stuck on the first until released. */
     private static final class Inbox implements StompFrameHandler {

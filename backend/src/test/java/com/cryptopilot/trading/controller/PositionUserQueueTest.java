@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.support.StompRecorder;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.entity.TradingPlan;
@@ -55,7 +56,6 @@ import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
 import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
-import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.messaging.simp.user.SimpSession;
 import org.springframework.messaging.simp.user.SimpUser;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
@@ -197,7 +197,7 @@ class PositionUserQueueTest {
 
         client.session.subscribe(POSITIONS, new Inbox(new CopyOnWriteArrayList<>()));
 
-        assertRefused(client, "sign in to subscribe");
+        client.recorder().awaitRefused(client.session(), "sign in to subscribe");
     }
 
     /** Q-75: another user's position queue cannot be named, even by a signed-in Trader. */
@@ -209,20 +209,7 @@ class PositionUserQueueTest {
 
         client.session.subscribe("/user/" + owner + "/queue/positions", new Inbox(new CopyOnWriteArrayList<>()));
 
-        assertRefused(client, "not a public market topic");
-    }
-
-    /**
-     * The subscription was refused: the server closes the session, with an ERROR frame naming why when the client
-     * reads it before the close (it may not, under load).
-     */
-    private static void assertRefused(Client client, String why) {
-        await(() -> !client.errors.isEmpty() || !client.session.isConnected(), "the refusal");
-        await(() -> !client.session.isConnected(), "the session to be closed");
-        client.errors.stream()
-                .filter(error -> !error.startsWith("transport:"))
-                .findFirst()
-                .ifPresent(error -> assertThat(error).contains(why));
+        client.recorder().awaitRefused(client.session(), "not a public market topic");
     }
 
     /** A Spot LIMIT LONG of the Trader, 2 at 100 (SL 95, TP 115), filled by the engine: its OPEN position. */
@@ -307,7 +294,7 @@ class PositionUserQueueTest {
     }
 
     private Client connect(String bearer) throws Exception {
-        List<String> errors = new CopyOnWriteArrayList<>();
+        StompRecorder recorder = new StompRecorder();
         StompHeaders connect = new StompHeaders();
         if (bearer != null) {
             connect.add(HttpHeaders.AUTHORIZATION, bearer);
@@ -316,31 +303,10 @@ class PositionUserQueueTest {
         stomp.setMessageConverter(new TextConverter());
         clients.add(stomp);
         StompSession session = stomp.connectAsync(
-                        "ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, handler(errors))
+                        "ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), connect, recorder)
                 .get(5, TimeUnit.SECONDS); // ends when the session connects; the bound only stops a hang
         sessions.add(session);
-        return new Client(session, errors);
-    }
-
-    private static StompSessionHandlerAdapter handler(List<String> errors) {
-        return new StompSessionHandlerAdapter() {
-            @Override
-            public void handleFrame(StompHeaders headers, Object payload) {
-                errors.add(String.valueOf(headers.getFirst("message")));
-                signal();
-            }
-
-            @Override
-            public void handleTransportError(StompSession session, Throwable exception) {
-                errors.add("transport: " + exception);
-                signal();
-            }
-
-            @Override
-            public Type getPayloadType(StompHeaders headers) {
-                return String.class;
-            }
-        };
+        return new Client(session, recorder);
     }
 
     private String bearer(UUID userId) {
@@ -363,7 +329,7 @@ class PositionUserQueueTest {
         return new TransactionTemplate(transactions).execute(status -> work.get());
     }
 
-    private record Client(StompSession session, List<String> errors) {}
+    private record Client(StompSession session, StompRecorder recorder) {}
 
     private static final class Inbox implements StompFrameHandler {
 
