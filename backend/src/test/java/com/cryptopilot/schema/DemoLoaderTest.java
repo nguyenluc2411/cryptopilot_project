@@ -3,18 +3,15 @@ package com.cryptopilot.schema;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.MarketTestData;
-import com.cryptopilot.market.client.Kline;
-import com.cryptopilot.market.client.StreamMessage.KlineMessage;
-import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.dto.request.LeverageBracketRequest;
 import com.cryptopilot.market.dto.request.LeverageBracketsRequest;
 import com.cryptopilot.market.dto.request.UpdatePairRequest;
-import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.PairStatus;
 import com.cryptopilot.market.service.PairAdminService;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.support.OwnDatabaseConfig;
+import com.cryptopilot.support.StreamedPrices;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.service.TradingPlanService;
 import java.io.IOException;
@@ -29,7 +26,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -244,7 +240,12 @@ class DemoLoaderTest {
      */
     @Test
     void BR33_aDemoPlanThatFillsAtActivation_stopsTheLoad() {
-        cachedPrice("BTCUSDT", new BigDecimal("49000.00"), Instant.now().plusSeconds(1));
+        new StreamedPrices(prices)
+                .last(
+                        MarketType.SPOT,
+                        "BTCUSDT",
+                        new BigDecimal("49000.00"),
+                        Instant.now().plusSeconds(1));
 
         Run run = load();
 
@@ -310,7 +311,7 @@ class DemoLoaderTest {
     @Test
     void MSG18_DS01c_aStopLossBeyondLiquidation_onTheSeededBrackets_blocksTheActivation() throws Exception {
         assertThat(load().exitCode()).isZero();
-        futuresLastPrice("BTCUSDT", BTC_PRICE);
+        new StreamedPrices(prices).last(MarketType.FUTURES, "BTCUSDT", BTC_PRICE, Instant.now());
         String token = accessToken("demo.pro@cryptopilot.invalid");
 
         HttpResponse<String> saved = call("POST", "/api/v1/plans", token, """
@@ -409,49 +410,7 @@ class DemoLoaderTest {
         sql.sql("insert into spot_market_data (pair_id, snapshot_time, last_price) values (?, ?, ?)")
                 .params(pair, Timestamp.from(now), value)
                 .update();
-        cachedPrice(symbol, value, now);
-    }
-
-    /** The cached Spot last price alone, the one an activation reads (D-112). */
-    private void cachedPrice(String symbol, BigDecimal value, Instant at) {
-        prices.record(
-                MarketType.SPOT,
-                new TickerMessage(
-                        symbol,
-                        value,
-                        value,
-                        value,
-                        value,
-                        value,
-                        BigDecimal.ZERO,
-                        BigDecimal.ONE,
-                        BigDecimal.ONE,
-                        at));
-        prices.flush();
-    }
-
-    /** The Futures last price as NSF-03 leaves it: the close of the forming 1-minute candle (D-111). */
-    private void futuresLastPrice(String symbol, BigDecimal value) {
-        Instant at = Instant.now();
-        Instant open = at.truncatedTo(ChronoUnit.MINUTES);
-        prices.record(
-                MarketType.FUTURES,
-                new KlineMessage(
-                        symbol,
-                        MarketInterval.ONE_MINUTE,
-                        new Kline(
-                                open,
-                                open.plusSeconds(60).minusMillis(1),
-                                value,
-                                value,
-                                value,
-                                value,
-                                BigDecimal.ONE,
-                                BigDecimal.ONE,
-                                1),
-                        false,
-                        at));
-        prices.flush();
+        new StreamedPrices(prices).last(MarketType.SPOT, symbol, value, now);
     }
 
     private String accessToken(String email) throws Exception {
