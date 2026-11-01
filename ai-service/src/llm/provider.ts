@@ -16,10 +16,27 @@ export interface GenerateResult {
   outputTokens: number;
 }
 
+/** One turn of a conversation; the assistant's turns are the model's earlier answers. */
+export interface ChatTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
+/** One request for a free-text answer to the last turn of a conversation (NSF-16). */
+export interface ChatRequest {
+  model: string;
+  systemPrompt: string;
+  /** Oldest first; the last turn is the user's question. */
+  turns: readonly ChatTurn[];
+  temperature: number;
+  maxOutputTokens: number;
+}
+
 /** A language model behind one API. A new provider is a new implementation; nothing else changes. */
 export interface LlmProvider {
   readonly name: string;
   generateJson(request: GenerateRequest): Promise<GenerateResult>;
+  generateText(request: ChatRequest): Promise<GenerateResult>;
 }
 
 /** Why a call failed, as the route turns it into a status the backend can act on. */
@@ -34,7 +51,7 @@ export class LlmError extends Error {
     this.kind = kind;
   }
 
-  /** Whether the same request may succeed later: the backend retries it at its next run (NSF-11). */
+  /** Whether the same request may succeed later: the backend may send it again (NSF-11 next run, NSF-16 retry). */
   get retryable(): boolean {
     return this.kind === "RATE_LIMITED" || this.kind === "UNAVAILABLE" || this.kind === "TIMEOUT";
   }

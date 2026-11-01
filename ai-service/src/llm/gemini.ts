@@ -1,4 +1,10 @@
-import { LlmError, type GenerateRequest, type GenerateResult, type LlmProvider } from "./provider.js";
+import {
+  LlmError,
+  type ChatRequest,
+  type GenerateRequest,
+  type GenerateResult,
+  type LlmProvider,
+} from "./provider.js";
 
 export const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -54,14 +60,37 @@ export class GeminiProvider implements LlmProvider {
   }
 
   async generateJson(request: GenerateRequest): Promise<GenerateResult> {
-    const body = JSON.stringify(this.body(request));
+    return this.send(request.model, JSON.stringify(this.body(request)));
+  }
+
+  async generateText(request: ChatRequest): Promise<GenerateResult> {
+    return this.send(request.model, JSON.stringify(this.chatBody(request)));
+  }
+
+  /** The request body of a conversation: plain text out, the assistant's turns under the role Gemini calls "model". */
+  chatBody(request: ChatRequest): Record<string, unknown> {
+    return {
+      systemInstruction: { parts: [{ text: request.systemPrompt }] },
+      contents: request.turns.map((turn) => ({
+        role: turn.role === "assistant" ? "model" : "user",
+        parts: [{ text: turn.text }],
+      })),
+      generationConfig: this.generationConfig(request, {}),
+    };
+  }
+
+  /**
+   * One call with the key rotation and the retry: a 429 moves to the next key, each key tried once; a server error,
+   * a timeout or a lost connection is retried once after a pause; anything else is final.
+   */
+  private async send(model: string, body: string): Promise<GenerateResult> {
     let rateLimited = 0;
     let retried = false;
     let index = this.nextKey;
     for (;;) {
       const keyIndex = index % this.keys.length;
       try {
-        const result = await this.call(this.keys[keyIndex] as string, request.model, body);
+        const result = await this.call(this.keys[keyIndex] as string, model, body);
         this.nextKey = keyIndex;
         return result;
       } catch (error) {
@@ -84,20 +113,29 @@ export class GeminiProvider implements LlmProvider {
 
   /** The request body; exported shape checked by the tests, as the official REST reference writes it. */
   body(request: GenerateRequest): Record<string, unknown> {
-    const generationConfig: Record<string, unknown> = {
-      temperature: request.temperature,
-      maxOutputTokens: request.maxOutputTokens,
-      responseMimeType: "application/json",
-      responseSchema: request.responseSchema,
-    };
-    if (this.options.thinkingLevel !== undefined) {
-      generationConfig["thinkingConfig"] = { thinkingLevel: this.options.thinkingLevel };
-    }
     return {
       systemInstruction: { parts: [{ text: request.systemPrompt }] },
       contents: [{ role: "user", parts: [{ text: request.userPrompt }] }],
-      generationConfig,
+      generationConfig: this.generationConfig(request, {
+        responseMimeType: "application/json",
+        responseSchema: request.responseSchema,
+      }),
     };
+  }
+
+  private generationConfig(
+    request: { temperature: number; maxOutputTokens: number },
+    extra: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const config: Record<string, unknown> = {
+      temperature: request.temperature,
+      maxOutputTokens: request.maxOutputTokens,
+      ...extra,
+    };
+    if (this.options.thinkingLevel !== undefined) {
+      config["thinkingConfig"] = { thinkingLevel: this.options.thinkingLevel };
+    }
+    return config;
   }
 
   private async call(key: string, model: string, body: string): Promise<GenerateResult> {

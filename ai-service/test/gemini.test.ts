@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GEMINI_BASE_URL, GeminiProvider, type GeminiOptions } from "../src/llm/gemini.js";
-import { LlmError, type GenerateRequest } from "../src/llm/provider.js";
+import { LlmError, type ChatRequest, type GenerateRequest } from "../src/llm/provider.js";
 
 const REQUEST: GenerateRequest = {
   model: "gemini-test-lite",
@@ -9,6 +9,18 @@ const REQUEST: GenerateRequest = {
   temperature: 0.2,
   maxOutputTokens: 256,
   responseSchema: { type: "OBJECT" },
+};
+
+const CHAT: ChatRequest = {
+  model: "gemini-test-flash",
+  systemPrompt: "Explain; never tell the Trader to buy or sell.",
+  turns: [
+    { role: "user", text: "What is RSI?" },
+    { role: "assistant", text: "A momentum gauge." },
+    { role: "user", text: "And 72?" },
+  ],
+  temperature: 0.3,
+  maxOutputTokens: 800,
 };
 
 interface Call {
@@ -183,5 +195,34 @@ describe("GeminiProvider", () => {
     await provider(fetch, { sleep: async (ms) => void waits.push(ms) }).generateJson(REQUEST);
 
     expect(waits).toEqual([1_000]);
+  });
+
+  it("NSF16 sends a conversation as plain text, the assistant's turns under the role model", async () => {
+    const { fetch, calls } = scriptedFetch([answer("An RSI of 72 is overbought.")]);
+
+    const result = await provider(fetch, { thinkingLevel: "low" }).generateText(CHAT);
+
+    expect(result).toEqual({ text: "An RSI of 72 is overbought.", inputTokens: 120, outputTokens: 35 });
+    expect(calls[0]?.url).toBe(`${GEMINI_BASE_URL}/models/gemini-test-flash:generateContent`);
+    expect(headerOf(calls[0], "x-goog-api-key")).toBe("key-one");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      systemInstruction: { parts: [{ text: CHAT.systemPrompt }] },
+      contents: [
+        { role: "user", parts: [{ text: "What is RSI?" }] },
+        { role: "model", parts: [{ text: "A momentum gauge." }] },
+        { role: "user", parts: [{ text: "And 72?" }] },
+      ],
+      generationConfig: { temperature: 0.3, maxOutputTokens: 800, thinkingConfig: { thinkingLevel: "low" } },
+    });
+  });
+
+  it("NSF16 a conversation gets the same key rotation and retry as a summary", async () => {
+    const { fetch, calls } = scriptedFetch([status(429), status(503), answer("ok")]);
+
+    await expect(provider(fetch).generateText(CHAT)).resolves.toMatchObject({ text: "ok" });
+    expect(calls.map((call) => headerOf(call, "x-goog-api-key"))).toEqual(["key-one", "key-two", "key-two"]);
+
+    const blocked = scriptedFetch([new Response(JSON.stringify({ candidates: [{ finishReason: "SAFETY" }] }))]);
+    await expect(provider(blocked.fetch).generateText(CHAT)).rejects.toMatchObject({ kind: "BAD_RESPONSE" });
   });
 });

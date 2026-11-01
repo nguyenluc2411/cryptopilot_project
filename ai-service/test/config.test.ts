@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadEnv } from "../src/config/env.js";
 import { createLimiter } from "../src/limiter/limiter.js";
-import { createProvider } from "../src/llm/index.js";
+import { createChatProvider, createProvider } from "../src/llm/index.js";
 import { GeminiProvider } from "../src/llm/gemini.js";
 import { unfence } from "../src/prompts/newsSummary.js";
 
@@ -21,6 +21,25 @@ describe("environment", () => {
       LLM_MAX_CONCURRENT: 2,
     });
     expect(env.GEMINI_THINKING_LEVEL).toBeUndefined();
+    expect(env.LLM_CHAT_API_KEY).toBeUndefined();
+    expect(env).toMatchObject({ LLM_CHAT_REQUESTS_PER_MINUTE: 10, LLM_CHAT_MAX_CONCURRENT: 2 });
+  });
+
+  it("NSF16 reads the assistant's own keys and limits, and takes a blank key list as none", () => {
+    const env = loadEnv({
+      ...VALID,
+      LLM_CHAT_API_KEY: " chat-a, chat-b ",
+      LLM_CHAT_REQUESTS_PER_MINUTE: "5",
+      LLM_CHAT_MAX_CONCURRENT: "1",
+    });
+
+    expect(env).toMatchObject({
+      LLM_CHAT_API_KEY: ["chat-a", "chat-b"],
+      LLM_CHAT_REQUESTS_PER_MINUTE: 5,
+      LLM_CHAT_MAX_CONCURRENT: 1,
+    });
+    expect(loadEnv({ ...VALID, LLM_CHAT_API_KEY: "  " }).LLM_CHAT_API_KEY).toBeUndefined();
+    expect(() => loadEnv({ ...VALID, LLM_CHAT_API_KEY: " , " })).toThrow(/LLM_CHAT_API_KEY: needs at least one key/);
   });
 
   it("names every wrong variable and echoes no value", () => {
@@ -50,6 +69,27 @@ describe("wiring", () => {
       loadEnv({ ...VALID, LLM_BASE_URL: "https://proxy.example.com", GEMINI_THINKING_LEVEL: "minimal" }),
     );
     expect(configured.name).toBe("gemini");
+  });
+
+  it("NSF16 the assistant calls Gemini with its own key, or the shared one when it has none", async () => {
+    const keys: string[] = [];
+    const fetchFn = (async (_input: string | URL | Request, init?: RequestInit) => {
+      keys.push((init?.headers as Record<string, string>)["x-goog-api-key"] ?? "");
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }));
+    }) as typeof fetch;
+    const chat = {
+      model: "m",
+      systemPrompt: "s",
+      turns: [{ role: "user" as const, text: "q" }],
+      temperature: 0,
+      maxOutputTokens: 16,
+    };
+
+    await createChatProvider(loadEnv({ ...VALID, LLM_CHAT_API_KEY: "chat-a" }), fetchFn).generateText(chat);
+    await createChatProvider(loadEnv(VALID), fetchFn).generateText(chat);
+    await createProvider(loadEnv({ ...VALID, LLM_CHAT_API_KEY: "chat-a" }), fetchFn).generateText(chat);
+
+    expect(keys).toEqual(["chat-a", "key-a", "key-a"]);
   });
 
   it("builds a limiter that queues instead of refusing", async () => {
