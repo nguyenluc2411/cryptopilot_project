@@ -464,16 +464,13 @@ class MarketStreamSupervisorTest {
         signal();
     }
 
+    // By its own path: the handshakes run in parallel, so paths() and connections() need not share an order.
     private Connection connection(String pathStart) {
-        await(() -> server.paths().stream().anyMatch(p -> p.startsWith(pathStart + "?")), pathStart);
-        int index = 0;
-        for (String path : server.paths()) {
-            if (path.startsWith(pathStart + "?")) {
-                return server.connections().get(index);
-            }
-            index++;
-        }
-        throw new AssertionError(pathStart);
+        await(() -> server.connections().stream().anyMatch(c -> c.path().startsWith(pathStart + "?")), pathStart);
+        return server.connections().stream()
+                .filter(c -> c.path().startsWith(pathStart + "?"))
+                .findFirst()
+                .orElseThrow();
     }
 
     private long storedCandles() {
