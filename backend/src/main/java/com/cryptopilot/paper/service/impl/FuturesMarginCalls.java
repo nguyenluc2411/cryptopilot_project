@@ -44,7 +44,7 @@ class FuturesMarginCalls {
     private final ApplicationEventPublisher events;
 
     /**
-     * Calls the Trader if the ratio holds now.
+     * Calls the Trader if the ratio holds now. It only reads positions and sends a notice, so it takes no Trader lock.
      *
      * @param positionId the isolated position, or {@code null} for the cross positions together
      * @param mark the mark of the isolated position's pair; unused for the cross positions

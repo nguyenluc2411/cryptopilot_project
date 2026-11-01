@@ -1,0 +1,20 @@
+{
+  "cases": [
+    { "id": "LP-HEDGE-01", "source": "Hedge cross: WB 2,000, long 0.1 @ 60,000, short 0.05 @ 61,000, bracket 1 both; the long is larger: up. At 19,230.769 equity = MM = 11.54",
+      "fn": "hedgeLiquidationPrice",
+      "input": { "longQuantity": "0.1", "longEntry": "60000", "shortQuantity": "0.05", "shortEntry": "61000", "walletBalance": "2000", "otherMaintenanceMargin": "0", "otherUnrealizedPnl": "0", "brackets": "demo", "tickSize": "0.01" },
+      "expect": { "value": "19230.77" } },
+    { "id": "LP-HEDGE-02", "source": "Hedge cross with another cross position (MM 15.5, uPnL -100): WB 1,000, long 0.05 @ 60,000, short 0.1 @ 59,000; the short is larger: down. At 74,792.490 equity = MM = 60.38",
+      "fn": "hedgeLiquidationPrice",
+      "input": { "longQuantity": "0.05", "longEntry": "60000", "shortQuantity": "0.1", "shortEntry": "59000", "walletBalance": "1000", "otherMaintenanceMargin": "15.5", "otherUnrealizedPnl": "-100", "brackets": "demo", "tickSize": "0.01" },
+      "expect": { "value": "74792.49" } },
+    { "id": "LP-HEDGE-03", "source": "Bracket changes on the way: short 0.9 @ 60,000 is bracket 2 at entry (54,000) and bracket 1 at the LP (about 48,731); long 9 stays bracket 2. WB 50,000. At 54,145.863 equity = MM = 2,581.49",
+      "fn": "hedgeLiquidationPrice",
+      "input": { "longQuantity": "9", "longEntry": "60000", "shortQuantity": "0.9", "shortEntry": "60000", "walletBalance": "50000", "otherMaintenanceMargin": "0", "otherUnrealizedPnl": "0", "brackets": "demo", "tickSize": "0.01" },
+      "expect": { "value": "54145.87" } },
+    { "id": "LP-HEDGE-04", "source": "LP-HEDGE-01 with WB 10,000: no price liquidates the pair",
+      "fn": "hedgeLiquidationPrice",
+      "input": { "longQuantity": "0.1", "longEntry": "60000", "shortQuantity": "0.05", "shortEntry": "61000", "walletBalance": "10000", "otherMaintenanceMargin": "0", "otherUnrealizedPnl": "0", "brackets": "demo", "tickSize": "0.01" },
+      "expect": { "value": "0" } }
+  ]
+}

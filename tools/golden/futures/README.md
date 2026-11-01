@@ -37,6 +37,7 @@ Each `*.json` file (except `brackets.json`) is an object with a `cases` array. A
 | `maxRemovableMargin` | `isolatedWallet`, `unrealizedPnl`, `markNotional`, `leverage` | `value` |
 | `marginRatio` | `maintenanceMargin`, `marginBalance` | `value` |
 | `liquidationPrice` | `direction`, `quantity`, `entryPrice`, `walletBalance`, `otherMaintenanceMargin`, `otherUnrealizedPnl`, `brackets`, `tickSize` | `value` |
+| `hedgeLiquidationPrice` | `longQuantity`, `longEntry`, `shortQuantity`, `shortEntry`, `walletBalance`, `otherMaintenanceMargin`, `otherUnrealizedPnl`, `brackets`, `tickSize` | `value` (backend only for now: the web client has no hedge formula) |
 | `closeFlow` | `isolatedWallet`, `closedQuantity`, `positionQuantity`, `realizedPnl`, `fee` | `branch`, `isolatedWalletChange`, `crossChange`, `insuranceCover` |
 | `fundingFlow` | `isolatedWallet`, `fundingFee` | `branch`, `isolatedWalletChange`, `crossChange`, `insuranceCover` |
 | `fundingFee` | `direction`, `quantity`, `markPrice`, `fundingRate` | `value` |

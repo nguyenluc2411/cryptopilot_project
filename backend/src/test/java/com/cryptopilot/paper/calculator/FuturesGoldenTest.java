@@ -84,6 +84,7 @@ class FuturesGoldenTest {
                         "maxRemovableMargin",
                         "marginRatio",
                         "liquidationPrice",
+                        "hedgeLiquidationPrice",
                         "closeFlow",
                         "fundingFlow",
                         "fundingFee",
@@ -226,6 +227,19 @@ class FuturesGoldenTest {
                                 direction(in),
                                 dec(in.get("quantity")),
                                 dec(in.get("entryPrice")),
+                                dec(in.get("walletBalance")),
+                                dec(in.get("otherMaintenanceMargin")),
+                                dec(in.get("otherUnrealizedPnl")),
+                                tiers(in, brackets),
+                                dec(in.get("tickSize"))));
+            case "hedgeLiquidationPrice" ->
+                out.put(
+                        "value",
+                        FuturesMarginMath.hedgeLiquidationPrice(
+                                dec(in.get("longQuantity")),
+                                dec(in.get("longEntry")),
+                                dec(in.get("shortQuantity")),
+                                dec(in.get("shortEntry")),
                                 dec(in.get("walletBalance")),
                                 dec(in.get("otherMaintenanceMargin")),
                                 dec(in.get("otherUnrealizedPnl")),
