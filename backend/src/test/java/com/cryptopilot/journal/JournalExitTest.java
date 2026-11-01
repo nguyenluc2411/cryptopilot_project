@@ -17,6 +17,7 @@ import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.SettledFunding;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.support.ClosedKlines;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
@@ -473,16 +474,7 @@ class JournalExitTest {
     }
 
     private MinuteKline closedAt(MarketType marketType, Instant openTime, String open, String low, String high) {
-        return new MinuteKline(
-                marketType,
-                pair,
-                openTime,
-                new BigDecimal(low),
-                new BigDecimal(high),
-                new BigDecimal(high),
-                true,
-                openTime.plusSeconds(60).minusMillis(1),
-                new BigDecimal(open));
+        return ClosedKlines.closed(marketType, pair, openTime, open, low, high);
     }
 
     private static Instant minute(long n) {

@@ -68,7 +68,25 @@ public class TestcontainersConfig {
      * every context, like the database; tests that need a clean cache empty the keys they use.
      */
     private static final GenericContainer<?> REDIS =
-            new GenericContainer<>(DockerImageName.parse("redis:7.4.11-alpine")).withExposedPorts(6379);
+            new SharedRedis(DockerImageName.parse("redis:7.4.11-alpine")).withExposedPorts(6379);
+
+    /**
+     * A Redis no context stops, like the database: when the test context cache evicts a context and closes it, a
+     * stopped container would be started again on another port by the next context, and every context still cached
+     * would keep the old port and find nothing there ("Connection refused"). Testcontainers removes the container when
+     * the JVM exits.
+     */
+    private static final class SharedRedis extends GenericContainer<SharedRedis> {
+
+        SharedRedis(DockerImageName image) {
+            super(image);
+        }
+
+        @Override
+        public void stop() {
+            // Shared by every context; see above.
+        }
+    }
 
     @Bean
     @ServiceConnection(name = "redis")

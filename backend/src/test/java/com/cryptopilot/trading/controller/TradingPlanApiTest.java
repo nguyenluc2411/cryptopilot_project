@@ -16,16 +16,12 @@ import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.MarketTestData;
-import com.cryptopilot.market.client.Kline;
-import com.cryptopilot.market.client.StreamMessage.KlineMessage;
-import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
-import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.StoredIndicators;
-import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.support.StreamedPrices;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
 import com.cryptopilot.trading.model.Excursion;
@@ -1877,17 +1873,8 @@ class TradingPlanApiTest {
 
     /** Streams a Futures mark price of the test pair into the price cache, newer than every earlier one. */
     private void markPrice(String mark) {
-        BigDecimal value = new BigDecimal(mark);
-        prices.record(
-                MarketType.FUTURES,
-                new MarkPriceMessage(
-                        symbol,
-                        value,
-                        value,
-                        BigDecimal.ZERO,
-                        Instant.now().plus(Duration.ofHours(1)),
-                        Instant.now().plusMillis(TICKS.incrementAndGet())));
-        prices.flush();
+        new StreamedPrices(prices)
+                .mark(symbol, new BigDecimal(mark), Instant.now().plusMillis(TICKS.incrementAndGet()));
     }
 
     /** Streams a Spot ticker of the test pair into the price cache, newer than every earlier one. */
@@ -1900,44 +1887,8 @@ class TradingPlanApiTest {
      * a ticker on Spot, a forming 1-minute candle update on Futures, whose close is the last price (D-111 E2/E3).
      */
     private void lastPrice(MarketType market, String last) {
-        BigDecimal value = new BigDecimal(last);
-        Instant at = Instant.now().plusMillis(TICKS.incrementAndGet());
-        if (market == MarketType.FUTURES) {
-            Instant open = at.truncatedTo(ChronoUnit.MINUTES);
-            prices.record(
-                    market,
-                    new KlineMessage(
-                            symbol,
-                            MarketInterval.ONE_MINUTE,
-                            new Kline(
-                                    open,
-                                    open.plusSeconds(60).minusMillis(1),
-                                    value,
-                                    value,
-                                    value,
-                                    value,
-                                    BigDecimal.ONE,
-                                    BigDecimal.ONE,
-                                    1),
-                            false,
-                            at));
-            prices.flush();
-            return;
-        }
-        prices.record(
-                market,
-                new TickerMessage(
-                        symbol,
-                        value,
-                        value,
-                        value,
-                        value,
-                        value,
-                        BigDecimal.ZERO,
-                        BigDecimal.ONE,
-                        BigDecimal.ONE,
-                        at));
-        prices.flush();
+        new StreamedPrices(prices)
+                .last(market, symbol, new BigDecimal(last), Instant.now().plusMillis(TICKS.incrementAndGet()));
     }
 
     /** The plan as the matching engine rebuilds it from the database. */
