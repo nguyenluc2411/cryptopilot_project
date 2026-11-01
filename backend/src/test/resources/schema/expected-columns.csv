@@ -43,6 +43,7 @@ academy_topic,updated_at,timestamp with time zone,,,NO
 academy_topic,version,bigint,64,0,NO
 ai_configuration,config_id,uuid,,,NO
 ai_configuration,created_at,timestamp with time zone,,,NO
+ai_configuration,disclaimer,text,,,NO
 ai_configuration,is_active,boolean,,,NO
 ai_configuration,max_output_tokens,integer,32,0,NO
 ai_configuration,model_name,character varying,,,NO
@@ -54,6 +55,7 @@ ai_configuration,version,bigint,64,0,NO
 ai_conversation,conversation_id,uuid,,,NO
 ai_conversation,conversation_title,character varying,,,YES
 ai_conversation,created_at,timestamp with time zone,,,NO
+ai_conversation,deleted_at,timestamp with time zone,,,YES
 ai_conversation,pair_id,uuid,,,YES
 ai_conversation,updated_at,timestamp with time zone,,,NO
 ai_conversation,user_id,uuid,,,NO

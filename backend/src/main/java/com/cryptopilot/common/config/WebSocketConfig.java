@@ -79,11 +79,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     /**
      * The queues of the signed-in user: demo trading (TR-08), paper Futures orders and account (TR-41), its algo orders,
-     * settings and margin calls (TR-43), the positions of the plans (UC-20) and the notifications
-     * (SCR-15, Q-75). {@code /user/queue/...} is resolved to the caller's own session, so another user's queue cannot be
-     * named here; {@code /user/{id}/queue/...} matches no pattern and is refused.
+     * settings and margin calls (TR-43), the positions of the plans (UC-20), the notifications (SCR-15, Q-75) and the AI
+     * Assistant's answers (NSF-16). {@code /user/queue/...} is resolved to the caller's own session, so another user's
+     * queue cannot be named here; {@code /user/{id}/queue/...} matches no pattern and is refused.
      */
-    static final Pattern USER_QUEUES = Pattern.compile("/user/queue/(orders|fills|balances|positions|notifications"
+    static final Pattern USER_QUEUES = Pattern.compile("/user/queue/(orders|fills|balances|positions|notifications|ai"
             + "|futures\\.(?:orders|account|algo|config|marginCall))");
 
     private static final String BEARER = "Bearer ";

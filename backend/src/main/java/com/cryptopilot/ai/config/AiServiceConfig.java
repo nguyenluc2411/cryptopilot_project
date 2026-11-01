@@ -14,7 +14,7 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>Rule: ADR-004; TECHNICAL_DESIGN 7.14.
  */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(AiServiceProperties.class)
+@EnableConfigurationProperties({AiServiceProperties.class, AiAssistantProperties.class})
 public class AiServiceConfig {
 
     @Bean(destroyMethod = "close")

@@ -75,7 +75,8 @@ class SeedDataTest {
      * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V26 adds the
      * liquidation clearance fee (BR-36); V32 the entry deviation, setup score drop and slippage settings (BR-36, BR-69,
      * BR-70), V33 the two resend limits (BR-65), V34 the fee share threshold of HIGH_FEE_SHARE (BR-29, D-116); V11
-     * seeds the five packages; V39 the Academy's 8 topics, 21 lessons and 64 glossary terms (T-114).
+     * seeds the five packages; V39 the Academy's 8 topics, 21 lessons and 64 glossary terms (T-114); V62 the first active
+     * AI Assistant configuration (T-073).
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
             "system_setting", 20,
@@ -85,7 +86,8 @@ class SeedDataTest {
             "subscription_package", 5,
             "academy_topic", 8,
             "academy_article", 21,
-            "academy_term", 64);
+            "academy_term", 64,
+            "ai_configuration", 1);
 
     /**
      * The settings V3 seeds and a later migration deletes: V10 the plan limits (BR-62, D-58), V13 the thresholds the

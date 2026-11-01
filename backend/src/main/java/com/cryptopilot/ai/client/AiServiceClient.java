@@ -3,13 +3,20 @@ package com.cryptopilot.ai.client;
 import com.cryptopilot.ai.AiServiceException;
 import com.cryptopilot.ai.NewsSummaryRequest;
 import com.cryptopilot.ai.NewsSummaryResult;
+import com.cryptopilot.ai.model.AiChatAnswer;
+import com.cryptopilot.ai.model.AiChatRequest;
+import com.cryptopilot.ai.model.ChatTurn;
+import com.cryptopilot.ai.model.enums.SenderRole;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import tools.jackson.core.JacksonException;
@@ -22,7 +29,7 @@ import tools.jackson.databind.json.JsonMapper;
  * client passes on as an {@link AiServiceException}; a connection that fails or a service that does not answer in time
  * is {@code UNREACHABLE} and retryable.
  *
- * <p>Rule: NSF-11; ADR-004.
+ * <p>Rule: NSF-11, NSF-16; ADR-004.
  */
 public class AiServiceClient implements AutoCloseable {
 
@@ -43,10 +50,7 @@ public class AiServiceClient implements AutoCloseable {
 
     /** {@code POST /v1/news/summary}. */
     public NewsSummaryResult summarizeNews(NewsSummaryRequest request) {
-        if (!properties.configured()) {
-            throw new AiServiceException(
-                    AiServiceException.NOT_CONFIGURED, false, "the AI Service shared secret is not set");
-        }
+        requireConfigured();
         Map<String, Object> article = new LinkedHashMap<>();
         article.put("title", request.title());
         if (request.source() != null) {
@@ -62,7 +66,7 @@ public class AiServiceClient implements AutoCloseable {
         if (request.feedback() != null) {
             body.put("feedback", request.feedback());
         }
-        JsonNode answer = post("/v1/news/summary", body);
+        JsonNode answer = post("/v1/news/summary", body, properties.requestTimeout());
         return new NewsSummaryResult(
                 text(answer, "title"),
                 text(answer, "summary"),
@@ -73,15 +77,51 @@ public class AiServiceClient implements AutoCloseable {
                 blankToNull(answer.path("body").asString(null)));
     }
 
+    /**
+     * {@code POST /v1/chat} (T-072, NSF-16): one question with its history and context; the answer is the model's
+     * text as written, which the caller guards (BR-51).
+     */
+    public AiChatAnswer chat(AiChatRequest request) {
+        requireConfigured();
+        List<Map<String, Object>> history = new ArrayList<>(request.history().size());
+        for (ChatTurn turn : request.history()) {
+            history.add(
+                    Map.of("role", turn.role() == SenderRole.ASSISTANT ? "assistant" : "user", "text", turn.text()));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", request.model());
+        body.put("systemPrompt", request.systemPrompt());
+        body.put("temperature", request.temperature().doubleValue());
+        body.put("maxOutputTokens", request.maxOutputTokens());
+        body.put("history", history);
+        body.put("question", request.question());
+        if (request.context() != null && request.context().isObject()) {
+            body.put("context", request.context());
+        }
+        JsonNode answer = post("/v1/chat", body, request.timeout());
+        return new AiChatAnswer(
+                text(answer, "text"),
+                answer.path("model").asString(request.model()),
+                answer.path("inputTokens").asInt(0),
+                answer.path("outputTokens").asInt(0));
+    }
+
     @Override
     public void close() {
         http.close();
     }
 
-    private JsonNode post(String path, Object body) {
+    private void requireConfigured() {
+        if (!properties.configured()) {
+            throw new AiServiceException(
+                    AiServiceException.NOT_CONFIGURED, false, "the AI Service shared secret is not set");
+        }
+    }
+
+    private JsonNode post(String path, Object body, Duration timeout) {
         URI uri = properties.url().resolve(path);
         HttpRequest request = HttpRequest.newBuilder(uri)
-                .timeout(properties.requestTimeout())
+                .timeout(timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
                 .header(SECRET_HEADER, properties.sharedSecret())

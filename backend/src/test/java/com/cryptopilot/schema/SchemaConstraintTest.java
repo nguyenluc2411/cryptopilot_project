@@ -370,6 +370,8 @@ class SchemaConstraintTest {
 
     @Test
     void onlyOneAiConfiguration_isActiveAtATime() {
+        // V62 seeds the first active configuration; this transaction rolls back.
+        jdbc.sql("update ai_configuration set is_active = false").update();
         insertAiConfiguration(true);
 
         assertThatExceptionOfType(DataIntegrityViolationException.class).isThrownBy(() -> insertAiConfiguration(true));
@@ -605,8 +607,9 @@ class SchemaConstraintTest {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
                         insert into ai_configuration (config_id, model_name, system_prompt, temperature,
-                                                      max_output_tokens, is_active, created_at, updated_at)
-                        values (?, 'model', 'prompt', 0.20, 1024, ?, ?, ?)""").params(id, active, NOW, NOW).update();
+                                                      max_output_tokens, is_active, disclaimer, created_at,
+                                                      updated_at)
+                        values (?, 'model', 'prompt', 0.20, 1024, ?, 'disclaimer', ?, ?)""").params(id, active, NOW, NOW).update();
         return id;
     }
 }
