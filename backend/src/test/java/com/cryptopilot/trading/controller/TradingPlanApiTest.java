@@ -21,6 +21,7 @@ import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.StreamedPrices;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
@@ -157,6 +158,8 @@ class TradingPlanApiTest {
 
     @AfterEach
     void removeRows() {
+        // MSG22 of a fill is written after its commit; wait for every delivery so none lands on a deleted account.
+        InAppNotifications.awaitDeliveries(sql);
         for (UUID account : accounts) {
             sql.sql("delete from trading_journal where user_id = ?")
                     .param(account)
@@ -1393,12 +1396,14 @@ class TradingPlanApiTest {
     /** The one notification of the plan, once written after the commit. */
     private String awaitNotification(UUID planId) {
         await().atMost(Duration.ofSeconds(20))
-                .until(() -> sql.sql("select count(*) from notification where reference_id = ?")
+                .until(() -> sql.sql(
+                                        "select count(*) from notification where reference_id = ? and source_key not like 'PLAN_FILLED:%'")
                                 .param(planId)
                                 .query(Long.class)
                                 .single()
                         == 1);
-        return sql.sql("select content from notification where reference_id = ?")
+        return sql.sql(
+                        "select content from notification where reference_id = ? and source_key not like 'PLAN_FILLED:%'")
                 .param(planId)
                 .query(String.class)
                 .single();
@@ -1421,7 +1426,8 @@ class TradingPlanApiTest {
                 .isTrue();
         // MSG23 is written after the commit; wait for it so the account's rows can be removed.
         await().atMost(Duration.ofSeconds(20))
-                .until(() -> sql.sql("select count(*) from notification where reference_id = ?")
+                .until(() -> sql.sql(
+                                        "select count(*) from notification where reference_id = ? and source_key not like 'PLAN_FILLED:%'")
                                 .param(position.planId())
                                 .query(Long.class)
                                 .single()

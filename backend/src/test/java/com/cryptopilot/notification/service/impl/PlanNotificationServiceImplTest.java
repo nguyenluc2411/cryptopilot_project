@@ -8,12 +8,14 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.notification.model.NewNotification;
 import com.cryptopilot.notification.model.enums.NotificationReference;
 import com.cryptopilot.notification.model.enums.NotificationType;
+import com.cryptopilot.trading.event.PlanFilled;
 import com.cryptopilot.trading.event.PositionClosed;
 import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.event.TradingPlanInvalidated;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -23,15 +25,38 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 
 /**
- * The exact texts of MSG23 and MSG24, with {@code {pnl}} the net P/L of the journal row (Q-56): the T-044 vectors (a)
+ * The exact text of MSG22 for a filled entry (Q-81); the exact texts of MSG23 and MSG24, with {@code {pnl}} the net P/L of the journal row (Q-56): the T-044 vectors (a)
  * to (c) and a manual close; and of MSG53 and MSG54 with each invalidation reason.
  *
- * <p>Rule: BR-35, BR-38, BR-68, NSF-09; Q-56.
+ * <p>Rule: BR-34, BR-35, BR-38, BR-68, NSF-09; Q-56, Q-81.
  */
 class PlanNotificationServiceImplTest {
 
     private final NotificationWriter writer = mock(NotificationWriter.class);
     private final PlanNotificationServiceImpl notifications = new PlanNotificationServiceImpl(writer);
+
+    @Test
+    void MSG22_aFilledEntry_namesThePairTheDirectionAndTheFillPrice() {
+        PlanFilled filled = filled("BTCUSDT", Direction.LONG, "100100.000000000000");
+
+        notifications.filled(filled);
+
+        NewNotification written = written();
+        assertThat(written.content()).isEqualTo("BTCUSDT LONG entry filled at 100100.");
+        assertThat(written.title()).isEqualTo("Entry filled");
+        assertThat(written.type()).isEqualTo(NotificationType.PLAN);
+        assertThat(written.referenceType()).isEqualTo(NotificationReference.PLAN);
+        assertThat(written.referenceId()).isEqualTo(filled.planId());
+        assertThat(written.recipientId()).isEqualTo(filled.userId());
+        assertThat(written.sourceKey()).isEqualTo("PLAN_FILLED:" + filled.planId());
+    }
+
+    @Test
+    void MSG22_aShortWithAnUnknownSymbol_isTheTradersEntry() {
+        notifications.filled(filled(null, Direction.SHORT, "99300.60"));
+
+        assertThat(written().content()).isEqualTo("Your SHORT entry filled at 99300.6.");
+    }
 
     @Test
     void MSG23_aTakeProfit_namesThePairTheReasonThePriceAndTheNet() {
@@ -139,6 +164,20 @@ class PlanNotificationServiceImplTest {
         assertThat(written().content())
                 .isEqualTo("Your LONG plan was invalidated before its entry was filled: the invalidation price was"
                         + " reached.");
+    }
+
+    private static PlanFilled filled(String symbol, Direction direction, String price) {
+        return new PlanFilled(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                direction,
+                symbol,
+                new BigDecimal(price),
+                new BigDecimal("0.166"),
+                LiquidityRole.TAKER,
+                Instant.parse("2026-11-02T07:58:30Z"));
     }
 
     private NewNotification written() {
