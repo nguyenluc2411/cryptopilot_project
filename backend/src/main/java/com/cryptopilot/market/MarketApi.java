@@ -101,6 +101,12 @@ public interface MarketApi {
     Optional<BigDecimal> currentMarkPrice(String symbol, Duration maxAge);
 
     /**
+     * The pair's latest stored Futures mark price, from the minute snapshots (NSF-03), however old; empty when none is
+     * stored. For the callers that must settle at some mark when the cache holds none (TR-46).
+     */
+    Optional<BigDecimal> latestStoredMarkPrice(UUID pairId);
+
+    /**
      * The latest stored open interest reading of a Futures pair at or before {@code at}, in contracts; empty when none
      * is stored (Q-45).
      */

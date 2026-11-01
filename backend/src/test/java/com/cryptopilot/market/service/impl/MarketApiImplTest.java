@@ -19,6 +19,7 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.CachedPrice;
+import com.cryptopilot.market.model.FuturesPriceSnapshot;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
@@ -26,6 +27,7 @@ import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
+import com.cryptopilot.market.repository.MarketDataQueryRepository;
 import com.cryptopilot.market.service.AnalysisService;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
@@ -55,6 +57,7 @@ class MarketApiImplTest {
     private final PriceCacheService prices = mock(PriceCacheService.class);
     private final MinuteKlineService minuteKlines = mock(MinuteKlineService.class);
     private final AnalysisService analysis = mock(AnalysisService.class);
+    private final MarketDataQueryRepository data = mock(MarketDataQueryRepository.class);
     private final MarketApiImpl api = new MarketApiImpl(
             pairs,
             coins,
@@ -64,6 +67,7 @@ class MarketApiImplTest {
             coinWriter,
             mock(TradingMarketData.class),
             mock(FuturesMetricsRepository.class),
+            data,
             analysis,
             Clock.systemUTC());
 
@@ -273,6 +277,17 @@ class MarketApiImplTest {
         assertThat(api.currentMarkPrice("BTCUSDT", Duration.ofSeconds(5))).contains(new BigDecimal("60000"));
         assertThat(api.currentMarkPrice("BTCUSDT", Duration.ofSeconds(5))).isEmpty();
         assertThat(api.currentMarkPrice("BTCUSDT", Duration.ofSeconds(5))).isEmpty();
+    }
+
+    @Test
+    void TR46_theLatestStoredMark_isTheNewestSnapshots_orNone() {
+        UUID stored = UUID.randomUUID();
+        when(data.latestFuturesPrice(stored))
+                .thenReturn(Optional.of(new FuturesPriceSnapshot(
+                        Instant.parse("2026-11-01T00:00:00Z"), new BigDecimal("101.5"), null, null, null)));
+
+        assertThat(api.latestStoredMarkPrice(stored)).contains(new BigDecimal("101.5"));
+        assertThat(api.latestStoredMarkPrice(UUID.randomUUID())).isEmpty();
     }
 
     @Test

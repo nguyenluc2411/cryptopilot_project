@@ -78,6 +78,23 @@ class FuturesSchemaTest {
     }
 
     @Test
+    void TR24_aCrossPosition_givesNothingBackToTheCrossWallet() {
+        returnedToCross(position("BOTH", "LONG", "ISOLATED", "0", "OPEN"), "12.5");
+        UUID cross = position("LONG", "LONG", "CROSSED", null, "OPEN");
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> returnedToCross(cross, "0.00000001"));
+    }
+
+    @Test
+    void TR24_whatAnIsolatedPositionGaveBack_isNeverBelowZero() {
+        UUID isolated = position("BOTH", "LONG", "ISOLATED", "0", "OPEN");
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> returnedToCross(isolated, "-0.00000001"));
+    }
+
+    @Test
     void TR14_inHedgeMode_theSideIsTheDirection() {
         position("LONG", "LONG", "CROSSED", null, "OPEN");
 
@@ -161,6 +178,12 @@ class FuturesSchemaTest {
                         NOW)
                 .update();
         return id;
+    }
+
+    private void returnedToCross(UUID position, String amount) {
+        jdbc.sql("update futures_position set returned_to_cross_amount = ?::numeric where position_id = ?")
+                .params(amount, position)
+                .update();
     }
 
     private void adjustment(UUID position, String amount) {

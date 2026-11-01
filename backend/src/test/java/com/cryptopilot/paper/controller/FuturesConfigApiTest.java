@@ -132,7 +132,7 @@ class FuturesConfigApiTest {
     // ------------------------------------------------------------------------------------------
 
     @Test
-    void aTraderOnTheFreePlan_setsUpFutures_asOnSpot() throws Exception {
+    void D128_aFreeTrader_setsUpPaperFutures_likeSpot() throws Exception {
         UUID trader = trader(false);
 
         as(trader, get(FUTURES + "/symbolConfig").param("symbol", symbol), null).andExpect(status().isOk());

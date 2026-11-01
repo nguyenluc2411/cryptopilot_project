@@ -15,6 +15,7 @@ import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.model.CachedPrice;
+import com.cryptopilot.market.model.FuturesPriceSnapshot;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -23,6 +24,7 @@ import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
+import com.cryptopilot.market.repository.MarketDataQueryRepository;
 import com.cryptopilot.market.service.AnalysisService;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
@@ -62,6 +64,7 @@ public class MarketApiImpl implements MarketApi {
     private final CoinWriter coinWriter;
     private final TradingMarketData trading;
     private final FuturesMetricsRepository metrics;
+    private final MarketDataQueryRepository data;
     private final AnalysisService analysis;
     private final Clock clock;
 
@@ -241,6 +244,12 @@ public class MarketApiImpl implements MarketApi {
         return lookup.price()
                 .filter(price -> !price.sourceTime().isBefore(oldest))
                 .map(CachedPrice::markPrice);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<BigDecimal> latestStoredMarkPrice(UUID pairId) {
+        return data.latestFuturesPrice(pairId).map(FuturesPriceSnapshot::markPrice);
     }
 
     @Override

@@ -239,7 +239,7 @@ class FuturesOrderApiTest {
     // ------------------------------------------------------------------------------------------
 
     @Test
-    void aTraderOnTheFreePlan_tradesFutures_asOnSpot() throws Exception {
+    void D128_aFreeTrader_tradesPaperFutures_likeSpot() throws Exception {
         UUID trader = trader(false);
         depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
 
@@ -2437,7 +2437,10 @@ class FuturesOrderApiTest {
         try (InputStream backfill = new ClassPathResource(
                         "db/migration/V58__futures_position_returned_to_cross_backfill.sql")
                 .getInputStream()) {
-            String update = new String(backfill.readAllBytes(), StandardCharsets.UTF_8)
+            String script = new String(backfill.readAllBytes(), StandardCharsets.UTF_8);
+            // The UPDATE only: the check the script adds after it is already there.
+            String update = script.substring(
+                            script.indexOf("UPDATE"), script.indexOf(';', script.indexOf("WHERE p.margin_type")))
                     .replace(
                             "WHERE p.margin_type = 'ISOLATED'",
                             "WHERE p.position_id = ? AND p.margin_type = 'ISOLATED'");
@@ -3261,7 +3264,7 @@ class FuturesOrderApiTest {
     }
 
     @Test
-    void TR25_calculator_refusesALeverageAboveThePairs_onEveryPlan() throws Exception {
+    void D128_theCalculator_refusesALeverageAboveThePairs_onEveryPlan() throws Exception {
         String body = """
                 {"symbol": "%s", "side": "LONG", "leverage": 126, "entryPrice": "100", "roe": "10"}""".formatted(symbol);
 
@@ -3389,7 +3392,7 @@ class FuturesOrderApiTest {
     }
 
     @Test
-    void TR26_theFormsWarnings_needAWellShapedOrder_onEveryPlan() throws Exception {
+    void D128_theFormsWarnings_needAWellShapedOrder_onEveryPlan() throws Exception {
         warnings(trader(false), market("BUY", "1")).andExpect(status().isOk());
         warnings(trader(true), """
                         {"symbol": "%s", "side": "BUY", "type": "LIMIT", "quantity": "1"}""".formatted(symbol))
@@ -3558,6 +3561,64 @@ class FuturesOrderApiTest {
         assertThat(pairStop.stop(trader, pair)).isEqualTo(2);
 
         assertThat(openPositions(trader)).isZero();
+    }
+
+    /** With no mark in the cache, the positions are closed at the latest stored mark, after the cancels. */
+    @Test
+    void TR46_withoutACachedMark_closesAtTheLatestStoredMark() throws Exception {
+        UUID trader = trader(true);
+        isolated(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String waiting = id(place(trader, limit("BUY", "GTC", "90", "1")).andExpect(status().isOk()));
+        storedMark(Duration.ofMinutes(2), "98");
+        storedMark(Duration.ofMinutes(1), "101");
+        redis.delete("px:FUTURES:" + symbol);
+
+        assertThat(pairStop.stop(trader, pair)).isEqualTo(2);
+
+        assertThat(orderStatus(waiting)).isEqualTo("CANCELED:PAIR_NOT_TRADING");
+        Map<String, Object> closed = sql.sql("select * from futures_position where user_id = ?")
+                .param(trader)
+                .query()
+                .singleRow();
+        assertThat(closed.get("position_status")).isEqualTo("CLOSED");
+        assertThat(closed.get("close_reason")).isEqualTo("SYSTEM");
+        assertThat((BigDecimal) closed.get("close_avg_price")).isEqualByComparingTo("101");
+        assertThat(wallet(trader)).isEqualByComparingTo("5001");
+    }
+
+    /** With no mark at all, the cancels still commit and the positions stay open; run again, nothing more ends. */
+    @Test
+    void TR46_withoutAnyMark_cancelsTheOrders_andKeepsThePositionsOpen() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "1")).andExpect(status().isOk());
+        String waiting = id(place(trader, limit("BUY", "GTC", "90", "1")).andExpect(status().isOk()));
+        redis.delete("px:FUTURES:" + symbol);
+
+        assertThat(pairStop.stop(trader, pair)).isOne();
+        assertThat(pairStop.stop(trader, pair)).isZero();
+
+        assertThat(orderStatus(waiting)).isEqualTo("CANCELED:PAIR_NOT_TRADING");
+        assertThat(openPositions(trader)).isOne();
+        assertThat(pairStop.accountsOn(pair)).containsExactly(trader);
+    }
+
+    /** A minute mark price snapshot of the test pair, stored as NSF-03 stores it. */
+    private void storedMark(Duration ago, String mark) {
+        sql.sql("""
+                        insert into futures_market_data (pair_id, snapshot_time, mark_price)
+                        values (?, ?, ?)""")
+                .params(pair, Timestamp.from(Instant.now().minus(ago)), new BigDecimal(mark))
+                .update();
+    }
+
+    private String orderStatus(String orderId) {
+        return sql.sql("select order_status || ':' || status_reason from trade_order where order_id = ?")
+                .param(UUID.fromString(orderId))
+                .query(String.class)
+                .single();
     }
 
     private String gtd(String price, Instant date) {
