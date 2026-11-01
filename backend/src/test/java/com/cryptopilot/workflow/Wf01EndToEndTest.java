@@ -483,7 +483,9 @@ class Wf01EndToEndTest {
     /**
      * DS-01b, MSG22 on an engine fill (Q-81): the resting LIMIT filled by the 07:59 candle tells the Trader once. The
      * same candle replayed after a restart of the engine, and the same fill handed to the matching service again, as a
-     * replay after a crash would, find the plan EXECUTED and write nothing more.
+     * replay after a crash would, find the plan EXECUTED and write nothing more. The watermark never moves back, so the
+     * test knows the replayed candle was matched when the candle after it moves the watermark: the pair's candles are
+     * matched in order.
      */
     @Test
     void DS01b_anEngineFill_sendsMsg22Once_evenWhenItsCandleIsReplayed() throws Exception {
@@ -503,6 +505,8 @@ class Wf01EndToEndTest {
         feed.start();
         feed.onMinuteKline(
                 ClosedKlines.closed(MarketType.FUTURES, pairs.get(BTC), minute(1), "99500", "98900", "99600"));
+        feedClosed(MarketType.FUTURES, BTC, 2, "99500", "99400", "99600");
+        awaitWatermark(MarketType.FUTURES, BTC, minute(2));
         assertThat(matching.fill(new Fill(resting, LiquidityRole.MAKER, new BigDecimal("99000"), minute(1))))
                 .as("the compare-and-set refuses a plan already EXECUTED")
                 .isEmpty();
@@ -774,6 +778,16 @@ class Wf01EndToEndTest {
         long handed = System.nanoTime();
         feed.onMinuteKline(ClosedKlines.closed(marketType, pairs.get(symbol), minute(n), open, low, high));
         return handed;
+    }
+
+    /** Waits until the matching engine recorded the candle of {@code openTime} of the pair as fully matched. */
+    private void awaitWatermark(MarketType marketType, String symbol, Instant openTime) {
+        await("the watermark at " + openTime)
+                .atMost(Duration.ofSeconds(20))
+                .pollInterval(Duration.ofMillis(20))
+                .until(() -> matching.watermark(marketType, pairs.get(symbol))
+                        .filter(at -> !at.isBefore(openTime))
+                        .isPresent());
     }
 
     /**

@@ -10,12 +10,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.community.event.PostCommented;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.notification.service.CommunityNotificationService;
 import com.cryptopilot.notification.service.NotificationService;
+import com.cryptopilot.notification.service.PlanNotificationService;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
+import com.cryptopilot.trading.event.PlanFilled;
+import com.cryptopilot.trading.model.enums.Direction;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
+import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
@@ -43,9 +49,10 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 /**
  * The notification centre (SRS 3.4.5, UC-15) and the community notifications that fill it (E-1): a comment tells the
  * post's author, a follow the member followed, a moderation decision the author and the reporters; the bell counts
- * the unread ones, which are marked read one by one or all at once; NSF-17 deletes those older than 90 days.
+ * the unread ones, which are marked read one by one or all at once; NSF-17 deletes those older than 90 days. A plan's
+ * fill delivered again writes its MSG22 once.
  *
- * <p>Rule: UC-15; SRS 3.4.5, 3.7.3, 3.11.3; D-99, D-125; NSF-15, NSF-17.
+ * <p>Rule: UC-15; SRS 3.4.5, 3.7.3, 3.11.3; MSG22; D-99, D-125; NSF-15, NSF-17; Q-81.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -71,6 +78,9 @@ class NotificationApiTest {
 
     @Autowired
     private NotificationService notifications;
+
+    @Autowired
+    private PlanNotificationService planNotifications;
 
     private final List<UUID> accounts = new ArrayList<>();
 
@@ -133,6 +143,33 @@ class NotificationApiTest {
         community.commented(commented);
         community.commented(commented);
 
+        assertThat(count(alice)).isEqualTo(1);
+    }
+
+    @Test
+    void MSG22_aPlanFilledDeliveredTwice_writesOneRow() {
+        UUID alice = account(UserRole.TRADER, "Alice");
+        PlanFilled filled = new PlanFilled(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                alice,
+                MarketType.FUTURES,
+                Direction.LONG,
+                "BTCUSDT",
+                new BigDecimal("99000.000000000000"),
+                new BigDecimal("0.101"),
+                LiquidityRole.MAKER,
+                Instant.parse("2026-10-30T08:00:00Z"));
+
+        // Each call commits on its own, as two deliveries of the same publication would.
+        planNotifications.filled(filled);
+        planNotifications.filled(filled);
+
+        assertThat(sql.sql("select content from notification where user_id = ? and source_key = ?")
+                        .params(alice, "PLAN_FILLED:" + filled.planId())
+                        .query(String.class)
+                        .list())
+                .containsExactly("BTCUSDT LONG entry filled at 99000.");
         assertThat(count(alice)).isEqualTo(1);
     }
 
