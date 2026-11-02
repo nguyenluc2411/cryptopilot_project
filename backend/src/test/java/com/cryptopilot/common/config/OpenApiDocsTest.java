@@ -211,7 +211,11 @@ class OpenApiDocsTest {
             "/api/v1/admin/news-articles/sentiment-summary",
             "/api/v1/admin/news-articles/{id}/hide",
             "/api/v1/admin/news-articles/{id}/restore",
-            "/api/v1/admin/news-articles/{id}/summarize");
+            "/api/v1/admin/news-articles/{id}/summarize",
+            "/api/v1/ai/conversations",
+            "/api/v1/ai/conversations/{id}",
+            "/api/v1/ai/conversations/{id}/messages",
+            "/api/v1/ai/quota");
 
     private static final int OPERATIONS = 222;
 
