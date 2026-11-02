@@ -215,9 +215,11 @@ class OpenApiDocsTest {
             "/api/v1/ai/conversations",
             "/api/v1/ai/conversations/{id}",
             "/api/v1/ai/conversations/{id}/messages",
-            "/api/v1/ai/quota");
+            "/api/v1/ai/quota",
+            "/api/v1/admin/ai-configurations",
+            "/api/v1/admin/ai-configurations/{id}/activate");
 
-    private static final int OPERATIONS = 222;
+    private static final int OPERATIONS = 225;
 
     @Autowired
     private MockMvc mvc;
