@@ -13,12 +13,14 @@ import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
+import com.cryptopilot.market.repository.MarketDataQueryRepository;
 import com.cryptopilot.market.service.AnalysisService;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -71,7 +73,9 @@ class MarketApiStreamPricesTest {
                 mock(CoinWriter.class),
                 mock(TradingMarketData.class),
                 mock(FuturesMetricsRepository.class),
-                mock(AnalysisService.class));
+                mock(MarketDataQueryRepository.class),
+                mock(AnalysisService.class),
+                Clock.systemUTC());
     }
 
     @AfterEach

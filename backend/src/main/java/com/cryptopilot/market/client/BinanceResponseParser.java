@@ -202,7 +202,7 @@ final class BinanceResponseParser {
                             ? decimal(filter.get("minNotional"))
                             : decimal(filter.required("notional"));
                 default -> {
-                    // The other filters are read into the rules below; the rest (PERCENT_PRICE, ...) are ignored.
+                    // The other filters are read into the rules below; the rest are ignored.
                 }
             }
         }
@@ -231,6 +231,10 @@ final class BinanceResponseParser {
         JsonNode notional = filters.get("NOTIONAL");
         JsonNode legacyNotional = filters.get("MIN_NOTIONAL");
         JsonNode percent = filters.get("PERCENT_PRICE_BY_SIDE");
+        // Futures send PERCENT_PRICE, one pair of multipliers for both sides (TR-39); Spot sends them by side.
+        JsonNode plainPercent = filters.get("PERCENT_PRICE");
+        JsonNode maxOrders = filters.get("MAX_NUM_ORDERS");
+        JsonNode maxAlgoOrders = filters.get("MAX_NUM_ALGO_ORDERS");
         JsonNode trailing = filters.get("TRAILING_DELTA");
         try {
             return new SymbolRules(
@@ -244,16 +248,17 @@ final class BinanceResponseParser {
                     notional != null ? flag(notional, "applyMinToMarket") : flag(legacyNotional, "applyToMarket"),
                     field(notional, "maxNotional"),
                     flag(notional, "applyMaxToMarket"),
-                    field(percent, "bidMultiplierUp"),
-                    field(percent, "bidMultiplierDown"),
-                    field(percent, "askMultiplierUp"),
-                    field(percent, "askMultiplierDown"),
+                    percent != null ? field(percent, "bidMultiplierUp") : field(plainPercent, "multiplierUp"),
+                    percent != null ? field(percent, "bidMultiplierDown") : field(plainPercent, "multiplierDown"),
+                    percent != null ? field(percent, "askMultiplierUp") : field(plainPercent, "multiplierUp"),
+                    percent != null ? field(percent, "askMultiplierDown") : field(plainPercent, "multiplierDown"),
                     whole(trailing, "minTrailingAboveDelta"),
                     whole(trailing, "maxTrailingAboveDelta"),
                     whole(trailing, "minTrailingBelowDelta"),
                     whole(trailing, "maxTrailingBelowDelta"),
-                    whole(filters.get("MAX_NUM_ORDERS"), "maxNumOrders"),
-                    whole(filters.get("MAX_NUM_ALGO_ORDERS"), "maxNumAlgoOrders"));
+                    // Futures name each cap "limit".
+                    firstWhole(maxOrders, "maxNumOrders", "limit"),
+                    firstWhole(maxAlgoOrders, "maxNumAlgoOrders", "limit"));
         } catch (IllegalArgumentException unusable) {
             log.warn("NSF-01 {} filters out of shape, its Spot rules are left off: {}", symbol, unusable.getMessage());
             return SymbolRules.NONE;
@@ -272,6 +277,11 @@ final class BinanceResponseParser {
     private static Integer whole(JsonNode filter, String name) {
         JsonNode value = filter == null ? null : filter.get(name);
         return value == null || !value.isIntegralNumber() ? null : value.intValue();
+    }
+
+    private static Integer firstWhole(JsonNode filter, String name, String fallback) {
+        Integer value = whole(filter, name);
+        return value != null ? value : whole(filter, fallback);
     }
 
     private <T> T parse(BinanceVenue venue, String body, Function<JsonNode, T> reader) {

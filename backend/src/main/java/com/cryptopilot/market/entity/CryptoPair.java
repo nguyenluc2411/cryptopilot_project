@@ -162,6 +162,48 @@ public class CryptoPair extends BaseEntity {
     @Column(name = "futures_min_notional", precision = 28, scale = 8)
     private BigDecimal futuresMinNotional;
 
+    /** {@code PRICE_FILTER} of Futures: the lowest price (TR-39). */
+    @Column(name = "futures_min_price", precision = 28, scale = 12)
+    private BigDecimal futuresMinPrice;
+
+    /** {@code PRICE_FILTER} of Futures: the highest price (TR-39). */
+    @Column(name = "futures_max_price", precision = 28, scale = 12)
+    private BigDecimal futuresMaxPrice;
+
+    /** {@code LOT_SIZE} of Futures: the smallest quantity (TR-39). */
+    @Column(name = "futures_min_qty", precision = 28, scale = 12)
+    private BigDecimal futuresMinQty;
+
+    /** {@code LOT_SIZE} of Futures: the largest quantity (TR-39). */
+    @Column(name = "futures_max_qty", precision = 28, scale = 12)
+    private BigDecimal futuresMaxQty;
+
+    /** {@code MARKET_LOT_SIZE} of Futures: the smallest quantity of a MARKET order (TR-39). */
+    @Column(name = "futures_market_min_qty", precision = 28, scale = 12)
+    private BigDecimal futuresMarketMinQty;
+
+    /** {@code MARKET_LOT_SIZE} of Futures: the largest quantity of a MARKET order (TR-39). */
+    @Column(name = "futures_market_max_qty", precision = 28, scale = 12)
+    private BigDecimal futuresMarketMaxQty;
+
+    /** {@code MARKET_LOT_SIZE} of Futures: the quantity increment of a MARKET order (TR-39). */
+    @Column(name = "futures_market_step_size", precision = 28, scale = 12)
+    private BigDecimal futuresMarketStepSize;
+
+    /** {@code PERCENT_PRICE} of Futures: a BUY's price at most the mark times this (TR-39). */
+    @Column(name = "futures_multiplier_up", precision = 28, scale = 12)
+    private BigDecimal futuresMultiplierUp;
+
+    /** {@code PERCENT_PRICE} of Futures: a SELL's price at least the mark times this (TR-39). */
+    @Column(name = "futures_multiplier_down", precision = 28, scale = 12)
+    private BigDecimal futuresMultiplierDown;
+
+    @Column(name = "futures_max_num_orders")
+    private Integer futuresMaxNumOrders;
+
+    @Column(name = "futures_max_num_algo_orders")
+    private Integer futuresMaxNumAlgoOrders;
+
     /** The highest leverage an administrator allows, or {@code null} when futures is not enabled. */
     @Column(name = "max_leverage")
     private Integer maxLeverage;
@@ -242,6 +284,18 @@ public class CryptoPair extends BaseEntity {
                 this.futuresTickSize = filters.tickSize();
                 this.futuresStepSize = filters.stepSize();
                 this.futuresMinNotional = filters.minNotional();
+                SymbolRules rules = filters.rules();
+                this.futuresMinPrice = rules.minPrice();
+                this.futuresMaxPrice = rules.maxPrice();
+                this.futuresMinQty = rules.minQuantity();
+                this.futuresMaxQty = rules.maxQuantity();
+                this.futuresMarketMinQty = rules.marketMinQuantity();
+                this.futuresMarketMaxQty = rules.marketMaxQuantity();
+                this.futuresMarketStepSize = rules.marketStepSize();
+                this.futuresMultiplierUp = rules.bidMultiplierUp();
+                this.futuresMultiplierDown = rules.askMultiplierDown();
+                this.futuresMaxNumOrders = rules.maxNumOrders();
+                this.futuresMaxNumAlgoOrders = rules.maxNumAlgoOrders();
             }
         }
     }
@@ -253,7 +307,7 @@ public class CryptoPair extends BaseEntity {
     public Optional<PairFilters> filters(MarketType market) {
         return switch (Objects.requireNonNull(market, "market must not be null")) {
             case SPOT -> filtersOf(spotTickSize, spotStepSize, spotMinNotional, spotRules());
-            case FUTURES -> filtersOf(futuresTickSize, futuresStepSize, futuresMinNotional, SymbolRules.NONE);
+            case FUTURES -> filtersOf(futuresTickSize, futuresStepSize, futuresMinNotional, futuresRules());
         };
     }
 
@@ -278,6 +332,35 @@ public class CryptoPair extends BaseEntity {
         this.spotMaxTrailingBelowDelta = rules.maxTrailingBelowDelta();
         this.spotMaxNumOrders = rules.maxNumOrders();
         this.spotMaxNumAlgoOrders = rules.maxNumAlgoOrders();
+    }
+
+    /**
+     * The Futures rules kept (TR-39): {@code PRICE_FILTER}, {@code LOT_SIZE} and {@code MARKET_LOT_SIZE} bounds,
+     * {@code PERCENT_PRICE}, one pair of multipliers for both sides, and the caps on open orders. Futures have no
+     * {@code NOTIONAL} maximum and no {@code TRAILING_DELTA} (a trailing stop's callback rate has its own bounds).
+     */
+    private SymbolRules futuresRules() {
+        return new SymbolRules(
+                futuresMinPrice,
+                futuresMaxPrice,
+                futuresMinQty,
+                futuresMaxQty,
+                futuresMarketMinQty,
+                futuresMarketMaxQty,
+                futuresMarketStepSize,
+                null,
+                null,
+                null,
+                futuresMultiplierUp,
+                futuresMultiplierDown,
+                futuresMultiplierUp,
+                futuresMultiplierDown,
+                null,
+                null,
+                null,
+                null,
+                futuresMaxNumOrders,
+                futuresMaxNumAlgoOrders);
     }
 
     private SymbolRules spotRules() {

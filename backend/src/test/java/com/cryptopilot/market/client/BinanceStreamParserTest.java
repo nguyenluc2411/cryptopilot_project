@@ -73,6 +73,20 @@ class BinanceStreamParserTest {
     }
 
     @Test
+    void TR38_aFuturesTicker_hasNoBestBidOrAsk() {
+        Instant at = Instant.parse("2026-10-30T08:00:00Z");
+        String frame = StreamFrames.ticker("BTCUSDT", at)
+                .replace("\"b\":\"84282.00\",\"B\":\"4.39\",\"a\":\"84282.01\",\"A\":\"7.9\",", "");
+
+        TickerMessage ticker = (TickerMessage) parser.parse(frame).orElseThrow();
+
+        assertThat(ticker.lastPrice()).isEqualTo(new BigDecimal("84282.01"));
+        assertThat(ticker.bestBidPrice()).isNull();
+        assertThat(ticker.bestAskPrice()).isNull();
+        assertThat(ticker.highPrice24h()).isEqualTo(new BigDecimal("84794.01"));
+    }
+
+    @Test
     void NSF03_aTicker_isReadExactly() {
         Instant at = Instant.parse("2026-09-24T10:00:00Z");
 
@@ -189,6 +203,58 @@ class BinanceStreamParserTest {
                         new Level(new BigDecimal("84282.01"), new BigDecimal("7.90")),
                         new Level(new BigDecimal("84283.00"), new BigDecimal("1.25")));
         assertThat(depth.eventTime()).isEqualTo(now);
+    }
+
+    /** The Futures payload carries its event type; like Spot's, the read instant stamps it. */
+    @Test
+    void TR38_aFuturesBookTicker_isReadByItsEventType_andStampedWhenRead() {
+        Instant at = Instant.parse("2026-10-29T08:00:01Z");
+        Instant now = at.plusMillis(40);
+        BinanceStreamParser stamped =
+                new BinanceStreamParser(JsonMapper.builder().build(), Clock.fixed(now, ZoneOffset.UTC));
+
+        BookTickerMessage book = (BookTickerMessage)
+                stamped.parse(StreamFrames.futuresBookTicker("BTCUSDT", 11952974066913L, "79996.90", "79997.00", at))
+                        .orElseThrow();
+
+        assertThat(book.symbol()).isEqualTo("BTCUSDT");
+        assertThat(book.updateId()).isEqualTo(11952974066913L);
+        assertThat(book.bidPrice()).isEqualTo(new BigDecimal("79996.90"));
+        assertThat(book.bidQuantity()).isEqualTo(new BigDecimal("3.661"));
+        assertThat(book.askPrice()).isEqualTo(new BigDecimal("79997.00"));
+        assertThat(book.askQuantity()).isEqualTo(new BigDecimal("2.768"));
+        assertThat(book.eventTime()).isEqualTo(now);
+    }
+
+    /** A Futures depth is a depthUpdate: levels under b and a, its last update id under u. */
+    @Test
+    void TR38_aFuturesDepth_readsItsLevelsAndLastUpdateId_bestLevelsFirst() {
+        Instant at = Instant.parse("2026-10-29T08:00:02Z");
+        Instant now = at.plusMillis(40);
+        BinanceStreamParser stamped =
+                new BinanceStreamParser(JsonMapper.builder().build(), Clock.fixed(now, ZoneOffset.UTC));
+
+        DepthMessage depth = (DepthMessage)
+                stamped.parse(StreamFrames.futuresDepth("BTCUSDT", 500, at)).orElseThrow();
+
+        assertThat(depth.symbol()).isEqualTo("BTCUSDT");
+        assertThat(depth.lastUpdateId()).isEqualTo(500);
+        assertThat(depth.bids())
+                .containsExactly(
+                        new Level(new BigDecimal("79996.90"), new BigDecimal("3.662")),
+                        new Level(new BigDecimal("79996.80"), new BigDecimal("0.002")));
+        assertThat(depth.asks())
+                .containsExactly(
+                        new Level(new BigDecimal("79997.00"), new BigDecimal("2.768")),
+                        new Level(new BigDecimal("79997.10"), new BigDecimal("0.010")));
+        assertThat(depth.eventTime()).isEqualTo(now);
+    }
+
+    @Test
+    void TR38_aMalformedFuturesDepth_isRefused() {
+        String depth = StreamFrames.futuresDepth("BTCUSDT", 1, Instant.EPOCH).replace("\"u\":1,", "");
+
+        assertThatThrownBy(() -> parser.parse(depth)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

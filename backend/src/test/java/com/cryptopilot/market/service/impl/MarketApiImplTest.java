@@ -19,6 +19,7 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.CachedPrice;
+import com.cryptopilot.market.model.FuturesPriceSnapshot;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
@@ -26,10 +27,13 @@ import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
+import com.cryptopilot.market.repository.MarketDataQueryRepository;
 import com.cryptopilot.market.service.AnalysisService;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -53,6 +57,7 @@ class MarketApiImplTest {
     private final PriceCacheService prices = mock(PriceCacheService.class);
     private final MinuteKlineService minuteKlines = mock(MinuteKlineService.class);
     private final AnalysisService analysis = mock(AnalysisService.class);
+    private final MarketDataQueryRepository data = mock(MarketDataQueryRepository.class);
     private final MarketApiImpl api = new MarketApiImpl(
             pairs,
             coins,
@@ -62,7 +67,9 @@ class MarketApiImplTest {
             coinWriter,
             mock(TradingMarketData.class),
             mock(FuturesMetricsRepository.class),
-            analysis);
+            data,
+            analysis,
+            Clock.systemUTC());
 
     @Test
     void TR04_coins_areNamedBySymbol_andAnUnknownSymbolIsLeftOut() {
@@ -258,6 +265,31 @@ class MarketApiImplTest {
         assertThat(api.currentLastPrice(MarketType.SPOT, "BTCUSDT")).isEmpty();
     }
 
+    /** TR-22a: a mark older than the age asked for is not current, however long the cache keeps it. */
+    @Test
+    void TR22a_aMarkOlderThanTheAgeAskedFor_isNotCurrent() {
+        Instant now = Instant.now();
+        when(prices.latest(MarketType.FUTURES, "BTCUSDT"))
+                .thenReturn(found(mark("60000", now.minusSeconds(3))))
+                .thenReturn(found(mark("60000", now.minusSeconds(30))))
+                .thenReturn(PriceLookup.missing());
+
+        assertThat(api.currentMarkPrice("BTCUSDT", Duration.ofSeconds(5))).contains(new BigDecimal("60000"));
+        assertThat(api.currentMarkPrice("BTCUSDT", Duration.ofSeconds(5))).isEmpty();
+        assertThat(api.currentMarkPrice("BTCUSDT", Duration.ofSeconds(5))).isEmpty();
+    }
+
+    @Test
+    void TR46_theLatestStoredMark_isTheNewestSnapshots_orNone() {
+        UUID stored = UUID.randomUUID();
+        when(data.latestFuturesPrice(stored))
+                .thenReturn(Optional.of(new FuturesPriceSnapshot(
+                        Instant.parse("2026-11-01T00:00:00Z"), new BigDecimal("101.5"), null, null, null)));
+
+        assertThat(api.latestStoredMarkPrice(stored)).contains(new BigDecimal("101.5"));
+        assertThat(api.latestStoredMarkPrice(UUID.randomUUID())).isEmpty();
+    }
+
     @Test
     void BR27_theBrackets_areTheStoredOnes() {
         UUID pairId = UUID.randomUUID();
@@ -288,6 +320,11 @@ class MarketApiImplTest {
 
     private static PriceLookup found(CachedPrice price) {
         return new PriceLookup(PriceLookup.Status.FOUND, Optional.of(price));
+    }
+
+    private static CachedPrice mark(String mark, Instant at) {
+        return new CachedPrice(
+                MarketType.FUTURES, "BTCUSDT", null, null, null, new BigDecimal(mark), null, null, null, at);
     }
 
     private static CachedPrice price(String last, String funding) {

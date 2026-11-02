@@ -15,6 +15,7 @@ import com.cryptopilot.market.dto.response.MarketTradesResponse;
 import com.cryptopilot.market.dto.response.TickerUpdateResponse;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketBroadcastService;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -65,6 +66,9 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
     private static final Logger log = LoggerFactory.getLogger(MarketBroadcastService.class);
 
     private final Map<String, TickerUpdateResponse> tickers = new ConcurrentHashMap<>();
+    /** The latest futures ticker of each pair, its 24-hour figures and its mark together. */
+    private final Map<String, TickerUpdateResponse> futuresLatest = new ConcurrentHashMap<>();
+
     private final Map<String, NavigableMap<Instant, KlineUpdateResponse>> klines = new ConcurrentHashMap<>();
     private final Map<MarketType, Map<String, TickerUpdateResponse>> overview = new EnumMap<>(MarketType.class);
     private final Map<String, List<MarketTradeResponse>> trades = new ConcurrentHashMap<>();
@@ -192,7 +196,12 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
         return "/topic/kline." + update.market() + "." + update.symbol() + "." + update.timeframe();
     }
 
-    private void ticker(MarketType market, TickerUpdateResponse update) {
+    private void ticker(MarketType market, TickerUpdateResponse arriving) {
+        // A futures pair's 24-hour ticker and its mark price arrive apart: each fills in the fields it carries and
+        // keeps the others, so neither blanks what the other showed.
+        TickerUpdateResponse update = market == MarketType.FUTURES
+                ? futuresLatest.merge(arriving.symbol(), arriving, MarketBroadcastServiceImpl::combined)
+                : arriving;
         tickers.merge(
                 tickerDestination(update.market(), update.symbol()), update, MarketBroadcastServiceImpl::newerTicker);
         overview.get(market).merge(update.symbol(), update, MarketBroadcastServiceImpl::newerTicker);
@@ -261,6 +270,30 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
                 message.kline().quoteVolume(),
                 message.closed(),
                 message.eventTime());
+    }
+
+    /** The fields of {@code arriving} over those of {@code known}, at the later of their instants. */
+    static TickerUpdateResponse combined(TickerUpdateResponse known, TickerUpdateResponse arriving) {
+        return new TickerUpdateResponse(
+                arriving.market(),
+                arriving.symbol(),
+                arriving.sourceTime().isBefore(known.sourceTime()) ? known.sourceTime() : arriving.sourceTime(),
+                either(arriving.lastPrice(), known.lastPrice()),
+                either(arriving.bestBid(), known.bestBid()),
+                either(arriving.bestAsk(), known.bestAsk()),
+                either(arriving.high24h(), known.high24h()),
+                either(arriving.low24h(), known.low24h()),
+                either(arriving.changePercent24h(), known.changePercent24h()),
+                either(arriving.baseVolume24h(), known.baseVolume24h()),
+                either(arriving.quoteVolume24h(), known.quoteVolume24h()),
+                either(arriving.markPrice(), known.markPrice()),
+                either(arriving.indexPrice(), known.indexPrice()),
+                either(arriving.fundingRate(), known.fundingRate()),
+                arriving.nextFundingTime() != null ? arriving.nextFundingTime() : known.nextFundingTime());
+    }
+
+    private static BigDecimal either(BigDecimal arriving, BigDecimal known) {
+        return arriving != null ? arriving : known;
     }
 
     private static TickerUpdateResponse newerTicker(TickerUpdateResponse waiting, TickerUpdateResponse arriving) {

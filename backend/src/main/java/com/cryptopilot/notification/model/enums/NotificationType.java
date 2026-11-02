@@ -33,5 +33,8 @@ public enum NotificationType {
     FOLLOW,
 
     /** Someone mentioned the recipient in a post or a comment (D-125). */
-    MENTION
+    MENTION,
+
+    /** A margin call or a liquidation of the recipient's paper Futures positions (TR-43); V53 adds this kind. */
+    FUTURES
 }

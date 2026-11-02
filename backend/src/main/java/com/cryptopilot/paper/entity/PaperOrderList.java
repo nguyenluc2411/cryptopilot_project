@@ -69,6 +69,17 @@ public class PaperOrderList extends BaseEntity {
         return new PaperOrderList(userId, pairId, listType, listClientOrderId);
     }
 
+    /**
+     * A Futures opening order with its take profit and stop loss (TR-20, plan 5.6): OTOCO, EXECUTING.
+     *
+     * @param listClientOrderId the group's key; {@code null} for the group's own id
+     */
+    public static PaperOrderList futuresTpSl(UUID userId, UUID pairId, String listClientOrderId) {
+        PaperOrderList list = new PaperOrderList(userId, pairId, OrderListType.OTOCO, listClientOrderId);
+        list.marketType = MarketType.FUTURES;
+        return list;
+    }
+
     /** Whether one of its orders still works or waits to be placed. */
     public boolean isExecuting() {
         return listStatus == OrderListStatus.EXECUTING;

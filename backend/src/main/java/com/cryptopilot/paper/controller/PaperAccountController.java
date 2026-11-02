@@ -86,7 +86,8 @@ public class PaperAccountController {
     @ApiResponse(responseCode = "200", description = "The transfer made earlier with the same clientTransferId")
     @ApiResponse(
             responseCode = "400",
-            description = "MSG01, MSG15: `errors` names each rejected field; PAPER_INSUFFICIENT_BALANCE (MSG01)")
+            description = "MSG01, MSG15: `errors` names each rejected field; PAPER_INSUFFICIENT_BALANCE (MSG01),"
+                    + " out of Futures also past its maxWithdrawAmount (TR-18)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened yet")
     @ApiResponse(responseCode = "409", description = "MSG43: the clientTransferId was used for another transfer")

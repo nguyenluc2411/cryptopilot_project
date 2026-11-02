@@ -77,6 +77,22 @@ public class PaperBalance extends BaseEntity {
         return freeAmount.add(lockedAmount);
     }
 
+    /**
+     * Changes the free amount of the Futures wallet by a signed amount, which may take it below zero while cross
+     * positions are open (D-127); the Futures wallet locks nothing.
+     *
+     * @throws IllegalStateException on any other wallet
+     */
+    public void changeFutures(BigDecimal amount) {
+        if (walletType != WalletType.FUTURES) {
+            throw new IllegalStateException("only the Futures wallet may go below zero, not " + walletType);
+        }
+        if (amount.signum() == 0) {
+            throw new IllegalArgumentException("a change of the Futures wallet is not zero");
+        }
+        freeAmount = freeAmount.add(amount);
+    }
+
     /** Adds to the free amount. */
     public void credit(BigDecimal amount) {
         freeAmount = freeAmount.add(positive(amount));

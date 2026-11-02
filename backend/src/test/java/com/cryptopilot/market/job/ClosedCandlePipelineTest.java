@@ -248,6 +248,7 @@ class ClosedCandlePipelineTest {
                 Duration.ofMinutes(2),
                 partitions,
                 capacity,
-                new BinanceStreamProperties.Trading(false, 20, Duration.ofSeconds(10), 50));
+                new BinanceStreamProperties.Trading(
+                        false, false, URI.create("wss://fstream.binance.com/public"), 20, Duration.ofSeconds(10), 50));
     }
 }

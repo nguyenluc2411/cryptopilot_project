@@ -120,6 +120,33 @@ class BinanceRestClientTest {
             assertThat(btc.minNotional()).isEqualTo(new BigDecimal("100"));
         }
 
+        /**
+         * TR-39: Futures PERCENT_PRICE, one pair of multipliers, is read for both sides, and the order caps named
+         * {@code limit} are read too.
+         */
+        @Test
+        void TR39_futuresPercentPrice_andOrderCaps_areRead() {
+            exchange.on(FUTURES_EXCHANGE_INFO, Answer.ok("""
+                    {"symbols":[{"symbol":"BTCUSDT","status":"TRADING","contractType":"PERPETUAL",
+                      "baseAsset":"BTC","quoteAsset":"USDT","filters":[
+                        {"filterType":"PRICE_FILTER","tickSize":"0.10"},
+                        {"filterType":"LOT_SIZE","stepSize":"0.001","minQty":"0.001"},
+                        {"filterType":"MIN_NOTIONAL","notional":"100"},
+                        {"filterType":"MAX_NUM_ORDERS","limit":200},
+                        {"filterType":"MAX_NUM_ALGO_ORDERS","limit":10},
+                        {"filterType":"PERCENT_PRICE","multiplierUp":"1.0500","multiplierDown":"0.9500",
+                         "multiplierDecimal":"4"}]}]}"""));
+
+            SymbolRules rules = client.futuresExchangeInfo().get(0).rules();
+
+            assertThat(rules.bidMultiplierUp()).isEqualByComparingTo("1.05");
+            assertThat(rules.askMultiplierUp()).isEqualByComparingTo("1.05");
+            assertThat(rules.bidMultiplierDown()).isEqualByComparingTo("0.95");
+            assertThat(rules.askMultiplierDown()).isEqualByComparingTo("0.95");
+            assertThat(rules.maxNumOrders()).isEqualTo(200);
+            assertThat(rules.maxNumAlgoOrders()).isEqualTo(10);
+        }
+
         /** Spot MIN_NOTIONAL, the older spelling of the Spot filter, is read too. */
         @Test
         void NSF01_theOlderSpotMinNotionalFilter_isReadToo() {
