@@ -340,7 +340,8 @@ public class BinanceRestClient implements AutoCloseable {
 
     private static BinanceClientException refusal(
             BinanceClientException.Kind kind, BinanceVenue venue, String path, int status, Instant retryAt) {
-        return new BinanceClientException(kind, venue, venue + " " + path + " answered " + status, retryAt, null);
+        return new BinanceClientException(
+                kind, venue, venue + " " + path + " answered " + status, retryAt, null, status);
     }
 
     private static boolean isTransient(Throwable failure) {

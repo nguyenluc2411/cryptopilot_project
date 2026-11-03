@@ -2,11 +2,15 @@ package com.cryptopilot.admin.service.impl;
 
 import com.cryptopilot.admin.ActorDirectory;
 import com.cryptopilot.admin.ActorDirectory.ActorSummary;
+import com.cryptopilot.admin.AdminApi;
 import com.cryptopilot.admin.AdminMetricSource;
+import com.cryptopilot.admin.AuditEntry;
 import com.cryptopilot.admin.dto.response.AuditLogEntryResponse;
 import com.cryptopilot.admin.model.AuditLogFilter;
 import com.cryptopilot.admin.model.AuditLogRow;
 import com.cryptopilot.admin.model.enums.ActorType;
+import com.cryptopilot.admin.model.enums.AuditAction;
+import com.cryptopilot.admin.model.enums.AuditedEntity;
 import com.cryptopilot.admin.repository.AuditLogReader;
 import com.cryptopilot.admin.service.AuditLogService;
 import com.cryptopilot.common.exception.FieldValidationException;
@@ -17,6 +21,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,7 +42,8 @@ import tools.jackson.databind.ObjectMapper;
  *
  * <p>The export opens in a spreadsheet, so a cell that a spreadsheet would read as a formula ({@code =}, {@code +},
  * {@code -}, {@code @}, tab or carriage return first) is prefixed with an apostrophe; a stored value, an email or a
- * reason given by an administrator is never run as one (OWASP, "CSV Injection").
+ * reason given by an administrator is never run as one (OWASP, "CSV Injection"). Every export is itself audited, with
+ * its filters and row count, since it takes a copy of the trail out of the system (OWASP Logging Cheat Sheet).
  *
  * <p>Rule: SRS 3.11.9; UC-46; BR-57; CR-01.
  */
@@ -54,22 +60,66 @@ public class AuditLogServiceImpl implements AuditLogService {
     private final AuditLogReader reader;
     private final ActorDirectory actors;
     private final ObjectMapper json;
+    private final AdminApi admin;
+
+    /** A filter, and whether the actor text stood for more accounts than were searched. */
+    private record Filtered(AuditLogFilter filter, boolean actorsTruncated) {}
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<AuditLogEntryResponse> search(Criteria criteria, Integer page, Integer pageSize) {
+    public Page search(Criteria criteria, Integer page, Integer pageSize) {
         PageRequest request = Paging.of(page, pageSize);
-        AuditLogFilter filter = filter(criteria);
+        Filtered filtered = filter(criteria);
+        AuditLogFilter filter = filtered.filter();
         long total = reader.count(filter);
         List<AuditLogRow> rows =
                 total == 0 ? List.of() : reader.search(filter, request.getOffset(), request.getPageSize());
-        return new PageResponse<>(responses(rows), request.getPageNumber() + 1, request.getPageSize(), total);
+        return new Page(
+                new PageResponse<>(responses(rows), request.getPageNumber() + 1, request.getPageSize(), total),
+                filtered.actorsTruncated());
     }
 
     @Override
-    @Transactional(readOnly = true)
-    public String csv(Criteria criteria) {
-        List<AuditLogEntryResponse> entries = responses(reader.search(filter(criteria), 0, EXPORT_LIMIT));
+    @Transactional
+    public Export export(UUID adminId, Criteria criteria) {
+        Filtered filtered = filter(criteria);
+        long total = reader.count(filtered.filter());
+        List<AuditLogEntryResponse> entries = responses(reader.search(filtered.filter(), 0, EXPORT_LIMIT));
+        Export export = new Export(csv(entries), total, entries.size(), filtered.actorsTruncated());
+        Map<String, Object> values = filters(criteria);
+        values.put("rows", export.rows());
+        values.put("truncated", export.truncated());
+        admin.audit(
+                new AuditEntry(adminId, AuditAction.AUDIT_LOG_EXPORTED, AuditedEntity.AUDIT_LOG, null, null, values));
+        return export;
+    }
+
+    /** The criteria that restrict, by name, for the audit entry of an export. */
+    private static Map<String, Object> filters(Criteria criteria) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        putIfPresent(
+                values, "actor", criteria.actor() == null || criteria.actor().isBlank() ? null : criteria.actor());
+        putIfPresent(values, "actorId", criteria.actorId());
+        putIfPresent(values, "actorType", criteria.actorType());
+        if (criteria.actions() != null && !criteria.actions().isEmpty()) {
+            values.put(
+                    "actions",
+                    criteria.actions().stream().map(Enum::name).sorted().toList());
+        }
+        putIfPresent(values, "entityType", criteria.entityType());
+        putIfPresent(values, "entityId", criteria.entityId());
+        putIfPresent(values, "from", criteria.from());
+        putIfPresent(values, "to", criteria.to());
+        return values;
+    }
+
+    private static void putIfPresent(Map<String, Object> values, String key, Object value) {
+        if (value != null) {
+            values.put(key, value instanceof Enum<?> name ? name.name() : value.toString());
+        }
+    }
+
+    private String csv(List<AuditLogEntryResponse> entries) {
         StringBuilder csv = new StringBuilder(
                 "recordedAt,actorEmail,actorId,action,entityType,entityId,ipAddress,oldValue,newValue\r\n");
         for (AuditLogEntryResponse entry : entries) {
@@ -93,17 +143,21 @@ public class AuditLogServiceImpl implements AuditLogService {
         return csv.toString();
     }
 
-    private AuditLogFilter filter(Criteria criteria) {
+    private Filtered filter(Criteria criteria) {
         Objects.requireNonNull(criteria, "criteria must not be null");
         if (criteria.from() != null && criteria.to() != null && criteria.from().isAfter(criteria.to())) {
             throw new FieldValidationException("the period starts after it ends", Map.of("from", "MSG15"));
         }
         Set<UUID> only = null;
+        boolean actorsTruncated = false;
         String text = criteria.actor() == null || criteria.actor().isBlank()
                 ? null
                 : criteria.actor().strip();
         if (text != null) {
-            only = new HashSet<>(actors.matching(text, ACTOR_MATCHES));
+            // One more than searched, to tell the caller the text stood for more accounts.
+            List<UUID> matches = actors.matching(text, ACTOR_MATCHES + 1);
+            actorsTruncated = matches.size() > ACTOR_MATCHES;
+            only = new HashSet<>(actorsTruncated ? matches.subList(0, ACTOR_MATCHES) : matches);
         }
         if (criteria.actorId() != null) {
             if (only == null) {
@@ -112,15 +166,17 @@ public class AuditLogServiceImpl implements AuditLogService {
                 only.retainAll(Set.of(criteria.actorId()));
             }
         }
-        return new AuditLogFilter(
-                only,
-                criteria.actorType() == ActorType.SYSTEM,
-                criteria.actorType() == ActorType.USER,
-                criteria.actions(),
-                criteria.entityType(),
-                criteria.entityId(),
-                start(criteria.from()),
-                criteria.to() == null ? null : start(criteria.to().plusDays(1)));
+        return new Filtered(
+                new AuditLogFilter(
+                        only,
+                        criteria.actorType() == ActorType.SYSTEM,
+                        criteria.actorType() == ActorType.USER,
+                        criteria.actions(),
+                        criteria.entityType(),
+                        criteria.entityId(),
+                        start(criteria.from()),
+                        criteria.to() == null ? null : start(criteria.to().plusDays(1))),
+                actorsTruncated);
     }
 
     private List<AuditLogEntryResponse> responses(List<AuditLogRow> rows) {

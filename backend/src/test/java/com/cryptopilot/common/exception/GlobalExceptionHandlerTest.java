@@ -55,6 +55,16 @@ class GlobalExceptionHandlerTest {
     @Autowired
     private MockMvcTester mockMvc;
 
+    /** UC-46: the system log names a request by its route; without one, ids in the path are hidden. */
+    @Test
+    void UC46_theOperation_isTheRoute_orThePathWithItsIdsHidden() {
+        assertThat(GlobalExceptionHandler.operation()).as("no request").isEqualTo("unknown");
+        assertThat(GlobalExceptionHandler.idsHidden("/api/v1/plans/019b76da-a800-7d01-8000-0000000000a1/legs/7/v2"))
+                .isEqualTo("/api/v1/plans/{id}/legs/{id}/v2");
+        assertThat(GlobalExceptionHandler.idsHidden("/api/v1/coins/1inch")).isEqualTo("/api/v1/coins/1inch");
+        assertThat(GlobalExceptionHandler.idsHidden(null)).isEmpty();
+    }
+
     @Test
     void businessException_answersWithTheStatusAndCodesOfItsErrorCode() {
         MvcTestResult result = mockMvc.get().uri("/test-errors/business").exchange();

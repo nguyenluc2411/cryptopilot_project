@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.cryptopilot.admin.service.AuditLogService;
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.sql.Timestamp;
@@ -13,6 +14,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +32,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * SCR-44: the audit log is searched by actor, action, entity and period, newest first, and exported as the same rows.
@@ -54,6 +57,9 @@ class AuditLogApiTest {
 
     @Autowired
     private JwtEncoder jwtEncoder;
+
+    @Autowired
+    private ObjectMapper json;
 
     private final List<UUID> accounts = new ArrayList<>();
     private final List<UUID> entries = new ArrayList<>();
@@ -103,6 +109,12 @@ class AuditLogApiTest {
         for (UUID entry : entries) {
             sql.sql("delete from audit_log where audit_id = ?").param(entry).update();
         }
+        for (UUID account : accounts) {
+            sql.sql("delete from audit_log where user_id = ?").param(account).update();
+        }
+        sql.sql("delete from user_account where email like ?")
+                .param("many-" + tag + "-%")
+                .update();
         for (UUID account : accounts) {
             sql.sql("delete from user_profile where user_id = ?").param(account).update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();
@@ -214,6 +226,71 @@ class AuditLogApiTest {
         assertThat(lines[2])
                 .startsWith("2032-05-01T00:00:00+07:00,")
                 .endsWith(",\"{\"\"reason\"\":\"\"=HYPERLINK(1), spam\"\",\"\"status\"\":\"\"LOCKED\"\"}\"");
+    }
+
+    /** OWASP Logging Cheat Sheet: taking a copy of the trail is itself audited, with its filters and row count. */
+    @Test
+    void UC46_anExport_isAudited_withItsFiltersAndRowCount() throws Exception {
+        as(admin, get(API + "/export?" + MAY + "&actorId=" + admin + "&action=ACCOUNT_UNLOCKED&action=ACCOUNT_LOCKED"))
+                .andExpect(status().isOk())
+                .andExpect(header().doesNotExist("X-Result-Truncated"))
+                .andExpect(header().doesNotExist("X-Total-Count"));
+
+        List<Map<String, Object>> audited = sql.sql("""
+                        select entity_type, entity_id, old_value::text as old_value, new_value::text as new_value
+                          from audit_log where user_id = ? and action_code = 'AUDIT_LOG_EXPORTED'""").param(admin).query().listOfRows();
+        assertThat(audited).singleElement().satisfies(row -> {
+            assertThat(row.get("entity_type")).isEqualTo("AUDIT_LOG");
+            assertThat(row.get("entity_id")).isNull();
+            assertThat(row.get("old_value")).isNull();
+            assertThat(json.readTree((String) row.get("new_value"))).isEqualTo(json.readTree("""
+                            {"actorId": "%s", "actions": ["ACCOUNT_LOCKED", "ACCOUNT_UNLOCKED"],
+                             "from": "2032-05-01", "to": "2032-05-31", "rows": 2, "truncated": false}""".formatted(admin)));
+        });
+    }
+
+    /** More entries than an export holds: it says how many matched, and that it was cut. */
+    @Test
+    void UC46_anExportBeyondTheLimit_saysItWasCut() throws Exception {
+        sql.sql("""
+                        insert into audit_log (audit_id, user_id, action_code, entity_type, created_at, updated_at)
+                        select gen_random_uuid(), ?, 'POST_HIDDEN', 'FORUM_POST',
+                               timestamptz '2033-06-01 00:00:00+07' + n * interval '1 second',
+                               timestamptz '2033-06-01 00:00:00+07' + n * interval '1 second'
+                          from generate_series(1, ?) n""").params(trader, AuditLogService.EXPORT_LIMIT + 1).update();
+
+        String csv = as(admin, get(API + "/export?from=2033-06-01&to=2033-06-30&actorId=" + trader))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Total-Count", String.valueOf(AuditLogService.EXPORT_LIMIT + 1)))
+                .andExpect(header().string("X-Result-Truncated", "export"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(csv.split("\r\n")).hasSize(AuditLogService.EXPORT_LIMIT + 1);
+        String audited = sql.sql("""
+                        select new_value::text from audit_log
+                         where user_id = ? and action_code = 'AUDIT_LOG_EXPORTED'""").param(admin).query(String.class).single();
+        assertThat(json.readTree(audited).path("rows").asInt()).isEqualTo(AuditLogService.EXPORT_LIMIT);
+        assertThat(json.readTree(audited).path("truncated").asBoolean()).isTrue();
+    }
+
+    /** An actor text matching more accounts than are searched says so; one matching fewer does not. */
+    @Test
+    void UC46_anActorTextMatchingTooManyAccounts_saysTheSearchWasCut() throws Exception {
+        sql.sql("""
+                        insert into user_account (user_id, email, password_hash, role, account_status, created_at,
+                                                  updated_at)
+                        select gen_random_uuid(), 'many-' || ? || '-' || n || '@uc46.invalid', 'x', 'TRADER', 'ACTIVE',
+                               now(), now()
+                          from generate_series(1, 501) n""").param(tag).update();
+
+        as(admin, get(API + "?" + MAY + "&actor=many-" + tag))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Result-Truncated", "actor"));
+        as(admin, get(API + "?" + MAY + "&actor=auditor-" + tag))
+                .andExpect(status().isOk())
+                .andExpect(header().doesNotExist("X-Result-Truncated"));
     }
 
     // ------------------------------------------------------------------------------------------

@@ -38,16 +38,17 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       dropped and counted rather than piled up in memory.
  * </ul>
  *
- * <p>The same failure seen again within {@link #MERGE_WINDOW} is one row with a count, so a service down for an hour
- * leaves a few rows, not one per call. Only the exception's type and message are kept, cut to the column's length; no
+ * <p>The same failure seen again within {@link #MERGE_WINDOW} of its row's first failure is one row with a count, so a
+ * service down for an hour leaves six rows, not one per call. Only the exception's type and message are kept, cut to the column's length; no
  * request body, header or argument is.
  *
- * <p>Rule: UC-46; registration form, Admin System ("system errors, and external API failures").
+ * <p>Rule: UC-46; registration form, Admin System ("system errors, and external API failures"). Reference: Nygard, M.
+ * <i>Release It!</i> 2nd ed., 2018, ch. 5 (stability patterns, failure aggregation).
  */
 @Component
 public class SystemEventRecorder {
 
-    /** A repeat of a failure within this window adds to its row. */
+    /** A repeat of a failure within this window of its row's first failure adds to that row. */
     static final Duration MERGE_WINDOW = Duration.ofMinutes(10);
 
     /** How many failures may wait for the writer; more are dropped. */

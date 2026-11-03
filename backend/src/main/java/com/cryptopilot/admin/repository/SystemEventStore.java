@@ -20,10 +20,12 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 /**
- * The {@code system_event} table (V59): writes a failure, merging a repeat into the latest row of its fingerprint, and
- * reads the system log and the figures of the health panel. A technical table, so plain SQL and no entity.
+ * The {@code system_event} table (V59): writes a failure, merging a repeat into the row of its fingerprint opened within
+ * the merge window, and reads the system log and the figures of the health panel. A technical table, so plain SQL and
+ * no entity. Buckets are fixed from their first failure, so a continuous outage still leaves one row per window.
  *
- * <p>Rule: UC-46.
+ * <p>Rule: UC-46. Reference: Nygard, M. <i>Release It!</i> 2nd ed., 2018, ch. 5 (stability patterns, failure
+ * aggregation).
  */
 @Repository
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -44,7 +46,7 @@ public class SystemEventStore {
     private final JdbcClient sql;
 
     /**
-     * Records a failure: adds it to the latest row of its fingerprint last seen at or after {@code mergeSince}, or
+     * Records a failure: adds it to the latest row of its fingerprint first seen after {@code mergeSince}, or
      * writes a new row when there is none.
      */
     public void record(
@@ -66,8 +68,8 @@ public class SystemEventStore {
                          where system_event_id = (
                                select system_event_id
                                  from system_event
-                                where fingerprint = :fingerprint and last_seen_at >= :since
-                                order by last_seen_at desc
+                                where fingerprint = :fingerprint and first_seen_at > :since
+                                order by first_seen_at desc
                                 limit 1)""")
                 .param("now", Timestamp.from(now))
                 .param("message", message)
@@ -121,7 +123,8 @@ public class SystemEventStore {
 
     /**
      * For each source with a row in the log: its latest failure, and how many failures were seen in rows last seen at
-     * or after {@code since}.
+     * or after {@code since}. A row counts whole, so the figure may include one bucket (at most the merge window)
+     * that began before {@code since}.
      */
     public Map<SystemEventSource, SourceFailures> failuresBySource(Instant since) {
         Map<SystemEventSource, SourceFailures> bySource = new EnumMap<>(SystemEventSource.class);

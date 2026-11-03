@@ -107,7 +107,7 @@ public class AiServiceClient implements AutoCloseable {
         String code = answer.path("code").asString("HTTP_" + response.statusCode());
         boolean retryable = answer.path("retryable").asBoolean(response.statusCode() >= 500);
         String message = answer.path("message").asString("the AI Service answered HTTP " + response.statusCode());
-        throw new AiServiceException(code, retryable, message);
+        throw new AiServiceException(code, retryable, message, null, response.statusCode());
     }
 
     private JsonNode parse(String body) {
@@ -115,7 +115,7 @@ public class AiServiceClient implements AutoCloseable {
             return json.readTree(body == null || body.isBlank() ? "{}" : body);
         } catch (JacksonException e) {
             throw new AiServiceException(
-                    "BAD_ANSWER", true, "the AI Service answered with something that is not JSON", e);
+                    AiServiceException.BAD_ANSWER, true, "the AI Service answered with something that is not JSON", e);
         }
     }
 
@@ -126,7 +126,8 @@ public class AiServiceClient implements AutoCloseable {
     private static String text(JsonNode answer, String field) {
         String value = answer.path(field).asString(null);
         if (value == null || value.isBlank()) {
-            throw new AiServiceException("BAD_ANSWER", false, "the AI Service's answer has no " + field);
+            throw new AiServiceException(
+                    AiServiceException.BAD_ANSWER, false, "the AI Service's answer has no " + field);
         }
         return value;
     }

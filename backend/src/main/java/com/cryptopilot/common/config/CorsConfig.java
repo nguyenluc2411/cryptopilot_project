@@ -28,7 +28,9 @@ public class CorsConfig {
 
     static final List<String> REQUEST_HEADERS = List.of("Authorization", "Content-Type", "Accept", "X-Correlation-Id");
 
-    static final List<String> EXPOSED_HEADERS = List.of("X-Correlation-Id", "Retry-After");
+    // The audit log says when a result was cut (UC-46), which a web client on another origin must be able to read.
+    static final List<String> EXPOSED_HEADERS =
+            List.of("X-Correlation-Id", "Retry-After", "X-Result-Truncated", "X-Total-Count");
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(CorsProperties properties) {

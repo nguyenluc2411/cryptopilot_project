@@ -2,8 +2,10 @@ package com.cryptopilot.common.exception;
 
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.common.web.CorrelationIdFilter;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
@@ -26,6 +28,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 import tools.jackson.core.JacksonException;
 
@@ -183,14 +186,31 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         }
     }
 
-    /** The current request's method and path, without its query, which may carry personal data. */
-    private static String operation() {
-        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
-            return attributes.getRequest().getMethod() + " "
-                    + attributes.getRequest().getRequestURI();
+    /**
+     * The current request's method and route, e.g. {@code GET /api/v1/plans/{planId}}, so the failures of one endpoint
+     * share a fingerprint whatever ids they were called with. Never the query, which may carry personal data.
+     */
+    static String operation() {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes)) {
+            return "unknown";
         }
-        return "unknown";
+        HttpServletRequest request = attributes.getRequest();
+        Object route = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        String path =
+                route instanceof String pattern && !pattern.isBlank() ? pattern : idsHidden(request.getRequestURI());
+        return request.getMethod() + " " + path;
     }
+
+    /** The path with each UUID or all-digit segment as {@code {id}}, for a request no handler matched. */
+    static String idsHidden(String uri) {
+        if (uri == null) {
+            return "";
+        }
+        return ID_SEGMENT.matcher(uri).replaceAll("/{id}");
+    }
+
+    private static final Pattern ID_SEGMENT = Pattern.compile(
+            "/(?:[0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?=/|$)");
 
     /**
      * A request body that failed Bean Validation. The offending fields are reported one by one
@@ -284,7 +304,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return CorrelationIdFilter.currentCorrelationId().orElse(null);
     }
 
-    /** The innermost message, which is where the driver puts the name of the constraint. */
     /**
      * PostgreSQL's SQLSTATE 22021, "character not in repertoire": a NUL byte or an invalid UTF-8 sequence in a value,
      * which no text column can store. Spring reports it as a {@link DataIntegrityViolationException}, as it does a
@@ -306,6 +325,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return state;
     }
 
+    /** The innermost message, which is where the driver puts the name of the constraint. */
     private static String mostSpecificMessage(Throwable exception) {
         Throwable cause = exception;
         while (cause.getCause() != null && cause.getCause() != cause) {

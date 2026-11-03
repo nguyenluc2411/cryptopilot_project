@@ -16,6 +16,8 @@ import com.cryptopilot.admin.model.enums.SystemEventCategory;
 import com.cryptopilot.admin.model.enums.SystemEventSource;
 import com.cryptopilot.admin.service.impl.ExternalCallTracker;
 import com.cryptopilot.admin.service.impl.SystemEventRecorder;
+import com.cryptopilot.ai.AiServiceException;
+import com.cryptopilot.common.exception.ExternalAnswer;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,6 +49,29 @@ class ExternalCallMonitoringTest {
 
         public String sign() {
             return "signed";
+        }
+
+        /** Throws what the test hands it. */
+        public String refuse(RuntimeException refusal) {
+            throw refusal;
+        }
+    }
+
+    /** A refusal that says whether the service answered, as {@code BinanceClientException} does. */
+    static final class Refusal extends RuntimeException implements ExternalAnswer {
+
+        private static final long serialVersionUID = 1L;
+
+        private final boolean answered;
+
+        Refusal(String message, boolean answered) {
+            super(message);
+            this.answered = answered;
+        }
+
+        @Override
+        public boolean serviceAnswered() {
+            return answered;
         }
     }
 
@@ -80,6 +105,62 @@ class ExternalCallMonitoringTest {
                         eq("FakeClient.fail"),
                         any(RuntimeException.class),
                         isNull());
+    }
+
+    /** UC-46, RFC 9110 15.5: a 4xx refusal is the service answering; a 429 or no answer is a failure. */
+    @Test
+    void aFourHundredRefusal_isAnAnswer_whileARateLimitIsAFailure() {
+        Refusal badRequest = new Refusal("BINANCE_SPOT /api/v3/klines answered 400", true);
+        assertThatThrownBy(() -> client.refuse(badRequest)).isSameAs(badRequest);
+        verify(tracker).succeeded(SystemEventSource.AI_SERVICE);
+        verifyNoInteractions(recorder);
+
+        Refusal rateLimited = new Refusal("BINANCE_SPOT /api/v3/klines answered 429", false);
+        assertThatThrownBy(() -> client.refuse(rateLimited)).isSameAs(rateLimited);
+        verify(recorder)
+                .record(
+                        eq(SystemEventCategory.EXTERNAL_API_FAILURE),
+                        eq(SystemEventSource.AI_SERVICE),
+                        eq("FakeClient.refuse"),
+                        eq(rateLimited),
+                        isNull());
+    }
+
+    @Test
+    void theAiServiceRefusingNotToRetry_isAnAnswer_whileUnreachableIsAFailure() {
+        AiServiceException refused = new AiServiceException("BAD_REQUEST", false, "no text", null, 400);
+        assertThatThrownBy(() -> client.refuse(refused)).isSameAs(refused);
+        verify(tracker).succeeded(SystemEventSource.AI_SERVICE);
+        verifyNoInteractions(recorder);
+
+        AiServiceException down = new AiServiceException(AiServiceException.UNREACHABLE, true, "connection refused");
+        assertThatThrownBy(() -> client.refuse(down)).isSameAs(down);
+        verify(recorder)
+                .record(
+                        eq(SystemEventCategory.EXTERNAL_API_FAILURE),
+                        eq(SystemEventSource.AI_SERVICE),
+                        eq("FakeClient.refuse"),
+                        eq(down),
+                        isNull());
+    }
+
+    @Test
+    void theClientsNoBeanMatched_areReportedAfterStartup() {
+        ExternalCallMonitoring monitoring = new ExternalCallMonitoring(
+                Map.of(
+                        FakeClient.class.getName(),
+                        SystemEventSource.AI_SERVICE,
+                        "com.cryptopilot.gone.RenamedClient",
+                        SystemEventSource.MAIL,
+                        ExternalCallMonitoringTest.class.getName(),
+                        SystemEventSource.NEWS_SOURCE),
+                mockProvider(),
+                mockProvider());
+        monitoring.postProcessAfterInitialization(new FakeClient(), "fake");
+
+        assertThatCode(monitoring::afterSingletonsInstantiated).doesNotThrowAnyException();
+        assertThat(monitoring.unwatched())
+                .containsExactly(ExternalCallMonitoringTest.class.getName(), "com.cryptopilot.gone.RenamedClient");
     }
 
     @Test

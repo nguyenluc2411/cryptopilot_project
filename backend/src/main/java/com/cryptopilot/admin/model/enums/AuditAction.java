@@ -41,5 +41,7 @@ public enum AuditAction {
     CONFIGURATION_CREATED,
     /** A configuration row or a system setting changed, Academy content included (T-114). */
     CONFIGURATION_CHANGED,
-    CONFIGURATION_DELETED
+    CONFIGURATION_DELETED,
+    /** An administrator exported the audit log as CSV (UC-46): who took a copy, with which filters. */
+    AUDIT_LOG_EXPORTED
 }

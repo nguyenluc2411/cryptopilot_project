@@ -4,15 +4,21 @@ import com.cryptopilot.admin.model.enums.SystemEventCategory;
 import com.cryptopilot.admin.model.enums.SystemEventSource;
 import com.cryptopilot.admin.service.impl.ExternalCallTracker;
 import com.cryptopilot.admin.service.impl.SystemEventRecorder;
+import com.cryptopilot.common.exception.ExternalAnswer;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import org.aopalliance.intercept.MethodInterceptor;
 import org.aopalliance.intercept.MethodInvocation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 
 /**
@@ -27,9 +33,16 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
  * declared by the client are watched, and of those not the ones in {@link #LOCAL_METHODS}, so {@code close},
  * {@code toString} and the like do not count as calls to the service.
  *
- * <p>Rule: UC-46; registration form, Admin System ("external API failures").
+ * <p>A failure that is an {@link ExternalAnswer} the service answered (a 4xx refusal of this request) counts as an
+ * answer and is not recorded: the service is up. RSS, Cloudinary and SMTP do not say so, so their refusals stay
+ * failures.
+ *
+ * <p>Rule: UC-46; registration form, Admin System ("external API failures"). Reference: Fielding, R. &amp; Reschke, J.,
+ * RFC 9110, §15.5 (4xx: client error, the server answered).
  */
-public class ExternalCallMonitoring implements BeanPostProcessor {
+public class ExternalCallMonitoring implements BeanPostProcessor, SmartInitializingSingleton {
+
+    private static final Logger log = LoggerFactory.getLogger(ExternalCallMonitoring.class);
 
     /** The client classes, by name, and the service each one calls. */
     static final Map<String, SystemEventSource> CLIENTS = Map.of(
@@ -48,6 +61,7 @@ public class ExternalCallMonitoring implements BeanPostProcessor {
     private final Map<String, SystemEventSource> clients;
     private final ObjectProvider<SystemEventRecorder> recorder;
     private final ObjectProvider<ExternalCallTracker> tracker;
+    private final Set<String> wrapped = ConcurrentHashMap.newKeySet();
 
     ExternalCallMonitoring(ObjectProvider<SystemEventRecorder> recorder, ObjectProvider<ExternalCallTracker> tracker) {
         this(CLIENTS, recorder, tracker);
@@ -73,7 +87,42 @@ public class ExternalCallMonitoring implements BeanPostProcessor {
         ProxyFactory proxy = new ProxyFactory(bean);
         proxy.setProxyTargetClass(true);
         proxy.addAdvice(new Watch(source, type, recorder, tracker));
+        wrapped.add(type.getName());
         return proxy.getProxy(type.getClassLoader());
+    }
+
+    /** Says which clients are not watched: renamed (WARN, a defect) or simply not created (DEBUG, disabled). */
+    @Override
+    public void afterSingletonsInstantiated() {
+        clients.keySet().stream()
+                .filter(name -> !wrapped.contains(name))
+                .sorted()
+                .forEach(name -> {
+                    if (loadable(name)) {
+                        log.debug("UC-46 {} is not created, so {} is not watched", name, clients.get(name));
+                    } else {
+                        log.warn(
+                                "UC-46 {} no longer exists, so {} is not watched; update CLIENTS",
+                                name,
+                                clients.get(name));
+                    }
+                });
+    }
+
+    /** The client names no bean matched so far. */
+    Set<String> unwatched() {
+        Set<String> missing = new TreeSet<>(clients.keySet());
+        missing.removeAll(wrapped);
+        return missing;
+    }
+
+    private static boolean loadable(String name) {
+        try {
+            Class.forName(name, false, ExternalCallMonitoring.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError renamed) {
+            return false;
+        }
     }
 
     /** Notes the outcome of each call to one client. */
@@ -107,6 +156,10 @@ public class ExternalCallMonitoring implements BeanPostProcessor {
             } catch (IllegalArgumentException | IllegalStateException | NullPointerException misuse) {
                 throw misuse;
             } catch (RuntimeException failure) {
+                if (failure instanceof ExternalAnswer answer && answer.serviceAnswered()) {
+                    answered();
+                    throw failure;
+                }
                 SystemEventRecorder log = recorder.getIfAvailable();
                 if (log != null) {
                     log.record(
@@ -118,11 +171,15 @@ public class ExternalCallMonitoring implements BeanPostProcessor {
                 }
                 throw failure;
             }
+            answered();
+            return result;
+        }
+
+        private void answered() {
             ExternalCallTracker calls = tracker.getIfAvailable();
             if (calls != null) {
                 calls.succeeded(source);
             }
-            return result;
         }
 
         private boolean watched(Method method) {

@@ -39,6 +39,9 @@ import org.springframework.transaction.annotation.Transactional;
  * has not ended is DOWN whatever the calls say, since every call is refused until then. A market's feed is stale when
  * its latest stored candle closed more than {@link #STALE} ago.
  *
+ * <p>{@code lastSuccessAt} is held per instance while the failures are shared in the database, so with more than one
+ * instance the panel may differ by the instance that answers.
+ *
  * <p>Rule: UC-46; NSF-01 to NSF-04 (ingestion); T-017 (Binance IP ban).
  */
 @Service

@@ -44,6 +44,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.servlet.HandlerMapping;
 
 /**
  * SCR-44, the system log: a failure is written outside the failing transaction and a repeat is merged into its row; an
@@ -172,6 +173,55 @@ class SystemMonitorApiTest {
         assertThat(rows()).hasSize(2);
     }
 
+    /** Buckets are fixed from their first failure: a failure every minute for 35 minutes is four rows, not one. */
+    @Test
+    void UC46_aContinuousOutage_isOneRowPerTenMinutes() {
+        Instant start = Instant.parse("2032-01-01T00:00:00Z");
+        for (int minute = 0; minute < 35; minute++) {
+            Instant at = start.plus(Duration.ofMinutes(minute));
+            store.record(
+                    SystemEventCategory.EXTERNAL_API_FAILURE,
+                    SystemEventSource.AI_SERVICE,
+                    "outage." + tag,
+                    "E",
+                    "m",
+                    null,
+                    "f-outage-" + tag,
+                    at,
+                    at.minus(Duration.ofMinutes(10)));
+        }
+
+        List<Map<String, Object>> rows = rows();
+        assertThat(rows).hasSize(4);
+        assertThat(rows.stream().mapToInt(row -> ((Number) row.get("occurrences")).intValue()))
+                .containsExactlyInAnyOrder(10, 10, 10, 5);
+    }
+
+    /** The 24-hour figure of a source failing for three days counts the last day, give or take one bucket. */
+    @Test
+    void UC46_theDayFigure_ofAThreeDayOutage_countsOnlyTheLastDay() {
+        Instant start = Instant.parse("2040-01-01T00:03:00Z");
+        Instant now = start.plus(Duration.ofDays(3));
+        for (Instant at = start; at.isBefore(now); at = at.plus(Duration.ofMinutes(5))) {
+            store.record(
+                    SystemEventCategory.EXTERNAL_API_FAILURE,
+                    SystemEventSource.MAIL,
+                    "smtp." + tag,
+                    "E",
+                    "m",
+                    null,
+                    "f-days-" + tag,
+                    at,
+                    at.minus(Duration.ofMinutes(10)));
+        }
+
+        long lastDay = store.failuresBySource(now.minus(Duration.ofDays(1)))
+                .get(SystemEventSource.MAIL)
+                .failuresSince();
+        // 288 failures in the last 24 hours, plus at most the 2 of the bucket that began before it.
+        assertThat(lastDay).isBetween(288L, 290L);
+    }
+
     @Test
     void UC46_aFailureInATransactionThatRollsBack_isStillRecorded() {
         transaction.executeWithoutResult(status -> {
@@ -208,6 +258,44 @@ class SystemMonitorApiTest {
         } finally {
             RequestContextHolder.resetRequestAttributes();
         }
+    }
+
+    /** The failures of one endpoint share a row whatever ids it was called with (the route, not the URI). */
+    @Test
+    void UC46_twoFailuresOfOneRoute_withDifferentIds_areOneRow() {
+        for (UUID plan : List.of(UUID.randomUUID(), UUID.randomUUID())) {
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/" + tag + "/" + plan);
+            request.setAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/api/v1/" + tag + "/{planId}");
+            RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+            try {
+                handler.handleUnexpectedException(new IllegalStateException("uc46 route"));
+            } finally {
+                RequestContextHolder.resetRequestAttributes();
+            }
+        }
+
+        written();
+        List<Map<String, Object>> rows = rows();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.getFirst().get("operation")).isEqualTo("GET /api/v1/" + tag + "/{planId}");
+        assertThat(rows.getFirst().get("occurrences")).isEqualTo(2);
+    }
+
+    /** No handler matched: each UUID or number in the path is an id, and the query is never kept. */
+    @Test
+    void UC46_aFailureWithoutARoute_hidesTheIdsOfItsPath() {
+        MockHttpServletRequest request =
+                new MockHttpServletRequest("POST", "/api/v1/" + tag + "/" + UUID.randomUUID() + "/items/42");
+        request.setQueryString("email=someone@example.com");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        try {
+            handler.handleUnexpectedException(new IllegalStateException("uc46 no route"));
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+
+        written();
+        assertThat(rows().getFirst().get("operation")).isEqualTo("POST /api/v1/" + tag + "/{id}/items/{id}");
     }
 
     @Test

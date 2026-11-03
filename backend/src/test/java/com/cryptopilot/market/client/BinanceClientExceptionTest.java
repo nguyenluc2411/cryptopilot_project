@@ -40,4 +40,29 @@ class BinanceClientExceptionTest {
                         .retryAt())
                 .isEmpty();
     }
+
+    /** UC-46: a 4xx refusal of this request is the exchange answering; a 408, a ban, a rate limit or no answer is not. */
+    @Test
+    void UC46_onlyARejectedFourHundred_isTheExchangeAnswering() {
+        assertThat(refusal(BinanceClientException.Kind.REJECTED, 400).serviceAnswered())
+                .isTrue();
+        assertThat(refusal(BinanceClientException.Kind.REJECTED, 404).serviceAnswered())
+                .isTrue();
+        assertThat(refusal(BinanceClientException.Kind.REJECTED, 408).serviceAnswered())
+                .isFalse();
+        assertThat(refusal(BinanceClientException.Kind.BANNED, 418).serviceAnswered())
+                .isFalse();
+        assertThat(refusal(BinanceClientException.Kind.RATE_LIMITED, 429).serviceAnswered())
+                .isFalse();
+        assertThat(refusal(BinanceClientException.Kind.UNAVAILABLE, 0).serviceAnswered())
+                .isFalse();
+        assertThat(new BinanceClientException(BinanceClientException.Kind.REJECTED, BinanceVenue.SPOT, "x", null, null)
+                        .serviceAnswered())
+                .as("no status known")
+                .isFalse();
+    }
+
+    private static BinanceClientException refusal(BinanceClientException.Kind kind, int status) {
+        return new BinanceClientException(kind, BinanceVenue.SPOT, "answered " + status, null, null, status);
+    }
 }

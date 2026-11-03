@@ -26,5 +26,8 @@ public enum AuditedEntity {
     ACADEMY_TERM,
 
     /** A topic of the Academy (T-114). */
-    ACADEMY_TOPIC
+    ACADEMY_TOPIC,
+
+    /** The audit trail itself, read out by an export (UC-46); no row id. */
+    AUDIT_LOG
 }

@@ -29,20 +29,44 @@ public interface AuditLogService {
             LocalDate to) {}
 
     /**
+     * A page of a search.
+     *
+     * @param actorsTruncated the actor text matched more than the accounts searched, so entries may be missing
+     */
+    record Page(PageResponse<AuditLogEntryResponse> page, boolean actorsTruncated) {}
+
+    /**
+     * An export.
+     *
+     * @param total how many entries match, which may be more than {@code rows}
+     * @param rows how many entries the CSV holds
+     * @param actorsTruncated as in {@link Page}
+     */
+    record Export(String csv, long total, int rows, boolean actorsTruncated) {
+
+        /** Whether more entries match than the export holds. */
+        public boolean truncated() {
+            return total > rows;
+        }
+    }
+
+    /**
      * One page of entries, newest first.
      *
      * @throws com.cryptopilot.common.exception.FieldValidationException MSG15 on {@code from} when it is after
      *     {@code to}, or on {@code page} or {@code pageSize}
      */
-    PageResponse<AuditLogEntryResponse> search(Criteria criteria, Integer page, Integer pageSize);
+    Page search(Criteria criteria, Integer page, Integer pageSize);
 
     /**
-     * The entries of the same search as CSV, newest first, at most {@link #EXPORT_LIMIT}.
+     * The entries of the same search as CSV, newest first, at most {@link #EXPORT_LIMIT}; the export itself is audited
+     * as {@code AUDIT_LOG_EXPORTED} with the filters and the row count.
      *
+     * @param adminId the administrator taking the export
      * @throws com.cryptopilot.common.exception.FieldValidationException MSG15 on {@code from} when it is after
      *     {@code to}
      */
-    String csv(Criteria criteria);
+    Export export(UUID adminId, Criteria criteria);
 
     /** The most rows one export holds. */
     int EXPORT_LIMIT = 10_000;

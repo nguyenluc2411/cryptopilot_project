@@ -11,8 +11,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Records in the system log every request that ended in an unexpected error, with the reference its caller received,
- * so an administrator can match a user's "error reference" to the failure. Synchronous and on the request's thread;
- * the recorder writes in a transaction of its own and never throws.
+ * so an administrator can match a user's "error reference" to the failure. The recorder hands it to its writer thread
+ * and returns at once, so the 500 is never delayed; it never throws.
  *
  * <p>Rule: UC-46; registration form ("The system logs important actions and system errors").
  */
