@@ -3,6 +3,7 @@ package com.cryptopilot.admin.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.admin.model.enums.ServiceStatus;
+import com.cryptopilot.admin.model.enums.SystemEventSource;
 import java.time.Duration;
 import java.time.Instant;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -32,7 +33,25 @@ class SystemMonitorServiceImplTest {
     })
     void theStatus_weighsTheLatestFailure_againstTheLatestAnswer(
             Integer answerMinutes, Integer failureMinutes, ServiceStatus expected) {
-        assertThat(SystemMonitorServiceImpl.status(ago(answerMinutes), ago(failureMinutes), NOW))
+        assertThat(SystemMonitorServiceImpl.status(
+                        SystemEventSource.AI_SERVICE, ago(answerMinutes), ago(failureMinutes), NOW))
+                .isEqualTo(expected);
+    }
+
+    /** The news sites: one feed refusing while another answered recently is DEGRADED, none answering DOWN. */
+    @ParameterizedTest(name = "news: answer {0} min ago, failure {1} min ago → {2}")
+    @CsvSource({
+        " 5,  1, DEGRADED",
+        " 1,  5, DEGRADED",
+        "16,  1, DOWN",
+        "  ,  1, DOWN",
+        " 1,   , UP",
+        "  ,   , UNKNOWN",
+    })
+    void theNewsSites_areDownOnlyWhenNoneAnswered(
+            Integer answerMinutes, Integer failureMinutes, ServiceStatus expected) {
+        assertThat(SystemMonitorServiceImpl.status(
+                        SystemEventSource.NEWS_SOURCE, ago(answerMinutes), ago(failureMinutes), NOW))
                 .isEqualTo(expected);
     }
 

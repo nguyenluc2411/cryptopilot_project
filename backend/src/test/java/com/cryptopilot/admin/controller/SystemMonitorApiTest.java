@@ -132,6 +132,7 @@ class SystemMonitorApiTest {
                 new RuntimeException("third"),
                 null);
 
+        written();
         List<Map<String, Object>> rows = rows();
         assertThat(rows).hasSize(2);
         Map<String, Object> merged = rows.stream()
@@ -183,6 +184,7 @@ class SystemMonitorApiTest {
             status.setRollbackOnly();
         });
 
+        written();
         assertThat(rows()).hasSize(1);
     }
 
@@ -194,6 +196,7 @@ class SystemMonitorApiTest {
             ProblemDetail body = handler.handleUnexpectedException(new IllegalStateException("uc46 boom"))
                     .getBody();
 
+            written();
             List<Map<String, Object>> rows = rows();
             assertThat(rows).hasSize(1);
             assertThat(rows.getFirst().get("operation")).isEqualTo("GET /api/v1/admin/" + tag);
@@ -221,6 +224,7 @@ class SystemMonitorApiTest {
                 "job." + tag,
                 new RuntimeException("job failed"),
                 "ref-" + tag);
+        written();
 
         as(admin, get(API + "/system-events?source=NEWS_SOURCE&pageSize=100"))
                 .andExpect(status().isOk())
@@ -256,6 +260,7 @@ class SystemMonitorApiTest {
                 "mail." + tag,
                 new RuntimeException("smtp refused"),
                 null);
+        written();
         tracker.succeeded(SystemEventSource.MAIL);
 
         as(admin, get(API + "/system-health"))
@@ -288,6 +293,11 @@ class SystemMonitorApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+
+    /** Recording is handed to a writer thread: wait for it before reading. */
+    private void written() {
+        assertThat(recorder.awaitWritten(Duration.ofSeconds(10))).isTrue();
+    }
 
     private List<Map<String, Object>> rows() {
         return sql.sql("select * from system_event where operation like ?")

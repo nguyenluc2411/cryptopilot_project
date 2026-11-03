@@ -33,7 +33,8 @@ import org.springframework.transaction.annotation.Transactional;
  * The system log and the health panel of SCR-44.
  *
  * <p>A service's status weighs its latest failure, from the system log, against its latest answer, held in memory by
- * {@link ExternalCallTracker}: a failure within {@link #RECENT} with no answer after it is DOWN, one with an answer
+ * {@link ExternalCallTracker}: a failure within {@link #RECENT} with no answer after it is DOWN (for the news sites:
+ * with no answer from any of them within it), one with an answer
  * after it DEGRADED; an answer and no recent failure is UP, and neither since the start UNKNOWN. A Binance IP ban that
  * has not ended is DOWN whatever the calls say, since every call is refused until then. A market's feed is stale when
  * its latest stored candle closed more than {@link #STALE} ago.
@@ -108,7 +109,8 @@ public class SystemMonitorServiceImpl implements SystemMonitorService {
             Instant bannedUntil = source == SystemEventSource.BINANCE_REST
                     ? bans.values().stream().max(Instant::compareTo).orElse(null)
                     : null;
-            ServiceStatus status = bannedUntil != null ? ServiceStatus.DOWN : status(lastAnswer, lastFailure, now);
+            ServiceStatus status =
+                    bannedUntil != null ? ServiceStatus.DOWN : status(source, lastAnswer, lastFailure, now);
             services.add(new SystemHealthResponse.Service(
                     source,
                     status,
@@ -137,11 +139,19 @@ public class SystemMonitorServiceImpl implements SystemMonitorService {
         return store.deleteLastSeenBefore(clock.instant().minus(KEPT));
     }
 
-    /** The status rule of the class comment. */
-    static ServiceStatus status(Instant lastAnswer, Instant lastFailure, Instant now) {
-        boolean recentFailure = lastFailure != null && !lastFailure.isBefore(now.minus(RECENT));
+    /**
+     * The status rule of the class comment. A source of many independent endpoints (the news sites) is DOWN only when
+     * none of them answered within {@link #RECENT}: one feed refusing while the others answer is DEGRADED.
+     */
+    static ServiceStatus status(SystemEventSource source, Instant lastAnswer, Instant lastFailure, Instant now) {
+        Instant since = now.minus(RECENT);
+        boolean recentFailure = lastFailure != null && !lastFailure.isBefore(since);
         if (recentFailure) {
-            return lastAnswer != null && lastAnswer.isAfter(lastFailure) ? ServiceStatus.DEGRADED : ServiceStatus.DOWN;
+            boolean answeredAfter = lastAnswer != null && lastAnswer.isAfter(lastFailure);
+            boolean answeredRecently = lastAnswer != null && !lastAnswer.isBefore(since);
+            return answeredAfter || (source.manyEndpoints() && answeredRecently)
+                    ? ServiceStatus.DEGRADED
+                    : ServiceStatus.DOWN;
         }
         return lastAnswer != null ? ServiceStatus.UP : ServiceStatus.UNKNOWN;
     }
