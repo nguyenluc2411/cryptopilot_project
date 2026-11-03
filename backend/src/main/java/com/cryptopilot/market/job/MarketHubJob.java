@@ -75,12 +75,17 @@ public class MarketHubJob {
             return;
         }
         if (overviewQueued.compareAndSet(false, true)) {
-            scheduler.schedule(
-                    () -> {
-                        overviewQueued.set(false);
-                        broadcast.pushOverviews();
-                    },
-                    Instant.now().plus(SUBSCRIBE_SETTLE));
+            try {
+                scheduler.schedule(
+                        () -> {
+                            overviewQueued.set(false);
+                            broadcast.pushOverviews();
+                        },
+                        Instant.now().plus(SUBSCRIBE_SETTLE));
+            } catch (RuntimeException refused) {
+                // The scheduler is shutting down: the next subscription tries again; the regular push still runs.
+                overviewQueued.set(false);
+            }
         }
     }
 }

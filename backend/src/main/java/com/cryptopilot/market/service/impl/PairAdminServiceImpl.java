@@ -198,11 +198,16 @@ public class PairAdminServiceImpl implements PairAdminService {
     @Transactional
     public AdminPairResponse update(UUID adminId, UUID pairId, UpdatePairRequest request) {
         CryptoPair pair = lockedPair(pairId);
-        if (request.futuresEnabled() && request.maxLeverage() == null) {
+        // An INACTIVE pair has both markets off whatever the switches sent (UC-45): every check below reads the
+        // switches as they will be stored.
+        boolean active = request.status() == PairStatus.ACTIVE;
+        boolean spotOn = active && request.spotEnabled();
+        boolean futuresOn = active && request.futuresEnabled();
+        if (futuresOn && request.maxLeverage() == null) {
             throw new FieldValidationException(
                     "a futures market needs its maximum leverage", Map.of("maxLeverage", "MSG01"));
         }
-        if (request.futuresEnabled()) {
+        if (futuresOn) {
             requireWithinFirstBracket(request.maxLeverage(), brackets.findByPair(pair.getId()), "maxLeverage");
         }
         Map<String, Object> before = values(pair);
@@ -210,8 +215,7 @@ public class PairAdminServiceImpl implements PairAdminService {
         List<MarketType> disabled = new ArrayList<>();
         List<MarketType> enabled = new ArrayList<>();
         for (MarketType market : MarketType.values()) {
-            boolean switchOn = market == MarketType.SPOT ? request.spotEnabled() : request.futuresEnabled();
-            boolean available = request.status() == PairStatus.ACTIVE && switchOn;
+            boolean available = market == MarketType.SPOT ? spotOn : futuresOn;
             if (available && !pair.isEnabledOn(market)) {
                 enabled.add(market);
             }
@@ -227,15 +231,14 @@ public class PairAdminServiceImpl implements PairAdminService {
             }
         }
         for (MarketType market : MarketType.values()) {
-            boolean switchOn = market == MarketType.SPOT ? request.spotEnabled() : request.futuresEnabled();
-            if (switchOn) {
+            if (market == MarketType.SPOT ? spotOn : futuresOn) {
                 pair.enable(market);
             } else {
                 pair.disable(market);
             }
         }
         pair.changeStatus(request.status());
-        if (request.futuresEnabled()) {
+        if (futuresOn) {
             pair.limitLeverage(request.maxLeverage());
         }
         pair.placeAt(request.displayOrder());

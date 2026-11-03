@@ -207,6 +207,22 @@ class PairAdminApiTest {
         assertThat(events.stream(PairMarketEnabled.class)).isEmpty();
     }
 
+    /** An INACTIVE pair stores both markets off even when the request still has their switches on. */
+    @Test
+    void UC45_inactiveWithItsSwitchesOn_isStoredWithBothMarketsOff() throws Exception {
+        UUID pair = pair(false, false, "TRADING", "TRADING");
+        filters(pair);
+        update(pair, "ACTIVE", true, true, 20, 1).andExpect(status().isOk());
+
+        update(pair, "INACTIVE", true, true, 20, 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("INACTIVE"))
+                .andExpect(jsonPath("$.spotEnabled").value(false))
+                .andExpect(jsonPath("$.futuresEnabled").value(false))
+                .andExpect(jsonPath("$.maxLeverage").doesNotExist());
+        update(pair, "INACTIVE", false, true, null, 1).andExpect(status().isOk());
+    }
+
     /**
      * Futures turned on without brackets gets the default template, its first bracket above the ceiling, audited as
      * created; brackets once there are kept when the market is turned off and on again.

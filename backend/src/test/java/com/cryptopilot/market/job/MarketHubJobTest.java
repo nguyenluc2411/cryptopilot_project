@@ -52,6 +52,19 @@ class MarketHubJobTest {
     }
 
     @Test
+    void aRefusedSchedule_doesNotBlockTheNextSubscription() {
+        org.mockito.Mockito.when(scheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenThrow(new org.springframework.core.task.TaskRejectedException("shutting down"))
+                .thenReturn(null);
+        MarketHubJob job = job(true);
+
+        job.onSubscribe(subscribe("/topic/overview.SPOT"));
+        job.onSubscribe(subscribe("/topic/overview.SPOT"));
+
+        verify(scheduler, times(2)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
     void anotherTopic_orTopicsTurnedOff_pushNothing() {
         job(true).onSubscribe(subscribe("/topic/ticker.SPOT.BTCUSDT"));
         job(true).onSubscribe(subscribe(null));
