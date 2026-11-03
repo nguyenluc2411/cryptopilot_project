@@ -31,6 +31,7 @@ import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.market.service.impl.LatestMarketData;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import jakarta.annotation.PreDestroy;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
@@ -150,19 +151,34 @@ public class MarketStreamSupervisor {
         }
     }
 
-    /** An administrator brought a pair into service: its streams open now, not at the next refresh. */
+    /**
+     * An administrator brought a pair into service: its streams open now, not at the next refresh. After commit, so the
+     * pair is read as saved, and on the scheduler, so the administrator's answer does not wait for the reconnection.
+     */
     @EventListener
     public void onPairMarketEnabled(PairMarketEnabled event) {
-        if (properties.enabled()) {
+        if (!properties.enabled()) {
+            return;
+        }
+        AfterCommit.run(() -> {
             try {
-                refresh(event.market());
-            } catch (RuntimeException failure) {
-                log.error(
-                        "NSF-03 {} could not open {}; the next refresh tries again",
-                        event.market(),
-                        event.symbol(),
-                        failure);
+                scheduler.schedule(() -> refreshFor(event), Instant.now());
+            } catch (RuntimeException refused) {
+                // Shutting down: the next refresh opens the streams anyway.
+                log.warn("NSF-03 {} could not schedule {}: {}", event.market(), event.symbol(), refused.toString());
             }
+        });
+    }
+
+    private void refreshFor(PairMarketEnabled event) {
+        try {
+            refresh(event.market());
+        } catch (RuntimeException failure) {
+            log.error(
+                    "NSF-03 {} could not open {}; the next refresh tries again",
+                    event.market(),
+                    event.symbol(),
+                    failure);
         }
     }
 

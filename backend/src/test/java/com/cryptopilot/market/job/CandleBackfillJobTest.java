@@ -54,6 +54,8 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.Trigger;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -301,6 +303,33 @@ class CandleBackfillJobTest {
 
         assertThat(scheduled).singleElement().satisfies(task -> assertThat(task.at())
                 .isEqualTo(NOW));
+    }
+
+    /** Inside a transaction: the backfill is scheduled once it commits, never when it rolls back. */
+    @Test
+    void UC45_aPairTurnedOn_waitsForTheCommit_andARollbackSchedulesNothing() {
+        PairMarketEnabled enabled = new PairMarketEnabled(UUID.randomUUID(), "TRXUSDT", MarketType.SPOT);
+        CandleBackfillJob job = job(true);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            assertThat(scheduled).isEmpty();
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        assertThat(scheduled).as("rolled back").isEmpty();
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        assertThat(scheduled).as("committed").hasSize(1);
     }
 
     /** Enabled, the hourly cron is registered; runAll backfills both markets. */

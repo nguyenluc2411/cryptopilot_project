@@ -157,15 +157,18 @@ public class CandleBackfillJob {
         }
     }
 
-    /** The stream found candles missing: queue the gap and run its market now, unless the gap was dropped. */
-    /** An administrator brought a pair into service: its market is brought up to date at once, not at the next hour. */
+    /**
+     * An administrator brought a pair into service: its market is brought up to date at once, not at the next hour.
+     * After commit, so the run reads the pair as saved; the run itself is on the scheduler.
+     */
     @EventListener
     public void onPairMarketEnabled(PairMarketEnabled event) {
         if (properties.enabled()) {
-            continueAt(event.market(), clock.instant());
+            AfterCommit.run(() -> continueAt(event.market(), clock.instant()));
         }
     }
 
+    /** The stream found candles missing: queue the gap and run its market now, unless the gap was dropped. */
     @EventListener
     public void onGapDetected(GapDetected gap) {
         queue(gap);

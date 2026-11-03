@@ -52,14 +52,10 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -67,21 +63,21 @@ import org.springframework.transaction.support.TransactionTemplate;
  * change of either that takes a market out of service is a disabling: refused while simulated positions are open there
  * (BR-59, asked of every {@link OpenPositionCheck}), and announced with {@link PairMarketDisabled} inside the same
  * transaction, whose synchronous listener cancels the market's ACTIVE plans. A change that brings a market into service
- * is announced with {@link PairMarketEnabled} once it commits, so NSF-03 opens the pair's streams and NSF-02 stores its
- * candles at once; without it they would follow at the next refresh (5 minutes) and the next hourly backfill.
+ * is announced with {@link PairMarketEnabled}, whose listeners act once it commits and off the request's thread, so
+ * NSF-03 opens the pair's streams and NSF-02 stores its candles at once; without it they would follow at the next
+ * refresh (5 minutes) and the next hourly backfill.
  *
  * <p>Adding a pair reuses the synchronisation of NSF-01 with the symbol as its only seed, so a pair added here and one
  * seeded from configuration are created by the same code, with the same coins and filters.
  *
  * <p>The pair's leverage ceiling and its first bracket are kept consistent from either side (BR-26).
  *
- * <p>Rule: UC-45, UC-46; BR-07, BR-26, BR-27, BR-31, BR-57, BR-59; NSF-01.
+ * <p>Rule: UC-45, UC-46; BR-07, BR-26, BR-27, BR-31, BR-57, BR-59; NSF-01. Reference: Kleppmann, M. <i>Designing
+ * Data-Intensive Applications</i>, 2017, ch. 11 (acting on committed events).
  */
 @Service
 @RequiredArgsConstructor
 public class PairAdminServiceImpl implements PairAdminService {
-
-    private static final Logger log = LoggerFactory.getLogger(PairAdminServiceImpl.class);
 
     /** The most symbols {@link #exchangeSymbols} lists. */
     static final int EXCHANGE_SYMBOLS_LIMIT = 50;
@@ -257,9 +253,10 @@ public class PairAdminServiceImpl implements PairAdminService {
         if (enabled.contains(MarketType.FUTURES)) {
             bracketsFromTemplate(adminId, pair, now);
         }
-        announceAfterCommit(enabled.stream()
-                .map(market -> new PairMarketEnabled(pair.getId(), pair.getSymbol(), market))
-                .toList());
+        // Its listeners act after commit, off this thread: a rolled-back update announces nothing.
+        for (MarketType market : enabled) {
+            events.publishEvent(new PairMarketEnabled(pair.getId(), pair.getSymbol(), market));
+        }
         Map<String, Object> after = values(pair);
         if (!before.equals(after)) {
             admin.audit(new AuditEntry(
@@ -405,38 +402,6 @@ public class PairAdminServiceImpl implements PairAdminService {
                 pair.getId(),
                 null,
                 Map.of("symbol", pair.getSymbol(), "template", template.name(), "brackets", bracketValues(tiers))));
-    }
-
-    /**
-     * Publishes the markets the update brought into service once it has committed: the streams and the backfill then
-     * read the pair as saved, and an update that rolls back announces nothing. Without a transaction (a unit test) they
-     * are published at once.
-     */
-    private void announceAfterCommit(List<PairMarketEnabled> announcements) {
-        if (announcements.isEmpty()) {
-            return;
-        }
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            announcements.forEach(events::publishEvent);
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                for (PairMarketEnabled announcement : announcements) {
-                    try {
-                        events.publishEvent(announcement);
-                    } catch (RuntimeException failure) {
-                        // Committed already: the streams and the backfill catch up at their own schedule.
-                        log.warn(
-                                "Could not announce {} on {}: {}",
-                                announcement.symbol(),
-                                announcement.market(),
-                                failure.toString());
-                    }
-                }
-            }
-        });
     }
 
     /** Whether the exchange trades the pair on the market and has sent its filters there. */

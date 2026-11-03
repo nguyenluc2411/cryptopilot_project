@@ -2,6 +2,9 @@ package com.cryptopilot.market.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -17,6 +20,8 @@ import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.ExchangeSymbol;
 import com.cryptopilot.market.event.PairMarketEnabled;
+import com.cryptopilot.market.job.CandleBackfillJob;
+import com.cryptopilot.market.job.MarketStreamSupervisor;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PairAdminService;
 import com.cryptopilot.support.InAppNotifications;
@@ -51,6 +56,7 @@ import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.test.web.servlet.MockMvc;
@@ -91,6 +97,12 @@ class PairAdminApiTest {
 
     @Autowired
     private ApplicationEvents events;
+
+    @MockitoSpyBean
+    private MarketStreamSupervisor streams;
+
+    @MockitoSpyBean
+    private CandleBackfillJob backfill;
 
     private final List<UUID> accounts = new ArrayList<>();
     private final List<UUID> pairs = new ArrayList<>();
@@ -199,6 +211,9 @@ class PairAdminApiTest {
             assertThat(event.pairId()).isEqualTo(pair);
             assertThat(event.market()).isEqualTo(MarketType.SPOT);
         });
+        // Both listeners hear it; they act after the commit, on the scheduler (MarketStreamSupervisorTest).
+        verify(streams, timeout(5_000)).onPairMarketEnabled(any(PairMarketEnabled.class));
+        verify(backfill, timeout(5_000)).onPairMarketEnabled(any(PairMarketEnabled.class));
 
         events.clear();
         update(pair, "ACTIVE", true, false, null, 2).andExpect(status().isOk());

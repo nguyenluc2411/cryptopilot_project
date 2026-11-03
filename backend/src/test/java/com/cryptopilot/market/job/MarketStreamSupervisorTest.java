@@ -53,6 +53,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -85,6 +87,7 @@ class MarketStreamSupervisorTest {
 
     private final List<Object> events = new CopyOnWriteArrayList<>();
     private final List<Duration> refreshes = new CopyOnWriteArrayList<>();
+    private final List<Runnable> runs = new CopyOnWriteArrayList<>();
     private final LatestMarketData latest = new LatestMarketData();
     private final List<StreamMessage> realtime = new CopyOnWriteArrayList<>();
     private final List<MinuteKline> minutes = new CopyOnWriteArrayList<>();
@@ -179,9 +182,42 @@ class MarketStreamSupervisorTest {
         assertThat(supervisor.shards(MarketType.SPOT)).isEmpty();
 
         supervisor.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "ETHUSDT", MarketType.SPOT));
+        assertThat(supervisor.shards(MarketType.SPOT))
+                .as("on the scheduler, not on the administrator's thread")
+                .isEmpty();
+        assertThat(runs).hasSize(1);
+        runs.removeFirst().run();
 
         assertThat(supervisor.shards(MarketType.SPOT)).isNotEmpty();
         assertThat(supervisor.shards(MarketType.FUTURES)).isEmpty();
+    }
+
+    /** Inside a transaction: nothing until it commits, and nothing at all when it rolls back. */
+    @Test
+    void UC45_aPairTurnedOn_waitsForTheCommit_andARollbackOpensNothing() {
+        supervisor = supervisor(true, 100);
+        PairMarketEnabled enabled = new PairMarketEnabled(UUID.randomUUID(), "ETHUSDT", MarketType.SPOT);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            supervisor.onPairMarketEnabled(enabled);
+            assertThat(runs).isEmpty();
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        assertThat(runs).as("rolled back").isEmpty();
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            supervisor.onPairMarketEnabled(enabled);
+            assertThat(runs).isEmpty();
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        assertThat(runs).as("committed").hasSize(1);
     }
 
     /** A market with no pair to stream opens no connection. */
@@ -561,6 +597,10 @@ class MarketStreamSupervisorTest {
                 TaskScheduler.class.getClassLoader(), new Class<?>[] {TaskScheduler.class}, (proxy, method, args) -> {
                     if (method.getName().equals("scheduleWithFixedDelay") && args[1] instanceof Duration delay) {
                         refreshes.add(delay);
+                        return null;
+                    }
+                    if (method.getName().equals("schedule") && args[1] instanceof Instant) {
+                        runs.add((Runnable) args[0]);
                         return null;
                     }
                     throw new UnsupportedOperationException(method.getName());

@@ -2,9 +2,11 @@ package com.cryptopilot.market.job;
 
 import com.cryptopilot.market.config.MarketHubProperties;
 import com.cryptopilot.market.service.MarketBroadcastService;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -18,7 +20,8 @@ import org.springframework.web.socket.messaging.SessionSubscribeEvent;
  * Pushes the market topics on the rhythm of TECHNICAL_DESIGN 9 when the hub is enabled: ticker and kline updates every
  * {@code updateInterval} (1 s), each market's overview every {@code overviewInterval} (2 s).
  *
- * <p>Rule: NSF-03; SRS 4.2.3; TECHNICAL_DESIGN 9 and 10.
+ * <p>Rule: NSF-03; SRS 4.2.3; TECHNICAL_DESIGN 9 and 10. Reference: Tanenbaum, A. &amp; van Steen, M. <i>Distributed
+ * Systems</i>, 3rd ed., 2017, §6 (rate limiting, coalescing).
  */
 @Component
 public class MarketHubJob {
@@ -31,15 +34,24 @@ public class MarketHubJob {
     /** How long a new subscription waits for its first overview: long enough for the broker to register it. */
     static final Duration SUBSCRIBE_SETTLE = Duration.ofMillis(150);
 
+    /** The least time between two subscribe-triggered pushes, so a reconnect storm cannot multiply the pushes. */
+    static final Duration SUBSCRIBE_MIN_GAP = Duration.ofSeconds(2);
+
     private final AtomicBoolean overviewQueued = new AtomicBoolean(false);
+    /** When the last subscribe-triggered push was scheduled; {@code null} before the first. */
+    private final AtomicReference<Instant> lastSubscribePush = new AtomicReference<>();
+
     private final MarketBroadcastService broadcast;
     private final TaskScheduler scheduler;
     private final MarketHubProperties properties;
+    private final Clock clock;
 
-    public MarketHubJob(MarketBroadcastService broadcast, TaskScheduler scheduler, MarketHubProperties properties) {
+    public MarketHubJob(
+            MarketBroadcastService broadcast, TaskScheduler scheduler, MarketHubProperties properties, Clock clock) {
         this.broadcast = broadcast;
         this.scheduler = scheduler;
         this.properties = properties;
+        this.clock = clock;
     }
 
     /** Schedules both pushes when the hub is enabled. */
@@ -62,8 +74,9 @@ public class MarketHubJob {
     /**
      * A client has just subscribed to an overview: the overviews are pushed again shortly, so the market board fills in
      * as soon as the connection is up instead of at the next scheduled push (up to {@code overviewInterval} later). The
-     * push waits {@link #SUBSCRIBE_SETTLE} for the broker to register the subscription, and subscriptions arriving
-     * meanwhile share it.
+     * push waits {@link #SUBSCRIBE_SETTLE} for the broker to register the subscription, subscriptions arriving
+     * meanwhile share it, and none is pushed within {@link #SUBSCRIBE_MIN_GAP} of the previous one: the regular push
+     * covers those clients.
      */
     @EventListener
     public void onSubscribe(SessionSubscribeEvent event) {
@@ -74,6 +87,11 @@ public class MarketHubJob {
         if (destination == null || !destination.startsWith(OVERVIEW_TOPIC)) {
             return;
         }
+        Instant now = clock.instant();
+        Instant last = lastSubscribePush.get();
+        if (last != null && now.isBefore(last.plus(SUBSCRIBE_MIN_GAP))) {
+            return;
+        }
         if (overviewQueued.compareAndSet(false, true)) {
             try {
                 scheduler.schedule(
@@ -81,7 +99,8 @@ public class MarketHubJob {
                             overviewQueued.set(false);
                             broadcast.pushOverviews();
                         },
-                        Instant.now().plus(SUBSCRIBE_SETTLE));
+                        now.plus(SUBSCRIBE_SETTLE));
+                lastSubscribePush.set(now);
             } catch (RuntimeException refused) {
                 // The scheduler is shutting down: the next subscription tries again; the regular push still runs.
                 overviewQueued.set(false);
