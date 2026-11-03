@@ -22,6 +22,7 @@ import com.cryptopilot.market.dto.response.ExchangeSymbolResponse;
 import com.cryptopilot.market.dto.response.LeverageBracketsResponse;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.model.ExchangeListing;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -48,18 +49,23 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * SCR-37 and SCR-38. A pair's availability on a market is its status and the market's switch together (BR-07), so a
  * change of either that takes a market out of service is a disabling: refused while simulated positions are open there
  * (BR-59, asked of every {@link OpenPositionCheck}), and announced with {@link PairMarketDisabled} inside the same
- * transaction, whose synchronous listener cancels the market's ACTIVE plans. Streams and backfill follow the enabled
- * pairs on their own: NSF-03 reads them again every refresh interval (5 minutes).
+ * transaction, whose synchronous listener cancels the market's ACTIVE plans. A change that brings a market into service
+ * is announced with {@link PairMarketEnabled} once it commits, so NSF-03 opens the pair's streams and NSF-02 stores its
+ * candles at once; without it they would follow at the next refresh (5 minutes) and the next hourly backfill.
  *
  * <p>Adding a pair reuses the synchronisation of NSF-01 with the symbol as its only seed, so a pair added here and one
  * seeded from configuration are created by the same code, with the same coins and filters.
@@ -71,6 +77,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 @RequiredArgsConstructor
 public class PairAdminServiceImpl implements PairAdminService {
+
+    private static final Logger log = LoggerFactory.getLogger(PairAdminServiceImpl.class);
 
     /** The most symbols {@link #exchangeSymbols} lists. */
     static final int EXCHANGE_SYMBOLS_LIMIT = 50;
@@ -197,9 +205,13 @@ public class PairAdminServiceImpl implements PairAdminService {
         Map<String, Object> before = values(pair);
         Instant now = clock.instant();
         List<MarketType> disabled = new ArrayList<>();
+        List<MarketType> enabled = new ArrayList<>();
         for (MarketType market : MarketType.values()) {
             boolean switchOn = market == MarketType.SPOT ? request.spotEnabled() : request.futuresEnabled();
             boolean available = request.status() == PairStatus.ACTIVE && switchOn;
+            if (available && !pair.isEnabledOn(market)) {
+                enabled.add(market);
+            }
             // Whichever switch brings the market into service, the exchange must trade it there.
             if (available && !pair.isEnabledOn(market) && !tradable(pair, market)) {
                 throw new BusinessException(
@@ -236,6 +248,9 @@ public class PairAdminServiceImpl implements PairAdminService {
         for (MarketType market : disabled) {
             requireNoOpenPositions(pair, market);
         }
+        announceAfterCommit(enabled.stream()
+                .map(market -> new PairMarketEnabled(pair.getId(), pair.getSymbol(), market))
+                .toList());
         Map<String, Object> after = values(pair);
         if (!before.equals(after)) {
             admin.audit(new AuditEntry(
@@ -348,6 +363,38 @@ public class PairAdminServiceImpl implements PairAdminService {
                         pair.getSymbol() + " " + market + " has open simulated positions");
             }
         }
+    }
+
+    /**
+     * Publishes the markets the update brought into service once it has committed: the streams and the backfill then
+     * read the pair as saved, and an update that rolls back announces nothing. Without a transaction (a unit test) they
+     * are published at once.
+     */
+    private void announceAfterCommit(List<PairMarketEnabled> announcements) {
+        if (announcements.isEmpty()) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            announcements.forEach(events::publishEvent);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                for (PairMarketEnabled announcement : announcements) {
+                    try {
+                        events.publishEvent(announcement);
+                    } catch (RuntimeException failure) {
+                        // Committed already: the streams and the backfill catch up at their own schedule.
+                        log.warn(
+                                "Could not announce {} on {}: {}",
+                                announcement.symbol(),
+                                announcement.market(),
+                                failure.toString());
+                    }
+                }
+            }
+        });
     }
 
     /** Whether the exchange trades the pair on the market and has sent its filters there. */

@@ -16,6 +16,8 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.ExchangeSymbol;
+import com.cryptopilot.market.event.PairMarketEnabled;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PairAdminService;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -49,6 +51,8 @@ import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -62,6 +66,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestcontainersConfig.class)
+@RecordApplicationEvents
 class PairAdminApiTest {
 
     private static final String PAIRS = "/api/v1/admin/pairs";
@@ -83,6 +88,9 @@ class PairAdminApiTest {
 
     @MockitoBean
     private BinanceRestClient exchange;
+
+    @Autowired
+    private ApplicationEvents events;
 
     private final List<UUID> accounts = new ArrayList<>();
     private final List<UUID> pairs = new ArrayList<>();
@@ -167,6 +175,33 @@ class PairAdminApiTest {
         update(pair, "ACTIVE", true, false, 50, 3)
                 .andExpect(jsonPath("$.futuresEnabled").value(false))
                 .andExpect(jsonPath("$.maxLeverage").doesNotExist());
+    }
+
+    /**
+     * A market brought into service is announced once, after the change commits, so its streams and candles follow at
+     * once; a change that keeps it in service, takes it out, or is refused announces nothing.
+     */
+    @Test
+    void UC45_aMarketSwitchedOn_isAnnouncedOnce_andNothingElseIs() throws Exception {
+        UUID pair = pair(false, false, "TRADING", "TRADING");
+        filters(pair);
+
+        update(pair, "INACTIVE", true, false, null, 1).andExpect(status().isOk());
+        assertThat(events.stream(PairMarketEnabled.class))
+                .as("inactive: not in service")
+                .isEmpty();
+
+        update(pair, "ACTIVE", true, false, null, 1).andExpect(status().isOk());
+        assertThat(events.stream(PairMarketEnabled.class)).singleElement().satisfies(event -> {
+            assertThat(event.pairId()).isEqualTo(pair);
+            assertThat(event.market()).isEqualTo(MarketType.SPOT);
+        });
+
+        events.clear();
+        update(pair, "ACTIVE", true, false, null, 2).andExpect(status().isOk());
+        update(pair, "ACTIVE", true, true, null, 2).andExpect(status().isBadRequest());
+        update(pair, "ACTIVE", false, false, null, 2).andExpect(status().isOk());
+        assertThat(events.stream(PairMarketEnabled.class)).isEmpty();
     }
 
     @Test

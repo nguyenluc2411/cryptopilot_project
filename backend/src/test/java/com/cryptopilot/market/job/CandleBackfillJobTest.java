@@ -16,6 +16,7 @@ import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.event.MarketStreamReconnected;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.CandleBackfillJob.Outcome;
 import com.cryptopilot.market.model.BackfillRun;
@@ -424,6 +425,19 @@ class CandleBackfillJobTest {
     @Test
     void NSF03_aReconnectedStream_triggersThatMarketsBackfill() {
         job(true).onStreamReconnected(new MarketStreamReconnected(MarketType.FUTURES));
+
+        assertThat(scheduled).singleElement().satisfies(task -> assertThat(task.at())
+                .isEqualTo(NOW));
+    }
+
+    /** A pair an administrator turned on: that market is brought up to date at once, not at the next hour. */
+    @Test
+    void UC45_aPairTurnedOn_triggersThatMarketsBackfill_unlessDisabled() {
+        PairMarketEnabled enabled = new PairMarketEnabled(UUID.randomUUID(), "TRXUSDT", MarketType.SPOT);
+        job(false).onPairMarketEnabled(enabled);
+        assertThat(scheduled).isEmpty();
+
+        job(true).onPairMarketEnabled(enabled);
 
         assertThat(scheduled).singleElement().satisfies(task -> assertThat(task.at())
                 .isEqualTo(NOW));

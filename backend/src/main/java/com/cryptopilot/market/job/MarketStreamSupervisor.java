@@ -20,6 +20,7 @@ import com.cryptopilot.market.client.StreamMessage.Level;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.event.MarketStreamReconnected;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.model.enums.BinanceVenue;
@@ -146,6 +147,22 @@ public class MarketStreamSupervisor {
     public void onSymbolsSynchronised(SymbolsSynchronised event) {
         if (properties.enabled()) {
             refresh(event.market());
+        }
+    }
+
+    /** An administrator brought a pair into service: its streams open now, not at the next refresh. */
+    @EventListener
+    public void onPairMarketEnabled(PairMarketEnabled event) {
+        if (properties.enabled()) {
+            try {
+                refresh(event.market());
+            } catch (RuntimeException failure) {
+                log.error(
+                        "NSF-03 {} could not open {}; the next refresh tries again",
+                        event.market(),
+                        event.symbol(),
+                        failure);
+            }
         }
     }
 

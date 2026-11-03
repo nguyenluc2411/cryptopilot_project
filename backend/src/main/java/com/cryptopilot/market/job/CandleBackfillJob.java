@@ -4,6 +4,7 @@ import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.event.MarketStreamReconnected;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.BackfillRun;
 import com.cryptopilot.market.model.GapFill;
@@ -157,6 +158,14 @@ public class CandleBackfillJob {
     }
 
     /** The stream found candles missing: queue the gap and run its market now, unless the gap was dropped. */
+    /** An administrator brought a pair into service: its market is brought up to date at once, not at the next hour. */
+    @EventListener
+    public void onPairMarketEnabled(PairMarketEnabled event) {
+        if (properties.enabled()) {
+            continueAt(event.market(), clock.instant());
+        }
+    }
+
     @EventListener
     public void onGapDetected(GapDetected gap) {
         queue(gap);

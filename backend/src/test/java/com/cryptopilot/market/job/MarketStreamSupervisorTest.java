@@ -21,6 +21,7 @@ import com.cryptopilot.market.client.StubStreamServer;
 import com.cryptopilot.market.client.StubStreamServer.Connection;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.MarketStreamReconnected;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.model.enums.MarketInterval;
@@ -168,6 +169,19 @@ class MarketStreamSupervisorTest {
                 .extracting(shard -> shard.streams().size())
                 .containsExactly(12, 6);
         assertThat(supervisor.shards(MarketType.SPOT).get(1).streams()).allMatch(name -> name.startsWith("solusdt@"));
+    }
+
+    /** A pair an administrator turned on gets its connections at once, not at the next refresh. */
+    @Test
+    void UC45_aPairTurnedOn_opensItsMarketsStreamsAtOnce() {
+        data.pair("ETHUSDT", true, false, "TRADING", null, 1);
+        supervisor = supervisor(true, 100);
+        assertThat(supervisor.shards(MarketType.SPOT)).isEmpty();
+
+        supervisor.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "ETHUSDT", MarketType.SPOT));
+
+        assertThat(supervisor.shards(MarketType.SPOT)).isNotEmpty();
+        assertThat(supervisor.shards(MarketType.FUTURES)).isEmpty();
     }
 
     /** A market with no pair to stream opens no connection. */
