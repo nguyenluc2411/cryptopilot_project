@@ -46,6 +46,27 @@ public class MarketMetrics implements AdminMetricSource {
         return Map.of("latestCandle", latest);
     }
 
+    /**
+     * The health panel's ingestion figures: the latest stored candle of each market, and the markets whose Binance
+     * IP ban (T-017) has not ended yet, with when it ends.
+     */
+    @Override
+    public Map<String, Object> health(Instant now) {
+        Map<String, Instant> latest = new TreeMap<>();
+        for (MarketType market : MarketType.values()) {
+            latestClose(market, now).ifPresent(close -> latest.put(market.name(), close));
+        }
+        Map<String, Instant> bans = new TreeMap<>();
+        sql.sql("select market_type, banned_until from binance_ban where banned_until > ?")
+                .param(Timestamp.from(now))
+                .query((row, index) -> Map.entry(
+                        row.getString("market_type"),
+                        row.getTimestamp("banned_until").toInstant()))
+                .list()
+                .forEach(ban -> bans.put(ban.getKey(), ban.getValue()));
+        return Map.of("latestCandle", latest, "binanceBans", bans);
+    }
+
     private Optional<Instant> latestClose(MarketType market, Instant now) {
         Optional<Instant> recent = sql
                 .sql("select max(close_time) from ohlcv where market_type = ? and open_time >= ?")

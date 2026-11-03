@@ -101,3 +101,5 @@ user_profile,trading_style,ck_user_profile_trading_style,SCALPING|DAY|SWING|POSI
 user_relation,relation_type,ck_user_relation_type,FOLLOW|BLOCK
 user_subscription,subscription_status,ck_user_subscription_status,ACTIVE|EXPIRED|CANCELLED
 user_token,token_type,ck_user_token_type,EMAIL_VERIFICATION|PASSWORD_RESET|REFRESH
+system_event,category,ck_system_event_category,SYSTEM_ERROR|EXTERNAL_API_FAILURE
+system_event,source,ck_system_event_source,APPLICATION|SCHEDULED_JOB|BINANCE_REST|AI_SERVICE|MEDIA_STORAGE|NEWS_SOURCE|MAIL

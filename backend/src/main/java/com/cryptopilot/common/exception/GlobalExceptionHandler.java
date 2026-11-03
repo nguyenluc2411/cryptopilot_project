@@ -7,6 +7,8 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
@@ -20,6 +22,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
@@ -50,6 +54,19 @@ import tools.jackson.core.JacksonException;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
+
+    /** Told of every unexpected error, for the system log (UC-46); {@code null} in a unit test. */
+    private final ApplicationEventPublisher events;
+
+    /** Without anyone told of unexpected errors, as a unit test builds it. */
+    public GlobalExceptionHandler() {
+        this(null);
+    }
+
+    @Autowired
+    public GlobalExceptionHandler(ApplicationEventPublisher events) {
+        this.events = events;
+    }
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
@@ -143,8 +160,30 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         String reference = CorrelationIdFilter.currentCorrelationId()
                 .orElseGet(() -> UuidV7.next().toString());
         log.error("Unhandled exception, reference {}", reference, exception);
+        publish(exception, reference);
         ProblemDetail body = problemDetail(ErrorCode.INTERNAL_ERROR, UNEXPECTED_DETAIL, reference);
         return ResponseEntity.status(ErrorCode.INTERNAL_ERROR.status()).body(body);
+    }
+
+    /** Tells the system log; a listener that fails must not change the answer. */
+    private void publish(Exception exception, String reference) {
+        if (events == null) {
+            return;
+        }
+        try {
+            events.publishEvent(new UnexpectedFailure(operation(), exception, reference));
+        } catch (RuntimeException listenerFailed) {
+            log.warn("The unexpected error {} could not be passed on: {}", reference, listenerFailed.toString());
+        }
+    }
+
+    /** The current request's method and path, without its query, which may carry personal data. */
+    private static String operation() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
+            return attributes.getRequest().getMethod() + " "
+                    + attributes.getRequest().getRequestURI();
+        }
+        return "unknown";
     }
 
     /**
