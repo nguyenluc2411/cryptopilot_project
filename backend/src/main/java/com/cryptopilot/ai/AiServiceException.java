@@ -48,10 +48,17 @@ public class AiServiceException extends RuntimeException implements ExternalAnsw
         return status;
     }
 
-    /** A 4xx it says will not improve by retrying: the AI Service is up and refused this request. */
+    /**
+     * A non-retryable 4xx other than 401/403 (a wrong secret breaks every call). Reference: RFC 9110 §15.5.2, §15.5.4.
+     */
     @Override
     public boolean serviceAnswered() {
-        return status >= 400 && status < 500 && !retryable && !BAD_ANSWER.equals(code);
+        return status >= 400
+                && status < 500
+                && status != 401
+                && status != 403
+                && !retryable
+                && !BAD_ANSWER.equals(code);
     }
 
     public String code() {

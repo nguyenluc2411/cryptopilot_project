@@ -139,6 +139,12 @@ class AiServiceClientTest {
         assertThat(failure().serviceAnswered()).isTrue();
         assertThat(failure().status()).isEqualTo(400);
 
+        answer.set(new Answer(401, "{\"code\":\"UNAUTHORIZED\",\"retryable\":false}"));
+        assertThat(failure().serviceAnswered()).as("wrong shared secret").isFalse();
+
+        answer.set(new Answer(403, "{\"code\":\"FORBIDDEN\",\"retryable\":false}"));
+        assertThat(failure().serviceAnswered()).isFalse();
+
         answer.set(new Answer(429, "{\"code\":\"LLM_RATE_LIMITED\",\"retryable\":true}"));
         assertThat(failure().serviceAnswered()).isFalse();
 

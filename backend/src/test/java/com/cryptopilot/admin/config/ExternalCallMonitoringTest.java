@@ -18,6 +18,8 @@ import com.cryptopilot.admin.service.impl.ExternalCallTracker;
 import com.cryptopilot.admin.service.impl.SystemEventRecorder;
 import com.cryptopilot.ai.AiServiceException;
 import com.cryptopilot.common.exception.ExternalAnswer;
+import com.cryptopilot.market.client.BinanceClientException;
+import com.cryptopilot.market.model.enums.BinanceVenue;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -124,6 +126,37 @@ class ExternalCallMonitoringTest {
                         eq("FakeClient.refuse"),
                         eq(rateLimited),
                         isNull());
+    }
+
+    /** Binance answers 403 when its WAF blocks this server: every call fails, so it is a failure, not an answer. */
+    @Test
+    void aBinanceForbidden_isAFailure_notAnAnswer() throws Exception {
+        java.lang.reflect.Constructor<BinanceClientException> create =
+                BinanceClientException.class.getDeclaredConstructor(
+                        BinanceClientException.Kind.class,
+                        BinanceVenue.class,
+                        String.class,
+                        java.time.Instant.class,
+                        Throwable.class,
+                        int.class);
+        create.setAccessible(true);
+        BinanceClientException forbidden = create.newInstance(
+                BinanceClientException.Kind.REJECTED,
+                BinanceVenue.SPOT,
+                "SPOT /api/v3/klines answered 403",
+                null,
+                null,
+                403);
+
+        assertThatThrownBy(() -> client.refuse(forbidden)).isSameAs(forbidden);
+        verify(recorder)
+                .record(
+                        eq(SystemEventCategory.EXTERNAL_API_FAILURE),
+                        eq(SystemEventSource.AI_SERVICE),
+                        eq("FakeClient.refuse"),
+                        eq(forbidden),
+                        isNull());
+        verify(tracker, never()).succeeded(any());
     }
 
     @Test

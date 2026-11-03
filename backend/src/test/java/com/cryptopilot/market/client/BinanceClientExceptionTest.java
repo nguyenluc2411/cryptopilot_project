@@ -48,6 +48,11 @@ class BinanceClientExceptionTest {
                 .isTrue();
         assertThat(refusal(BinanceClientException.Kind.REJECTED, 404).serviceAnswered())
                 .isTrue();
+        assertThat(refusal(BinanceClientException.Kind.REJECTED, 401).serviceAnswered())
+                .isFalse();
+        assertThat(refusal(BinanceClientException.Kind.REJECTED, 403).serviceAnswered())
+                .as("the WAF blocks every call")
+                .isFalse();
         assertThat(refusal(BinanceClientException.Kind.REJECTED, 408).serviceAnswered())
                 .isFalse();
         assertThat(refusal(BinanceClientException.Kind.BANNED, 418).serviceAnswered())

@@ -5,8 +5,9 @@
 --
 -- A failure that repeats is one row, not thousands: the same fingerprint (category, source, operation, error type)
 -- seen again within ten minutes of its row's first_seen_at adds to occurrences and moves last_seen_at; buckets are
--- fixed, so an outage of an hour is six rows. A technical table like binance_ban — operational state of the application, not a business entity of the
--- logical model — written outside the failing command's transaction, and deleted after 90 days.
+-- fixed, so an outage of an hour is six rows. A technical table like binance_ban — operational state of the
+-- application, not a business entity of the logical model — written outside the failing command's transaction, and
+-- deleted after 90 days.
 CREATE TABLE system_event (
     system_event_id uuid          NOT NULL,
     category        varchar(32)   NOT NULL,

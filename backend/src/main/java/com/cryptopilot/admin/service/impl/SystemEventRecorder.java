@@ -39,8 +39,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * </ul>
  *
  * <p>The same failure seen again within {@link #MERGE_WINDOW} of its row's first failure is one row with a count, so a
- * service down for an hour leaves six rows, not one per call. Only the exception's type and message are kept, cut to the column's length; no
- * request body, header or argument is.
+ * service down for an hour leaves six rows, not one per call. Only the exception's type and message are kept, cut to
+ * the column's length; no request body, header or argument is.
  *
  * <p>Rule: UC-46; registration form, Admin System ("system errors, and external API failures"). Reference: Nygard, M.
  * <i>Release It!</i> 2nd ed., 2018, ch. 5 (stability patterns, failure aggregation).

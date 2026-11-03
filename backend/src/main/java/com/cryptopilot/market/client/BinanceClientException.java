@@ -100,12 +100,17 @@ public final class BinanceClientException extends RuntimeException implements Ex
     }
 
     /**
-     * A 4xx refusal of this request: the exchange is up. Not a 408 (it gave up waiting), nor a 418 or 429, which
-     * refuse every call until {@link #retryAt()}.
+     * A 4xx refusal of this request only: not 401/403 (the WAF blocks every call), 408, 418 or 429. Reference:
+     * RFC 9110 §15.5.2, §15.5.4; Binance Spot API docs, "General info: HTTP 403 = WAF limit".
      */
     @Override
     public boolean serviceAnswered() {
-        return kind == Kind.REJECTED && status >= 400 && status < 500 && status != 408;
+        return kind == Kind.REJECTED
+                && status >= 400
+                && status < 500
+                && status != 401
+                && status != 403
+                && status != 408;
     }
 
     /** Why the call produced no data. */
