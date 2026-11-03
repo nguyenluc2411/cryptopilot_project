@@ -186,7 +186,10 @@ class PairAdminApiTest {
         UUID pair = pair(false, false, "TRADING", "TRADING");
         filters(pair);
 
-        update(pair, "INACTIVE", true, false, null, 1).andExpect(status().isOk());
+        update(pair, "INACTIVE", true, false, null, 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.spotEnabled").value(false))
+                .andExpect(jsonPath("$.futuresEnabled").value(false));
         assertThat(events.stream(PairMarketEnabled.class))
                 .as("inactive: not in service")
                 .isEmpty();
