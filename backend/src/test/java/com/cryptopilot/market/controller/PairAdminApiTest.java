@@ -204,6 +204,40 @@ class PairAdminApiTest {
         assertThat(events.stream(PairMarketEnabled.class)).isEmpty();
     }
 
+    /**
+     * Futures turned on without brackets gets the default template, its first bracket above the ceiling, audited as
+     * created; brackets once there are kept when the market is turned off and on again.
+     */
+    @Test
+    void UC45_futuresTurnedOnWithoutBrackets_getsTheDefaultTemplate_once() throws Exception {
+        UUID pair = pair(false, false, "TRADING", "TRADING");
+        filters(pair);
+
+        update(pair, "ACTIVE", false, true, 50, 1).andExpect(status().isOk());
+
+        List<LeverageTier> tiers = marketApi.leverageBrackets(pair);
+        assertThat(tiers).hasSize(10);
+        assertThat(tiers.getFirst().maxLeverage()).isEqualTo(75);
+        String created = "select count(*) from audit_log where user_id = ? and entity_type = 'LEVERAGE_BRACKET'"
+                + " and action_code = 'CONFIGURATION_CREATED' and new_value ->> 'template' = 'ALTCOIN'";
+        assertThat(sql.sql(created).param(admin).query(Long.class).single()).isEqualTo(1);
+
+        update(pair, "ACTIVE", false, false, null, 1).andExpect(status().isOk());
+        update(pair, "ACTIVE", false, true, 20, 1).andExpect(status().isOk());
+        assertThat(marketApi.leverageBrackets(pair)).hasSize(10);
+        assertThat(sql.sql(created).param(admin).query(Long.class).single()).isEqualTo(1);
+    }
+
+    @Test
+    void UC46_theTemplates_areListedWithTheirAmounts_forAdministratorsOnly() throws Exception {
+        as(admin, get(PAIRS + "/bracket-templates"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].id").value(org.hamcrest.Matchers.contains("MAJOR", "ALTCOIN", "SMALL_CAP")))
+                .andExpect(jsonPath("$[0].firstLeverage").value(125))
+                .andExpect(jsonPath("$[0].brackets[11].maintenanceAmount").value("421481450.00000000"));
+        as(trader, get(PAIRS + "/bracket-templates")).andExpect(status().isForbidden());
+    }
+
     @Test
     void UC45_aMarketTheExchangeDoesNotTrade_cannotBeSwitchedOn() throws Exception {
         UUID pair = pair(false, false, "TRADING", "NOT_TRADING");

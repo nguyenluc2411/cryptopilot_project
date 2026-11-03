@@ -18,12 +18,14 @@ import com.cryptopilot.market.dto.request.LeverageBracketRequest;
 import com.cryptopilot.market.dto.request.LeverageBracketsRequest;
 import com.cryptopilot.market.dto.request.UpdatePairRequest;
 import com.cryptopilot.market.dto.response.AdminPairResponse;
+import com.cryptopilot.market.dto.response.BracketTemplateResponse;
 import com.cryptopilot.market.dto.response.ExchangeSymbolResponse;
 import com.cryptopilot.market.dto.response.LeverageBracketsResponse;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.model.ExchangeListing;
+import com.cryptopilot.market.model.enums.BracketTemplate;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.PairStatus;
@@ -36,6 +38,7 @@ import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -248,6 +251,9 @@ public class PairAdminServiceImpl implements PairAdminService {
         for (MarketType market : disabled) {
             requireNoOpenPositions(pair, market);
         }
+        if (enabled.contains(MarketType.FUTURES)) {
+            bracketsFromTemplate(adminId, pair, now);
+        }
         announceAfterCommit(enabled.stream()
                 .map(market -> new PairMarketEnabled(pair.getId(), pair.getSymbol(), market))
                 .toList());
@@ -262,6 +268,14 @@ public class PairAdminServiceImpl implements PairAdminService {
                     changed(after, before)));
         }
         return responses(List.of(pair)).getFirst();
+    }
+
+    @Override
+    public List<BracketTemplateResponse> bracketTemplates() {
+        return Arrays.stream(BracketTemplate.values())
+                .map(template -> new BracketTemplateResponse(
+                        template.name(), template.firstLeverage(), checkedBrackets(template.rows())))
+                .toList();
     }
 
     @Override
@@ -363,6 +377,31 @@ public class PairAdminServiceImpl implements PairAdminService {
                         pair.getSymbol() + " " + market + " has open simulated positions");
             }
         }
+    }
+
+    /**
+     * A Futures market turned on without brackets gets the default template's (UC-45): with none, every Futures order,
+     * leverage change and plan on the pair is refused, which the administrator would only find out from a Trader. The
+     * template's first bracket allows the pair's ceiling (BR-26); the brackets are audited as created, and the
+     * administrator adjusts them on SCR-38. A pair that has brackets keeps them.
+     */
+    private void bracketsFromTemplate(UUID adminId, CryptoPair pair, Instant now) {
+        if (!brackets.findByPair(pair.getId()).isEmpty()) {
+            return;
+        }
+        String baseCoin =
+                coins.findById(pair.getBaseCoinId()).map(Coin::getSymbol).orElse("");
+        BracketTemplate template = BracketTemplate.defaultFor(baseCoin, pair.getMaxLeverage());
+        List<LeverageTier> tiers = checkedBrackets(template.rows());
+        brackets.replace(pair.getId(), tiers, adminId, now);
+        events.publishEvent(new LeverageBracketsReplaced(pair.getId(), pair.getSymbol(), now));
+        admin.audit(new AuditEntry(
+                adminId,
+                AuditAction.CONFIGURATION_CREATED,
+                AuditedEntity.LEVERAGE_BRACKET,
+                pair.getId(),
+                null,
+                Map.of("symbol", pair.getSymbol(), "template", template.name(), "brackets", bracketValues(tiers))));
     }
 
     /**

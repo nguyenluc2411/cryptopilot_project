@@ -2,12 +2,17 @@ package com.cryptopilot.market.job;
 
 import com.cryptopilot.market.config.MarketHubProperties;
 import com.cryptopilot.market.service.MarketBroadcastService;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.messaging.SessionSubscribeEvent;
 
 /**
  * Pushes the market topics on the rhythm of TECHNICAL_DESIGN 9 when the hub is enabled: ticker and kline updates every
@@ -20,6 +25,13 @@ public class MarketHubJob {
 
     private static final Logger log = LoggerFactory.getLogger(MarketHubJob.class);
 
+    /** The destinations of the market overviews, {@code /topic/overview.SPOT} and {@code /topic/overview.FUTURES}. */
+    static final String OVERVIEW_TOPIC = "/topic/overview.";
+
+    /** How long a new subscription waits for its first overview: long enough for the broker to register it. */
+    static final Duration SUBSCRIBE_SETTLE = Duration.ofMillis(150);
+
+    private final AtomicBoolean overviewQueued = new AtomicBoolean(false);
     private final MarketBroadcastService broadcast;
     private final TaskScheduler scheduler;
     private final MarketHubProperties properties;
@@ -45,5 +57,30 @@ public class MarketHubJob {
                 properties.updateInterval(),
                 properties.overviewInterval(),
                 properties.tradingInterval());
+    }
+
+    /**
+     * A client has just subscribed to an overview: the overviews are pushed again shortly, so the market board fills in
+     * as soon as the connection is up instead of at the next scheduled push (up to {@code overviewInterval} later). The
+     * push waits {@link #SUBSCRIBE_SETTLE} for the broker to register the subscription, and subscriptions arriving
+     * meanwhile share it.
+     */
+    @EventListener
+    public void onSubscribe(SessionSubscribeEvent event) {
+        if (!properties.enabled()) {
+            return;
+        }
+        String destination = StompHeaderAccessor.wrap(event.getMessage()).getDestination();
+        if (destination == null || !destination.startsWith(OVERVIEW_TOPIC)) {
+            return;
+        }
+        if (overviewQueued.compareAndSet(false, true)) {
+            scheduler.schedule(
+                    () -> {
+                        overviewQueued.set(false);
+                        broadcast.pushOverviews();
+                    },
+                    Instant.now().plus(SUBSCRIBE_SETTLE));
+        }
     }
 }
