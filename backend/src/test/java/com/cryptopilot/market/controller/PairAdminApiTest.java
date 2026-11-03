@@ -207,6 +207,22 @@ class PairAdminApiTest {
         assertThat(events.stream(PairMarketEnabled.class)).isEmpty();
     }
 
+    /** A whole-number field refuses a fraction rather than cutting it; a search with a NUL byte is a 400. */
+    @Test
+    void UC45_aFractionalLeverage_isRefused_andANulSearchIs400() throws Exception {
+        UUID pair = pair(false, false, "TRADING", "TRADING");
+        filters(pair);
+
+        as(admin, put(PAIRS + "/" + pair), """
+                        {"status": "ACTIVE", "spotEnabled": false, "futuresEnabled": true, "maxLeverage": 20.5,
+                         "displayOrder": 1}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG01"));
+        as(admin, get("/api/v1/admin/users").param("q", "\0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
     /** An INACTIVE pair stores both markets off even when the request still has their switches on. */
     @Test
     void UC45_inactiveWithItsSwitchesOn_isStoredWithBothMarketsOff() throws Exception {

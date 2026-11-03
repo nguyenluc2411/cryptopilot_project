@@ -147,6 +147,16 @@ class GlobalExceptionHandlerTest {
      * <p>The constraint name identifies which rule fired, so it belongs in the log and not in the
      * response — it tells a caller what the tables are called and which column is unique.
      */
+    /** A NUL byte the database cannot store is the request's fault: 400 MSG01, never a 409 "conflict". */
+    @Test
+    void textTheDatabaseCannotStore_answers400() {
+        MvcTestResult result = mockMvc.get().uri("/test-errors/unstorable").exchange();
+
+        assertThat(result).hasStatus(HttpStatus.BAD_REQUEST);
+        assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("VALIDATION_FAILED");
+        assertThat(result).bodyJson().extractingPath("$.messageCode").isEqualTo("MSG01");
+    }
+
     @Test
     void refusedWrite_answers409AndNamesNoConstraintInTheResponse() throws UnsupportedEncodingException {
         MvcTestResult result = mockMvc.get().uri("/test-errors/duplicate").exchange();
@@ -248,6 +258,13 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/broken")
         void broken() {
             throw new IllegalStateException("connection string postgres://user:secret@db/cryptopilot is invalid");
+        }
+
+        @GetMapping("/unstorable")
+        void unstorable() {
+            throw new DataIntegrityViolationException(
+                    "could not execute statement",
+                    new SQLException("ERROR: invalid byte sequence for encoding \"UTF8\": 0x00", "22021"));
         }
 
         @GetMapping("/duplicate")

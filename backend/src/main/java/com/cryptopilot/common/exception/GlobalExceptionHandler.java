@@ -134,6 +134,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ProblemDetail> handleDataIntegrityViolation(DataIntegrityViolationException exception) {
         String reference = CorrelationIdFilter.currentCorrelationId()
                 .orElseGet(() -> UuidV7.next().toString());
+        if (UNREADABLE_TEXT.equals(sqlState(exception))) {
+            // A NUL or a broken UTF-8 sequence in a parameter: the request is wrong, nothing conflicts.
+            log.info("Request refused: text the database cannot store, reference {}", reference);
+            ProblemDetail body = problemDetail(ErrorCode.VALIDATION_FAILED, VALIDATION_DETAIL, reference);
+            return ResponseEntity.status(ErrorCode.VALIDATION_FAILED.status()).body(body);
+        }
         log.warn("Integrity constraint refused a write, reference {}: {}", reference, mostSpecificMessage(exception));
         ProblemDetail body = problemDetail(ErrorCode.DATA_CONFLICT, CONFLICT_DETAIL, reference);
         return ResponseEntity.status(ErrorCode.DATA_CONFLICT.status()).body(body);
@@ -279,6 +285,27 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /** The innermost message, which is where the driver puts the name of the constraint. */
+    /**
+     * PostgreSQL's SQLSTATE 22021, "character not in repertoire": a NUL byte or an invalid UTF-8 sequence in a value,
+     * which no text column can store. Spring reports it as a {@link DataIntegrityViolationException}, as it does a
+     * unique key, but it is the request's text, not a conflict with stored data.
+     */
+    static final String UNREADABLE_TEXT = "22021";
+
+    /** The SQLSTATE of the deepest {@link java.sql.SQLException} in the chain, or {@code null}. */
+    private static String sqlState(Throwable exception) {
+        String state = null;
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.sql.SQLException sql && sql.getSQLState() != null) {
+                state = sql.getSQLState();
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return state;
+    }
+
     private static String mostSpecificMessage(Throwable exception) {
         Throwable cause = exception;
         while (cause.getCause() != null && cause.getCause() != cause) {
