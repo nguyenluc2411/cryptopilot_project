@@ -96,9 +96,11 @@ class SeedDataTest {
 
     /**
      * Tables that hold no business rows but are legitimately non-empty after a migration: Flyway's
-     * own history, and the event publication registry, which is a technical table (A-09).
+     * own history, the event publication registry, which is a technical table (A-09), and the
+     * system log (UC-46), which the running application writes whenever a call fails.
      */
-    private static final List<String> TECHNICAL_TABLES = List.of("flyway_schema_history", "event_publication");
+    private static final List<String> TECHNICAL_TABLES =
+            List.of("flyway_schema_history", "event_publication", "system_event");
 
     /** A foreign key as {@code pg_get_constraintdef} prints it. */
     private static final Pattern FOREIGN_KEY =
