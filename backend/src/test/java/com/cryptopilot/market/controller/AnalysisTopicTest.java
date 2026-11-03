@@ -147,9 +147,9 @@ class AnalysisTopicTest {
         recorder.awaitRefused("access token is not valid");
     }
 
-    /** BR-62: a FREE Trader has the Spot analysis, but neither the Futures analysis nor the components (CR-08). */
+    /** BR-62: a FREE Trader has the Spot and, since V61, the Futures analysis, but not the components (CR-08). */
     @Test
-    void BR62_aFreeTrader_getsTheSpotTopic_only() throws Exception {
+    void BR62_aFreeTrader_getsBothMainTopics_butNotTheComponents() throws Exception {
         String bearer = traders.bearer(PlanTier.FREE);
         Client spot = connect(bearer);
         spot.session.subscribe(main(MarketType.SPOT), new Inbox(new CopyOnWriteArrayList<>()));
@@ -157,13 +157,12 @@ class AnalysisTopicTest {
 
         Client futures = connect(bearer);
         futures.session.subscribe(main(MarketType.FUTURES), new Inbox(new CopyOnWriteArrayList<>()));
-        futures.recorder().awaitRefused(futures.session(), "FUTURES_ANALYSIS");
+        await(() -> subscribers(main(MarketType.FUTURES)) == 1, "the FREE Trader's Futures subscription");
 
         Client components = connect(bearer);
         components.session.subscribe(components(MarketType.SPOT), new Inbox(new CopyOnWriteArrayList<>()));
         components.recorder().awaitRefused(components.session(), "SCORE_COMPONENTS");
 
-        assertThat(subscribers(main(MarketType.FUTURES))).isZero();
         assertThat(subscribers(components(MarketType.SPOT))).isZero();
     }
 

@@ -436,12 +436,12 @@ class TradingPlanApiTest {
     // Plan entitlements (BR-62)
     // ------------------------------------------------------------------------------------------
 
+    /** The registered topic: every Trader plans on Spot and Futures; FREE includes FUTURES_ANALYSIS since V61. */
     @Test
-    void MSG29_aFreeTrader_cannotPlanOnFutures() throws Exception {
+    void BR62_aFreeTrader_plansOnFutures() throws Exception {
         as(trader(), post(PLANS), futuresLimit(false))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("PLAN_FEATURE_NOT_INCLUDED"))
-                .andExpect(jsonPath("$.messageCode").value("MSG29"));
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.marginMode").value("ISOLATED"));
     }
 
     @Test

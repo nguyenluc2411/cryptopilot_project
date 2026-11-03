@@ -286,16 +286,20 @@ class AnalysisControllerTest {
                 .andExpect(jsonPath("$.setupScore.components").value(nullValue()));
     }
 
-    /** D-60 and UC-11: on FREE the Futures analysis is refused as a whole with MSG29, naming no data. */
+    /**
+     * D-60 and UC-11: FREE includes the Futures analysis since V61 (the registered topic gives every Trader the
+     * Futures data); its component blocks stay locked without {@code SCORE_COMPONENTS} (CR-08).
+     */
     @Test
-    void BR62_freeFutures_isMsg29() throws Exception {
+    void BR62_freeFutures_readsTheAnalysisWithTheComponentsLocked() throws Exception {
         UUID pair = data.pair("ETHUSDT", false, true, null, "TRADING", 0);
         store(pair, MarketType.FUTURES, "1h", hour, emas("105", "100", "90"), futures());
 
         analysis("futures", "ETHUSDT", "1h", traders.bearer(PlanTier.FREE))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.messageCode").value("MSG29"))
-                .andExpect(jsonPath("$.setupScore").doesNotExist());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.componentsLocked").value(true))
+                .andExpect(jsonPath("$.components").value(nullValue()))
+                .andExpect(jsonPath("$.setupScore", hasKey("score")));
     }
 
     /** PRO and PREMIUM read the component scores on both markets and the Futures analysis with its dominant side. */

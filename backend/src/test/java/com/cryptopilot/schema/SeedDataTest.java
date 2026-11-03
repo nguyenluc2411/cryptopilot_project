@@ -442,7 +442,7 @@ class SeedDataTest {
      */
     @ParameterizedTest(name = "BR-62 {0}")
     @CsvSource({
-        "FREE,    false, false, 3, 5,   3,  false, false, false, false, 0,   false, false",
+        "FREE,    true,  false, 3, 5,   3,  false, false, false, false, 0,   false, false",
         "PRO,     true,  true,   , 50,  20, true,  true,  true,  true,  30,  false, true",
         "PREMIUM, true,  true,   , 100, 50, true,  true,  true,  true,  100, true,  true"
     })
