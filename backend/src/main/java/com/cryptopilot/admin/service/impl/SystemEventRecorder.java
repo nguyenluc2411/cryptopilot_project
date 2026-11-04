@@ -25,7 +25,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Writes the system log of UC-46. The caller only hands the failure over: it is written on a writer thread of its own,
+ * Writes the system log of UC-52. The caller only hands the failure over: it is written on a writer thread of its own,
  * in a transaction of its own, so
  *
  * <ul>
@@ -46,7 +46,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>Known limitation: one instance (D-39); two instances writing the same failure at once may open two rows of one
  * bucket.
  *
- * <p>Rule: UC-46; registration form, Admin System ("system errors, and external API failures"). Reference: Nygard, M.
+ * <p>Rule: UC-52; registration form, Admin System ("system errors, and external API failures"). Reference: Nygard, M.
  * <i>Release It!</i> 2nd ed., 2018, ch. 5 (stability patterns, failure aggregation).
  */
 @Component

@@ -8,7 +8,7 @@ import java.util.UUID;
 /**
  * One row of the system log on SCR-44: a failure and how often it repeated.
  *
- * <p>Rule: UC-46.
+ * <p>Rule: UC-52.
  *
  * @param operation a request's method and path, a job's class and method, or a client's class and method
  * @param errorType the class of what was thrown

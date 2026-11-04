@@ -89,7 +89,7 @@ final class AuditValueRedactor {
      * {@code password: …}) and the credential after {@code Bearer} or {@code Basic} are replaced, and an email keeps
      * its domain and the first letter of its local part ({@code j***@gmail.com}); {@code null} stays {@code null}.
      *
-     * <p>Rule: NSF-18; UC-46.
+     * <p>Rule: NSF-18; UC-52.
      *
      * <p>Reference: Regulation (EU) 2016/679 (GDPR), Art. 5(1)(c), data minimisation; OWASP Foundation. <i>Logging
      * Cheat Sheet</i>, "Data to exclude".

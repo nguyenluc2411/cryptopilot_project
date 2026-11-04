@@ -17,7 +17,7 @@ import org.springframework.beans.factory.ObjectProvider;
 /**
  * A scheduled job that throws is recorded under its own name, the {@code @Scheduled} method, whatever it failed on.
  *
- * <p>Rule: UC-46.
+ * <p>Rule: UC-52.
  */
 class SystemLogConfigTest {
 

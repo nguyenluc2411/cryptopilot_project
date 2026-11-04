@@ -713,7 +713,7 @@ class BinanceRestClientTest {
             assertThat(refusalOf(() ->
                                     client.klines(BinanceVenue.SPOT, "NOPE", MarketInterval.ONE_MINUTE, null, null, 1))
                             .serviceAnswered())
-                    .as("UC-46: the exchange answered, so the health panel reads it as up")
+                    .as("UC-52: the exchange answered, so the health panel reads it as up")
                     .isTrue();
 
             assertThat(exchange.hits(SPOT_KLINES))

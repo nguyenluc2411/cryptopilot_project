@@ -31,12 +31,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The audit log of SCR-44 (UC-46, SRS 3.11.9): searched by actor, action, entity and period, read only, with a CSV
+ * The audit log of SCR-44 (UC-52, SRS 3.11.9): searched by actor, action, entity and period, read only, with a CSV
  * export. Admin only, by the {@code /api/v1/admin/**} rule of the security chain. Dates are business days, UTC+7.
  *
- * <p>Rule: SRS 3.11.9; UC-46; BR-57.
+ * <p>Rule: SRS 3.11.9; UC-52; BR-57.
  */
-@Tag(name = "Admin: audit log", description = "Administrative and security-relevant actions, SCR-44 (UC-46).")
+@Tag(name = "Admin: audit log", description = "Administrative and security-relevant actions, SCR-44 (UC-52).")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequestMapping("/api/v1/admin/audit-log")

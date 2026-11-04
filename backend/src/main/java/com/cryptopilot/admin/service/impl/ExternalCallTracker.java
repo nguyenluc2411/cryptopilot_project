@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
  * tells nothing worth keeping, so it is held in memory rather than written: after a restart a service reads UNKNOWN
  * until it is called again, which is what the panel then says.
  *
- * <p>Rule: UC-46 ("views the status of the external APIs").
+ * <p>Rule: UC-52 ("views the status of the external APIs").
  */
 @Component
 public class ExternalCallTracker {

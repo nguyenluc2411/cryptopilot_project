@@ -45,7 +45,7 @@ import tools.jackson.databind.ObjectMapper;
  * reason given by an administrator is never run as one (OWASP, "CSV Injection"). Every export is itself audited, with
  * its filters and row count, since it takes a copy of the trail out of the system (OWASP Logging Cheat Sheet).
  *
- * <p>Rule: SRS 3.11.9; UC-46; BR-57; CR-01.
+ * <p>Rule: SRS 3.11.9; UC-52; BR-57; CR-01.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

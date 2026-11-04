@@ -132,9 +132,9 @@ class AiServiceClientTest {
         assertFailure("UNAUTHORIZED", false, "the AI Service answered HTTP 401");
     }
 
-    /** UC-46: a 4xx it will not retry is the AI Service answering; a 5xx, a retryable 4xx or a bad body is not. */
+    /** UC-52: a 4xx it will not retry is the AI Service answering; a 5xx, a retryable 4xx or a bad body is not. */
     @Test
-    void UC46_aNonRetryableFourHundred_isTheServiceAnswering() {
+    void UC52_aNonRetryableFourHundred_isTheServiceAnswering() {
         answer.set(new Answer(400, "{\"code\":\"BAD_REQUEST\",\"retryable\":false,\"message\":\"no text\"}"));
         assertThat(failure().serviceAnswered()).isTrue();
         assertThat(failure().status()).isEqualTo(400);

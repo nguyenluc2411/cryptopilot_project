@@ -30,7 +30,7 @@ import org.springframework.beans.factory.ObjectProvider;
  * A watched client's answers and failures reach the tracker and the system log; the caller's own mistakes, local
  * methods and other beans are left alone; and every client the module watches still exists under its name.
  *
- * <p>Rule: UC-46.
+ * <p>Rule: UC-52.
  */
 class ExternalCallMonitoringTest {
 
@@ -109,7 +109,7 @@ class ExternalCallMonitoringTest {
                         isNull());
     }
 
-    /** UC-46, RFC 9110 15.5: a 4xx refusal is the service answering; a 429 or no answer is a failure. */
+    /** UC-52, RFC 9110 15.5: a 4xx refusal is the service answering; a 429 or no answer is a failure. */
     @Test
     void aFourHundredRefusal_isAnAnswer_whileARateLimitIsAFailure() {
         Refusal badRequest = new Refusal("BINANCE_SPOT /api/v3/klines answered 400", true);

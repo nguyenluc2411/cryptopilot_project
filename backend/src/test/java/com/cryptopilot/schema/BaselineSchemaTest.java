@@ -128,7 +128,7 @@ class BaselineSchemaTest {
                         + " (V21, where the paper matching engine stopped) are technical tables, not"
                         + " business entities; legacy_paper_account and legacy_paper_transfer keep the rows V47"
                         + " folded into the Trader and the ledger, untouched, until a later migration drops them;"
-                        + " system_event (V59, the system log of UC-46) is operational state too")
+                        + " system_event (V59, the system log of UC-52) is operational state too")
                 .contains(
                         "event_publication",
                         "flyway_schema_history",

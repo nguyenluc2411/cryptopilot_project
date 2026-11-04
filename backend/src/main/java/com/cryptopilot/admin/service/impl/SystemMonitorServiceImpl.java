@@ -44,7 +44,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>{@code lastSuccessAt} is held per instance while the failures are shared in the database, so with more than one
  * instance the panel may differ by the instance that answers.
  *
- * <p>Rule: UC-46; NSF-01 to NSF-04 (ingestion); T-017 (Binance IP ban).
+ * <p>Rule: UC-52; NSF-01 to NSF-04 (ingestion); T-017 (Binance IP ban).
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -136,13 +136,7 @@ public class SystemMonitorServiceImpl implements SystemMonitorService {
             feeds.add(new SystemHealthResponse.Feed(market, close, lag, stale(close, now, staleAfter)));
         }
         return new SystemHealthResponse(
-                now,
-                (int) RECENT.toMinutes(),
-                (int) staleAfter.toMinutes(),
-                services,
-                feeds,
-                recorder.droppedCount(),
-                recorder.lostAtShutdownCount());
+                now, (int) RECENT.toMinutes(), (int) staleAfter.toMinutes(), services, feeds, recorder.droppedCount());
     }
 
     @Override

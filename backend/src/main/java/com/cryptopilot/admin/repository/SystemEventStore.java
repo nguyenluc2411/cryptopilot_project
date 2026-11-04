@@ -25,7 +25,7 @@ import org.springframework.stereotype.Repository;
  * the merge window, and reads the system log and the figures of the health panel. A technical table, so plain SQL and
  * no entity. Buckets are fixed from their first failure, so a continuous outage still leaves one row per window.
  *
- * <p>Rule: UC-46. Reference: Nygard, M. <i>Release It!</i> 2nd ed., 2018, ch. 5 (stability patterns, failure
+ * <p>Rule: UC-52. Reference: Nygard, M. <i>Release It!</i> 2nd ed., 2018, ch. 5 (stability patterns, failure
  * aggregation).
  */
 @Repository

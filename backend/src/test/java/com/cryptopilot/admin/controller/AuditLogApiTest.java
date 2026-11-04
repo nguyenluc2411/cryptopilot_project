@@ -39,7 +39,7 @@ import tools.jackson.databind.ObjectMapper;
  * The fixture lives in May 2032, a month no other test writes audit entries in, so every search is bounded by it and
  * its figures are exact; and it sits on the edges of the business day, UTC+7 (CR-01).
  *
- * <p>Rule: SRS 3.11.9; UC-46; BR-57.
+ * <p>Rule: SRS 3.11.9; UC-52; BR-57.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -231,7 +231,7 @@ class AuditLogApiTest {
 
     /** OWASP Logging Cheat Sheet: taking a copy of the trail is itself audited, with its filters and row count. */
     @Test
-    void UC46_anExport_isAudited_withItsFiltersAndRowCount() throws Exception {
+    void UC52_anExport_isAudited_withItsFiltersAndRowCount() throws Exception {
         as(admin, get(API + "/export?" + MAY + "&actorId=" + admin + "&action=ACCOUNT_UNLOCKED&action=ACCOUNT_LOCKED"))
                 .andExpect(status().isOk())
                 .andExpect(header().doesNotExist("X-Result-Truncated"))
@@ -252,7 +252,7 @@ class AuditLogApiTest {
 
     /** More entries than an export holds: it says how many matched, and that it was cut. */
     @Test
-    void UC46_anExportBeyondTheLimit_saysItWasCut() throws Exception {
+    void UC52_anExportBeyondTheLimit_saysItWasCut() throws Exception {
         sql.sql("""
                         insert into audit_log (audit_id, user_id, action_code, entity_type, created_at, updated_at)
                         select gen_random_uuid(), ?, 'POST_HIDDEN', 'FORUM_POST',
@@ -278,7 +278,7 @@ class AuditLogApiTest {
 
     /** An actor text matching more accounts than are searched says so; one matching fewer does not. */
     @Test
-    void UC46_anActorTextMatchingTooManyAccounts_saysTheSearchWasCut() throws Exception {
+    void UC52_anActorTextMatchingTooManyAccounts_saysTheSearchWasCut() throws Exception {
         sql.sql("""
                         insert into user_account (user_id, email, password_hash, role, account_status, created_at,
                                                   updated_at)

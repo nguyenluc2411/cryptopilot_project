@@ -9,7 +9,7 @@ import org.springframework.validation.annotation.Validated;
 /**
  * The health panel of SCR-44, under {@code cryptopilot.admin.system-health}.
  *
- * <p>Rule: UC-46; BR-08 (the stored timeframes).
+ * <p>Rule: UC-52; BR-08 (the stored timeframes).
  *
  * @param feedGrace how long after its shortest stored timeframe has passed a market's latest candle may still be
  *     missing before the feed reads stale: the stream writes a closed candle a few seconds after it closes

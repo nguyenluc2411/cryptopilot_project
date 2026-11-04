@@ -41,9 +41,9 @@ class BinanceClientExceptionTest {
                 .isEmpty();
     }
 
-    /** UC-46: a 4xx refusal of this request is the exchange answering; a 408, a ban, a rate limit or no answer is not. */
+    /** UC-52: a 4xx refusal of this request is the exchange answering; a 408, a ban, a rate limit or no answer is not. */
     @Test
-    void UC46_onlyARejectedFourHundred_isTheExchangeAnswering() {
+    void UC52_onlyARejectedFourHundred_isTheExchangeAnswering() {
         assertThat(refusal(BinanceClientException.Kind.REJECTED, 400).serviceAnswered())
                 .isTrue();
         assertThat(refusal(BinanceClientException.Kind.REJECTED, 404).serviceAnswered())

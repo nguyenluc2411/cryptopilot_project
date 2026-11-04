@@ -37,7 +37,7 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
  * answer and is not recorded: the service is up. RSS, Cloudinary and SMTP do not say so, so their refusals stay
  * failures.
  *
- * <p>Rule: UC-46; registration form, Admin System ("external API failures"). Reference: Fielding, R. &amp; Reschke, J.,
+ * <p>Rule: UC-52; registration form, Admin System ("external API failures"). Reference: Fielding, R. &amp; Reschke, J.,
  * RFC 9110, §15.5 (4xx: client error, the server answered).
  */
 public class ExternalCallMonitoring implements BeanPostProcessor, SmartInitializingSingleton {
@@ -99,10 +99,10 @@ public class ExternalCallMonitoring implements BeanPostProcessor, SmartInitializ
                 .sorted()
                 .forEach(name -> {
                     if (loadable(name)) {
-                        log.debug("UC-46 {} is not created, so {} is not watched", name, clients.get(name));
+                        log.debug("UC-52 {} is not created, so {} is not watched", name, clients.get(name));
                     } else {
                         log.warn(
-                                "UC-46 {} no longer exists, so {} is not watched; update CLIENTS",
+                                "UC-52 {} no longer exists, so {} is not watched; update CLIENTS",
                                 name,
                                 clients.get(name));
                     }

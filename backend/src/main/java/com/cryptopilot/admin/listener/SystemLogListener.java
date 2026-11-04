@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
  * so an administrator can match a user's "error reference" to the failure. The recorder hands it to its writer thread
  * and returns at once, so the 500 is never delayed; it never throws.
  *
- * <p>Rule: UC-46; registration form ("The system logs important actions and system errors").
+ * <p>Rule: UC-52; registration form ("The system logs important actions and system errors").
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

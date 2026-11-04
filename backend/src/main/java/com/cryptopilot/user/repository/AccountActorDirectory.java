@@ -17,7 +17,7 @@ import org.springframework.stereotype.Repository;
  * The accounts behind the audit trail of SCR-44: names the actors of a page of entries and finds the accounts an actor
  * filter means, by part of the email or display name as SCR-34 searches them.
  *
- * <p>Rule: SRS 3.11.9; UC-46.
+ * <p>Rule: SRS 3.11.9; UC-52.
  */
 @Repository
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

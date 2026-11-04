@@ -58,7 +58,7 @@ import tools.jackson.core.JacksonException;
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
-    /** Told of every unexpected error, for the system log (UC-46); {@code null} in a unit test. */
+    /** Told of every unexpected error, for the system log (UC-52); {@code null} in a unit test. */
     private final ApplicationEventPublisher events;
 
     /** Without anyone told of unexpected errors, as a unit test builds it. */

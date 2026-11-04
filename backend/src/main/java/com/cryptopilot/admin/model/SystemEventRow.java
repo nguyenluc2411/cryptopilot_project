@@ -8,7 +8,7 @@ import java.util.UUID;
 /**
  * One row of the system log: a failure, and how often it repeated between its first and last sighting.
  *
- * <p>Rule: UC-46.
+ * <p>Rule: UC-52.
  */
 public record SystemEventRow(
         UUID id,

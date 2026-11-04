@@ -31,7 +31,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 /**
  * Recording a failure never fails the caller, and keeps only a short, single-line message.
  *
- * <p>Rule: UC-46.
+ * <p>Rule: UC-52.
  */
 class SystemEventRecorderTest {
 
@@ -94,7 +94,7 @@ class SystemEventRecorderTest {
 
     /** An SMTP refusal names its recipients; the stored message keeps only their domains and first letters. */
     @Test
-    void UC46_anSmtpRefusalOfTwoRecipients_isStoredWithTheirEmailsMasked() {
+    void UC52_anSmtpRefusalOfTwoRecipients_isStoredWithTheirEmailsMasked() {
         SendFailedException refused = new SendFailedException(
                 "Invalid Addresses",
                 new MessagingException("550 5.1.1 <alice.nguyen@gmail.com>: Recipient address rejected;"
@@ -122,7 +122,7 @@ class SystemEventRecorderTest {
     }
 
     @Test
-    void UC46_aSecretInAMessage_isMasked() {
+    void UC52_aSecretInAMessage_isMasked() {
         assertThat(SystemEventRecorder.message(
                         new RuntimeException("refused token=abc123 for user=jo, Authorization: Bearer eyJh.x.y")))
                 .isEqualTo("refused token=[REDACTED] for user=jo, Authorization: [REDACTED] [REDACTED]");
@@ -130,7 +130,7 @@ class SystemEventRecorderTest {
 
     /** Shutdown waits a bounded time, then stops the writer and counts what was still waiting. */
     @Test
-    void UC46_aShutdownWhileTheDatabaseHangs_countsWhatWasLost() {
+    void UC52_aShutdownWhileTheDatabaseHangs_countsWhatWasLost() {
         CountDownLatch release = new CountDownLatch(1);
         doAnswer(call -> {
                     release.await(10, TimeUnit.SECONDS);
@@ -157,7 +157,7 @@ class SystemEventRecorderTest {
     }
 
     @Test
-    void UC46_aShutdownWithNothingWaiting_losesNothing() {
+    void UC52_aShutdownWithNothingWaiting_losesNothing() {
         recorder.stop(Duration.ofMillis(200));
 
         assertThat(recorder.lostAtShutdownCount()).isZero();

@@ -5,7 +5,7 @@ package com.cryptopilot.common.exception;
  * is up and refused this request, so the health panel counts it as an answer, not an outage. Lives in the shared kernel
  * so the system log reads it without depending on the modules that own the clients.
  *
- * <p>Rule: UC-46. Reference: Fielding, R. &amp; Reschke, J., RFC 9110, §15.5 (4xx: client error, the server answered).
+ * <p>Rule: UC-52. Reference: Fielding, R. &amp; Reschke, J., RFC 9110, §15.5 (4xx: client error, the server answered).
  */
 public interface ExternalAnswer {
 

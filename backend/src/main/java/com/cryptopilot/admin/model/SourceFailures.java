@@ -9,6 +9,6 @@ import java.time.Instant;
  * @param lastFailureAt when it last failed
  * @param failuresSince how many failures were seen since the start of the counting window
  * @param lastMessage the message of the latest failure, or {@code null}
- *     <p>Rule: UC-46.
+ *     <p>Rule: UC-52.
  */
 public record SourceFailures(SystemEventSource source, Instant lastFailureAt, long failuresSince, String lastMessage) {}

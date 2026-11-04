@@ -22,12 +22,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The system log and the health panel of SCR-44 (UC-46): unexpected errors, failed jobs and failed calls to external
+ * The system log and the health panel of SCR-44 (UC-52): unexpected errors, failed jobs and failed calls to external
  * services, and the status of those services and of the market data feeds. Admin only.
  *
- * <p>Rule: UC-46; registration form, Admin System ("system errors, and external API failures").
+ * <p>Rule: UC-52; registration form, Admin System ("system errors, and external API failures").
  */
-@Tag(name = "Admin: system log", description = "System errors, external API failures and health, SCR-44 (UC-46).")
+@Tag(name = "Admin: system log", description = "System errors, external API failures and health, SCR-44 (UC-52).")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequestMapping("/api/v1/admin")

@@ -11,7 +11,7 @@ import java.time.LocalDate;
  * The system log and the health panel of SCR-44. Implemented by
  * {@link com.cryptopilot.admin.service.impl.SystemMonitorServiceImpl}.
  *
- * <p>Rule: UC-46.
+ * <p>Rule: UC-52.
  */
 public interface SystemMonitorService {
 

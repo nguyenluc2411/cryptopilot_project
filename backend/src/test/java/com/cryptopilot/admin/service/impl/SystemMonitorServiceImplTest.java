@@ -14,7 +14,7 @@ import org.junit.jupiter.params.provider.CsvSource;
  * The status of an external service, over every combination of its latest answer and latest failure (minutes before
  * now; empty for none).
  *
- * <p>Rule: UC-46.
+ * <p>Rule: UC-52.
  */
 class SystemMonitorServiceImplTest {
 
@@ -59,7 +59,7 @@ class SystemMonitorServiceImplTest {
     /** A healthy feed closes a 15m candle every 15 minutes, so with a grace of 2 it is stale only after 17. */
     @ParameterizedTest(name = "latest 15m candle closed {0} min ago → stale {1}")
     @CsvSource({" 0, false", "12, false", "17, false", "18, true", "  , true"})
-    void UC46_aFeed_isStaleOnlyAfterItsShortestTimeframeAndTheGrace(Integer closedMinutes, boolean expected) {
+    void UC52_aFeed_isStaleOnlyAfterItsShortestTimeframeAndTheGrace(Integer closedMinutes, boolean expected) {
         Duration staleAfter = SystemMonitorServiceImpl.staleAfter(Duration.ofMinutes(15), Duration.ofMinutes(2));
 
         assertThat(staleAfter).isEqualTo(Duration.ofMinutes(17));
@@ -68,7 +68,7 @@ class SystemMonitorServiceImplTest {
     }
 
     @Test
-    void UC46_withoutAShortestTimeframe_theGraceAloneApplies() {
+    void UC52_withoutAShortestTimeframe_theGraceAloneApplies() {
         assertThat(SystemMonitorServiceImpl.staleAfter(null, Duration.ofMinutes(2)))
                 .isEqualTo(Duration.ofMinutes(2));
     }

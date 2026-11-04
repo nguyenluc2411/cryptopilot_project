@@ -4,7 +4,7 @@ package com.cryptopilot.admin.model.enums;
  * Where a system log entry comes from, stored by name in {@code system_event.source} (V59 CHECK). The first two are the
  * application's own; the others are the external services the health panel of SCR-44 reports on.
  *
- * <p>Rule: UC-46.
+ * <p>Rule: UC-52.
  */
 public enum SystemEventSource {
     /** A request the application could not answer (HTTP 500). */

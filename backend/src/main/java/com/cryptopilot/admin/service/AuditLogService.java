@@ -13,7 +13,7 @@ import java.util.UUID;
  * The audit log of SCR-44, read only. A period is a range of business days, UTC+7 (CR-01), both ends included.
  * Implemented by {@link com.cryptopilot.admin.service.impl.AuditLogServiceImpl}.
  *
- * <p>Rule: SRS 3.11.9; UC-46; BR-57.
+ * <p>Rule: SRS 3.11.9; UC-52; BR-57.
  */
 public interface AuditLogService {
 

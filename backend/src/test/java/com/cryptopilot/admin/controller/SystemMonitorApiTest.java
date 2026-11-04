@@ -52,7 +52,7 @@ import org.springframework.web.servlet.HandlerMapping;
  * filtered and paged; the health panel weighs failures against answers; old rows are deleted after 90 days. Each test
  * names its operations with a tag of its own and removes them afterwards.
  *
- * <p>Rule: UC-46; NSF-17.
+ * <p>Rule: UC-52; NSF-17.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -113,7 +113,7 @@ class SystemMonitorApiTest {
     }
 
     @Test
-    void UC46_aRepeatWithinTenMinutes_isOneRowWithACount_anotherOperationIsAnotherRow() {
+    void UC52_aRepeatWithinTenMinutes_isOneRowWithACount_anotherOperationIsAnotherRow() {
         recorder.record(
                 SystemEventCategory.EXTERNAL_API_FAILURE,
                 SystemEventSource.AI_SERVICE,
@@ -146,7 +146,7 @@ class SystemMonitorApiTest {
     }
 
     @Test
-    void UC46_aRepeatAfterTheWindow_startsANewRow() {
+    void UC52_aRepeatAfterTheWindow_startsANewRow() {
         Instant first = Instant.parse("2031-01-01T00:00:00Z");
         Instant later = first.plus(Duration.ofMinutes(11));
         store.record(
@@ -175,7 +175,7 @@ class SystemMonitorApiTest {
 
     /** Buckets are fixed from their first failure: a failure every minute for 35 minutes is four rows, not one. */
     @Test
-    void UC46_aContinuousOutage_isOneRowPerTenMinutes() {
+    void UC52_aContinuousOutage_isOneRowPerTenMinutes() {
         Instant start = Instant.parse("2032-01-01T00:00:00Z");
         for (int minute = 0; minute < 35; minute++) {
             Instant at = start.plus(Duration.ofMinutes(minute));
@@ -199,7 +199,7 @@ class SystemMonitorApiTest {
 
     /** The 24-hour figure of a source failing for three days counts the last day, give or take one bucket. */
     @Test
-    void UC46_theDayFigure_ofAThreeDayOutage_countsOnlyTheLastDay() {
+    void UC52_theDayFigure_ofAThreeDayOutage_countsOnlyTheLastDay() {
         Instant start = Instant.parse("2040-01-01T00:03:00Z");
         Instant now = start.plus(Duration.ofDays(3));
         for (Instant at = start; at.isBefore(now); at = at.plus(Duration.ofMinutes(5))) {
@@ -223,7 +223,7 @@ class SystemMonitorApiTest {
     }
 
     @Test
-    void UC46_aFailureInATransactionThatRollsBack_isStillRecorded() {
+    void UC52_aFailureInATransactionThatRollsBack_isStillRecorded() {
         transaction.executeWithoutResult(status -> {
             recorder.record(
                     SystemEventCategory.SYSTEM_ERROR,
@@ -239,7 +239,7 @@ class SystemMonitorApiTest {
     }
 
     @Test
-    void UC46_anUnexpectedErrorOfARequest_isRecordedWithItsReference() {
+    void UC52_anUnexpectedErrorOfARequest_isRecordedWithItsReference() {
         RequestContextHolder.setRequestAttributes(
                 new ServletRequestAttributes(new MockHttpServletRequest("GET", "/api/v1/admin/" + tag)));
         try {
@@ -262,7 +262,7 @@ class SystemMonitorApiTest {
 
     /** The failures of one endpoint share a row whatever ids it was called with (the route, not the URI). */
     @Test
-    void UC46_twoFailuresOfOneRoute_withDifferentIds_areOneRow() {
+    void UC52_twoFailuresOfOneRoute_withDifferentIds_areOneRow() {
         for (UUID plan : List.of(UUID.randomUUID(), UUID.randomUUID())) {
             MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/" + tag + "/" + plan);
             request.setAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/api/v1/" + tag + "/{planId}");
@@ -283,7 +283,7 @@ class SystemMonitorApiTest {
 
     /** No handler matched: each UUID or number in the path is an id, and the query is never kept. */
     @Test
-    void UC46_aFailureWithoutARoute_hidesTheIdsOfItsPath() {
+    void UC52_aFailureWithoutARoute_hidesTheIdsOfItsPath() {
         MockHttpServletRequest request =
                 new MockHttpServletRequest("POST", "/api/v1/" + tag + "/" + UUID.randomUUID() + "/items/42");
         request.setQueryString("email=someone@example.com");
@@ -299,7 +299,7 @@ class SystemMonitorApiTest {
     }
 
     @Test
-    void UC46_theSystemLog_isFilteredAndPaged_andOnlyAdminsRead() throws Exception {
+    void UC52_theSystemLog_isFilteredAndPaged_andOnlyAdminsRead() throws Exception {
         recorder.record(
                 SystemEventCategory.EXTERNAL_API_FAILURE,
                 SystemEventSource.NEWS_SOURCE,
@@ -343,7 +343,7 @@ class SystemMonitorApiTest {
     }
 
     @Test
-    void UC46_theHealthPanel_listsTheExternalServices_andTheFeeds() throws Exception {
+    void UC52_theHealthPanel_listsTheExternalServices_andTheFeeds() throws Exception {
         recorder.record(
                 SystemEventCategory.EXTERNAL_API_FAILURE,
                 SystemEventSource.MAIL,
@@ -358,7 +358,6 @@ class SystemMonitorApiTest {
                 .andExpect(jsonPath("$.recentWindowMinutes").value(15))
                 .andExpect(jsonPath("$.staleAfterMinutes").value(17))
                 .andExpect(jsonPath("$.systemLogDropped").value(0))
-                .andExpect(jsonPath("$.systemLogLostAtShutdown").value(0))
                 .andExpect(jsonPath("$.services.length()").value(5))
                 .andExpect(jsonPath("$.services[?(@.source == 'APPLICATION')]").isEmpty())
                 .andExpect(jsonPath("$.services[?(@.source == 'MAIL')].status").value("DEGRADED"))
@@ -369,7 +368,7 @@ class SystemMonitorApiTest {
     }
 
     @Test
-    void UC46_theClientsOfExternalServices_areWatched() {
+    void UC52_theClientsOfExternalServices_areWatched() {
         assertThat(AopUtils.isAopProxy(binance)).isTrue();
     }
 

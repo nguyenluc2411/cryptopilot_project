@@ -321,6 +321,8 @@ class AuthorizationMatrixTest {
                     "/api/v1/admin/ai-configurations",
                     "/api/v1/admin/settings",
                     "/api/v1/admin/audit-log",
+                    "/api/v1/admin/system-events",
+                    "/api/v1/admin/system-health",
                     "/api/v1/admin/announcements"
                 })
         void SRS313_theAdministrationConsole_admitsAnAdmin(String path) throws Exception {
@@ -335,15 +337,18 @@ class AuthorizationMatrixTest {
                     "/api/v1/admin/reports-queue",
                     "/api/v1/admin/settings",
                     "/api/v1/admin/audit-log",
+                    "/api/v1/admin/system-events",
+                    "/api/v1/admin/system-health",
                     "/api/v1/admin/announcements"
                 })
         void SRS313_theAdministrationConsole_refusesATrader(String path) throws Exception {
             assertForbidden(mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, bearer(UserRole.TRADER))));
         }
 
-        @Test
-        void SRS313_theAdministrationConsole_challengesAGuest() throws Exception {
-            assertUnauthenticated(mvc.perform(get(ADMIN_USERS)));
+        @ParameterizedTest(name = "{0} challenges a Guest")
+        @ValueSource(strings = {ADMIN_USERS, "/api/v1/admin/system-events", "/api/v1/admin/system-health"})
+        void SRS313_theAdministrationConsole_challengesAGuest(String path) throws Exception {
+            assertUnauthenticated(mvc.perform(get(path)));
         }
     }
 

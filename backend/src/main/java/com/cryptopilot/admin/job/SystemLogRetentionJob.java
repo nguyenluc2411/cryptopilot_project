@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
  * The audit trail is not touched: what people did is kept as BR-57 says, what failed only as long as it helps to find
  * out why.
  *
- * <p>Rule: NSF-17; UC-46.
+ * <p>Rule: NSF-17; UC-52.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

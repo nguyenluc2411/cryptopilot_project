@@ -15,13 +15,13 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.util.ErrorHandler;
 
 /**
- * Where the system log of UC-46 gets its failures from, besides the unexpected errors of requests
+ * Where the system log of UC-52 gets its failures from, besides the unexpected errors of requests
  * ({@code SystemLogListener}): the clients of the external services ({@link ExternalCallMonitoring}) and the
  * {@code @Scheduled} jobs, through the error handler of the scheduler Spring Boot builds. With virtual threads on, that
  * scheduler is a {@code SimpleAsyncTaskScheduler}, otherwise a {@code ThreadPoolTaskScheduler}; both customizers are
  * declared and Boot applies the one it needs.
  *
- * <p>Rule: UC-46; registration form, Admin System ("system errors").
+ * <p>Rule: UC-52; registration form, Admin System ("system errors").
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(SystemHealthProperties.class)
