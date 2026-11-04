@@ -30,9 +30,9 @@ public final class PlanFixtures {
     public static final List<String> SEEDED_CODES =
             List.of("FREE", "PRO_MONTHLY", "PRO_YEARLY", "PREMIUM_MONTHLY", "PREMIUM_YEARLY");
 
-    /** The entitlements V11 gives each tier; tests compare the seeded rows against them. */
+    /** The entitlements V11 gives each tier, with FUTURES_ANALYSIS on FREE since V61; tests compare the seeded rows. */
     public static final PlanEntitlements FREE =
-            new PlanEntitlements(false, false, 3, 5, 3, false, false, false, false, 0, false, false);
+            new PlanEntitlements(true, false, 3, 5, 3, false, false, false, false, 0, false, false);
 
     public static final PlanEntitlements PRO =
             new PlanEntitlements(true, true, null, 50, 20, true, true, true, true, 30, false, true);

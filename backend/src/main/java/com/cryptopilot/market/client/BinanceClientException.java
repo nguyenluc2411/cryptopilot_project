@@ -1,5 +1,6 @@
 package com.cryptopilot.market.client;
 
+import com.cryptopilot.common.exception.ExternalAnswer;
 import com.cryptopilot.market.model.enums.BinanceVenue;
 import java.io.Serial;
 import java.time.Instant;
@@ -52,7 +53,7 @@ import java.util.Optional;
  * (2nd ed.). Pragmatic Bookshelf, ch. 5 ("Fail Fast": refuse at once when the outcome is already known;
  * "Circuit Breaker": callers stop calling an integration point that keeps failing).
  */
-public final class BinanceClientException extends RuntimeException {
+public final class BinanceClientException extends RuntimeException implements ExternalAnswer {
 
     @Serial
     private static final long serialVersionUID = 1L;
@@ -82,12 +83,34 @@ public final class BinanceClientException extends RuntimeException {
     private final Kind kind;
     private final BinanceVenue venue;
     private final transient Instant retryAt;
+    /** The HTTP status the exchange answered, or 0 when it did not answer. */
+    private final int status;
 
     BinanceClientException(Kind kind, BinanceVenue venue, String message, Instant retryAt, Throwable cause) {
+        this(kind, venue, message, retryAt, cause, 0);
+    }
+
+    BinanceClientException(
+            Kind kind, BinanceVenue venue, String message, Instant retryAt, Throwable cause, int status) {
         super(message, cause);
         this.kind = Objects.requireNonNull(kind, "kind must not be null");
         this.venue = Objects.requireNonNull(venue, "venue must not be null");
         this.retryAt = retryAt;
+        this.status = status;
+    }
+
+    /**
+     * A 4xx refusal of this request only: not 401/403 (the WAF blocks every call), 408, 418 or 429. Reference:
+     * RFC 9110 §15.5.2, §15.5.4; Binance Spot API docs, "General info: HTTP 403 = WAF limit".
+     */
+    @Override
+    public boolean serviceAnswered() {
+        return kind == Kind.REJECTED
+                && status >= 400
+                && status < 500
+                && status != 401
+                && status != 403
+                && status != 408;
     }
 
     /** Why the call produced no data. */

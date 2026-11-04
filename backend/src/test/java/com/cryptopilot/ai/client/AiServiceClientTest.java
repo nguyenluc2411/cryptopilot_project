@@ -132,6 +132,39 @@ class AiServiceClientTest {
         assertFailure("UNAUTHORIZED", false, "the AI Service answered HTTP 401");
     }
 
+    /** UC-52: a 4xx it will not retry is the AI Service answering; a 5xx, a retryable 4xx or a bad body is not. */
+    @Test
+    void UC52_aNonRetryableFourHundred_isTheServiceAnswering() {
+        answer.set(new Answer(400, "{\"code\":\"BAD_REQUEST\",\"retryable\":false,\"message\":\"no text\"}"));
+        assertThat(failure().serviceAnswered()).isTrue();
+        assertThat(failure().status()).isEqualTo(400);
+
+        answer.set(new Answer(401, "{\"code\":\"UNAUTHORIZED\",\"retryable\":false}"));
+        assertThat(failure().serviceAnswered()).as("wrong shared secret").isFalse();
+
+        answer.set(new Answer(403, "{\"code\":\"FORBIDDEN\",\"retryable\":false}"));
+        assertThat(failure().serviceAnswered()).isFalse();
+
+        answer.set(new Answer(429, "{\"code\":\"LLM_RATE_LIMITED\",\"retryable\":true}"));
+        assertThat(failure().serviceAnswered()).isFalse();
+
+        answer.set(new Answer(502, "{\"code\":\"LLM_REJECTED\",\"retryable\":false}"));
+        assertThat(failure().serviceAnswered()).isFalse();
+
+        answer.set(new Answer(400, "<html>"));
+        assertThat(failure().code()).isEqualTo(AiServiceException.BAD_ANSWER);
+        assertThat(failure().serviceAnswered()).isFalse();
+    }
+
+    private AiServiceException failure() {
+        try {
+            client(SECRET).summarizeNews(REQUEST);
+        } catch (AiServiceException e) {
+            return e;
+        }
+        throw new AssertionError("the call should have failed");
+    }
+
     @Test
     void NSF11_anAnswerThatIsNotJson_orHasNoSummary_isABadAnswer() {
         answer.set(new Answer(200, "<html>"));

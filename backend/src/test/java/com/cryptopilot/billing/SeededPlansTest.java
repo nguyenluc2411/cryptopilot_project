@@ -50,7 +50,7 @@ class SeededPlansTest {
         EffectivePlan plan = entitlements.effectivePlan(trader);
 
         assertThat(plan.tier()).isEqualTo(PlanTier.FREE);
-        assertThat(entitlements.hasFeature(trader, Feature.FUTURES_ANALYSIS)).isFalse();
+        assertThat(entitlements.hasFeature(trader, Feature.FUTURES_ANALYSIS)).isTrue();
         assertThat(entitlements.getLimit(trader, Feature.WATCHLIST_MAX)).isEqualTo(5);
         assertThat(entitlements.getLimit(trader, Feature.ACTIVE_PLAN_MAX)).isEqualTo(3);
     }

@@ -4,6 +4,7 @@ import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.event.MarketStreamReconnected;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.BackfillRun;
 import com.cryptopilot.market.model.GapFill;
@@ -153,6 +154,17 @@ public class CandleBackfillJob {
     public void onSymbolsSynchronised(SymbolsSynchronised event) {
         if (properties.enabled()) {
             continueAt(event.market(), clock.instant());
+        }
+    }
+
+    /**
+     * An administrator brought a pair into service: its market is brought up to date at once, not at the next hour.
+     * After commit, so the run reads the pair as saved; the run itself is on the scheduler.
+     */
+    @EventListener
+    public void onPairMarketEnabled(PairMarketEnabled event) {
+        if (properties.enabled()) {
+            AfterCommit.run(() -> continueAt(event.market(), clock.instant()));
         }
     }
 

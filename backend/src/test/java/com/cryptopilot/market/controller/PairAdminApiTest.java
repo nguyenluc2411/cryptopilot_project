@@ -2,6 +2,9 @@ package com.cryptopilot.market.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -16,6 +19,10 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.ExchangeSymbol;
+import com.cryptopilot.market.event.PairMarketEnabled;
+import com.cryptopilot.market.job.CandleBackfillJob;
+import com.cryptopilot.market.job.MarketStreamSupervisor;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PairAdminService;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -49,6 +56,9 @@ import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -62,6 +72,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestcontainersConfig.class)
+@RecordApplicationEvents
 class PairAdminApiTest {
 
     private static final String PAIRS = "/api/v1/admin/pairs";
@@ -83,6 +94,15 @@ class PairAdminApiTest {
 
     @MockitoBean
     private BinanceRestClient exchange;
+
+    @Autowired
+    private ApplicationEvents events;
+
+    @MockitoSpyBean
+    private MarketStreamSupervisor streams;
+
+    @MockitoSpyBean
+    private CandleBackfillJob backfill;
 
     private final List<UUID> accounts = new ArrayList<>();
     private final List<UUID> pairs = new ArrayList<>();
@@ -167,6 +187,105 @@ class PairAdminApiTest {
         update(pair, "ACTIVE", true, false, 50, 3)
                 .andExpect(jsonPath("$.futuresEnabled").value(false))
                 .andExpect(jsonPath("$.maxLeverage").doesNotExist());
+    }
+
+    /**
+     * A market brought into service is announced once, after the change commits, so its streams and candles follow at
+     * once; a change that keeps it in service, takes it out, or is refused announces nothing.
+     */
+    @Test
+    void UC45_aMarketSwitchedOn_isAnnouncedOnce_andNothingElseIs() throws Exception {
+        UUID pair = pair(false, false, "TRADING", "TRADING");
+        filters(pair);
+
+        update(pair, "INACTIVE", true, false, null, 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.spotEnabled").value(false))
+                .andExpect(jsonPath("$.futuresEnabled").value(false));
+        assertThat(events.stream(PairMarketEnabled.class))
+                .as("inactive: not in service")
+                .isEmpty();
+
+        update(pair, "ACTIVE", true, false, null, 1).andExpect(status().isOk());
+        assertThat(events.stream(PairMarketEnabled.class)).singleElement().satisfies(event -> {
+            assertThat(event.pairId()).isEqualTo(pair);
+            assertThat(event.market()).isEqualTo(MarketType.SPOT);
+        });
+        // Both listeners hear it; they act after the commit, on the scheduler (MarketStreamSupervisorTest).
+        verify(streams, timeout(5_000)).onPairMarketEnabled(any(PairMarketEnabled.class));
+        verify(backfill, timeout(5_000)).onPairMarketEnabled(any(PairMarketEnabled.class));
+
+        events.clear();
+        update(pair, "ACTIVE", true, false, null, 2).andExpect(status().isOk());
+        update(pair, "ACTIVE", true, true, null, 2).andExpect(status().isBadRequest());
+        update(pair, "ACTIVE", false, false, null, 2).andExpect(status().isOk());
+        assertThat(events.stream(PairMarketEnabled.class)).isEmpty();
+    }
+
+    /** A whole-number field refuses a fraction rather than cutting it; a search with a NUL byte is a 400. */
+    @Test
+    void UC45_aFractionalLeverage_isRefused_andANulSearchIs400() throws Exception {
+        UUID pair = pair(false, false, "TRADING", "TRADING");
+        filters(pair);
+
+        as(admin, put(PAIRS + "/" + pair), """
+                        {"status": "ACTIVE", "spotEnabled": false, "futuresEnabled": true, "maxLeverage": 20.5,
+                         "displayOrder": 1}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG01"));
+        as(admin, get("/api/v1/admin/users").param("q", "\0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    /** An INACTIVE pair stores both markets off even when the request still has their switches on. */
+    @Test
+    void UC45_inactiveWithItsSwitchesOn_isStoredWithBothMarketsOff() throws Exception {
+        UUID pair = pair(false, false, "TRADING", "TRADING");
+        filters(pair);
+        update(pair, "ACTIVE", true, true, 20, 1).andExpect(status().isOk());
+
+        update(pair, "INACTIVE", true, true, 20, 1)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("INACTIVE"))
+                .andExpect(jsonPath("$.spotEnabled").value(false))
+                .andExpect(jsonPath("$.futuresEnabled").value(false))
+                .andExpect(jsonPath("$.maxLeverage").doesNotExist());
+        update(pair, "INACTIVE", false, true, null, 1).andExpect(status().isOk());
+    }
+
+    /**
+     * Futures turned on without brackets gets the default template, its first bracket above the ceiling, audited as
+     * created; brackets once there are kept when the market is turned off and on again.
+     */
+    @Test
+    void UC45_futuresTurnedOnWithoutBrackets_getsTheDefaultTemplate_once() throws Exception {
+        UUID pair = pair(false, false, "TRADING", "TRADING");
+        filters(pair);
+
+        update(pair, "ACTIVE", false, true, 50, 1).andExpect(status().isOk());
+
+        List<LeverageTier> tiers = marketApi.leverageBrackets(pair);
+        assertThat(tiers).hasSize(10);
+        assertThat(tiers.getFirst().maxLeverage()).isEqualTo(75);
+        String created = "select count(*) from audit_log where user_id = ? and entity_type = 'LEVERAGE_BRACKET'"
+                + " and action_code = 'CONFIGURATION_CREATED' and new_value ->> 'template' = 'ALTCOIN'";
+        assertThat(sql.sql(created).param(admin).query(Long.class).single()).isEqualTo(1);
+
+        update(pair, "ACTIVE", false, false, null, 1).andExpect(status().isOk());
+        update(pair, "ACTIVE", false, true, 20, 1).andExpect(status().isOk());
+        assertThat(marketApi.leverageBrackets(pair)).hasSize(10);
+        assertThat(sql.sql(created).param(admin).query(Long.class).single()).isEqualTo(1);
+    }
+
+    @Test
+    void UC46_theTemplates_areListedWithTheirAmounts_forAdministratorsOnly() throws Exception {
+        as(admin, get(PAIRS + "/bracket-templates"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].id").value(org.hamcrest.Matchers.contains("MAJOR", "ALTCOIN", "SMALL_CAP")))
+                .andExpect(jsonPath("$[0].firstLeverage").value(125))
+                .andExpect(jsonPath("$[0].brackets[11].maintenanceAmount").value("421481450.00000000"));
+        as(trader, get(PAIRS + "/bracket-templates")).andExpect(status().isForbidden());
     }
 
     @Test

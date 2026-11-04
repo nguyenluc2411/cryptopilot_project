@@ -20,6 +20,7 @@ import com.cryptopilot.market.client.StreamMessage.Level;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.event.MarketStreamReconnected;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.model.enums.BinanceVenue;
@@ -30,6 +31,7 @@ import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.market.service.impl.LatestMarketData;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import jakarta.annotation.PreDestroy;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
@@ -97,6 +99,7 @@ public class MarketStreamSupervisor {
     private final TradingMarketData trading;
     private final List<MarketTradeListener> tradeListeners;
     private final List<MarkPriceListener> markListeners;
+    private final Clock clock;
     private final Map<MarketType, MarketStreams> running = new EnumMap<>(MarketType.class);
 
     public MarketStreamSupervisor(
@@ -111,7 +114,8 @@ public class MarketStreamSupervisor {
             List<MinuteKlineListener> minuteListeners,
             TradingMarketData trading,
             List<MarketTradeListener> tradeListeners,
-            List<MarkPriceListener> markListeners) {
+            List<MarkPriceListener> markListeners,
+            Clock clock) {
         this.streams = streams;
         this.candles = candles;
         this.latest = latest;
@@ -124,6 +128,7 @@ public class MarketStreamSupervisor {
         this.trading = trading;
         this.tradeListeners = List.copyOf(tradeListeners);
         this.markListeners = List.copyOf(markListeners);
+        this.clock = clock;
     }
 
     /** Opens the streams of both markets and schedules the refresh, when enabled. */
@@ -146,6 +151,37 @@ public class MarketStreamSupervisor {
     public void onSymbolsSynchronised(SymbolsSynchronised event) {
         if (properties.enabled()) {
             refresh(event.market());
+        }
+    }
+
+    /**
+     * An administrator brought a pair into service: its streams open now, not at the next refresh. After commit, so the
+     * pair is read as saved, and on the scheduler, so the administrator's answer does not wait for the reconnection.
+     */
+    @EventListener
+    public void onPairMarketEnabled(PairMarketEnabled event) {
+        if (!properties.enabled()) {
+            return;
+        }
+        AfterCommit.run(() -> {
+            try {
+                scheduler.schedule(() -> refreshFor(event), clock.instant());
+            } catch (RuntimeException refused) {
+                // Shutting down: the next refresh opens the streams anyway.
+                log.warn("NSF-03 {} could not schedule {}: {}", event.market(), event.symbol(), refused.toString());
+            }
+        });
+    }
+
+    private void refreshFor(PairMarketEnabled event) {
+        try {
+            refresh(event.market());
+        } catch (RuntimeException failure) {
+            log.error(
+                    "NSF-03 {} could not open {}; the next refresh tries again",
+                    event.market(),
+                    event.symbol(),
+                    failure);
         }
     }
 

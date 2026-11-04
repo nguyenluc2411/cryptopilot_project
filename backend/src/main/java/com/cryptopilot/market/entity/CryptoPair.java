@@ -433,13 +433,18 @@ public class CryptoPair extends BaseEntity {
     }
 
     /**
-     * Sets the administrator's switch for the pair as a whole (BR-07). An INACTIVE pair is offered on no market,
-     * whatever its market switches say; they are kept, so activating it again restores them.
+     * Sets the administrator's switch for the pair as a whole (BR-07). An INACTIVE pair is offered on no market, and
+     * its market switches go off with it, the Futures ceiling too: the console then shows what the Trader sees, and
+     * activating the pair again offers nothing until a market is switched on.
      *
      * <p>Rule: BR-07, BR-59 (the caller checks open positions first); UC-45.
      */
     public void changeStatus(PairStatus status) {
         this.pairStatus = Objects.requireNonNull(status, "status must not be null");
+        if (status == PairStatus.INACTIVE) {
+            disable(MarketType.SPOT);
+            disable(MarketType.FUTURES);
+        }
     }
 
     /**

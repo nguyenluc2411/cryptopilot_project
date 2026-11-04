@@ -3,6 +3,7 @@ package com.cryptopilot.market.service;
 import com.cryptopilot.market.dto.request.LeverageBracketsRequest;
 import com.cryptopilot.market.dto.request.UpdatePairRequest;
 import com.cryptopilot.market.dto.response.AdminPairResponse;
+import com.cryptopilot.market.dto.response.BracketTemplateResponse;
 import com.cryptopilot.market.dto.response.ExchangeSymbolResponse;
 import com.cryptopilot.market.dto.response.LeverageBracketsResponse;
 import com.cryptopilot.market.model.enums.PairStatus;
@@ -36,6 +37,9 @@ public interface PairAdminService {
      * @param query only symbols containing this, case ignored, or {@code null}
      */
     List<ExchangeSymbolResponse> exchangeSymbols(String query);
+
+    /** The ready-made brackets SCR-38 offers to start from, with their maintenance amounts (BR-27). */
+    List<BracketTemplateResponse> bracketTemplates();
 
     /**
      * Adds a symbol the exchange trades, INACTIVE with both markets off and its filters taken from the exchange,

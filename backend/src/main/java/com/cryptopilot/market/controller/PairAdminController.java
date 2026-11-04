@@ -5,6 +5,7 @@ import com.cryptopilot.market.dto.request.LeverageBracketsRequest;
 import com.cryptopilot.market.dto.request.RegisterPairRequest;
 import com.cryptopilot.market.dto.request.UpdatePairRequest;
 import com.cryptopilot.market.dto.response.AdminPairResponse;
+import com.cryptopilot.market.dto.response.BracketTemplateResponse;
 import com.cryptopilot.market.dto.response.ExchangeSymbolResponse;
 import com.cryptopilot.market.dto.response.LeverageBracketsResponse;
 import com.cryptopilot.market.model.enums.PairStatus;
@@ -63,6 +64,13 @@ public class PairAdminController {
     public List<ExchangeSymbolResponse> exchangeSymbols(
             @Parameter(description = "Only symbols containing this") @RequestParam(required = false) String q) {
         return service.exchangeSymbols(q);
+    }
+
+    @Operation(summary = "Ready-made leverage brackets to start from (SCR-38)")
+    @ApiResponse(responseCode = "200", description = "MAJOR, ALTCOIN and SMALL_CAP, maintenance amounts computed")
+    @GetMapping("/bracket-templates")
+    public List<BracketTemplateResponse> bracketTemplates() {
+        return service.bracketTemplates();
     }
 
     @Operation(summary = "Add a pair from the exchange's symbols, INACTIVE with both markets off (UC-45)")

@@ -97,6 +97,25 @@ class CryptoPairTest {
         assertThat(pair.getQuoteCoinId()).isEqualTo(USDT);
     }
 
+    /** UC-45: making a pair INACTIVE turns both markets off and drops the Futures ceiling; ACTIVE turns none on. */
+    @Test
+    void UC45_anInactivePair_hasBothMarketsOff_andActivatingItOpensNone() {
+        CryptoPair pair = CryptoPair.register(BTC, USDT, "BTCUSDT");
+        pair.enable(MarketType.SPOT);
+        pair.enable(MarketType.FUTURES);
+        pair.limitLeverage(20);
+
+        pair.changeStatus(PairStatus.INACTIVE);
+
+        assertThat(pair.isSpotEnabled()).isFalse();
+        assertThat(pair.isFuturesEnabled()).isFalse();
+        assertThat(pair.getMaxLeverage()).isNull();
+
+        pair.changeStatus(PairStatus.ACTIVE);
+        assertThat(pair.isEnabledOn(MarketType.SPOT)).isFalse();
+        assertThat(pair.isEnabledOn(MarketType.FUTURES)).isFalse();
+    }
+
     /** One symbol, two markets: each keeps its own filters, and applying one leaves the other untouched. */
     /** BR-07: enabling a market activates the pair on it and leaves the other market off; repeating changes nothing. */
     @Test

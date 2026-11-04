@@ -526,6 +526,17 @@ subscription_package,tier_rank,smallint,16,0,NO
 subscription_package,updated_at,timestamp with time zone,,,NO
 subscription_package,version,bigint,64,0,NO
 subscription_package,watchlist_max,integer,32,0,YES
+system_event,category,character varying,,,NO
+system_event,error_type,character varying,,,NO
+system_event,fingerprint,character varying,,,NO
+system_event,first_seen_at,timestamp with time zone,,,NO
+system_event,last_seen_at,timestamp with time zone,,,NO
+system_event,message,character varying,,,YES
+system_event,occurrences,integer,32,0,NO
+system_event,operation,character varying,,,NO
+system_event,reference,character varying,,,YES
+system_event,source,character varying,,,NO
+system_event,system_event_id,uuid,,,NO
 system_setting,description,character varying,,,YES
 system_setting,setting_key,character varying,,,NO
 system_setting,setting_value,character varying,,,NO

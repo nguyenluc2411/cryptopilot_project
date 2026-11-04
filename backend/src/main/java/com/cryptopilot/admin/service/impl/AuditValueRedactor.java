@@ -5,6 +5,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -72,6 +74,40 @@ final class AuditValueRedactor {
             array.forEach(AuditValueRedactor::redact);
         }
         return values;
+    }
+
+    private static final Pattern EMAIL =
+            Pattern.compile("([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+)");
+
+    private static final Pattern NAMED_VALUE =
+            Pattern.compile("([A-Za-z][A-Za-z0-9_.-]*)(\\s*[=:]\\s*)([^\\s,;&\"']+)");
+
+    private static final Pattern BEARER = Pattern.compile("(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]+");
+
+    /**
+     * The same rules for free text such as an exception's message: the value after a secret's name ({@code token=…},
+     * {@code password: …}) and the credential after {@code Bearer} or {@code Basic} are replaced, and an email keeps
+     * its domain and the first letter of its local part ({@code j***@gmail.com}); {@code null} stays {@code null}.
+     *
+     * <p>Rule: NSF-18; UC-52.
+     *
+     * <p>Reference: Regulation (EU) 2016/679 (GDPR), Art. 5(1)(c), data minimisation; OWASP Foundation. <i>Logging
+     * Cheat Sheet</i>, "Data to exclude".
+     */
+    static String redactText(String text) {
+        if (text == null) {
+            return null;
+        }
+        String clean =
+                BEARER.matcher(text).replaceAll(match -> Matcher.quoteReplacement(match.group(1) + " " + REDACTED));
+        Matcher named = NAMED_VALUE.matcher(clean);
+        StringBuilder out = new StringBuilder();
+        while (named.find()) {
+            String replacement = isSecret(named.group(1)) ? named.group(1) + named.group(2) + REDACTED : named.group();
+            named.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        named.appendTail(out);
+        return EMAIL.matcher(out).replaceAll("$1***@$2");
     }
 
     static boolean isSecret(String field) {

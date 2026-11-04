@@ -556,19 +556,18 @@ class Wf01EndToEndTest {
         assertThat(severities(after)).containsEntry("SL_BEYOND_LIQUIDATION", "BLOCKING");
     }
 
-    /** DS-01d. demo.free asks for a Futures plan: the panel and the save are MSG29, and nothing is saved. */
+    /**
+     * DS-01d. demo.free asks for a Futures plan: since V61 every plan includes the Futures analysis (the registered
+     * topic gives every Trader Spot and Futures plans), so the panel answers and the draft is saved.
+     */
     @Test
-    void DS01d_freeAccount_futuresPlan_isRefused() throws Exception {
+    void DS01d_freeAccount_futuresPlan_isCalculatedAndSaved() throws Exception {
         futuresLast("100000");
         String body = futures("LIMIT", "99000", "98010", "101970", 5, false);
 
-        for (String path : List.of(PLANS + "/calculate", PLANS)) {
-            call(free, post(path), body)
-                    .andExpect(status().isForbidden())
-                    .andExpect(jsonPath("$.code").value("PLAN_FEATURE_NOT_INCLUDED"))
-                    .andExpect(jsonPath("$.messageCode").value("MSG29"));
-        }
-        assertThat(planCount(free)).isZero();
+        call(free, post(PLANS + "/calculate"), body).andExpect(status().isOk());
+        call(free, post(PLANS), body).andExpect(status().isCreated());
+        assertThat(planCount(free)).isOne();
     }
 
     // ------------------------------------------------------------------------------------------

@@ -58,7 +58,8 @@ class MarketRealtimeJobsTest {
                         broadcast(),
                         scheduler(),
                         new MarketHubProperties(
-                                false, Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofMillis(100)))
+                                false, Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                        java.time.Clock.systemUTC())
                 .start();
         assertThat(periods).isEmpty();
 
@@ -66,7 +67,8 @@ class MarketRealtimeJobsTest {
                         broadcast(),
                         scheduler(),
                         new MarketHubProperties(
-                                true, Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofMillis(100)))
+                                true, Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                        java.time.Clock.systemUTC())
                 .start();
 
         assertThat(periods).containsExactly(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofMillis(100));

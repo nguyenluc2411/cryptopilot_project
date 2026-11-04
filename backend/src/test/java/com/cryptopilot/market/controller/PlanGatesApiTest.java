@@ -57,10 +57,6 @@ class PlanGatesApiTest {
         Caller(PlanTier tier) {
             this.tier = tier;
         }
-
-        boolean paid() {
-            return tier == PlanTier.PRO || tier == PlanTier.PREMIUM;
-        }
     }
 
     @Autowired
@@ -119,7 +115,8 @@ class PlanGatesApiTest {
 
     /**
      * SRS 3.3.1 and D-60: everybody reads the mark price, index price, funding rate and next funding time; the open
-     * interest, long/short ratio and last settlement are answered only on a plan with {@code FUTURES_ANALYSIS}.
+     * interest, long/short ratio and last settlement are answered to every Trader, whose plans all include {@code
+     * FUTURES_ANALYSIS} since V61, and never to a Guest.
      */
     @ParameterizedTest
     @EnumSource(Caller.class)
@@ -130,7 +127,7 @@ class PlanGatesApiTest {
                 .andExpect(jsonPath("$.price.indexPrice").exists())
                 .andExpect(jsonPath("$.price.fundingRate").exists())
                 .andExpect(jsonPath("$.price.nextFundingTime").exists());
-        if (caller.paid()) {
+        if (caller.tier != null) {
             result.andExpect(jsonPath("$.openInterest.openInterest").exists())
                     .andExpect(jsonPath("$.longShortRatio.longShortRatio").exists())
                     .andExpect(jsonPath("$.lastFundingSettlement.fundingRate").exists());
@@ -141,7 +138,7 @@ class PlanGatesApiTest {
         }
     }
 
-    /** D-60: the futures metrics need a Trader (MSG44) whose plan includes {@code FUTURES_ANALYSIS} (MSG29). */
+    /** D-60: the futures metrics need a Trader (MSG44); every plan includes {@code FUTURES_ANALYSIS} since V61. */
     @ParameterizedTest
     @EnumSource(Caller.class)
     void BR62_futuresMetrics_needFuturesAnalysis(Caller caller) throws Exception {
@@ -150,9 +147,6 @@ class PlanGatesApiTest {
             case GUEST ->
                 result.andExpect(status().isUnauthorized())
                         .andExpect(jsonPath("$.messageCode").value("MSG44"));
-            case FREE ->
-                result.andExpect(status().isForbidden())
-                        .andExpect(jsonPath("$.messageCode").value("MSG29"));
             default ->
                 result.andExpect(status().isOk())
                         .andExpect(jsonPath("$.openInterest.length()").value(1))
@@ -182,7 +176,10 @@ class PlanGatesApiTest {
         }
     }
 
-    /** UC-11 and D-60: the Futures analysis needs {@code FUTURES_ANALYSIS}; FREE is refused with MSG29. */
+    /**
+     * UC-11 and D-60: the Futures analysis needs {@code FUTURES_ANALYSIS}, which every plan includes since V61; FREE
+     * reads it with the component blocks locked (CR-08), as the Spot one.
+     */
     @ParameterizedTest
     @EnumSource(Caller.class)
     void BR62_futuresAnalysis_needsFuturesAnalysis(Caller caller) throws Exception {
@@ -190,8 +187,10 @@ class PlanGatesApiTest {
         switch (caller) {
             case GUEST -> result.andExpect(status().isUnauthorized());
             case FREE ->
-                result.andExpect(status().isForbidden())
-                        .andExpect(jsonPath("$.messageCode").value("MSG29"));
+                result.andExpect(status().isOk())
+                        .andExpect(jsonPath("$.componentsLocked").value(true))
+                        .andExpect(jsonPath("$.components").value(nullValue()))
+                        .andExpect(jsonPath("$.setupScore", hasKey("score")));
             default ->
                 result.andExpect(status().isOk())
                         .andExpect(jsonPath("$.componentsLocked").value(false))

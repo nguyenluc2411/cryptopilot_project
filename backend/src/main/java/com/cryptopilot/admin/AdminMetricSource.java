@@ -33,4 +33,12 @@ public interface AdminMetricSource {
      * one; a bucket without any is left out and reads as 0.
      */
     Map<String, Map<LocalDate, BigDecimal>> series(Instant from, Instant to, ReportGrouping grouping);
+
+    /**
+     * Named figures of the health panel of SCR-44 (UC-52: "the status of the external APIs and of data ingestion"), by
+     * a name unique across the sources; none by default.
+     */
+    default Map<String, Object> health(Instant now) {
+        return Map.of();
+    }
 }

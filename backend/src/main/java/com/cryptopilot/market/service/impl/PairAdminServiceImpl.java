@@ -18,11 +18,14 @@ import com.cryptopilot.market.dto.request.LeverageBracketRequest;
 import com.cryptopilot.market.dto.request.LeverageBracketsRequest;
 import com.cryptopilot.market.dto.request.UpdatePairRequest;
 import com.cryptopilot.market.dto.response.AdminPairResponse;
+import com.cryptopilot.market.dto.response.BracketTemplateResponse;
 import com.cryptopilot.market.dto.response.ExchangeSymbolResponse;
 import com.cryptopilot.market.dto.response.LeverageBracketsResponse;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.model.ExchangeListing;
+import com.cryptopilot.market.model.enums.BracketTemplate;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.PairStatus;
@@ -35,6 +38,7 @@ import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,15 +62,18 @@ import org.springframework.transaction.support.TransactionTemplate;
  * SCR-37 and SCR-38. A pair's availability on a market is its status and the market's switch together (BR-07), so a
  * change of either that takes a market out of service is a disabling: refused while simulated positions are open there
  * (BR-59, asked of every {@link OpenPositionCheck}), and announced with {@link PairMarketDisabled} inside the same
- * transaction, whose synchronous listener cancels the market's ACTIVE plans. Streams and backfill follow the enabled
- * pairs on their own: NSF-03 reads them again every refresh interval (5 minutes).
+ * transaction, whose synchronous listener cancels the market's ACTIVE plans. A change that brings a market into service
+ * is announced with {@link PairMarketEnabled}, whose listeners act once it commits and off the request's thread, so
+ * NSF-03 opens the pair's streams and NSF-02 stores its candles at once; without it they would follow at the next
+ * refresh (5 minutes) and the next hourly backfill.
  *
  * <p>Adding a pair reuses the synchronisation of NSF-01 with the symbol as its only seed, so a pair added here and one
  * seeded from configuration are created by the same code, with the same coins and filters.
  *
  * <p>The pair's leverage ceiling and its first bracket are kept consistent from either side (BR-26).
  *
- * <p>Rule: UC-45, UC-46; BR-07, BR-26, BR-27, BR-31, BR-57, BR-59; NSF-01.
+ * <p>Rule: UC-45, UC-46; BR-07, BR-26, BR-27, BR-31, BR-57, BR-59; NSF-01. Reference: Kleppmann, M. <i>Designing
+ * Data-Intensive Applications</i>, 2017, ch. 11 (acting on committed events).
  */
 @Service
 @RequiredArgsConstructor
@@ -187,19 +194,27 @@ public class PairAdminServiceImpl implements PairAdminService {
     @Transactional
     public AdminPairResponse update(UUID adminId, UUID pairId, UpdatePairRequest request) {
         CryptoPair pair = lockedPair(pairId);
-        if (request.futuresEnabled() && request.maxLeverage() == null) {
+        // An INACTIVE pair has both markets off whatever the switches sent (UC-45): every check below reads the
+        // switches as they will be stored.
+        boolean active = request.status() == PairStatus.ACTIVE;
+        boolean spotOn = active && request.spotEnabled();
+        boolean futuresOn = active && request.futuresEnabled();
+        if (futuresOn && request.maxLeverage() == null) {
             throw new FieldValidationException(
                     "a futures market needs its maximum leverage", Map.of("maxLeverage", "MSG01"));
         }
-        if (request.futuresEnabled()) {
+        if (futuresOn) {
             requireWithinFirstBracket(request.maxLeverage(), brackets.findByPair(pair.getId()), "maxLeverage");
         }
         Map<String, Object> before = values(pair);
         Instant now = clock.instant();
         List<MarketType> disabled = new ArrayList<>();
+        List<MarketType> enabled = new ArrayList<>();
         for (MarketType market : MarketType.values()) {
-            boolean switchOn = market == MarketType.SPOT ? request.spotEnabled() : request.futuresEnabled();
-            boolean available = request.status() == PairStatus.ACTIVE && switchOn;
+            boolean available = market == MarketType.SPOT ? spotOn : futuresOn;
+            if (available && !pair.isEnabledOn(market)) {
+                enabled.add(market);
+            }
             // Whichever switch brings the market into service, the exchange must trade it there.
             if (available && !pair.isEnabledOn(market) && !tradable(pair, market)) {
                 throw new BusinessException(
@@ -212,15 +227,14 @@ public class PairAdminServiceImpl implements PairAdminService {
             }
         }
         for (MarketType market : MarketType.values()) {
-            boolean switchOn = market == MarketType.SPOT ? request.spotEnabled() : request.futuresEnabled();
-            if (switchOn) {
+            if (market == MarketType.SPOT ? spotOn : futuresOn) {
                 pair.enable(market);
             } else {
                 pair.disable(market);
             }
         }
         pair.changeStatus(request.status());
-        if (request.futuresEnabled()) {
+        if (futuresOn) {
             pair.limitLeverage(request.maxLeverage());
         }
         pair.placeAt(request.displayOrder());
@@ -236,6 +250,13 @@ public class PairAdminServiceImpl implements PairAdminService {
         for (MarketType market : disabled) {
             requireNoOpenPositions(pair, market);
         }
+        if (enabled.contains(MarketType.FUTURES)) {
+            bracketsFromTemplate(adminId, pair, now);
+        }
+        // Its listeners act after commit, off this thread: a rolled-back update announces nothing.
+        for (MarketType market : enabled) {
+            events.publishEvent(new PairMarketEnabled(pair.getId(), pair.getSymbol(), market));
+        }
         Map<String, Object> after = values(pair);
         if (!before.equals(after)) {
             admin.audit(new AuditEntry(
@@ -247,6 +268,14 @@ public class PairAdminServiceImpl implements PairAdminService {
                     changed(after, before)));
         }
         return responses(List.of(pair)).getFirst();
+    }
+
+    @Override
+    public List<BracketTemplateResponse> bracketTemplates() {
+        return Arrays.stream(BracketTemplate.values())
+                .map(template -> new BracketTemplateResponse(
+                        template.name(), template.firstLeverage(), checkedBrackets(template.rows())))
+                .toList();
     }
 
     @Override
@@ -348,6 +377,31 @@ public class PairAdminServiceImpl implements PairAdminService {
                         pair.getSymbol() + " " + market + " has open simulated positions");
             }
         }
+    }
+
+    /**
+     * A Futures market turned on without brackets gets the default template's (UC-45): with none, every Futures order,
+     * leverage change and plan on the pair is refused, which the administrator would only find out from a Trader. The
+     * template's first bracket allows the pair's ceiling (BR-26); the brackets are audited as created, and the
+     * administrator adjusts them on SCR-38. A pair that has brackets keeps them.
+     */
+    private void bracketsFromTemplate(UUID adminId, CryptoPair pair, Instant now) {
+        if (!brackets.findByPair(pair.getId()).isEmpty()) {
+            return;
+        }
+        String baseCoin =
+                coins.findById(pair.getBaseCoinId()).map(Coin::getSymbol).orElse("");
+        BracketTemplate template = BracketTemplate.defaultFor(baseCoin, pair.getMaxLeverage());
+        List<LeverageTier> tiers = checkedBrackets(template.rows());
+        brackets.replace(pair.getId(), tiers, adminId, now);
+        events.publishEvent(new LeverageBracketsReplaced(pair.getId(), pair.getSymbol(), now));
+        admin.audit(new AuditEntry(
+                adminId,
+                AuditAction.CONFIGURATION_CREATED,
+                AuditedEntity.LEVERAGE_BRACKET,
+                pair.getId(),
+                null,
+                Map.of("symbol", pair.getSymbol(), "template", template.name(), "brackets", bracketValues(tiers))));
     }
 
     /** Whether the exchange trades the pair on the market and has sent its filters there. */

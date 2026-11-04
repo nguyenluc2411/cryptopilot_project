@@ -16,6 +16,7 @@ import com.cryptopilot.market.client.StubExchange.Answer;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.GapDetected;
 import com.cryptopilot.market.event.MarketStreamReconnected;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.job.CandleBackfillJob.Outcome;
 import com.cryptopilot.market.model.BackfillRun;
@@ -53,6 +54,8 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.Trigger;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -302,6 +305,33 @@ class CandleBackfillJobTest {
                 .isEqualTo(NOW));
     }
 
+    /** Inside a transaction: the backfill is scheduled once it commits, never when it rolls back. */
+    @Test
+    void UC45_aPairTurnedOn_waitsForTheCommit_andARollbackSchedulesNothing() {
+        PairMarketEnabled enabled = new PairMarketEnabled(UUID.randomUUID(), "TRXUSDT", MarketType.SPOT);
+        CandleBackfillJob job = job(true);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            assertThat(scheduled).isEmpty();
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        assertThat(scheduled).as("rolled back").isEmpty();
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        assertThat(scheduled).as("committed").hasSize(1);
+    }
+
     /** Enabled, the hourly cron is registered; runAll backfills both markets. */
     @Test
     void NSF02_start_registersTheHourlyCron() {
@@ -424,6 +454,19 @@ class CandleBackfillJobTest {
     @Test
     void NSF03_aReconnectedStream_triggersThatMarketsBackfill() {
         job(true).onStreamReconnected(new MarketStreamReconnected(MarketType.FUTURES));
+
+        assertThat(scheduled).singleElement().satisfies(task -> assertThat(task.at())
+                .isEqualTo(NOW));
+    }
+
+    /** A pair an administrator turned on: that market is brought up to date at once, not at the next hour. */
+    @Test
+    void UC45_aPairTurnedOn_triggersThatMarketsBackfill_unlessDisabled() {
+        PairMarketEnabled enabled = new PairMarketEnabled(UUID.randomUUID(), "TRXUSDT", MarketType.SPOT);
+        job(false).onPairMarketEnabled(enabled);
+        assertThat(scheduled).isEmpty();
+
+        job(true).onPairMarketEnabled(enabled);
 
         assertThat(scheduled).singleElement().satisfies(task -> assertThat(task.at())
                 .isEqualTo(NOW));

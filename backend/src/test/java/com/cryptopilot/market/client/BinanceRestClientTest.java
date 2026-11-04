@@ -710,10 +710,15 @@ class BinanceRestClientTest {
                                 .kind())
                         .isEqualTo(BinanceClientException.Kind.REJECTED);
             }
+            assertThat(refusalOf(() ->
+                                    client.klines(BinanceVenue.SPOT, "NOPE", MarketInterval.ONE_MINUTE, null, null, 1))
+                            .serviceAnswered())
+                    .as("UC-52: the exchange answered, so the health panel reads it as up")
+                    .isTrue();
 
             assertThat(exchange.hits(SPOT_KLINES))
                     .as("each call once, none retried, none refused by a breaker")
-                    .isEqualTo(3);
+                    .isEqualTo(4);
         }
 
         /** A body that is not the documented shape is MALFORMED, whatever is wrong with it. */
