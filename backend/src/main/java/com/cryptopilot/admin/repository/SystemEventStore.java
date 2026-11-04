@@ -12,6 +12,7 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -124,16 +125,23 @@ public class SystemEventStore {
     /**
      * For each source with a row in the log: its latest failure, and how many failures were seen in rows last seen at
      * or after {@code since}. A row counts whole, so the figure may include one bucket (at most the merge window)
-     * that began before {@code since}.
+     * that began before {@code since}. Each source is read through {@code idx_system_event_source}: its newest row, and
+     * its rows since {@code since}, never the whole table.
      */
     public Map<SystemEventSource, SourceFailures> failuresBySource(Instant since) {
         Map<SystemEventSource, SourceFailures> bySource = new EnumMap<>(SystemEventSource.class);
         sql.sql("""
-                        select distinct on (source) source, last_seen_at, message,
-                               coalesce(sum(occurrences) filter (where last_seen_at >= :since)
-                                        over (partition by source), 0) as recent
-                          from system_event
-                         order by source, last_seen_at desc""")
+                        select s.source, latest.last_seen_at, latest.message, coalesce(recent.total, 0) as recent
+                          from unnest(cast(:sources as varchar[])) as s(source)
+                          join lateral (select e.last_seen_at, e.message
+                                          from system_event e
+                                         where e.source = s.source
+                                         order by e.last_seen_at desc
+                                         limit 1) latest on true
+                          left join lateral (select sum(e.occurrences) as total
+                                               from system_event e
+                                              where e.source = s.source and e.last_seen_at >= :since) recent on true""")
+                .param("sources", sources())
                 .param("since", Timestamp.from(since))
                 .query((row, index) -> new SourceFailures(
                         SystemEventSource.valueOf(row.getString("source")),
@@ -150,6 +158,14 @@ public class SystemEventStore {
         return sql.sql("delete from system_event where last_seen_at < ?")
                 .param(Timestamp.from(before))
                 .update();
+    }
+
+    private static String sources() {
+        StringJoiner literal = new StringJoiner(",", "{", "}");
+        for (SystemEventSource source : SystemEventSource.values()) {
+            literal.add(source.name());
+        }
+        return literal.toString();
     }
 
     private static String where(SystemEventFilter filter, Map<String, Object> params) {

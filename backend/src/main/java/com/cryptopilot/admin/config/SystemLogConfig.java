@@ -7,6 +7,7 @@ import com.cryptopilot.admin.service.impl.SystemEventRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.task.SimpleAsyncTaskSchedulerCustomizer;
 import org.springframework.boot.task.ThreadPoolTaskSchedulerCustomizer;
 import org.springframework.context.annotation.Bean;
@@ -23,6 +24,7 @@ import org.springframework.util.ErrorHandler;
  * <p>Rule: UC-46; registration form, Admin System ("system errors").
  */
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(SystemHealthProperties.class)
 public class SystemLogConfig {
 
     private static final Logger log = LoggerFactory.getLogger(SystemLogConfig.class);

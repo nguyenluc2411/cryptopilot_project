@@ -188,6 +188,10 @@ cryptopilot:
       enabled: false
       cron: "0 15 0 * * *"
       zone: UTC
+  admin:
+    system-health:
+      # UC-46: a feed is stale once its latest candle is older than the shortest stored timeframe (15m) plus this.
+      feed-grace: 2m
   market:
     binance:
       # The public market data API only (BR-09): no key, no account, no order endpoint. Hosts and

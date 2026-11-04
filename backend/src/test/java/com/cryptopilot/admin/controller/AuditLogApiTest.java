@@ -202,6 +202,7 @@ class AuditLogApiTest {
         as(trader, get(API)).andExpect(status().isForbidden());
         as(trader, get(API + "/export")).andExpect(status().isForbidden());
         mvc.perform(get(API)).andExpect(status().isUnauthorized());
+        mvc.perform(get(API + "/export")).andExpect(status().isUnauthorized());
     }
 
     @Test

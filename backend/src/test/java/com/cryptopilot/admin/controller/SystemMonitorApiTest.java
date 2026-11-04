@@ -338,6 +338,8 @@ class SystemMonitorApiTest {
                 .isZero();
         as(trader, get(API + "/system-events")).andExpect(status().isForbidden());
         as(trader, get(API + "/system-health")).andExpect(status().isForbidden());
+        mvc.perform(get(API + "/system-events")).andExpect(status().isUnauthorized());
+        mvc.perform(get(API + "/system-health")).andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -354,7 +356,9 @@ class SystemMonitorApiTest {
         as(admin, get(API + "/system-health"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.recentWindowMinutes").value(15))
-                .andExpect(jsonPath("$.staleAfterMinutes").value(5))
+                .andExpect(jsonPath("$.staleAfterMinutes").value(17))
+                .andExpect(jsonPath("$.systemLogDropped").value(0))
+                .andExpect(jsonPath("$.systemLogLostAtShutdown").value(0))
                 .andExpect(jsonPath("$.services.length()").value(5))
                 .andExpect(jsonPath("$.services[?(@.source == 'APPLICATION')]").isEmpty())
                 .andExpect(jsonPath("$.services[?(@.source == 'MAIL')].status").value("DEGRADED"))

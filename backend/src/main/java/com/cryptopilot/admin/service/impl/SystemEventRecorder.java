@@ -40,7 +40,11 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <p>The same failure seen again within {@link #MERGE_WINDOW} of its row's first failure is one row with a count, so a
  * service down for an hour leaves six rows, not one per call. Only the exception's type and message are kept, cut to
- * the column's length; no request body, header or argument is.
+ * the column's length, with emails and secrets masked ({@link AuditValueRedactor#redactText}); no request body, header or
+ * argument is.
+ *
+ * <p>Known limitation: one instance (D-39); two instances writing the same failure at once may open two rows of one
+ * bucket.
  *
  * <p>Rule: UC-46; registration form, Admin System ("system errors, and external API failures"). Reference: Nygard, M.
  * <i>Release It!</i> 2nd ed., 2018, ch. 5 (stability patterns, failure aggregation).
@@ -54,6 +58,9 @@ public class SystemEventRecorder {
     /** How many failures may wait for the writer; more are dropped. */
     static final int QUEUE_CAPACITY = 1000;
 
+    /** How long shutdown waits for the queue to be written. */
+    static final Duration SHUTDOWN_WAIT = Duration.ofSeconds(5);
+
     static final int OPERATION_LENGTH = 200;
     static final int ERROR_TYPE_LENGTH = 200;
     static final int MESSAGE_LENGTH = 1000;
@@ -66,6 +73,7 @@ public class SystemEventRecorder {
     private final Clock clock;
     private final ThreadPoolExecutor writer;
     private final AtomicLong dropped = new AtomicLong();
+    private final AtomicLong lostAtShutdown = new AtomicLong();
     /** Failures handed over and not written yet. */
     private final AtomicLong pending = new AtomicLong();
 
@@ -180,11 +188,25 @@ public class SystemEventRecorder {
         return dropped.get();
     }
 
-    /** Writes what is waiting, a few seconds at most, then stops the writer. */
+    /** How many failures were still waiting when the writer stopped, since the start. */
+    public long lostAtShutdownCount() {
+        return lostAtShutdown.get();
+    }
+
+    /** Writes what is waiting, a few seconds at most, then stops the writer and reports what was left. */
     @PreDestroy
     void stop() {
-        awaitWritten(Duration.ofSeconds(5));
-        writer.shutdownNow();
+        stop(SHUTDOWN_WAIT);
+    }
+
+    void stop(Duration wait) {
+        awaitWritten(wait);
+        int left = writer.shutdownNow().size();
+        if (left > 0) {
+            pending.addAndGet(-left);
+            lostAtShutdown.addAndGet(left);
+            log.warn("System log writer stopped: {} failures not recorded", left);
+        }
     }
 
     /** The message on one line, without control characters, cut to the column; {@code null} when there is none. */
@@ -193,7 +215,8 @@ public class SystemEventRecorder {
         if (text == null || text.isBlank()) {
             return null;
         }
-        String clean = text.replaceAll("\\p{Cntrl}+", " ").strip();
+        String clean = AuditValueRedactor.redactText(text.replaceAll("\\p{Cntrl}+", " "))
+                .strip();
         return clean.isEmpty() ? null : cut(clean, MESSAGE_LENGTH);
     }
 

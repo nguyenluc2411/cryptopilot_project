@@ -3,21 +3,29 @@ package com.cryptopilot.admin.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 
 import com.cryptopilot.admin.model.enums.SystemEventCategory;
 import com.cryptopilot.admin.model.enums.SystemEventSource;
 import com.cryptopilot.admin.repository.SystemEventStore;
+import jakarta.mail.MessagingException;
+import jakarta.mail.SendFailedException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.mail.MailSendException;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
@@ -82,6 +90,77 @@ class SystemEventRecorderTest {
                 .hasSize(SystemEventRecorder.MESSAGE_LENGTH);
         assertThat(SystemEventRecorder.message(new RuntimeException(" "))).isNull();
         assertThat(SystemEventRecorder.message(new RuntimeException())).isNull();
+    }
+
+    /** An SMTP refusal names its recipients; the stored message keeps only their domains and first letters. */
+    @Test
+    void UC46_anSmtpRefusalOfTwoRecipients_isStoredWithTheirEmailsMasked() {
+        SendFailedException refused = new SendFailedException(
+                "Invalid Addresses",
+                new MessagingException("550 5.1.1 <alice.nguyen@gmail.com>: Recipient address rejected;"
+                        + " 550 5.1.1 <bob@fpt.edu.vn>: Recipient address rejected"));
+        MailSendException failure = new MailSendException(Map.of("message", refused));
+
+        recorder.record(SystemEventCategory.EXTERNAL_API_FAILURE, SystemEventSource.MAIL, "send", failure, null);
+
+        ArgumentCaptor<String> stored = ArgumentCaptor.forClass(String.class);
+        verify(store, timeout(5000))
+                .record(
+                        eq(SystemEventCategory.EXTERNAL_API_FAILURE),
+                        eq(SystemEventSource.MAIL),
+                        eq("send"),
+                        any(),
+                        stored.capture(),
+                        any(),
+                        any(),
+                        any(),
+                        any());
+        assertThat(failure.getMessage()).contains("alice.nguyen@gmail.com", "bob@fpt.edu.vn");
+        assertThat(stored.getValue())
+                .contains("a***@gmail.com", "b***@fpt.edu.vn")
+                .doesNotContain("alice", "bob@");
+    }
+
+    @Test
+    void UC46_aSecretInAMessage_isMasked() {
+        assertThat(SystemEventRecorder.message(
+                        new RuntimeException("refused token=abc123 for user=jo, Authorization: Bearer eyJh.x.y")))
+                .isEqualTo("refused token=[REDACTED] for user=jo, Authorization: [REDACTED] [REDACTED]");
+    }
+
+    /** Shutdown waits a bounded time, then stops the writer and counts what was still waiting. */
+    @Test
+    void UC46_aShutdownWhileTheDatabaseHangs_countsWhatWasLost() {
+        CountDownLatch release = new CountDownLatch(1);
+        doAnswer(call -> {
+                    release.await(10, TimeUnit.SECONDS);
+                    return null;
+                })
+                .when(store)
+                .record(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        for (int i = 0; i < 4; i++) {
+            recorder.record(
+                    SystemEventCategory.EXTERNAL_API_FAILURE,
+                    SystemEventSource.MAIL,
+                    "send",
+                    new RuntimeException("down"),
+                    null);
+        }
+        verify(store, timeout(5000)).record(any(), any(), any(), any(), any(), any(), any(), any(), any());
+
+        long started = System.nanoTime();
+        recorder.stop(Duration.ofMillis(200));
+
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
+        assertThat(recorder.lostAtShutdownCount()).isEqualTo(3);
+        release.countDown();
+    }
+
+    @Test
+    void UC46_aShutdownWithNothingWaiting_losesNothing() {
+        recorder.stop(Duration.ofMillis(200));
+
+        assertThat(recorder.lostAtShutdownCount()).isZero();
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.cryptopilot.admin.service.impl;
 
 import com.cryptopilot.admin.AdminMetricSource;
+import com.cryptopilot.admin.config.SystemHealthProperties;
 import com.cryptopilot.admin.dto.response.SystemEventResponse;
 import com.cryptopilot.admin.dto.response.SystemHealthResponse;
 import com.cryptopilot.admin.model.SourceFailures;
@@ -37,7 +38,8 @@ import org.springframework.transaction.annotation.Transactional;
  * with no answer from any of them within it), one with an answer
  * after it DEGRADED; an answer and no recent failure is UP, and neither since the start UNKNOWN. A Binance IP ban that
  * has not ended is DOWN whatever the calls say, since every call is refused until then. A market's feed is stale when
- * its latest stored candle closed more than {@link #STALE} ago.
+ * its latest stored candle closed longer ago than the shortest stored timeframe and a grace
+ * ({@link SystemHealthProperties#feedGrace()}): a healthy feed closes no candle more often than that.
  *
  * <p>{@code lastSuccessAt} is held per instance while the failures are shared in the database, so with more than one
  * instance the panel may differ by the instance that answers.
@@ -51,9 +53,6 @@ public class SystemMonitorServiceImpl implements SystemMonitorService {
     /** How far back a failure counts against a service's status. */
     static final Duration RECENT = Duration.ofMinutes(15);
 
-    /** How old the latest candle may be before a feed is stale: a 1m candle closes every minute. */
-    static final Duration STALE = Duration.ofMinutes(5);
-
     /** How long a failure stays in the system log after it was last seen (NSF-17). */
     static final Duration KEPT = Duration.ofDays(90);
 
@@ -62,6 +61,8 @@ public class SystemMonitorServiceImpl implements SystemMonitorService {
     private final SystemEventStore store;
     private final ExternalCallTracker calls;
     private final List<AdminMetricSource> sources;
+    private final SystemHealthProperties properties;
+    private final SystemEventRecorder recorder;
     private final Clock clock;
 
     @Override
@@ -126,14 +127,22 @@ public class SystemMonitorServiceImpl implements SystemMonitorService {
 
         List<SystemHealthResponse.Feed> feeds = new ArrayList<>();
         Map<String, Instant> latest = instants(figures.get("latestCandle"));
+        Duration staleAfter = staleAfter(figures.get("shortestTimeframe"), properties.feedGrace());
         for (String market : List.of("SPOT", "FUTURES")) {
             Instant close = latest.get(market);
             Long lag = close == null
                     ? null
                     : Math.max(0, Duration.between(close, now).toSeconds());
-            feeds.add(new SystemHealthResponse.Feed(market, close, lag, lag == null || lag > STALE.toSeconds()));
+            feeds.add(new SystemHealthResponse.Feed(market, close, lag, stale(close, now, staleAfter)));
         }
-        return new SystemHealthResponse(now, (int) RECENT.toMinutes(), (int) STALE.toMinutes(), services, feeds);
+        return new SystemHealthResponse(
+                now,
+                (int) RECENT.toMinutes(),
+                (int) staleAfter.toMinutes(),
+                services,
+                feeds,
+                recorder.droppedCount(),
+                recorder.lostAtShutdownCount());
     }
 
     @Override
@@ -157,6 +166,16 @@ public class SystemMonitorServiceImpl implements SystemMonitorService {
                     : ServiceStatus.DOWN;
         }
         return lastAnswer != null ? ServiceStatus.UP : ServiceStatus.UNKNOWN;
+    }
+
+    /** The shortest stored timeframe the market module reports, plus the grace; the grace alone without one. */
+    static Duration staleAfter(Object shortestTimeframe, Duration grace) {
+        return shortestTimeframe instanceof Duration timeframe ? timeframe.plus(grace) : grace;
+    }
+
+    /** Whether nothing is stored, or the latest candle closed longer ago than {@code staleAfter}. */
+    static boolean stale(Instant latestClose, Instant now, Duration staleAfter) {
+        return latestClose == null || Duration.between(latestClose, now).compareTo(staleAfter) > 0;
     }
 
     private static Map<String, Instant> instants(Object figure) {

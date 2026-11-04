@@ -12,10 +12,19 @@ import java.util.List;
  *
  * @param checkedAt when the figures were read
  * @param recentWindowMinutes how far back a failure makes a service DOWN or DEGRADED
- * @param staleAfterMinutes how old the latest candle may be before a feed is stale
+ * @param staleAfterMinutes how old the latest candle may be before a feed is stale: the shortest stored timeframe and
+ *     a grace
+ * @param systemLogDropped failures not recorded since the start because the system log's queue was full
+ * @param systemLogLostAtShutdown failures still waiting when the system log's writer stopped, since the start
  */
 public record SystemHealthResponse(
-        Instant checkedAt, int recentWindowMinutes, int staleAfterMinutes, List<Service> services, List<Feed> feeds) {
+        Instant checkedAt,
+        int recentWindowMinutes,
+        int staleAfterMinutes,
+        List<Service> services,
+        List<Feed> feeds,
+        long systemLogDropped,
+        long systemLogLostAtShutdown) {
 
     /**
      * One external service.

@@ -571,7 +571,8 @@ class MarketStreamSupervisorTest {
                 minuteListeners,
                 trading,
                 tradeListeners,
-                markListeners);
+                markListeners,
+                Clock.systemUTC());
     }
 
     private CandleBackfillService backfill() {
