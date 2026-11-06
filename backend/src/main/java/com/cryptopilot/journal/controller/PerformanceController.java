@@ -30,7 +30,10 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Reference: Fowler, M. (2002). <i>Patterns of Enterprise Application Architecture</i>. Addison-Wesley, "Remote
  * Facade" over a "Service Layer".
  */
-@Tag(name = "Performance", description = "The performance dashboard of SCR-23 (UC-25). Trader.")
+@Tag(
+        name = "Performance",
+        description = "The performance dashboard of SCR-23 (UC-25). The period reads exit_time; the source defaults to"
+                + " SIMULATED. Trader.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
 @RestController
 @RequestMapping("/api/v1/journal/performance")
@@ -58,7 +61,9 @@ public class PerformanceController {
     }
 
     @Operation(summary = "The caller's statistics per pair, the highest net P/L first (SCR-23)")
-    @ApiResponse(responseCode = "200", description = "One row per pair; `key` is its id, `label` its symbol")
+    @ApiResponse(
+            responseCode = "200",
+            description = "One row per pair; `key` is its id, `label` its symbol, null when the pair is not found")
     @ApiResponse(responseCode = "400", description = BAD_FILTER)
     @ApiResponse(responseCode = "401", description = NO_SESSION)
     @ApiResponse(responseCode = "403", description = NOT_IN_PLAN)

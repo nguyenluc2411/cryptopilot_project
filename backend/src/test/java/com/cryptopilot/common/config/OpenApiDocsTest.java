@@ -64,6 +64,8 @@ class OpenApiDocsTest {
             "/api/v1/plans/calculate",
             "/api/v1/plans/{id}",
             "/api/v1/journal",
+            "/api/v1/journal/{id}",
+            "/api/v1/strategies",
             "/api/v1/journal/performance/summary",
             "/api/v1/journal/performance/by-coin",
             "/api/v1/journal/performance/by-strategy",
@@ -211,7 +213,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/news-articles/{id}/restore",
             "/api/v1/admin/news-articles/{id}/summarize");
 
-    private static final int OPERATIONS = 220;
+    private static final int OPERATIONS = 222;
 
     @Autowired
     private MockMvc mvc;
@@ -246,6 +248,38 @@ class OpenApiDocsTest {
                 .isEqualTo("string");
         assertThat((String) JsonPath.read(body, "$.components.schemas.PairResponse.properties.tickSize.format"))
                 .isEqualTo("decimal");
+    }
+
+    /** SCR-21: the detail documents the fields of a list row at the top level, beside the review. */
+    @Test
+    void UC22_theEntryDetail_documentsTheRowFieldsBesideTheReview() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Object> properties =
+                JsonPath.read(body, "$.components.schemas.JournalEntryDetailResponse.properties");
+        assertThat(properties).containsKeys("id", "strategyName", "netPnl", "setupDescription", "chartImageUrl");
+        assertThat(properties).doesNotContainKey("entry");
+    }
+
+    /** D-140: each list names the column of its period and the default of its source. */
+    @Test
+    void D140_theDescriptions_nameThePeriodColumnAndTheSourceDefault() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        assertThat(parameter(body, "/api/v1/journal", "from")).contains("entry_time");
+        assertThat(parameter(body, "/api/v1/journal", "to")).contains("entry_time");
+        assertThat(parameter(body, "/api/v1/journal", "source")).contains("default ALL");
+        assertThat(parameter(body, "/api/v1/journal", "market")).contains("ALL");
+        String summary = "/api/v1/journal/performance/summary";
+        assertThat(parameter(body, summary, "from")).contains("exit_time");
+        assertThat(parameter(body, summary, "to")).contains("exit_time");
+        assertThat(parameter(body, summary, "source")).contains("default SIMULATED");
+    }
+
+    private static String parameter(String body, String path, String name) {
+        List<String> descriptions =
+                JsonPath.read(body, "$.paths['" + path + "'].get.parameters[?(@.name == '" + name + "')].description");
+        return String.join(" ", descriptions);
     }
 
     /** D-76: a line cross has no threshold, and the MSG26 confirmation may name the count it confirms. */

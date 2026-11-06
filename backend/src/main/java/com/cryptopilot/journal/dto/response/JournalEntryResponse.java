@@ -17,6 +17,8 @@ import java.util.UUID;
  *
  * @param id the journal record
  * @param planId the plan the trade carried out; {@code null} for a manual trade
+ * @param strategyId the strategy assigned; {@code null} when unassigned
+ * @param strategyName its name; {@code null} when unassigned
  * @param pairId the pair traded
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT
@@ -35,12 +37,15 @@ import java.util.UUID;
  * @param realizedPnl CLOSED only: the price result, without fees or funding (BR-35)
  * @param feeAmount CLOSED only: the entry and exit fees (BR-36)
  * @param fundingFeeAmount CLOSED Futures only: the signed funding known so far (BR-37); {@code null} on Spot
- * @param netPnl CLOSED only: {@code realizedPnl − feeAmount + fundingFeeAmount} (BR-38)
+ * @param netPnl CLOSED only: {@code realizedPnl − feeAmount + fundingFeeAmount} (BR-38), a missing fee counting as 0
+ *     (D-139); {@code null} without a realized P/L
  * @param provisional CLOSED only: whether a funding settlement may still be missing; {@code false} while OPEN
  */
 public record JournalEntryResponse(
         UUID id,
         UUID planId,
+        UUID strategyId,
+        String strategyName,
         UUID pairId,
         MarketType market,
         Direction direction,

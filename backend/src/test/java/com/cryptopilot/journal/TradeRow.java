@@ -9,19 +9,22 @@ import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * A closed journal row written straight to the table, for the statistics tests: a manual Spot LONG of quantity 1 at
- * 100 unless a method says otherwise. The rows are the shape the closing code leaves; only the amounts under test vary.
+ * A journal row written straight to the table, for the journal and statistics tests: a manual Spot LONG of quantity 1
+ * at 100 unless a method says otherwise. The rows are the shape the closing code leaves; only the amounts under test
+ * vary.
  */
 public final class TradeRow {
 
     private final UUID user;
     private final UUID pair;
+    private final Instant entry;
     private final Instant exit;
     private final Map<String, Object> values = new HashMap<>();
 
-    private TradeRow(UUID user, UUID pair, Instant exit) {
+    private TradeRow(UUID user, UUID pair, Instant entry, Instant exit) {
         this.user = user;
         this.pair = pair;
+        this.entry = entry;
         this.exit = exit;
         values.put("market", "SPOT");
         values.put("direction", "LONG");
@@ -38,15 +41,37 @@ public final class TradeRow {
         values.put("funding", null);
         values.put("incomplete", false);
         for (String nullable : new String[] {
-            "stop", "take", "originalStop", "originalTake", "risk", "plannedEntry", "deviation", "adverse", "favorable"
+            "stop",
+            "take",
+            "originalStop",
+            "originalTake",
+            "risk",
+            "plannedEntry",
+            "deviation",
+            "adverse",
+            "favorable",
+            "setup",
+            "lessons",
+            "mistakes",
+            "chart"
         }) {
             values.put(nullable, null);
         }
     }
 
-    /** A closed trade with this exit. */
+    /** A closed trade with this exit, entered an hour before it. */
     public static TradeRow closed(UUID user, UUID pair, Instant exit) {
-        return new TradeRow(user, pair, exit);
+        return new TradeRow(user, pair, exit.minusSeconds(3600), exit);
+    }
+
+    /** An open trade with this entry. */
+    public static TradeRow open(UUID user, UUID pair, Instant entry) {
+        TradeRow row = new TradeRow(user, pair, entry, null);
+        row.values.put("status", "OPEN");
+        row.values.put("reason", null);
+        row.values.put("realized", null);
+        row.values.put("fee", null);
+        return row;
     }
 
     /** The gross result and the fees; the net P/L is their difference, plus any funding. */
@@ -156,9 +181,19 @@ public final class TradeRow {
         return this;
     }
 
+    /** The Trader's review. */
+    public TradeRow review(String setup, String lessons, String mistakes, String chart) {
+        values.put("setup", setup);
+        values.put("lessons", lessons);
+        values.put("mistakes", mistakes);
+        values.put("chart", chart);
+        return this;
+    }
+
     /** Writes the row. */
-    public void insert(JdbcClient sql) {
-        Timestamp at = Timestamp.from(exit);
+    public UUID insert(JdbcClient sql) {
+        UUID id = UUID.randomUUID();
+        Instant written = exit == null ? entry : exit;
         sql.sql("""
                         insert into trading_journal (journal_id, user_id, pair_id, plan_id, strategy_id, source,
                                                      market_type, direction, leverage, entry_price, stop_loss_price,
@@ -167,17 +202,23 @@ public final class TradeRow {
                                                      exit_time, close_reason, fee_amount, funding_fee_amount,
                                                      funding_incomplete, realized_pnl, risk_amount,
                                                      planned_entry_price, entry_deviation_r, max_adverse_price,
-                                                     max_favorable_price, trade_status, created_at, updated_at, version)
+                                                     max_favorable_price, trade_status, setup_description,
+                                                     lessons_learned, mistakes, chart_image_url, created_at, updated_at,
+                                                     version)
                         values (:id, :user, :pair, :plan, :strategy, :source, :market, :direction, :leverage, :entry,
-                                :stop, :take, :originalStop, :originalTake, :entry, :quantity, :entryTime, :exitTime,
-                                :reason, :fee, :funding, :incomplete, :realized, :risk, :plannedEntry, :deviation,
-                                :adverse, :favorable, :status, :exitTime, :exitTime, 1)""")
+                                :stop, :take, :originalStop, :originalTake, :exitPrice, :quantity, :entryTime,
+                                :exitTime, :reason, :fee, :funding, :incomplete, :realized, :risk, :plannedEntry,
+                                :deviation, :adverse, :favorable, :status, :setup, :lessons, :mistakes, :chart,
+                                :written, :written, 1)""")
                 .params(values)
-                .param("id", UUID.randomUUID())
+                .param("id", id)
                 .param("user", user)
                 .param("pair", pair)
-                .param("entryTime", Timestamp.from(exit.minusSeconds(3600)))
-                .param("exitTime", at)
+                .param("entryTime", Timestamp.from(entry))
+                .param("exitTime", exit == null ? null : Timestamp.from(exit))
+                .param("exitPrice", exit == null ? null : values.get("entry"))
+                .param("written", Timestamp.from(written))
                 .update();
+        return id;
     }
 }

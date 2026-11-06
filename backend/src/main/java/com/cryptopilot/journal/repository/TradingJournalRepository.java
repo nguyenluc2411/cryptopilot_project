@@ -2,8 +2,6 @@ package com.cryptopilot.journal.repository;
 
 import com.cryptopilot.journal.entity.TradingJournal;
 import com.cryptopilot.journal.model.PlanPosition;
-import com.cryptopilot.market.model.enums.MarketType;
-import com.cryptopilot.trading.model.enums.PositionStatus;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
@@ -26,6 +24,15 @@ import org.springframework.transaction.annotation.Transactional;
  */
 public interface TradingJournalRepository extends Repository<TradingJournal, UUID> {
 
+    /** The rows of {@link #search}, for its page and its count; a result only ever matches a CLOSED row (BR-42). */
+    String SEARCHED_ROWS = " from trading_journal where user_id = :userId and trade_status in (:statuses)"
+            + " and market_type in (:markets) and source in (:sources)"
+            + " and entry_time >= :from and entry_time < :to"
+            + " and (:anyPair = true or pair_id = :pairId)"
+            + " and (:anyStrategy = true or strategy_id = :strategyId)"
+            + " and (:anyResult = true or (trade_status = 'CLOSED' and sign(" + PerformanceQueryRepository.NET_PNL
+            + ") = :resultSign))";
+
     /**
      * Inserts a new record, or updates a loaded one, and writes it at once, so a second record of a plan breaks
      * {@code uq_trading_journal_plan} in the caller and not at its commit.
@@ -33,23 +40,35 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     TradingJournal saveAndFlush(TradingJournal record);
 
     /**
-     * A page of the user's records in the statuses and markets, the latest entry first (SCR-20); the pair filter
-     * applies unless {@code anyPair}. No parameter is null, so PostgreSQL can type every one.
+     * A page of the user's records entered in {@code [from, to)}, the latest entry first (SCR-20); the pair, strategy
+     * and result filters apply unless their {@code any} flag is set. No parameter is null, so PostgreSQL can type every
+     * one. Native, because the result reads the one SQL expression of the net P/L.
+     *
+     * @param resultSign the {@code sign} of the net P/L a row must have
      */
     @Transactional(readOnly = true)
     @Query(
-            value = "select j from TradingJournal j where j.userId = :userId and j.status in :statuses"
-                    + " and j.market in :markets and (:anyPair = true or j.pairId = :pairId)"
-                    + " order by j.entryTime desc, j.id desc",
-            countQuery = "select count(j) from TradingJournal j where j.userId = :userId and j.status in :statuses"
-                    + " and j.market in :markets and (:anyPair = true or j.pairId = :pairId)")
+            value = "select *" + SEARCHED_ROWS + " order by entry_time desc, journal_id desc",
+            countQuery = "select count(*)" + SEARCHED_ROWS,
+            nativeQuery = true)
     Page<TradingJournal> search(
             UUID userId,
-            Collection<PositionStatus> statuses,
-            Collection<MarketType> markets,
+            Collection<String> statuses,
+            Collection<String> markets,
+            Collection<String> sources,
+            Instant from,
+            Instant to,
             boolean anyPair,
             UUID pairId,
+            boolean anyStrategy,
+            UUID strategyId,
+            boolean anyResult,
+            int resultSign,
             Pageable page);
+
+    /** The user's record, or nothing when it is another Trader's, so a foreign id is not confirmed (SCR-21). */
+    @Transactional(readOnly = true)
+    Optional<TradingJournal> findByIdAndUserId(UUID id, UUID userId);
 
     /** The record of a plan, if the plan filled. */
     @Transactional(readOnly = true)
