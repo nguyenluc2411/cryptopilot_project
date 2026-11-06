@@ -17,6 +17,8 @@ import java.util.UUID;
  *
  * @param id the journal record
  * @param planId the plan the trade carried out; {@code null} for a manual trade
+ * @param strategyId the strategy assigned; {@code null} when unassigned
+ * @param strategyName its name; {@code null} when unassigned
  * @param pairId the pair traded
  * @param market SPOT or FUTURES
  * @param direction LONG or SHORT
@@ -41,6 +43,8 @@ import java.util.UUID;
 public record JournalEntryResponse(
         UUID id,
         UUID planId,
+        UUID strategyId,
+        String strategyName,
         UUID pairId,
         MarketType market,
         Direction direction,

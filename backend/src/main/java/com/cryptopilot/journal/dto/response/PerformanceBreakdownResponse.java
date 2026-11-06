@@ -8,7 +8,8 @@ import java.math.BigDecimal;
  * <p>Rule: SRS 3.6.3; UC-25; BR-42, BR-62.
  *
  * @param key the pair id, the strategy id ({@code null} for the trades without a strategy) or the market
- * @param label the symbol, the strategy name ("Unassigned" for those trades) or the market
+ * @param label the symbol ({@code null} when the pair is not found), the strategy name ("Unassigned" for those trades)
+ *     or the market
  * @param trades the closed trades of the group
  * @param wins trades with a net P/L above 0
  * @param losses trades with a net P/L below 0

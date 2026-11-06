@@ -58,7 +58,9 @@ public class PerformanceController {
     }
 
     @Operation(summary = "The caller's statistics per pair, the highest net P/L first (SCR-23)")
-    @ApiResponse(responseCode = "200", description = "One row per pair; `key` is its id, `label` its symbol")
+    @ApiResponse(
+            responseCode = "200",
+            description = "One row per pair; `key` is its id, `label` its symbol, null when the pair is not found")
     @ApiResponse(responseCode = "400", description = BAD_FILTER)
     @ApiResponse(responseCode = "401", description = NO_SESSION)
     @ApiResponse(responseCode = "403", description = NOT_IN_PLAN)

@@ -21,10 +21,11 @@ import org.springframework.stereotype.Repository;
 
 /**
  * The performance statistics, aggregated by PostgreSQL over the closed trades; no trade is loaded here. A closed
- * record without a realized P/L (the schema demands it of a simulated one only) has no result and is left out; a missing
- * fee counts as 0, like missing funding (D-139). Ratios and means are rounded to 8 decimals, the scale of the amounts; a division by zero yields {@code null}, as does a mean
- * or an extreme of nothing. A trade's R uses the planned risk, or without one the risk of its original stop loss, so
- * moving a stop never changes it; a trade without a stop loss is left out of every R metric.
+ * record without a realized P/L (the schema demands it of a simulated one only) has no result and is left out; a
+ * missing fee counts as 0, like missing funding (D-139). Ratios and means are rounded to 8 decimals, the scale of the
+ * amounts; a division by zero yields {@code null}, as does a mean or an extreme of nothing. A trade's R uses the planned
+ * risk, or without one the risk of its original stop loss, so moving a stop never changes it; a trade without a stop
+ * loss is left out of every R metric.
  *
  * <p>Rule: UC-25; BR-38, BR-42, BR-70; D-97, D-111, D-124, D-139; TECHNICAL_DESIGN 7.8, 7.10.
  *
@@ -38,7 +39,7 @@ import org.springframework.stereotype.Repository;
 public class PerformanceQueryRepository {
 
     /** The one SQL expression of the net P/L, which has no column (D-97). */
-    private static final String NET_PNL = "realized_pnl - coalesce(fee_amount, 0) + coalesce(funding_fee_amount, 0)";
+    static final String NET_PNL = "realized_pnl - coalesce(fee_amount, 0) + coalesce(funding_fee_amount, 0)";
 
     private static final String COUNTS = """
             count(*) as trades,

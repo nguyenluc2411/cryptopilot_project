@@ -64,6 +64,8 @@ class OpenApiDocsTest {
             "/api/v1/plans/calculate",
             "/api/v1/plans/{id}",
             "/api/v1/journal",
+            "/api/v1/journal/{id}",
+            "/api/v1/strategies",
             "/api/v1/journal/performance/summary",
             "/api/v1/journal/performance/by-coin",
             "/api/v1/journal/performance/by-strategy",
@@ -211,7 +213,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/news-articles/{id}/restore",
             "/api/v1/admin/news-articles/{id}/summarize");
 
-    private static final int OPERATIONS = 220;
+    private static final int OPERATIONS = 222;
 
     @Autowired
     private MockMvc mvc;
@@ -246,6 +248,17 @@ class OpenApiDocsTest {
                 .isEqualTo("string");
         assertThat((String) JsonPath.read(body, "$.components.schemas.PairResponse.properties.tickSize.format"))
                 .isEqualTo("decimal");
+    }
+
+    /** SCR-21: the detail documents the fields of a list row at the top level, beside the review. */
+    @Test
+    void UC22_theEntryDetail_documentsTheRowFieldsBesideTheReview() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Object> properties =
+                JsonPath.read(body, "$.components.schemas.JournalEntryDetailResponse.properties");
+        assertThat(properties).containsKeys("id", "strategyName", "netPnl", "setupDescription", "chartImageUrl");
+        assertThat(properties).doesNotContainKey("entry");
     }
 
     /** D-76: a line cross has no threshold, and the MSG26 confirmation may name the count it confirms. */

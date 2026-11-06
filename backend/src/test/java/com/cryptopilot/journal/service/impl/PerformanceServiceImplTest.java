@@ -8,9 +8,11 @@ import static org.mockito.Mockito.when;
 
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.journal.dto.request.PerformanceFilterRequest;
+import com.cryptopilot.journal.dto.response.PerformanceBreakdownResponse;
 import com.cryptopilot.journal.dto.response.PerformanceSummaryResponse;
 import com.cryptopilot.journal.model.PerformanceCounts;
 import com.cryptopilot.journal.model.PerformanceFilter;
+import com.cryptopilot.journal.model.PerformanceGroup;
 import com.cryptopilot.journal.repository.PerformanceQueryRepository;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.trading.StrategyCatalog;
@@ -19,6 +21,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -55,5 +58,28 @@ class PerformanceServiceImplTest {
         ArgumentCaptor<PerformanceFilter> filter = ArgumentCaptor.forClass(PerformanceFilter.class);
         verify(statistics).counts(filter.capture());
         assertThat(filter.getValue().to()).isEqualTo(Instant.parse("2026-09-30T17:00:00Z"));
+    }
+
+    @Test
+    void UC25_byCoin_labelsAPairThatCannotBeFoundWithNull() {
+        UUID pair = UUID.randomUUID();
+        PerformanceCounts counts =
+                new PerformanceCounts(1, 1, 0, 0, BigDecimal.ONE, BigDecimal.ONE, 0, BigDecimal.ZERO, BigDecimal.ZERO);
+        PerformanceQueryRepository statistics = mock(PerformanceQueryRepository.class);
+        when(statistics.byPair(any())).thenReturn(List.of(new PerformanceGroup(pair.toString(), counts, null, null)));
+        MarketApi market = mock(MarketApi.class);
+        when(market.pairListings(any())).thenReturn(List.of());
+        PerformanceServiceImpl service = new PerformanceServiceImpl(
+                statistics,
+                mock(EntitlementApi.class),
+                market,
+                mock(StrategyCatalog.class),
+                Clock.fixed(LATE, ZoneOffset.UTC));
+
+        List<PerformanceBreakdownResponse> rows = service.byCoin(UUID.randomUUID(), NO_FILTERS);
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).key()).isEqualTo(pair.toString());
+        assertThat(rows.get(0).label()).isNull();
     }
 }
