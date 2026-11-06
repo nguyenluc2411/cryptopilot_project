@@ -215,14 +215,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     /**
      * A request body that failed Bean Validation. The offending fields are reported one by one
      * under {@code errors}, so the web client can show each message under its own input instead of
-     * one banner for the whole form.
+     * one banner for the whole form. A value that could not be converted answers the default text: the binder's own
+     * message names Java types and repeats the input.
      */
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
             MethodArgumentNotValidException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
         Map<String, String> errors = new LinkedHashMap<>();
         for (FieldError fieldError : exception.getBindingResult().getFieldErrors()) {
-            errors.putIfAbsent(fieldError.getField(), messageOf(fieldError));
+            errors.putIfAbsent(
+                    fieldError.getField(),
+                    fieldError.isBindingFailure() ? DEFAULT_FIELD_MESSAGE : messageOf(fieldError));
         }
         for (ObjectError globalError : exception.getBindingResult().getGlobalErrors()) {
             errors.putIfAbsent(globalError.getObjectName(), messageOf(globalError));
