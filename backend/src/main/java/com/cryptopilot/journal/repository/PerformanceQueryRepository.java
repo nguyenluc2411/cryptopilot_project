@@ -21,12 +21,12 @@ import org.springframework.stereotype.Repository;
 
 /**
  * The performance statistics, aggregated by PostgreSQL over the closed trades; no trade is loaded here. A closed
- * record without its amounts (the schema demands them of a simulated one only) has no result and is left out. Ratios
- * and means are rounded to 8 decimals, the scale of the amounts; a division by zero yields {@code null}, as does a mean
+ * record without a realized P/L (the schema demands it of a simulated one only) has no result and is left out; a missing
+ * fee counts as 0, like missing funding (D-139). Ratios and means are rounded to 8 decimals, the scale of the amounts; a division by zero yields {@code null}, as does a mean
  * or an extreme of nothing. A trade's R uses the planned risk, or without one the risk of its original stop loss, so
  * moving a stop never changes it; a trade without a stop loss is left out of every R metric.
  *
- * <p>Rule: UC-25; BR-38, BR-42, BR-70; D-97, D-111, D-124; TECHNICAL_DESIGN 7.8, 7.10.
+ * <p>Rule: UC-25; BR-38, BR-42, BR-70; D-97, D-111, D-124, D-139; TECHNICAL_DESIGN 7.8, 7.10.
  *
  * <p>Reference: Tharp, V. K. (2007). <i>Trade Your Way to Financial Freedom</i> (2nd ed.). McGraw-Hill (R-multiples,
  * expectancy). Schwager, J. D. (1989). <i>Market Wizards</i>. New York Institute of Finance (profit factor).
@@ -38,7 +38,7 @@ import org.springframework.stereotype.Repository;
 public class PerformanceQueryRepository {
 
     /** The one SQL expression of the net P/L, which has no column (D-97). */
-    private static final String NET_PNL = "realized_pnl - fee_amount + coalesce(funding_fee_amount, 0)";
+    private static final String NET_PNL = "realized_pnl - coalesce(fee_amount, 0) + coalesce(funding_fee_amount, 0)";
 
     private static final String COUNTS = """
             count(*) as trades,
@@ -191,7 +191,7 @@ public class PerformanceQueryRepository {
                            coalesce(original_take_profit_price, take_profit_price) as target_level,
                            coalesce(planned_entry_price, entry_price) as plan_entry
                       from trading_journal
-                     where trade_status = 'CLOSED' and realized_pnl is not null and fee_amount is not null and %s
+                     where trade_status = 'CLOSED' and realized_pnl is not null and %s
                 ), risked as (
                     select *,
                            nullif(coalesce(risk_amount, abs(entry_price - stop_level) * quantity), 0) as risk

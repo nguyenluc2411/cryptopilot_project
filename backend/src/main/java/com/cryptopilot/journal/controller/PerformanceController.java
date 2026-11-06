@@ -96,7 +96,8 @@ public class PerformanceController {
     @Operation(summary = "The caller's cumulative net P/L per exit day (SCR-23)")
     @ApiResponse(
             responseCode = "200",
-            description = "One point per day with an exit, oldest first; the curve starts at 0 at `from`")
+            description = "One point per day with an exit, oldest first; there is no point at `from`, the client"
+                    + " adds the 0 baseline")
     @ApiResponse(responseCode = "400", description = BAD_FILTER)
     @ApiResponse(responseCode = "401", description = NO_SESSION)
     @ApiResponse(responseCode = "403", description = NOT_IN_PLAN)

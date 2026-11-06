@@ -9,9 +9,9 @@ import java.util.UUID;
 
 /**
  * The Trader's performance statistics (SCR-23, UC-25); only the user's own closed trades are read. Every method refuses
- * a period that does not end after it starts, with a
- * {@link com.cryptopilot.common.exception.FieldValidationException} naming {@code from} with MSG15. Every method but
- * {@link #summary} needs {@code ADVANCED_PERFORMANCE} and refuses a plan without it with a
+ * a {@code from} that is not before the end of the period, given or defaulted, and a {@code from} or {@code to} outside
+ * the years 1 to 9999, with a {@link com.cryptopilot.common.exception.FieldValidationException} naming the field with
+ * MSG15. Every method but {@link #summary} needs {@code ADVANCED_PERFORMANCE} and refuses a plan without it with a
  * {@link com.cryptopilot.common.exception.BusinessException} {@code PLAN_FEATURE_NOT_INCLUDED} (MSG29). Implemented by
  * {@link com.cryptopilot.journal.service.impl.PerformanceServiceImpl}.
  *

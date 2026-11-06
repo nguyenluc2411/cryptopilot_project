@@ -46,6 +46,8 @@ public class PerformanceServiceImpl implements PerformanceService {
     private static final String UNASSIGNED = "Unassigned";
     private static final String ZONE_NAME = "Asia/Ho_Chi_Minh";
     private static final ZoneId ZONE = ZoneId.of(ZONE_NAME);
+    private static final int FIRST_YEAR = 1;
+    private static final int LAST_YEAR = 9999;
 
     private final PerformanceQueryRepository statistics;
     private final EntitlementApi entitlements;
@@ -56,7 +58,7 @@ public class PerformanceServiceImpl implements PerformanceService {
     @Override
     public PerformanceSummaryResponse summary(UUID userId, PerformanceFilterRequest request) {
         LocalDate to = to(request);
-        LocalDate from = from(request);
+        LocalDate from = from(request, to);
         PerformanceFilter filter = filter(userId, request, from, to);
         if (!entitlements.hasFeature(userId, Feature.ADVANCED_PERFORMANCE)) {
             return summary(from, to, statistics.counts(filter), null);
@@ -103,20 +105,34 @@ public class PerformanceServiceImpl implements PerformanceService {
     private PerformanceFilter gated(UUID userId, PerformanceFilterRequest request) {
         entitlements.requireFeature(userId, Feature.ADVANCED_PERFORMANCE);
         LocalDate to = to(request);
-        return filter(userId, request, from(request), to);
+        return filter(userId, request, from(request, to), to);
     }
 
     private LocalDate to(PerformanceFilterRequest request) {
-        return request.to() != null
-                ? request.to()
-                : LocalDate.now(clock.withZone(ZONE)).plusDays(1);
+        if (request.to() == null) {
+            return LocalDate.now(clock.withZone(ZONE)).plusDays(1);
+        }
+        requireStorableYear(request.to(), "to");
+        return request.to();
     }
 
-    private static LocalDate from(PerformanceFilterRequest request) {
-        if (request.from() != null && request.to() != null && !request.from().isBefore(request.to())) {
+    /** {@code to} is the resolved end, so a {@code from} in the future is refused without a {@code to} too (D-139). */
+    private static LocalDate from(PerformanceFilterRequest request, LocalDate to) {
+        LocalDate from = request.from();
+        if (from == null) {
+            return null;
+        }
+        requireStorableYear(from, "from");
+        if (!from.isBefore(to)) {
             throw new FieldValidationException("the period starts at or after its end", Map.of("from", "MSG15"));
         }
-        return request.from();
+        return from;
+    }
+
+    private static void requireStorableYear(LocalDate day, String field) {
+        if (day.getYear() < FIRST_YEAR || day.getYear() > LAST_YEAR) {
+            throw new FieldValidationException("the year is out of range", Map.of(field, "MSG15"));
+        }
     }
 
     private static PerformanceFilter filter(

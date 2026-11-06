@@ -1,5 +1,6 @@
 package com.cryptopilot.journal.controller;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -49,6 +51,7 @@ class PerformanceApiTest {
     private static final String BASE = "/api/v1/journal/performance";
     private static final String SUMMARY = BASE + "/summary";
     private static final Instant EXIT = Instant.parse("2026-09-20T08:00:00Z");
+    private static final Instant MIDNIGHT = Instant.parse("2026-09-19T17:00:00Z");
     private static final UUID BREAKOUT = UUID.fromString("019b76da-a800-7001-8000-000000000001");
 
     @Autowired
@@ -104,7 +107,8 @@ class PerformanceApiTest {
                 .andExpect(jsonPath("$.provisionalTrades").value(0))
                 .andExpect(jsonPath("$.totalFees").value("1.50000000"))
                 .andExpect(jsonPath("$.totalFunding").value("-0.25000000"))
-                .andExpect(jsonPath("$.advanced").doesNotExist());
+                .andExpect(jsonPath("$.advanced").hasJsonPath())
+                .andExpect(jsonPath("$.advanced").value(nullValue()));
     }
 
     @ParameterizedTest
@@ -239,25 +243,88 @@ class PerformanceApiTest {
                 .andExpect(jsonPath("$.trades").value(0));
     }
 
+    /** 2026-09-19 17:00 UTC is 2026-09-20 00:00 in UTC+7, so the exit belongs to the 20th of the client. */
+    @Test
+    void UC25_exitAtMidnightUtcPlus7_countsOnThatDay() throws Exception {
+        UUID paid = subscribed(PlanTier.PRO);
+        TradeRow.closed(paid, pair, MIDNIGHT).amounts("1", "0").insert(sql);
+
+        as(paid, SUMMARY + "?source=ALL&from=2026-09-20&to=2026-09-21")
+                .andExpect(jsonPath("$.trades").value(1));
+        as(paid, SUMMARY + "?source=ALL&from=2026-09-19&to=2026-09-20")
+                .andExpect(jsonPath("$.trades").value(0));
+        as(paid, BASE + "/equity-curve?source=ALL")
+                .andExpect(jsonPath("$[0].day").value("2026-09-20"));
+    }
+
     @Test
     void UC25_aPeriodLongerThanAYear_isAccepted() throws Exception {
         as(account(UserRole.TRADER), SUMMARY + "?from=2020-01-01&to=2026-01-02").andExpect(status().isOk());
     }
 
+    /** Each answers 400 MSG01, with the problem under the field's name and never the binder's text. */
     @ParameterizedTest
-    @ValueSource(
-            strings = {
-                "?from=2026-09-20&to=2026-09-20",
-                "?from=2026-09-21&to=2026-09-20",
-                "?from=notadate",
-                "?market=BOTH",
-                "?source=DEMO",
-                "?pairId=1"
-            })
-    void UC25_badFilter_isRefusedWithMsg01(String query) throws Exception {
+    @CsvSource({
+        "?from=notadate, from, is invalid",
+        "?to=notadate, to, is invalid",
+        "?market=BOTH, market, is invalid",
+        "?source=DEMO, source, is invalid",
+        "?pairId=1, pairId, is invalid",
+        "?strategyId=1, strategyId, is invalid",
+        "?from=2026-09-20&to=2026-09-20, from, MSG15",
+        "?from=2026-09-21&to=2026-09-20, from, MSG15",
+        "?from=2026-09-30, from, MSG15",
+        "?from=2030-01-01, from, MSG15",
+        "?from=0000-12-31, from, MSG15",
+        "?from=-5000-01-01, from, MSG15",
+        "?from=+10000-01-01, from, MSG15",
+        "?to=0000-12-31, to, MSG15",
+        "?to=+1000000-01-01, to, MSG15",
+    })
+    void UC25_badFilter_namesTheField(String query, String field, String message) throws Exception {
         as(account(UserRole.TRADER), SUMMARY + query)
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.messageCode").value("MSG01"));
+                .andExpect(jsonPath("$.messageCode").value("MSG01"))
+                .andExpect(jsonPath("$.errors." + field).value(message));
+    }
+
+    /** The last day a default period can start on, and the widest years accepted (D-139). */
+    @ParameterizedTest
+    @ValueSource(strings = {"?from=2026-09-29", "?from=0001-01-01&to=9999-12-31"})
+    void UC25_periodAtItsLimits_isAccepted(String query) throws Exception {
+        as(account(UserRole.TRADER), SUMMARY + query).andExpect(status().isOk());
+    }
+
+    /** A pair or strategy nobody traded, or only another Trader did, is an empty result and not an error. */
+    @ParameterizedTest
+    @ValueSource(strings = {"pairId", "strategyId"})
+    void UC25_filterOnAnIdWithoutTradesOfTheCaller_answersEmpty(String filter) throws Exception {
+        UUID paid = subscribed(PlanTier.PRO);
+        trade(account(UserRole.TRADER)).strategy(BREAKOUT).amounts("9", "0").insert(sql);
+        String foreign = filter.equals("pairId") ? pair.toString() : BREAKOUT.toString();
+
+        for (String id : List.of(foreign, UUID.randomUUID().toString())) {
+            String query = "?source=ALL&" + filter + "=" + id;
+            as(paid, SUMMARY + query)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.trades").value(0));
+            as(paid, BASE + "/by-coin" + query)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(0));
+            as(paid, BASE + "/by-strategy" + query)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(0));
+        }
+    }
+
+    @Test
+    void D97_breakdownNet_includesTheSignedFunding() throws Exception {
+        UUID paid = subscribed(PlanTier.PRO);
+        trade(paid).futures("LONG").amounts("10", "1").funding("-2").insert(sql);
+
+        as(paid, BASE + "/by-coin?source=ALL").andExpect(jsonPath("$[0].netPnl").value("7.00000000"));
+        as(paid, BASE + "/by-market?source=ALL")
+                .andExpect(jsonPath("$[0].netPnl").value("7.00000000"));
     }
 
     @Test

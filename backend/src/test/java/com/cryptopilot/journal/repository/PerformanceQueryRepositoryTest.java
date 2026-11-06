@@ -229,6 +229,18 @@ class PerformanceQueryRepositoryTest {
         assertThat(detail.averageRealizedR()).isNull();
     }
 
+    /** D-138 (6): the result is the net alone, so a liquidation that nets above 0 is a win. */
+    @Test
+    void BR42_liquidationWithANetAboveZero_isAWin() {
+        closed(0).futures("LONG").amounts("5", "1").reason("LIQUIDATION").insert(sql);
+
+        PerformanceCounts counts = statistics.counts(all());
+
+        assertThat(counts.wins()).isEqualTo(1);
+        assertThat(counts.losses()).isZero();
+        assertThat(counts.totalNetPnl()).isEqualByComparingTo("4");
+    }
+
     /** D-97: Spot 10 - 0.21 = 9.79; Futures 30 - 0.086 - 0.0202 = 29.8938 (TECHNICAL_DESIGN 7.8). */
     @Test
     void D97_spotAndFutures_useTheNetOfFeesAndSignedFunding() {
@@ -252,6 +264,20 @@ class PerformanceQueryRepositoryTest {
 
         assertThat(counts.wins()).isEqualTo(1);
         assertThat(counts.losses()).isEqualTo(1);
+    }
+
+    @Test
+    void D139_closedTradeWithoutAFee_isCountedWithFeeZero() {
+        closed(0).amounts("10", "1").insert(sql);
+        closed(1).amounts("-4", "0").noFee().insert(sql);
+
+        PerformanceCounts counts = statistics.counts(all());
+
+        assertThat(counts.trades()).isEqualTo(2);
+        assertThat(counts.losses()).isEqualTo(1);
+        assertThat(counts.totalNetPnl()).isEqualByComparingTo("5");
+        assertThat(counts.totalFees()).isEqualByComparingTo("1");
+        assertThat(statistics.detail(all()).largestLoss()).isEqualByComparingTo("-4");
     }
 
     @Test
@@ -334,6 +360,19 @@ class PerformanceQueryRepositoryTest {
         assertThat(detail.averageRealizedR()).isEqualByComparingTo("2");
     }
 
+    /** The risk is 0, and R is left out rather than divided by it; the trade itself still counts. */
+    @Test
+    void BR42_stopLossAtTheEntry_isLeftOutOfR() {
+        closed(0).amounts("10", "0").stop("100").take("115").insert(sql);
+
+        PerformanceDetail detail = statistics.detail(all());
+
+        assertThat(detail.counts().trades()).isEqualTo(1);
+        assertThat(detail.tradesWithR()).isZero();
+        assertThat(detail.averageRealizedR()).isNull();
+        assertThat(detail.averagePlannedRiskReward()).isNull();
+    }
+
     @Test
     void D124_movedStop_keepsTheOriginalRisk() {
         closed(0).amounts("10", "0").stop("95").movedStop("99").insert(sql);
@@ -357,6 +396,13 @@ class PerformanceQueryRepositoryTest {
         closed(3).take("110").insert(sql); // no stop loss
 
         assertThat(statistics.detail(all()).averagePlannedRiskReward()).isEqualByComparingTo("2");
+    }
+
+    @Test
+    void D124_movedTakeProfit_keepsTheOriginalRiskReward() {
+        closed(0).stop("95").take("115").movedTake("130").insert(sql);
+
+        assertThat(statistics.detail(all()).averagePlannedRiskReward()).isEqualByComparingTo("3");
     }
 
     @Test

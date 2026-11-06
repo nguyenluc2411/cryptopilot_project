@@ -63,6 +63,12 @@ public final class TradeRow {
         return this;
     }
 
+    /** Without a fee, as a manual record may be. */
+    public TradeRow noFee() {
+        values.put("fee", null);
+        return this;
+    }
+
     public TradeRow funding(String funding) {
         values.put("funding", new BigDecimal(funding));
         return this;
@@ -103,6 +109,12 @@ public final class TradeRow {
     public TradeRow take(String price) {
         values.put("take", new BigDecimal(price));
         values.put("originalTake", new BigDecimal(price));
+        return this;
+    }
+
+    /** A take profit moved after the fill. */
+    public TradeRow movedTake(String current) {
+        values.put("take", new BigDecimal(current));
         return this;
     }
 

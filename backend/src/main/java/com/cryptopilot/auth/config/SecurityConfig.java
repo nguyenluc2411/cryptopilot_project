@@ -60,7 +60,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * <tr><td>SCR-07 Profile, Notifications, Subscription tabs</td><td>{@code /me/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-08…15 Dashboard, Market, Watchlist, Alerts, Notifications</td><td>{@code /analysis/**}, {@code /watchlist/**}, {@code /alerts/**}, {@code /notifications/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-16…19 Trading Plans and Position</td><td>{@code /plans/**}</td><td>TRADER</td></tr>
- * <tr><td>SCR-20…23 Journal and Performance</td><td>{@code /journal/**}, {@code /performance}</td><td>TRADER</td></tr>
+ * <tr><td>SCR-20…23 Journal and Performance</td><td>{@code /journal/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-24…27 Community</td><td>{@code /posts/**}, {@code /comments/**}, {@code /media/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-28 News Feed</td><td>{@code /news/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-29 AI Assistant</td><td>{@code /ai/**}</td><td>TRADER + entitlement</td></tr>
@@ -225,7 +225,6 @@ public class SecurityConfig {
         "/api/v1/plans/**",
         "/api/v1/paper/**",
         "/api/v1/journal/**",
-        "/api/v1/performance",
         "/api/v1/posts/**",
         "/api/v1/comments/**",
         "/api/v1/community/**",
