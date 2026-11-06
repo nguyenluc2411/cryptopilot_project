@@ -5,10 +5,10 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.journal.dto.response.JournalEntryDetailResponse;
 import com.cryptopilot.journal.dto.response.JournalEntryResponse;
 import com.cryptopilot.journal.model.JournalListQuery;
+import com.cryptopilot.journal.model.enums.PerformanceMarket;
 import com.cryptopilot.journal.model.enums.PerformanceSource;
 import com.cryptopilot.journal.model.enums.TradeResult;
 import com.cryptopilot.journal.service.JournalService;
-import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.enums.PositionStatus;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -46,7 +46,10 @@ public class JournalController {
 
     private final JournalService journal;
 
-    @Operation(summary = "The caller's trades, the latest entry first, 20 per page by default (SCR-20, CR-04)")
+    @Operation(
+            summary = "The caller's trades, the latest entry first, 20 per page by default (SCR-20, CR-04)",
+            description = "The period reads entry_time, so open trades are included; the source defaults to ALL."
+                    + " The performance endpoints read exit_time and default to SIMULATED (D-140)")
     @ApiResponse(
             responseCode = "200",
             description = "One page of trades. A CLOSED trade carries its exit, realized P/L, fees, funding and net"
@@ -59,16 +62,17 @@ public class JournalController {
             @Parameter(description = "OPEN or CLOSED; both when absent") @RequestParam(required = false)
                     PositionStatus status,
             @Parameter(description = "Only this pair") @RequestParam(required = false) UUID pairId,
-            @Parameter(description = "SPOT or FUTURES") @RequestParam(required = false) MarketType market,
-            @Parameter(description = "First day of entry counted, UTC+7, yyyy-MM-dd; default the first trade")
+            @Parameter(description = "SPOT, FUTURES or ALL; default ALL") @RequestParam(required = false)
+                    PerformanceMarket market,
+            @Parameter(description = "First day counted, on entry_time, UTC+7, yyyy-MM-dd; default the first trade")
                     @RequestParam(required = false)
                     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
                     LocalDate from,
-            @Parameter(description = "First day of entry no longer counted, UTC+7, yyyy-MM-dd; default tomorrow")
+            @Parameter(description = "First day no longer counted, on entry_time, UTC+7, yyyy-MM-dd; default tomorrow")
                     @RequestParam(required = false)
                     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
                     LocalDate to,
-            @Parameter(description = "SIMULATED, MANUAL or ALL; default SIMULATED") @RequestParam(required = false)
+            @Parameter(description = "SIMULATED, MANUAL or ALL; default ALL") @RequestParam(required = false)
                     PerformanceSource source,
             @Parameter(description = "Only this strategy") @RequestParam(required = false) UUID strategyId,
             @Parameter(description = "WIN, LOSS or BREAKEVEN by net P/L; only CLOSED trades match")

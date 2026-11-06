@@ -1,8 +1,8 @@
 package com.cryptopilot.journal.model;
 
+import com.cryptopilot.journal.model.enums.PerformanceMarket;
 import com.cryptopilot.journal.model.enums.PerformanceSource;
 import com.cryptopilot.journal.model.enums.TradeResult;
-import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.enums.PositionStatus;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -14,10 +14,10 @@ import java.util.UUID;
  *
  * @param status OPEN or CLOSED, or {@code null} for both
  * @param pairId the pair, or {@code null}
- * @param market the market, or {@code null}
+ * @param market the market, or {@code null} for both
  * @param from the first day of entry counted, or {@code null} from the first trade
  * @param to the first day of entry no longer counted, or {@code null} for tomorrow
- * @param source the source, or {@code null} for SIMULATED
+ * @param source the source, or {@code null} for both (D-140)
  * @param strategyId the strategy, or {@code null}
  * @param result the result, which only a CLOSED trade has, or {@code null}
  * @param page the page, from 1, or {@code null} for 1
@@ -26,7 +26,7 @@ import java.util.UUID;
 public record JournalListQuery(
         PositionStatus status,
         UUID pairId,
-        MarketType market,
+        PerformanceMarket market,
         LocalDate from,
         LocalDate to,
         PerformanceSource source,

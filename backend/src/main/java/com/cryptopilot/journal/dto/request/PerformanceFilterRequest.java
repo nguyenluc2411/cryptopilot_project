@@ -12,19 +12,19 @@ import org.springframework.format.annotation.DateTimeFormat;
  *
  * <p>Rule: SRS 3.6.3; UC-25; BR-41.
  *
- * @param from the first day counted, or {@code null} from the first trade
- * @param to the first day no longer counted, or {@code null} for tomorrow
+ * @param from the first day of exit counted, or {@code null} from the first trade
+ * @param to the first day of exit no longer counted, or {@code null} for tomorrow
  * @param market the market, or {@code null} for both
  * @param source the source, or {@code null} for SIMULATED
  * @param pairId the pair, or {@code null}
  * @param strategyId the strategy, or {@code null}
  */
 public record PerformanceFilterRequest(
-        @Parameter(description = "First day counted, UTC+7; default the first trade")
+        @Parameter(description = "First day counted, on exit_time, UTC+7; default the first trade")
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
         LocalDate from,
 
-        @Parameter(description = "First day no longer counted, UTC+7; default tomorrow")
+        @Parameter(description = "First day no longer counted, on exit_time, UTC+7; default tomorrow")
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
         LocalDate to,
 

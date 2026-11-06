@@ -1,6 +1,7 @@
 package com.cryptopilot.journal.controller;
 
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -41,7 +43,7 @@ import org.springframework.test.web.servlet.ResultActions;
  * The filters of SCR-20, one trade of SCR-21 and the strategy list, over HTTP and the real schema. The clock stands at
  * {@link FixedClockConfig#NOW}, 2026-09-29 17:30 UTC+7.
  *
- * <p>Rule: UC-22; SRS 3.6.1; BR-38, BR-41, BR-42; CR-04, CR-08; D-97, D-139.
+ * <p>Rule: UC-22; SRS 3.6.1; BR-38, BR-41, BR-42; CR-04, CR-08; D-97, D-139, D-140.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -97,15 +99,45 @@ class JournalFiltersApiTest {
         new MarketTestData(sql, FixedClockConfig.NOW).remove(otherPair);
     }
 
-    @Test
-    void BR41_source_defaultsToSimulated_andIsFiltered() throws Exception {
+    /** Unlike SCR-23, the list hides no trade unless told to (D-140). */
+    @ParameterizedTest
+    @ValueSource(strings = {JOURNAL, ALL})
+    void D140_source_defaultsToBoth(String path) throws Exception {
         UUID simulated = closed().simulated(plan()).insert(sql);
         UUID manual = closed().insert(sql);
 
-        ids(JOURNAL, simulated);
+        as(trader, path)
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items[*].id", containsInAnyOrder(simulated.toString(), manual.toString())));
+    }
+
+    @Test
+    void BR41_source_isFilteredWhenNamed() throws Exception {
+        UUID simulated = closed().simulated(plan()).insert(sql);
+        UUID manual = closed().insert(sql);
+
         ids(JOURNAL + "?source=SIMULATED", simulated);
         ids(JOURNAL + "?source=MANUAL", manual);
-        as(trader, ALL).andExpect(jsonPath("$.total").value(2));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {JOURNAL, JOURNAL + "?market=ALL"})
+    void D140_market_defaultsToBoth_andAcceptsAll(String path) throws Exception {
+        UUID spot = closed().insert(sql);
+        UUID futures = closed().futures("LONG").insert(sql);
+
+        as(trader, path)
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items[*].id", containsInAnyOrder(spot.toString(), futures.toString())));
+    }
+
+    @Test
+    void UC22_market_isFilteredWhenNamed() throws Exception {
+        UUID spot = closed().insert(sql);
+        UUID futures = closed().futures("LONG").insert(sql);
+
+        ids(JOURNAL + "?market=SPOT", spot);
+        ids(JOURNAL + "?market=FUTURES", futures);
     }
 
     @Test
@@ -239,6 +271,7 @@ class JournalFiltersApiTest {
     @CsvSource({
         "?from=soon, from, is invalid",
         "?to=2026-13-01, to, is invalid",
+        "?market=BOTH, market, is invalid",
         "?source=DEMO, source, is invalid",
         "?strategyId=1, strategyId, is invalid",
         "?result=DRAW, result, is invalid",

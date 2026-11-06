@@ -86,7 +86,7 @@ class JournalApiTest {
         UUID open = openFutures(trader, eth, T0.plusSeconds(60));
         openFutures(other, eth, T0.plusSeconds(120));
 
-        as(trader, JOURNAL + "?source=ALL")
+        as(trader, JOURNAL)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(2))
                 .andExpect(jsonPath("$.page").value(1))
@@ -120,7 +120,7 @@ class JournalApiTest {
         UUID trader = account(UserRole.TRADER);
         closedFuturesMissingFunding(trader, eth, T0);
 
-        as(trader, JOURNAL + "?source=ALL")
+        as(trader, JOURNAL)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].fundingFeeAmount").value("-0.50000000"))
                 .andExpect(jsonPath("$.items[0].netPnl").value("-21.00000000"))
@@ -136,7 +136,7 @@ class JournalApiTest {
                                                      updated_at, version)
                         values (gen_random_uuid(), ?, ?, 'SPOT', 'LONG', 100, ?, 1, 'MANUAL', 'CLOSED', ?, ?, 0)""").params(trader, btc, ts(T0), ts(T0), ts(T0)).update();
 
-        as(trader, JOURNAL + "?source=ALL")
+        as(trader, JOURNAL)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].status").value("CLOSED"))
                 .andExpect(jsonPath("$.items[0].netPnl").doesNotExist())
@@ -150,17 +150,14 @@ class JournalApiTest {
         openFutures(trader, eth, T0.plusSeconds(60));
         openFutures(trader, eth, T0.plusSeconds(120));
 
-        as(trader, JOURNAL + "?status=CLOSED&source=ALL")
-                .andExpect(jsonPath("$.total").value(1));
-        as(trader, JOURNAL + "?status=OPEN&source=ALL")
+        as(trader, JOURNAL + "?status=CLOSED").andExpect(jsonPath("$.total").value(1));
+        as(trader, JOURNAL + "?status=OPEN").andExpect(jsonPath("$.total").value(2));
+        as(trader, JOURNAL + "?pairId=" + btc).andExpect(jsonPath("$.total").value(1));
+        as(trader, JOURNAL + "?market=FUTURES&pairId=" + eth)
                 .andExpect(jsonPath("$.total").value(2));
-        as(trader, JOURNAL + "?source=ALL&pairId=" + btc)
-                .andExpect(jsonPath("$.total").value(1));
-        as(trader, JOURNAL + "?source=ALL&market=FUTURES&pairId=" + eth)
-                .andExpect(jsonPath("$.total").value(2));
-        as(trader, JOURNAL + "?market=SPOT&status=OPEN&source=ALL")
+        as(trader, JOURNAL + "?market=SPOT&status=OPEN")
                 .andExpect(jsonPath("$.total").value(0));
-        as(trader, JOURNAL + "?page=2&pageSize=2&source=ALL")
+        as(trader, JOURNAL + "?page=2&pageSize=2")
                 .andExpect(jsonPath("$.total").value(3))
                 .andExpect(jsonPath("$.page").value(2))
                 .andExpect(jsonPath("$.items.length()").value(1))

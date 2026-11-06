@@ -261,6 +261,27 @@ class OpenApiDocsTest {
         assertThat(properties).doesNotContainKey("entry");
     }
 
+    /** D-140: each list names the column of its period and the default of its source. */
+    @Test
+    void D140_theDescriptions_nameThePeriodColumnAndTheSourceDefault() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        assertThat(parameter(body, "/api/v1/journal", "from")).contains("entry_time");
+        assertThat(parameter(body, "/api/v1/journal", "to")).contains("entry_time");
+        assertThat(parameter(body, "/api/v1/journal", "source")).contains("default ALL");
+        assertThat(parameter(body, "/api/v1/journal", "market")).contains("ALL");
+        String summary = "/api/v1/journal/performance/summary";
+        assertThat(parameter(body, summary, "from")).contains("exit_time");
+        assertThat(parameter(body, summary, "to")).contains("exit_time");
+        assertThat(parameter(body, summary, "source")).contains("default SIMULATED");
+    }
+
+    private static String parameter(String body, String path, String name) {
+        List<String> descriptions =
+                JsonPath.read(body, "$.paths['" + path + "'].get.parameters[?(@.name == '" + name + "')].description");
+        return String.join(" ", descriptions);
+    }
+
     /** D-76: a line cross has no threshold, and the MSG26 confirmation may name the count it confirms. */
     @Test
     @SuppressWarnings("unchecked") // T-054: the schema object of a JSON document is read as a raw map

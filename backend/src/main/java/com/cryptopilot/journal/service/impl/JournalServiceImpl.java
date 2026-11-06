@@ -8,6 +8,7 @@ import com.cryptopilot.journal.dto.response.JournalEntryResponse;
 import com.cryptopilot.journal.entity.TradingJournal;
 import com.cryptopilot.journal.model.JournalListQuery;
 import com.cryptopilot.journal.model.TradePeriod;
+import com.cryptopilot.journal.model.enums.PerformanceMarket;
 import com.cryptopilot.journal.model.enums.PerformanceSource;
 import com.cryptopilot.journal.model.enums.TradeSource;
 import com.cryptopilot.journal.repository.TradingJournalRepository;
@@ -38,7 +39,7 @@ import org.springframework.stereotype.Service;
  * an OPEN trade has. Ownership is part of the lookup of one trade: another Trader's is "not found" (MSG41) rather than
  * "forbidden", which would confirm that the id exists.
  *
- * <p>Rule: SRS 3.6.1; UC-22; BR-38, BR-41, BR-42; D-97 and its note of 2026-10-24; D-138, D-139; CR-04, CR-08.
+ * <p>Rule: SRS 3.6.1; UC-22; BR-38, BR-41, BR-42; D-97 and its note of 2026-10-24; D-138, D-139, D-140; CR-04, CR-08.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -59,9 +60,7 @@ public class JournalServiceImpl implements JournalService {
                 query.status() == null
                         ? names(PositionStatus.values())
                         : Set.of(query.status().name()),
-                query.market() == null
-                        ? names(MarketType.values())
-                        : Set.of(query.market().name()),
+                markets(query.market()),
                 sources(query.source()),
                 period.start() == null ? Instant.EPOCH : period.start(),
                 period.end(),
@@ -88,11 +87,13 @@ public class JournalServiceImpl implements JournalService {
                 record.getChartImageUrl());
     }
 
+    private static Set<String> markets(PerformanceMarket market) {
+        return market == null || market == PerformanceMarket.ALL ? names(MarketType.values()) : Set.of(market.name());
+    }
+
+    /** Both by default, unlike SCR-23, so the list of SCR-20 hides no trade (D-140). */
     private static Set<String> sources(PerformanceSource source) {
-        if (source == PerformanceSource.ALL) {
-            return names(TradeSource.values());
-        }
-        return Set.of(source == null ? TradeSource.SIMULATED.name() : source.name());
+        return source == null || source == PerformanceSource.ALL ? names(TradeSource.values()) : Set.of(source.name());
     }
 
     private static Set<String> names(Enum<?>[] values) {
