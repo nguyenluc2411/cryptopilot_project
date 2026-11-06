@@ -29,8 +29,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The journal endpoints of SCR-20 and SCR-21 (UC-22), Trader only. The caller is the owner of every record read; the service
- * never loads another Trader's.
+ * The journal endpoints of SCR-20 and SCR-21 (UC-22), Trader only. The caller is the owner of every record read; the
+ * service never loads another Trader's.
  *
  * <p>Rule: UC-22; SRS 3.6.1; CR-04; TECHNICAL_DESIGN 8.
  *

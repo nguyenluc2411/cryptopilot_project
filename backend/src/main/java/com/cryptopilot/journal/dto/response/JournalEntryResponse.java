@@ -37,7 +37,8 @@ import java.util.UUID;
  * @param realizedPnl CLOSED only: the price result, without fees or funding (BR-35)
  * @param feeAmount CLOSED only: the entry and exit fees (BR-36)
  * @param fundingFeeAmount CLOSED Futures only: the signed funding known so far (BR-37); {@code null} on Spot
- * @param netPnl CLOSED only: {@code realizedPnl − feeAmount + fundingFeeAmount} (BR-38)
+ * @param netPnl CLOSED only: {@code realizedPnl − feeAmount + fundingFeeAmount} (BR-38), a missing fee counting as 0
+ *     (D-139); {@code null} without a realized P/L
  * @param provisional CLOSED only: whether a funding settlement may still be missing; {@code false} while OPEN
  */
 public record JournalEntryResponse(

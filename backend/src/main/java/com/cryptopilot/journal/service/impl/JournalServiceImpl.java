@@ -109,9 +109,11 @@ public class JournalServiceImpl implements JournalService {
 
     private static JournalEntryResponse entry(TradingJournal record, Map<UUID, String> strategyNames) {
         boolean closed = record.getStatus() == PositionStatus.CLOSED;
-        // A closed manual trade may lack its amounts: the schema demands them of a simulated one only.
-        BigDecimal net = closed && record.getRealizedPnl() != null && record.getFeeAmount() != null
-                ? TradeNetPnl.of(record.getRealizedPnl(), record.getFeeAmount(), record.getFundingFeeAmount())
+        // A closed manual trade may lack its amounts: the schema demands them of a simulated one only. As in the
+        // statistics, a missing fee counts as 0 (D-139) and a missing realized P/L leaves no net P/L.
+        BigDecimal fee = Objects.requireNonNullElse(record.getFeeAmount(), BigDecimal.ZERO);
+        BigDecimal net = closed && record.getRealizedPnl() != null
+                ? TradeNetPnl.of(record.getRealizedPnl(), fee, record.getFundingFeeAmount())
                 : null;
         return new JournalEntryResponse(
                 record.getId(),

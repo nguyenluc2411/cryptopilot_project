@@ -197,6 +197,34 @@ class JournalFiltersApiTest {
         ids(ALL + "&result=BREAKEVEN");
     }
 
+    /** The row, its detail and the statistics agree on a closed trade without a fee: realized + funding (D-139). */
+    @Test
+    void D139_netPnl_coalescesAMissingFee_likeTheStatistics() throws Exception {
+        UUID id = closed().futures("LONG")
+                .amounts("3", "0")
+                .noFee()
+                .funding("-0.5")
+                .insert(sql);
+        String net = "2.50000000";
+
+        as(trader, ALL)
+                .andExpect(jsonPath("$.items[0].feeAmount").value(nullValue()))
+                .andExpect(jsonPath("$.items[0].netPnl").value(net));
+        as(trader, JOURNAL + "/" + id).andExpect(jsonPath("$.netPnl").value(net));
+        as(trader, JOURNAL + "/performance/summary?source=ALL")
+                .andExpect(jsonPath("$.totalNetPnl").value(net));
+    }
+
+    /** Only the fee is coalesced: without a realized P/L neither the row nor the statistics have a net P/L. */
+    @Test
+    void D139_netPnl_staysNullWithoutARealizedPnl() throws Exception {
+        UUID id = closed().noAmounts().insert(sql);
+
+        as(trader, JOURNAL + "/" + id).andExpect(jsonPath("$.netPnl").value(nullValue()));
+        as(trader, JOURNAL + "/performance/summary?source=ALL")
+                .andExpect(jsonPath("$.trades").value(0));
+    }
+
     /** The day of UTC+7 starts at 17:00 UTC, and the period is that of the entry, which an OPEN trade has too. */
     @Test
     void CR08_periodBoundary_isMidnightOfUtcPlus7() throws Exception {
@@ -254,9 +282,10 @@ class JournalFiltersApiTest {
             closed().amounts("3", "1").insert(sql);
         }
         closed().amounts("1", "3").insert(sql);
-        List<String> everyId = sql.sql("""
+        String byId = """
                         select journal_id::text from trading_journal
-                         where user_id = ? and realized_pnl = 3 order by journal_id desc""").param(trader).query(String.class).list();
+                         where user_id = ? and realized_pnl = 3 order by journal_id desc""";
+        List<String> everyId = sql.sql(byId).param(trader).query(String.class).list();
 
         as(trader, ALL + "&result=WIN&page=1&pageSize=2")
                 .andExpect(jsonPath("$.total").value(3))
@@ -400,11 +429,12 @@ class JournalFiltersApiTest {
     private UUID plan() {
         UUID id = UUID.randomUUID();
         Timestamp at = Timestamp.from(EXIT);
-        sql.sql("""
+        String insert = """
                         insert into trading_plan (plan_id, user_id, pair_id, market_type, direction, entry_type,
                                                   entry_price, stop_loss_price, take_profit_price, capital_amount,
                                                   risk_percent, plan_status, analysis_timeframe, created_at, updated_at)
-                        values (?, ?, ?, 'SPOT', 'LONG', 'LIMIT', 100, 90, 110, 1000, 1, 'DRAFT', '1h', ?, ?)""").params(id, trader, pair, at, at).update();
+                        values (?, ?, ?, 'SPOT', 'LONG', 'LIMIT', 100, 90, 110, 1000, 1, 'DRAFT', '1h', ?, ?)""";
+        sql.sql(insert).params(id, trader, pair, at, at).update();
         return id;
     }
 
