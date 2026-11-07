@@ -7,6 +7,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
@@ -182,11 +183,44 @@ public final class AlertTestData {
 
     public void clear() {
         for (UUID account : accounts) {
-            sql.sql("delete from alert where user_id = ?").param(account).update();
-            sql.sql("delete from watchlist where user_id = ?").param(account).update();
-            sql.sql("delete from user_account where user_id = ?").param(account).update();
+            removeAccount(account);
         }
         pairs.forEach(market::remove);
+    }
+
+    /**
+     * A triggered alert notifies its owner after the commit (T-056), so a notification can still be written while the
+     * rows are removed; it goes first, and the removal is tried again when one arrived meanwhile.
+     */
+    private void removeAccount(UUID account) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                sql.sql("delete from notification where user_id = ?")
+                        .param(account)
+                        .update();
+                sql.sql("delete from alert where user_id = ?").param(account).update();
+                sql.sql("delete from watchlist where user_id = ?")
+                        .param(account)
+                        .update();
+                sql.sql("delete from user_account where user_id = ?")
+                        .param(account)
+                        .update();
+                return;
+            } catch (DataIntegrityViolationException lateNotification) {
+                if (attempt == 5) {
+                    throw lateNotification;
+                }
+                pause();
+            }
+        }
+    }
+
+    private static void pause() {
+        try {
+            Thread.sleep(200);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static OffsetDateTime now() {
