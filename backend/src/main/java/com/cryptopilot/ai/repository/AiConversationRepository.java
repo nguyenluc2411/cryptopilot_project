@@ -1,6 +1,7 @@
 package com.cryptopilot.ai.repository;
 
 import com.cryptopilot.ai.entity.AiConversation;
+import com.cryptopilot.ai.model.enums.ConversationTopic;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -19,6 +20,10 @@ public interface AiConversationRepository extends Repository<AiConversation, UUI
 
     @Transactional(readOnly = true)
     Page<AiConversation> findByUserIdAndDeletedAtIsNullOrderByUpdatedAtDesc(UUID userId, Pageable page);
+
+    @Transactional(readOnly = true)
+    Page<AiConversation> findByUserIdAndTopicAndDeletedAtIsNullOrderByUpdatedAtDesc(
+            UUID userId, ConversationTopic topic, Pageable page);
 
     AiConversation save(AiConversation conversation);
 }

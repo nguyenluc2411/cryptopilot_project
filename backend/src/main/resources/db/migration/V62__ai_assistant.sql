@@ -36,3 +36,10 @@ Cách trả lời: dùng ngôn ngữ của câu hỏi (mặc định tiếng Vi�
         'Thông tin chỉ mang tính tham khảo, không phải lời khuyên đầu tư.',
         now(), now(), 0)
 ON CONFLICT (config_id) DO NOTHING;
+
+-- 5. ai_conversation.topic: SCR-29 keeps "market analysis" and "my plan and performance" in two tabs, each with its
+--    own conversations, and the floating chat keeps the general ones. A conversation keeps its topic, and a question
+--    may only carry the data of that topic (BR-51). The rows started before the topic existed are general ones.
+ALTER TABLE ai_conversation ADD COLUMN topic varchar(16) NOT NULL DEFAULT 'GENERAL';
+ALTER TABLE ai_conversation ADD CONSTRAINT ck_ai_conversation_topic CHECK (topic IN ('GENERAL', 'MARKET', 'MY_TRADING'));
+CREATE INDEX idx_ai_conversation_user_topic ON ai_conversation (user_id, topic, updated_at DESC);

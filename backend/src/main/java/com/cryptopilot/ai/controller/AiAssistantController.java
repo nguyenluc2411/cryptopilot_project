@@ -7,6 +7,7 @@ import com.cryptopilot.ai.dto.response.AskResponse;
 import com.cryptopilot.ai.dto.response.ConversationResponse;
 import com.cryptopilot.ai.dto.response.MessageResponse;
 import com.cryptopilot.ai.dto.response.QuotaResponse;
+import com.cryptopilot.ai.model.enums.ConversationTopic;
 import com.cryptopilot.ai.service.AiAssistantService;
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
@@ -46,20 +47,26 @@ public class AiAssistantController {
 
     private final AiAssistantService assistant;
 
-    @Operation(summary = "The caller's conversations, last asked first (SCR-29)")
+    @Operation(
+            summary = "The caller's conversations, last asked first (SCR-29)",
+            description = "`topic` keeps one tab of SCR-29 (MARKET, MY_TRADING) or the floating chat (GENERAL);"
+                    + " without it every topic is listed.")
     @ApiResponse(responseCode = "200", description = "One page, 20 per page by default; readable on every plan (BR-52)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @GetMapping("/conversations")
     public PageResponse<ConversationResponse> conversations(
             @AuthenticationPrincipal Jwt caller,
+            @RequestParam(required = false) ConversationTopic topic,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer pageSize) {
-        return assistant.conversations(callerOf(caller), page, pageSize);
+        return assistant.conversations(callerOf(caller), topic, page, pageSize);
     }
 
-    @Operation(summary = "Start a conversation, optionally about a pair (SRS 3.9.1)")
+    @Operation(summary = "Start a conversation on one topic, optionally about a pair (SRS 3.9.1)")
     @ApiResponse(responseCode = "201", description = "The conversation")
-    @ApiResponse(responseCode = "400", description = "MSG01: `errors` names each rejected field")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01: `errors` names each rejected field; a MY_TRADING conversation has no `pairId`")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "403", description = "MSG29: the plan has no AI Assistant (FREE)")
     @ApiResponse(responseCode = "404", description = "MSG41: the pair is not listed")
@@ -111,7 +118,10 @@ public class AiAssistantController {
             description = "Stores the question PENDING and returns at once; the answer, or FAILED (MSG31) after an"
                     + " error or 60 seconds, is pushed to /user/queue/ai. A failed question uses no quota.")
     @ApiResponse(responseCode = "202", description = "The pending question and today's quota with it counted")
-    @ApiResponse(responseCode = "400", description = "MSG01: `errors` names each rejected field")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01: `errors` names each rejected field, including data outside the conversation's"
+                    + " topic (a plan or the performance on MARKET, a pair, market or timeframe on MY_TRADING)")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(
             responseCode = "403",

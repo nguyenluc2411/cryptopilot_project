@@ -24,6 +24,7 @@ final class AiMessages {
         return new ConversationResponse(
                 conversation.getId(),
                 conversation.getTitle(),
+                conversation.getTopic(),
                 conversation.getPairId(),
                 conversation.getCreatedAt(),
                 conversation.getUpdatedAt());

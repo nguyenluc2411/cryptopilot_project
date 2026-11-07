@@ -288,6 +288,68 @@ class AiAssistantApiTest {
     }
 
     @Test
+    void SRS391_eachTabOfScr29_listsOnlyTheConversationsOfItsTopic() throws Exception {
+        UUID market = start(pro, "MARKET");
+        UUID mine = start(pro, "MY_TRADING");
+        UUID general = start(pro);
+
+        as(pro, get(AI + "/conversations").param("topic", "MARKET"))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(market.toString()))
+                .andExpect(jsonPath("$.items[0].topic").value("MARKET"));
+        as(pro, get(AI + "/conversations").param("topic", "MY_TRADING"))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(mine.toString()));
+        as(pro, get(AI + "/conversations").param("topic", "GENERAL"))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(general.toString()));
+        as(pro, get(AI + "/conversations")).andExpect(jsonPath("$.total").value(3));
+        as(pro, get(AI + "/conversations").param("topic", "OTHER")).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void BR51_aMarketConversation_refusesAPlanAndThePerformanceSummary() throws Exception {
+        UUID conversation = start(pro, "MARKET");
+
+        as(
+                        pro,
+                        post(AI + "/conversations/" + conversation + "/messages")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"question\":\"Review my plan\",\"planId\":\"" + UUID.randomUUID()
+                                        + "\",\"includePerformance\":true}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.planId").value("MSG01"))
+                .andExpect(jsonPath("$.errors.includePerformance").value("MSG01"));
+        assertThat(count("select count(*) from ai_message where conversation_id = ?", conversation))
+                .isZero();
+        verify(client, never()).chat(any());
+    }
+
+    @Test
+    void BR51_aMyTradingConversation_isNotAboutAPairOfItsOwn() throws Exception {
+        as(
+                        pro,
+                        post(AI + "/conversations")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"topic\":\"MY_TRADING\",\"pairId\":\"" + UUID.randomUUID() + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.pairId").value("MSG01"));
+
+        UUID conversation = start(pro, "MY_TRADING");
+        as(
+                        pro,
+                        post(AI + "/conversations/" + conversation + "/messages")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"question\":\"How is BTC?\",\"pairId\":\"" + UUID.randomUUID()
+                                        + "\",\"market\":\"SPOT\",\"timeframe\":\"4h\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.pairId").value("MSG01"))
+                .andExpect(jsonPath("$.errors.market").value("MSG01"))
+                .andExpect(jsonPath("$.errors.timeframe").value("MSG01"));
+        verify(client, never()).chat(any());
+    }
+
+    @Test
     void SRS391_aQuestionLongerThan1000Characters_isRefused() throws Exception {
         UUID conversation = start(pro);
 
@@ -321,12 +383,17 @@ class AiAssistantApiTest {
     }
 
     private UUID start(UUID user) throws Exception {
+        return start(user, null);
+    }
+
+    private UUID start(UUID user, String topic) throws Exception {
         String body = as(
                         user,
                         post(AI + "/conversations")
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .content("{}"))
+                                .content(topic == null ? "{}" : "{\"topic\":\"" + topic + "\"}"))
                 .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.topic").value(topic == null ? "GENERAL" : topic))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();

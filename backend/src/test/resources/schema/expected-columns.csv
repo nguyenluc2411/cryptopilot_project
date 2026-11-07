@@ -57,6 +57,7 @@ ai_conversation,conversation_title,character varying,,,YES
 ai_conversation,created_at,timestamp with time zone,,,NO
 ai_conversation,deleted_at,timestamp with time zone,,,YES
 ai_conversation,pair_id,uuid,,,YES
+ai_conversation,topic,character varying,,,NO
 ai_conversation,updated_at,timestamp with time zone,,,NO
 ai_conversation,user_id,uuid,,,NO
 ai_conversation,version,bigint,64,0,NO

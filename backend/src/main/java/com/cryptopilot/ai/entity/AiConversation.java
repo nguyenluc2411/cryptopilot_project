@@ -1,9 +1,12 @@
 package com.cryptopilot.ai.entity;
 
+import com.cryptopilot.ai.model.enums.ConversationTopic;
 import com.cryptopilot.common.entity.BaseEntity;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.Objects;
@@ -11,8 +14,9 @@ import java.util.UUID;
 import lombok.Getter;
 
 /**
- * A Trader's conversation with the AI Assistant, optionally about one pair (SRS 3.9.1, AI_CONVERSATION). Deleting it
- * hides it rather than removing it, so its questions of the day keep counting against the quota (BR-50).
+ * A Trader's conversation with the AI Assistant, on one topic and optionally about one pair (SRS 3.9.1,
+ * AI_CONVERSATION). The topic never changes. Deleting it hides it rather than removing it, so its questions of the day
+ * keep counting against the quota (BR-50).
  *
  * <p>Rule: UC-30, BR-50, BR-52; SRS 3.9.1.
  */
@@ -27,6 +31,10 @@ public class AiConversation extends BaseEntity {
     @Column(name = "user_id", nullable = false, updatable = false)
     private UUID userId;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "topic", nullable = false, length = 16, updatable = false)
+    private ConversationTopic topic;
+
     @Column(name = "pair_id")
     private UUID pairId;
 
@@ -38,14 +46,15 @@ public class AiConversation extends BaseEntity {
 
     protected AiConversation() {}
 
-    private AiConversation(UUID userId, UUID pairId, String title) {
+    private AiConversation(UUID userId, ConversationTopic topic, UUID pairId, String title) {
         this.userId = Objects.requireNonNull(userId, "userId must not be null");
+        this.topic = Objects.requireNonNull(topic, "topic must not be null");
         this.pairId = pairId;
         this.title = cut(title);
     }
 
-    public static AiConversation start(UUID userId, UUID pairId, String title) {
-        return new AiConversation(userId, pairId, title);
+    public static AiConversation start(UUID userId, ConversationTopic topic, UUID pairId, String title) {
+        return new AiConversation(userId, topic, pairId, title);
     }
 
     public void rename(String title) {

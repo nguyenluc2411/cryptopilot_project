@@ -7,6 +7,7 @@ import com.cryptopilot.ai.dto.response.AskResponse;
 import com.cryptopilot.ai.dto.response.ConversationResponse;
 import com.cryptopilot.ai.dto.response.MessageResponse;
 import com.cryptopilot.ai.dto.response.QuotaResponse;
+import com.cryptopilot.ai.model.enums.ConversationTopic;
 import com.cryptopilot.common.web.PageResponse;
 import java.util.UUID;
 
@@ -19,8 +20,9 @@ import java.util.UUID;
  */
 public interface AiAssistantService {
 
-    /** The caller's conversations, last asked first, 20 per page by default. */
-    PageResponse<ConversationResponse> conversations(UUID userId, Integer page, Integer pageSize);
+    /** The caller's conversations of one topic, or of every topic when {@code null}; last asked first, 20 per page. */
+    PageResponse<ConversationResponse> conversations(
+            UUID userId, ConversationTopic topic, Integer page, Integer pageSize);
 
     /**
      * Starts a conversation.
@@ -28,6 +30,7 @@ public interface AiAssistantService {
      * @throws com.cryptopilot.common.exception.BusinessException {@code PLAN_FEATURE_NOT_INCLUDED} (MSG29) on a plan
      *     without the AI Assistant
      * @throws com.cryptopilot.common.exception.ResourceNotFoundException for a pair that is not listed
+     * @throws com.cryptopilot.common.exception.FieldValidationException MSG01 on {@code pairId} for MY_TRADING
      */
     ConversationResponse start(UUID userId, CreateConversationRequest request);
 
