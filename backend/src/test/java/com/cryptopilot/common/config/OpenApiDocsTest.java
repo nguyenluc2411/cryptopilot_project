@@ -219,7 +219,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/ai-configurations",
             "/api/v1/admin/ai-configurations/{id}/activate");
 
-    private static final int OPERATIONS = 225;
+    private static final int OPERATIONS = 232;
 
     @Autowired
     private MockMvc mvc;
