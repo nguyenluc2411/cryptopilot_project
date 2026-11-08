@@ -172,8 +172,8 @@ public class AnalysisServiceImpl implements AnalysisService {
         Optional<StoredIndicators> row = indicators.at(pairId, market, timeframe, latestClosedOpen);
         boolean weighable = version.equals(preset.version()) && timeframe.equals(preset.timeframe());
         Integer score = row.filter(r -> weighable)
-                .map(r ->
-                        SetupScoreCalculator.score(preset, r.components(), null).score())
+                .map(r -> SetupScoreCalculator.score(preset, r.components(), null, presets.v2())
+                        .score())
                 .orElse(null);
         return new SetupScoreReading(score, preset.style(), version, timeframe, latestClosedOpen);
     }
@@ -207,7 +207,9 @@ public class AnalysisServiceImpl implements AnalysisService {
                             preset.version(),
                             preset.timeframe(),
                             null,
-                            locked ? null : spot(null))
+                            locked ? null : spot(null),
+                            null,
+                            null)
                     : new FuturesSetupScoreResponse(
                             null,
                             preset.style(),
@@ -215,19 +217,23 @@ public class AnalysisServiceImpl implements AnalysisService {
                             preset.timeframe(),
                             null,
                             locked ? null : futures(null),
+                            null,
+                            null,
                             null);
         }
         if (type == MarketType.SPOT) {
-            SetupScore s = SetupScoreCalculator.score(preset, row.components(), null);
+            SetupScore s = SetupScoreCalculator.score(preset, row.components(), null, presets.v2());
             return new SpotSetupScoreResponse(
                     s.score(),
                     s.style(),
                     s.presetVersion(),
                     s.timeframe(),
                     row.openTime(),
-                    locked ? null : spot(row.components()));
+                    locked ? null : spot(row.components()),
+                    s.capReason(),
+                    row.components().scoredSide());
         }
-        SetupScore s = SetupScoreCalculator.score(preset, row.components(), dominantSide(pairId, row));
+        SetupScore s = SetupScoreCalculator.score(preset, row.components(), dominantSide(pairId, row), presets.v2());
         return new FuturesSetupScoreResponse(
                 s.score(),
                 s.style(),
@@ -235,7 +241,9 @@ public class AnalysisServiceImpl implements AnalysisService {
                 s.timeframe(),
                 row.openTime(),
                 locked ? null : futures(row.components()),
-                s.dominantSide());
+                s.dominantSide(),
+                s.capReason(),
+                row.components().scoredSide());
     }
 
     /** From the stored EMAs and the close of the same candle; {@code null} when either is missing. */

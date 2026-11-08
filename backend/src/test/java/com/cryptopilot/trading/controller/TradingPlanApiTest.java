@@ -1760,8 +1760,8 @@ class TradingPlanApiTest {
 
     /**
      * D-112 end to end: Save and Activate stores the setup score of the latest closed candle of the preset's timeframe
-     * under the Trader's preset (no style: DAY_TRADING v1 on 1h, 35·75 + 30·50 + 15·40 + 20·60 → 59), which the
-     * detail then answers.
+     * under the Trader's preset (no style: DAY_TRADING v2, same weights, on 1h: 35·75 + 30·50 + 15·40 + 20·60 → 59),
+     * which the detail then answers.
      */
     @Test
     void BR70_saveAndActivate_storesTheSetupScoreOfTheLatestClosedCandle() throws Exception {
@@ -1772,10 +1772,10 @@ class TradingPlanApiTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
-                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1")));
+                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v2")));
         as(trader, get(PLANS + "/" + id), null)
                 .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
-                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1"));
+                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v2"));
     }
 
     /**
@@ -1797,7 +1797,7 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.analysisTimeframe").value("4h"))
                 .andExpect(jsonPath("$.setupScoreAtPlan").value("59.00"))
-                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1"));
+                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v2"));
     }
 
     /**
@@ -1870,7 +1870,7 @@ class TradingPlanApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.setupScoreAtPlan").doesNotExist())
-                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v1"));
+                .andExpect(jsonPath("$.setupScorePreset").value("DAY_TRADING v2"));
     }
 
     // ------------------------------------------------------------------------------------------

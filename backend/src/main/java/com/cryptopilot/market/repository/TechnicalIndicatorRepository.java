@@ -3,6 +3,7 @@ package com.cryptopilot.market.repository;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -30,7 +31,7 @@ public class TechnicalIndicatorRepository {
             pair_id, market_type, timeframe, open_time, sma_20, ema_20, ema_50, ema_200, rsi_14, macd_line,
             macd_signal, macd_histogram, bb_upper, bb_middle, bb_lower, volume_sma_20, nearest_support,
             nearest_resistance, trend_score, momentum_score, volume_score, level_score, derivatives_score,
-            score_version, calculated_at""";
+            score_version, scored_side, calculated_at""";
 
     private final JdbcClient sql;
 
@@ -39,7 +40,7 @@ public class TechnicalIndicatorRepository {
         ComponentScores c = row.components();
         sql.sql("insert into technical_indicator (" + COLUMNS + """
                         )
-                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         on conflict (pair_id, market_type, timeframe, open_time) do update set
                             sma_20 = excluded.sma_20, ema_20 = excluded.ema_20, ema_50 = excluded.ema_50,
                             ema_200 = excluded.ema_200, rsi_14 = excluded.rsi_14, macd_line = excluded.macd_line,
@@ -49,7 +50,8 @@ public class TechnicalIndicatorRepository {
                             nearest_resistance = excluded.nearest_resistance, trend_score = excluded.trend_score,
                             momentum_score = excluded.momentum_score, volume_score = excluded.volume_score,
                             level_score = excluded.level_score, derivatives_score = excluded.derivatives_score,
-                            score_version = excluded.score_version, calculated_at = excluded.calculated_at""")
+                            score_version = excluded.score_version, scored_side = excluded.scored_side,
+                            calculated_at = excluded.calculated_at""")
                 .params(
                         row.pairId(),
                         c.market().name(),
@@ -75,6 +77,7 @@ public class TechnicalIndicatorRepository {
                         c.level(),
                         c.derivatives(),
                         c.formulaVersion(),
+                        c.scoredSide() == null ? null : c.scoredSide().name(),
                         Timestamp.from(row.calculatedAt()))
                 .update();
     }
@@ -117,6 +120,7 @@ public class TechnicalIndicatorRepository {
 
     private static StoredIndicators read(ResultSet row) throws SQLException {
         MarketType market = MarketType.valueOf(row.getString("market_type"));
+        String side = row.getString("scored_side");
         ComponentScores components = new ComponentScores(
                 market,
                 row.getString("timeframe"),
@@ -125,7 +129,8 @@ public class TechnicalIndicatorRepository {
                 row.getBigDecimal("momentum_score"),
                 row.getBigDecimal("volume_score"),
                 row.getBigDecimal("level_score"),
-                row.getBigDecimal("derivatives_score"));
+                row.getBigDecimal("derivatives_score"),
+                side == null ? null : ScoredSide.valueOf(side));
         return new StoredIndicators(
                 row.getObject("pair_id", UUID.class),
                 row.getTimestamp("open_time").toInstant(),

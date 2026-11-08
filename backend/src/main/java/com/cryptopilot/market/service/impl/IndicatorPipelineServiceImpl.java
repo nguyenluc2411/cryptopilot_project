@@ -2,6 +2,7 @@ package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.calculator.SetupComponents;
 import com.cryptopilot.market.calculator.SwingSupportResistance;
+import com.cryptopilot.market.config.SetupScoreProperties;
 import com.cryptopilot.market.event.CandleClosed;
 import com.cryptopilot.market.event.IndicatorLevels;
 import com.cryptopilot.market.event.IndicatorsComputed;
@@ -55,6 +56,7 @@ public class IndicatorPipelineServiceImpl implements IndicatorPipelineService {
     private final MarketDataQueryRepository marketData;
     private final Clock clock;
     private final ApplicationEventPublisher events;
+    private final SetupScoreProperties setupScore;
 
     @Override
     @Transactional
@@ -93,16 +95,19 @@ public class IndicatorPipelineServiceImpl implements IndicatorPipelineService {
         DerivativesInputs derivatives = candle.market() == MarketType.FUTURES
                 ? marketData.derivativesAt(candle.pairId(), candle.closeTime())
                 : null;
-        ComponentScores components = SetupComponents.compute(new ComponentInputs(
-                candle.market(),
-                candle.timeframe(),
-                candle.close(),
-                candle.baseVolume(),
-                snapshot,
-                previousHistogram,
-                levels.support(),
-                levels.resistance(),
-                derivatives));
+        ComponentScores components = SetupComponents.compute(
+                new ComponentInputs(
+                        candle.market(),
+                        candle.timeframe(),
+                        candle.open(),
+                        candle.close(),
+                        candle.baseVolume(),
+                        snapshot,
+                        previousHistogram,
+                        levels.support(),
+                        levels.resistance(),
+                        derivatives),
+                setupScore.v2());
         StoredIndicators row = new StoredIndicators(
                 candle.pairId(),
                 candle.openTime(),

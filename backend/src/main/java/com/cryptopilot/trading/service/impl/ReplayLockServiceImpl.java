@@ -10,8 +10,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -62,8 +60,10 @@ public class ReplayLockServiceImpl implements ReplayLockService {
         this.scheduler = scheduler;
     }
 
-    /** Starts renewing the held keys every {@code heartbeat}. */
-    @EventListener(ApplicationReadyEvent.class)
+    /**
+     * Starts renewing the held keys every {@code heartbeat}, once: when the first key is held, so an instance that
+     * never replays (the calibration profile, a context without matching) schedules nothing.
+     */
     public synchronized void startHeartbeat() {
         if (heartbeats == null) {
             heartbeats = scheduler.scheduleAtFixedRate(this::heartbeat, properties.heartbeat());
@@ -77,6 +77,7 @@ public class ReplayLockServiceImpl implements ReplayLockService {
             Boolean taken = redis.opsForValue().setIfAbsent(key, token, properties.ttl());
             if (Boolean.TRUE.equals(taken) || token.equals(redis.opsForValue().get(key))) {
                 held.add(key);
+                startHeartbeat();
                 return true;
             }
             return false;

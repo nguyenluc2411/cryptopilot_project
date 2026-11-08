@@ -17,6 +17,7 @@ import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.SetupScoreReading;
+import com.cryptopilot.market.SetupScoreTunings;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.config.SetupScoreProperties;
 import com.cryptopilot.market.dto.response.AnalysisResponse;
@@ -291,10 +292,15 @@ class AnalysisServiceImplTest {
     private static SetupScoreProperties presets() {
         ComponentWeights spot = new ComponentWeights(25, 25, 25, 25, null);
         ComponentWeights futures = new ComponentWeights(20, 20, 20, 20, 20);
-        return new SetupScoreProperties(Map.of(
-                SetupStyle.SCALPING, new SetupScoreProperties.Preset("v1", "15m", spot, futures),
-                SetupStyle.DAY_TRADING, new SetupScoreProperties.Preset("v1", "1h", spot, futures),
-                SetupStyle.SWING, new SetupScoreProperties.Preset("v1", "4h", spot, futures)));
+        return new SetupScoreProperties(
+                Map.of(
+                        SetupStyle.SCALPING,
+                        new SetupScoreProperties.Preset("v1", "15m", spot, futures),
+                        SetupStyle.DAY_TRADING,
+                        new SetupScoreProperties.Preset("v1", "1h", spot, futures),
+                        SetupStyle.SWING,
+                        new SetupScoreProperties.Preset("v1", "4h", spot, futures)),
+                SetupScoreTunings.DEFAULT);
     }
 
     /** A row whose four components all equal a number told apart by timeframe: 15m → 15, 1h → 10, 4h → 40. */
