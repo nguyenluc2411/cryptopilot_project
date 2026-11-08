@@ -169,6 +169,7 @@ class AuthorizationMatrixTest {
                     "/api/v1/news",
                     "/api/v1/ai/conversations",
                     "/api/v1/billing/packages",
+                    "/api/v1/billing/gateways",
                     "/api/v1/billing/orders",
                     "/api/v1/billing/subscription"
                 })
@@ -488,6 +489,7 @@ class AuthorizationMatrixTest {
                             "/api/v1/news/**",
                             "/api/v1/ai/**",
                             "/api/v1/billing/packages",
+                            "/api/v1/billing/gateways",
                             "/api/v1/billing/orders/**",
                             "/api/v1/billing/subscription");
         }

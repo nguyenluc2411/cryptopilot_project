@@ -102,7 +102,11 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.COMMENT_REPORT_OWN_COMMENT, "MSG43 409"),
             Map.entry(ErrorCode.COMMENT_ALREADY_REPORTED, "MSG34 409"),
             Map.entry(ErrorCode.COMMENT_NOT_HIDDEN, "MSG43 409"),
-            Map.entry(ErrorCode.AUTHOR_BANNED, "MSG43 409"));
+            Map.entry(ErrorCode.AUTHOR_BANNED, "MSG43 409"),
+            Map.entry(ErrorCode.PACKAGE_NOT_ON_SALE, "MSG43 409"),
+            Map.entry(ErrorCode.SUBSCRIPTION_DOWNGRADE_REFUSED, "MSG43 409"),
+            Map.entry(ErrorCode.PAYMENT_GATEWAY_DISABLED, "MSG43 409"),
+            Map.entry(ErrorCode.PAYMENT_GATEWAY_UNAVAILABLE, "MSG43 503"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)

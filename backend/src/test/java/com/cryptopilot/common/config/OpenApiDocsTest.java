@@ -211,9 +211,15 @@ class OpenApiDocsTest {
             "/api/v1/admin/news-articles/sentiment-summary",
             "/api/v1/admin/news-articles/{id}/hide",
             "/api/v1/admin/news-articles/{id}/restore",
-            "/api/v1/admin/news-articles/{id}/summarize");
+            "/api/v1/admin/news-articles/{id}/summarize",
+            "/api/v1/billing/packages",
+            "/api/v1/billing/gateways",
+            "/api/v1/billing/orders/quote",
+            "/api/v1/billing/orders",
+            "/api/v1/billing/orders/{orderCode}",
+            "/api/v1/billing/subscription");
 
-    private static final int OPERATIONS = 222;
+    private static final int OPERATIONS = 229;
 
     @Autowired
     private MockMvc mvc;

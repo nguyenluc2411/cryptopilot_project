@@ -65,4 +65,15 @@ class SystemSettingReaderTest {
                 .hasMessageContaining("DECIMAL");
         assertThatThrownBy(() -> settings.integer("NOT_A_SETTING")).isInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    void D146_theGatewaySwitches_areReadAsFlags() {
+        assertThat(settings.flag("PAYMENT_MOMO_ENABLED")).isTrue();
+        assertThat(settings.flag("PAYMENT_SEPAY_ENABLED")).isTrue();
+    }
+
+    @Test
+    void aWholeNumberSetting_isNotReadAsAFlag() {
+        assertThatThrownBy(() -> settings.flag("MAX_IMAGES_PER_POST")).isInstanceOf(IllegalStateException.class);
+    }
 }

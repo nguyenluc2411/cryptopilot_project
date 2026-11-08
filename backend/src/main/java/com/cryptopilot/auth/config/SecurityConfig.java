@@ -64,7 +64,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * <tr><td>SCR-24…27 Community</td><td>{@code /posts/**}, {@code /comments/**}, {@code /media/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-28 News Feed</td><td>{@code /news/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-29 AI Assistant</td><td>{@code /ai/**}</td><td>TRADER + entitlement</td></tr>
- * <tr><td>SCR-30…32 Subscription and Payment</td><td>{@code /billing/packages}, {@code /billing/orders/**}, {@code /billing/subscription}</td><td>TRADER</td></tr>
+ * <tr><td>SCR-30…32 Subscription and Payment</td><td>{@code /billing/packages}, {@code /billing/gateways}, {@code /billing/orders/**}, {@code /billing/subscription}</td><td>TRADER</td></tr>
  * <tr><td>SCR-33…44 Administration console</td><td>{@code /admin/**}</td><td>ADMIN</td></tr>
  * </table>
  *
@@ -233,6 +233,7 @@ public class SecurityConfig {
         "/api/v1/news/**",
         "/api/v1/ai/**",
         "/api/v1/billing/packages",
+        "/api/v1/billing/gateways",
         "/api/v1/billing/orders/**",
         "/api/v1/billing/subscription"
     };
