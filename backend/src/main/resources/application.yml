@@ -137,6 +137,13 @@ cryptopilot:
       secret-key: ${SEPAY_SECRET_KEY:}
       ipn-secret-key: ${SEPAY_IPN_SECRET_KEY:}
       checkout-url: ${SEPAY_CHECKOUT_URL:https://pay-sandbox.sepay.vn/v1/checkout/init}
+      # The order query API of NSF-13 (https://pgapi.sepay.vn in production).
+      api-url: ${SEPAY_API_URL:https://pgapi-sandbox.sepay.vn}
+    # NSF-13: PENDING orders older than `after` are asked about every `interval`; on in the dev and prod profiles.
+    reconcile:
+      interval: PT5M
+      after: PT5M
+      batch-size: 50
   notification:
     mail:
       # T-057: the sender address, and the web application the mailed links open (/verify-email, /reset-password).

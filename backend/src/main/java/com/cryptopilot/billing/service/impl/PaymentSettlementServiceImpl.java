@@ -108,6 +108,21 @@ public class PaymentSettlementServiceImpl implements PaymentSettlementService {
         activate(order, now);
     }
 
+    @Override
+    @Transactional
+    public boolean expireIfDue(String orderCode) {
+        Optional<SubscriptionOrder> found = orders.lockByOrderCode(orderCode);
+        Instant now = clock.instant();
+        if (found.isEmpty()
+                || found.get().getOrderStatus() != OrderStatus.PENDING
+                || now.isBefore(found.get().getExpiresAt())) {
+            return false;
+        }
+        found.get().expire(now);
+        log.info("order {} expired unpaid", orderCode);
+        return true;
+    }
+
     private void activate(SubscriptionOrder order, Instant now) {
         SubscriptionPackage bought = packages.findById(order.getPackageId()).orElseThrow();
         UserSubscription held = subscriptions

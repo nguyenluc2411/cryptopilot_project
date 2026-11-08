@@ -241,6 +241,36 @@ class PaymentSettlementServiceImplTest {
         assertThat(subscriptions(trader)).isEmpty();
     }
 
+    /** BR-54: an unpaid order expires once its window has closed, and only then. */
+    @Test
+    void BR54_anUnpaidOrder_expiresWhenItsWindowHasClosed() {
+        UUID trader = trader();
+        String due = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now().minus(Duration.ofMinutes(20)));
+        String open = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
+
+        assertThat(settlement.expireIfDue(due)).isTrue();
+        assertThat(settlement.expireIfDue(open)).isFalse();
+        entityManager.flush();
+
+        assertThat(orderRow(due).get("order_status")).isEqualTo("EXPIRED");
+        assertThat(orderRow(open).get("order_status")).isEqualTo("PENDING");
+        assertThat(settlement.expireIfDue(due)).isFalse();
+        assertThat(settlement.expireIfDue("CP-NO-SUCH-ORDER")).isFalse();
+    }
+
+    /** BR-54: a settled order never expires. */
+    @Test
+    void BR54_aPaidOrder_doesNotExpire() {
+        UUID trader = trader();
+        String order =
+                pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now().minus(Duration.ofMinutes(20)));
+        settlement.settle(paid(order, "99000"));
+        entityManager.flush();
+
+        assertThat(settlement.expireIfDue(order)).isFalse();
+        assertThat(orderRow(order).get("order_status")).isEqualTo("PAID");
+    }
+
     private static PaymentResult paid(String order, String amount) {
         return new PaymentResult(
                 GatewayCode.SEPAY, order, true, new BigDecimal(amount), "TX-" + order, "CAPTURED", "{\"ok\":true}");

@@ -14,6 +14,7 @@ import com.cryptopilot.billing.client.GatewayUnavailableException;
 import com.cryptopilot.billing.client.PaymentGateway;
 import com.cryptopilot.billing.model.Checkout;
 import com.cryptopilot.billing.model.CheckoutRequest;
+import com.cryptopilot.billing.model.GatewayLookup;
 import com.cryptopilot.billing.model.enums.GatewayCode;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -409,6 +410,11 @@ class BillingApiTest {
                     fields.put("amount", request.amount().toPlainString());
                     fields.put("success_url", request.returnUrl().toString());
                     return Checkout.form(URI.create("https://pay.example.test/checkout"), fields);
+                }
+
+                @Override
+                public GatewayLookup lookup(String orderCode) {
+                    return GatewayLookup.of(GatewayLookup.State.AWAITING);
                 }
             };
         }

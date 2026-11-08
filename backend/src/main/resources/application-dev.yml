@@ -33,6 +33,10 @@ cryptopilot:
       api: ${RATE_LIMIT_API:1200}
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:500}
       guest: ${RATE_LIMIT_GUEST:3000}
+  billing:
+    reconcile:
+      # NSF-13 runs in this profile: unconfirmed orders are asked about at their gateway, unpaid ones expire.
+      enabled: true
   media:
     sweep:
       # Runs in this profile: files no post carries are deleted from Cloudinary daily.

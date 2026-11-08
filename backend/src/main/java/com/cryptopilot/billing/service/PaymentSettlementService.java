@@ -15,4 +15,12 @@ public interface PaymentSettlementService {
      * or FAILED changes nothing.
      */
     void settle(PaymentResult result);
+
+    /**
+     * Expires the order with this code when it is still PENDING and its payment window has closed (BR-54). It stays
+     * payable: a payment reported afterwards is still honoured (A-03).
+     *
+     * @return whether the order was expired by this call
+     */
+    boolean expireIfDue(String orderCode);
 }

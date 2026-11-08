@@ -43,5 +43,11 @@ public enum AuditAction {
     CONFIGURATION_CHANGED,
     CONFIGURATION_DELETED,
     /** An administrator exported the audit log as CSV (UC-52): who took a copy, with which filters. */
-    AUDIT_LOG_EXPORTED
+    AUDIT_LOG_EXPORTED,
+
+    /** An administrator asked the gateway about a subscription order (UC-48, NSF-13): its status before and after. */
+    ORDER_RECONCILED,
+
+    /** An administrator recorded how a flagged subscription order was handled, e.g. refunded (UC-48, D-146). */
+    ORDER_HANDLED
 }

@@ -595,7 +595,13 @@ public enum ErrorCode {
      * The payment gateway could not be reached or refused to open a payment page; no order was kept (D-146). Borrows
      * MSG43 (A-38). 503: the same request may succeed later, or through another gateway.
      */
-    PAYMENT_GATEWAY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43");
+    PAYMENT_GATEWAY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43"),
+
+    /**
+     * An administrator marked an order handled that is not waiting for one: it was never flagged, or was handled
+     * already (UC-48, D-146). Borrows MSG43 (A-38). 409: the order's state refuses the command.
+     */
+    ORDER_NOT_AWAITING_HANDLING(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

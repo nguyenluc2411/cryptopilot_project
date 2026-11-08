@@ -1,11 +1,15 @@
 package com.cryptopilot.billing.repository;
 
 import com.cryptopilot.billing.entity.SubscriptionOrder;
+import com.cryptopilot.billing.model.enums.OrderStatus;
 import jakarta.persistence.LockModeType;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
@@ -17,7 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>Rule: BR-53, BR-54; SRS v1.1 entity 35; TECHNICAL_DESIGN 7.11; D-146.
  */
-public interface SubscriptionOrderRepository extends Repository<SubscriptionOrder, UUID> {
+public interface SubscriptionOrderRepository
+        extends Repository<SubscriptionOrder, UUID>, JpaSpecificationExecutor<SubscriptionOrder> {
 
     SubscriptionOrder save(SubscriptionOrder order);
 
@@ -47,4 +52,16 @@ public interface SubscriptionOrderRepository extends Repository<SubscriptionOrde
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select o from SubscriptionOrder o where o.orderCode = :orderCode")
     Optional<SubscriptionOrder> lockByOrderCode(@Param("orderCode") String orderCode);
+
+    /**
+     * The codes of the orders in this status created before {@code before}, oldest first, one page of them: the
+     * orders a reconciliation run asks the gateway about (NSF-13), by the {@code (order_status, created_at)} index.
+     */
+    @Transactional(readOnly = true)
+    @Query("""
+            select o.orderCode from SubscriptionOrder o
+             where o.orderStatus = :status and o.createdAt < :before
+             order by o.createdAt, o.id""")
+    List<String> findCodesCreatedBefore(
+            @Param("status") OrderStatus status, @Param("before") Instant before, Pageable page);
 }

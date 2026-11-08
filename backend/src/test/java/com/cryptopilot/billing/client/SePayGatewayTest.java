@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 import com.cryptopilot.billing.calculator.SePaySignature;
 import com.cryptopilot.billing.model.Checkout;
 import com.cryptopilot.billing.model.CheckoutRequest;
+import com.cryptopilot.billing.model.GatewayLookup;
 import com.cryptopilot.billing.model.PaymentResult;
 import com.cryptopilot.billing.model.enums.GatewayCode;
 import java.math.BigDecimal;
@@ -14,6 +15,7 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -24,10 +26,10 @@ class SePayGatewayTest {
             "MERCHANT_123",
             "spsk_test_secret",
             "ipn-secret",
-            URI.create("https://pay-sandbox.sepay.vn/v1/checkout/init"));
+            URI.create("https://pay-sandbox.sepay.vn/v1/checkout/init"),
+            URI.create("https://pgapi-sandbox.sepay.vn"));
 
-    private static final SePayGateway GATEWAY =
-            new SePayGateway(SANDBOX, JsonMapper.builder().build());
+    private static final SePayGateway GATEWAY = answering(Optional.empty());
 
     private static final CheckoutRequest REQUEST = new CheckoutRequest(
             "CP261108030000ABCD",
@@ -90,8 +92,9 @@ class SePayGatewayTest {
     @Test
     void D146_withoutCredentials_SePayIsUnavailable() {
         SePayGateway unconfigured = new SePayGateway(
-                new SePayProperties("", "", "", SANDBOX.checkoutUrl()),
-                JsonMapper.builder().build());
+                new SePayProperties("", "", "", SANDBOX.checkoutUrl(), SANDBOX.apiUrl()),
+                JsonMapper.builder().build(),
+                code -> Optional.empty());
 
         assertThat(unconfigured.configured()).isFalse();
         assertThat(unconfigured.authentic("")).isFalse();
@@ -138,5 +141,68 @@ class SePayGatewayTest {
                 .isThrownBy(() -> GATEWAY.interpret("{\"notification_type\":\"ORDER_PAID\"}"));
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> GATEWAY.interpret(PAID.replace("\"99000.00\"", "\"lots\"")));
+    }
+
+    /** The documentation's order detail example, with our order code and amount. */
+    private static String detail(String status) {
+        return """
+                {"data": {"id": "6f1c2b3a-8d4e-11f0-9a1b-0242ac120002", "customer_id": null,
+                          "order_id": "SEPAY-68B01673A77FF", "order_invoice_number": "CP261108030000ABCD",
+                          "order_status": "%s", "order_amount": "99000.00", "order_currency": "VND",
+                          "transactions": [{"id": "7a2d3c4b-8d4e-11f0-9a1b-0242ac120002",
+                                            "payment_method": "BANK_TRANSFER", "transaction_type": "PAYMENT",
+                                            "transaction_amount": "99000", "transaction_status": "APPROVED"}]}}""".formatted(status);
+    }
+
+    private static SePayGateway answering(Optional<String> answer) {
+        return new SePayGateway(SANDBOX, JsonMapper.builder().build(), code -> answer);
+    }
+
+    @Test
+    void NSF13_aCapturedOrder_isAPaymentOfItsOrderAmount() {
+        String body = detail("CAPTURED");
+
+        GatewayLookup lookup = answering(Optional.of(body)).lookup("CP261108030000ABCD");
+
+        assertThat(lookup.state()).isEqualTo(GatewayLookup.State.PAID);
+        assertThat(lookup.payment().paid()).isTrue();
+        assertThat(lookup.payment().gateway()).isEqualTo(GatewayCode.SEPAY);
+        assertThat(lookup.payment().orderCode()).isEqualTo("CP261108030000ABCD");
+        assertThat(lookup.payment().amount()).isEqualByComparingTo("99000");
+        assertThat(lookup.payment().transactionNo()).isEqualTo("7a2d3c4b-8d4e-11f0-9a1b-0242ac120002");
+        assertThat(lookup.payment().responseCode()).isEqualTo("CAPTURED");
+        assertThat(lookup.payment().payload()).isEqualTo(body);
+    }
+
+    @Test
+    void NSF13_aCapturedOrderWithoutTransactions_isStillPaid() {
+        String body = "{\"data\": {\"order_status\": \"CAPTURED\", \"order_amount\": \"99000.00\"}}";
+
+        GatewayLookup lookup = answering(Optional.of(body)).lookup("CP1");
+
+        assertThat(lookup.state()).isEqualTo(GatewayLookup.State.PAID);
+        assertThat(lookup.payment().transactionNo()).isNull();
+    }
+
+    @Test
+    void NSF13_cancelledAwaitingUndocumentedAndUnknownOrders_settleNothing() {
+        assertThat(answering(Optional.of(detail("CANCELLED"))).lookup("CP1"))
+                .isEqualTo(GatewayLookup.of(GatewayLookup.State.CANCELLED));
+        assertThat(answering(Optional.of(detail("AUTHENTICATION_NOT_NEEDED"))).lookup("CP1"))
+                .isEqualTo(GatewayLookup.of(GatewayLookup.State.AWAITING));
+        assertThat(answering(Optional.of(detail("SOMETHING_NEW"))).lookup("CP1"))
+                .isEqualTo(GatewayLookup.of(GatewayLookup.State.AWAITING));
+        assertThat(answering(Optional.empty()).lookup("CP1")).isEqualTo(GatewayLookup.of(GatewayLookup.State.UNKNOWN));
+    }
+
+    @Test
+    void NSF13_anAnswerThatIsNotAnOrder_isAnUnavailableGateway() {
+        assertThatExceptionOfType(GatewayUnavailableException.class)
+                .isThrownBy(() -> answering(Optional.of("<html>")).lookup("CP1"));
+        assertThatExceptionOfType(GatewayUnavailableException.class)
+                .isThrownBy(() -> answering(Optional.of("{\"data\": {}}")).lookup("CP1"));
+        assertThatExceptionOfType(GatewayUnavailableException.class).isThrownBy(() -> answering(
+                        Optional.of("{\"data\": {\"order_status\": \"CAPTURED\", \"order_amount\": \"\"}}"))
+                .lookup("CP1"));
     }
 }

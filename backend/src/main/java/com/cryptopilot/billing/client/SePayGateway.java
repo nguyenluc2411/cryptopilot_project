@@ -3,6 +3,7 @@ package com.cryptopilot.billing.client;
 import com.cryptopilot.billing.calculator.SePaySignature;
 import com.cryptopilot.billing.model.Checkout;
 import com.cryptopilot.billing.model.CheckoutRequest;
+import com.cryptopilot.billing.model.GatewayLookup;
 import com.cryptopilot.billing.model.PaymentResult;
 import com.cryptopilot.billing.model.enums.GatewayCode;
 import java.math.BigDecimal;
@@ -49,8 +50,15 @@ public class SePayGateway implements PaymentGateway {
 
     private static final Logger log = LoggerFactory.getLogger(SePayGateway.class);
 
+    /** The order status of an order opened and not paid yet. */
+    static final String AWAITING = "AUTHENTICATION_NOT_NEEDED";
+
+    /** The order status of an order cancelled on SePay's page. */
+    static final String CANCELLED = "CANCELLED";
+
     private final SePayProperties properties;
     private final JsonMapper json;
+    private final SePayOrderApi orders;
 
     @Override
     public GatewayCode code() {
@@ -81,6 +89,55 @@ public class SePayGateway implements PaymentGateway {
         fields.put("lang", "vi");
         fields.put("signature", SePaySignature.sign(fields, properties.secretKey()));
         return Checkout.form(properties.checkoutUrl(), fields);
+    }
+
+    /**
+     * What SePay's order query says of the order: {@code data.order_status} CAPTURED is a payment of
+     * {@code data.order_amount}, CANCELLED a cancelled page, AUTHENTICATION_NOT_NEEDED (or any status the
+     * documentation does not list) an order still awaiting payment, and a 404 an order SePay never saw.
+     *
+     * @throws GatewayUnavailableException when SePay cannot be reached, refuses the query or answers something else
+     */
+    @Override
+    public GatewayLookup lookup(String orderCode) {
+        Optional<String> answer = orders.orderDetail(orderCode);
+        if (answer.isEmpty()) {
+            return GatewayLookup.of(GatewayLookup.State.UNKNOWN);
+        }
+        JsonNode data;
+        try {
+            data = json.readTree(answer.get()).path("data");
+        } catch (JacksonException e) {
+            throw new GatewayUnavailableException("SePay answered about " + orderCode + " with no JSON", e);
+        }
+        String status = data.path("order_status").asString(null);
+        if (status == null) {
+            throw new GatewayUnavailableException("SePay answered about " + orderCode + " with no order status");
+        }
+        if (CANCELLED.equals(status)) {
+            return GatewayLookup.of(GatewayLookup.State.CANCELLED);
+        }
+        if (!CAPTURED.equals(status)) {
+            if (!AWAITING.equals(status)) {
+                log.warn("SePay order {} has the undocumented status {}; read as awaiting payment", orderCode, status);
+            }
+            return GatewayLookup.of(GatewayLookup.State.AWAITING);
+        }
+        BigDecimal amount;
+        try {
+            amount = new BigDecimal(data.path("order_amount").asString(""));
+        } catch (NumberFormatException e) {
+            throw new GatewayUnavailableException("SePay says " + orderCode + " is paid but names no amount", e);
+        }
+        JsonNode transaction = data.path("transactions").path(0);
+        return GatewayLookup.paid(new PaymentResult(
+                GatewayCode.SEPAY,
+                orderCode,
+                true,
+                amount,
+                transaction.path("id").asString(null),
+                status,
+                answer.get()));
     }
 
     /** Whether an IPN carries this deployment's IPN secret key, compared in constant time. */

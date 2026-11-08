@@ -2,6 +2,7 @@ package com.cryptopilot.billing.client;
 
 import com.cryptopilot.billing.model.Checkout;
 import com.cryptopilot.billing.model.CheckoutRequest;
+import com.cryptopilot.billing.model.GatewayLookup;
 import com.cryptopilot.billing.model.enums.GatewayCode;
 
 /**
@@ -25,4 +26,11 @@ public interface PaymentGateway {
      * @throws GatewayUnavailableException when the gateway cannot be reached or refuses the request
      */
     Checkout checkout(CheckoutRequest request);
+
+    /**
+     * What the gateway knows of the order with this code, for reconciliation (NSF-13). Called outside any transaction.
+     *
+     * @throws GatewayUnavailableException when the gateway is not configured, cannot be reached or refuses the query
+     */
+    GatewayLookup lookup(String orderCode);
 }

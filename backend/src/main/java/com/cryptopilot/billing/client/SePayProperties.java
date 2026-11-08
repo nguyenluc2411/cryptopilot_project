@@ -15,6 +15,8 @@ import org.springframework.validation.annotation.Validated;
  * @param ipnSecretKey the IPN secret key chosen under Payment Gateway, Configuration, IPN (auth type SECRET_KEY): SePay
  *     sends it in {@code X-Secret-Key}; a different value from {@code secretKey}
  * @param checkoutUrl the checkout form endpoint ({@code https://pay.sepay.vn/v1/checkout/init} in production)
+ * @param apiUrl the base of the order query API ({@code https://pgapi.sepay.vn} in production), Basic authentication
+ *     with the merchant id and secret key
  */
 @Validated
 @ConfigurationProperties("cryptopilot.billing.sepay")
@@ -24,7 +26,10 @@ public record SePayProperties(
         @DefaultValue("") String ipnSecretKey,
 
         @NotNull @DefaultValue("https://pay-sandbox.sepay.vn/v1/checkout/init")
-        URI checkoutUrl) {
+        URI checkoutUrl,
+
+        @NotNull @DefaultValue("https://pgapi-sandbox.sepay.vn")
+        URI apiUrl) {
 
     /** Whether every credential is present. */
     public boolean configured() {
