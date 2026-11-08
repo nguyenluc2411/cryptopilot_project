@@ -4,6 +4,7 @@ import com.cryptopilot.billing.entity.SubscriptionOrder;
 import com.cryptopilot.billing.model.enums.OrderStatus;
 import jakarta.persistence.LockModeType;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -49,9 +50,10 @@ public interface SubscriptionOrderRepository
     @Transactional(readOnly = true)
     boolean existsByOrderCode(String orderCode);
 
-    /** The Trader's orders, newest first (SCR-32). */
+    /** The Trader's orders in these statuses, newest first: the payment history (SCR-32). */
     @Transactional(readOnly = true)
-    Page<SubscriptionOrder> findByUserIdOrderByCreatedAtDescIdDesc(UUID userId, Pageable page);
+    Page<SubscriptionOrder> findByUserIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
+            UUID userId, Collection<OrderStatus> statuses, Pageable page);
 
     /**
      * The order with this code, its row locked until the transaction ends, so two reports of the same payment are

@@ -32,7 +32,7 @@ public interface BillingService {
     /** A PENDING order for the package, and how the browser reaches the gateway's payment page. */
     CreateOrderResponse createOrder(UUID userId, CreateOrderRequest request);
 
-    /** The Trader's orders, newest first. */
+    /** The Trader's paid and failed orders, newest first; orders never paid are left out (SCR-32). */
     PageResponse<OrderResponse> orders(UUID userId, Integer page, Integer pageSize);
 
     /** One of the Trader's orders, by code. */

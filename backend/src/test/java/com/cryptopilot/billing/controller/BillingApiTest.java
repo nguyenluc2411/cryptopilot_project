@@ -266,8 +266,38 @@ class BillingApiTest {
                 .isZero();
     }
 
+    /** SCR-32: the history shows what was paid or failed, newest first; an order never paid is left out. */
     @Test
-    void SCR32_theCallerSeesTheirOwnOrders_newestFirst_andNoOneElses() throws Exception {
+    void SCR32_theHistory_showsPaidAndFailedOrdersOnly_newestFirst_andNoOneElses() throws Exception {
+        UUID trader = trader();
+        String token = bearer(trader);
+        Instant now = Instant.now();
+        String paid = order(trader, "PRO_MONTHLY", "PAID", now.minus(Duration.ofDays(2)));
+        String failed = order(trader, "PREMIUM_MONTHLY", "FAILED", now.minus(Duration.ofDays(1)));
+        String expired = order(trader, "PRO_MONTHLY", "EXPIRED", now.minus(Duration.ofHours(2)));
+        String pending = order(trader, "PRO_MONTHLY", "PENDING", now.minus(Duration.ofMinutes(1)));
+
+        mvc.perform(get(BILLING + "/orders").header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items[0].orderCode").value(failed))
+                .andExpect(jsonPath("$.items[1].orderCode").value(paid))
+                .andExpect(jsonPath("$.items[1].packageName").value("Pro Monthly"));
+        // The result page still reads an order never paid, by its code.
+        mvc.perform(get(BILLING + "/orders/" + pending).header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"));
+        mvc.perform(get(BILLING + "/orders/" + expired).header("Authorization", token))
+                .andExpect(jsonPath("$.status").value("EXPIRED"));
+        mvc.perform(get(BILLING + "/orders/" + paid).header("Authorization", bearer(trader())))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(BILLING + "/orders").header("Authorization", bearer(trader())))
+                .andExpect(jsonPath("$.total").value(0));
+    }
+
+    /** D-146: a second order withdraws the Trader's unpaid one, which stays readable by its code. */
+    @Test
+    void D146_aSecondOrder_withdrawsTheUnpaidOne() throws Exception {
         UUID trader = trader();
         String token = bearer(trader);
         String first = orderCode(mvc.perform(createOrder(token, "PRO_MONTHLY", "SEPAY"))
@@ -275,27 +305,15 @@ class BillingApiTest {
                 .getResponse()
                 .getContentAsString());
         String second = orderCode(mvc.perform(createOrder(token, "PREMIUM_MONTHLY", "SEPAY"))
+                .andExpect(status().isCreated())
                 .andReturn()
                 .getResponse()
                 .getContentAsString());
-        sql.sql("update subscription_order set created_at = created_at - interval '1 minute' where order_code = ?")
-                .param(first)
-                .update();
 
-        mvc.perform(get(BILLING + "/orders").header("Authorization", token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.total").value(2))
-                .andExpect(jsonPath("$.items[0].orderCode").value(second))
-                .andExpect(jsonPath("$.items[1].orderCode").value(first))
-                .andExpect(jsonPath("$.items[1].packageName").value("Pro Monthly"));
-        // One PENDING order per Trader (D-146): the second order withdrew the first.
         mvc.perform(get(BILLING + "/orders/" + first).header("Authorization", token))
-                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("EXPIRED"));
         mvc.perform(get(BILLING + "/orders/" + second).header("Authorization", token))
                 .andExpect(jsonPath("$.status").value("PENDING"));
-        mvc.perform(get(BILLING + "/orders/" + first).header("Authorization", bearer(trader())))
-                .andExpect(status().isNotFound());
     }
 
     /** D-146: a PENDING order the gateway will not cancel (a card payment under way) blocks a second order. */
@@ -354,6 +372,30 @@ class BillingApiTest {
 
     private static String orderCode(String body) {
         return JsonPath.read(body, "$.order.orderCode");
+    }
+
+    /** An order in this status, created at {@code createdAt}, as SQL; a PAID one has no subscription here. */
+    private String order(UUID trader, String packageCode, String status, Instant createdAt) {
+        String code = "SCR32-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        Timestamp at = Timestamp.from(createdAt);
+        sql.sql("""
+                        insert into subscription_order (order_id, user_id, package_id, order_code, amount, currency,
+                                                        payment_gateway, order_status, created_at, paid_at, expires_at,
+                                                        updated_at)
+                        select ?, ?, package_id, ?, price_amount, 'VND', 'SEPAY', ?, ?, ?, ?, ?
+                          from subscription_package where package_id = ?""")
+                .params(
+                        UUID.randomUUID(),
+                        trader,
+                        code,
+                        status,
+                        at,
+                        "PAID".equals(status) ? at : null,
+                        Timestamp.from(createdAt.plusSeconds(900)),
+                        at,
+                        PACKAGES.get(packageCode))
+                .update();
+        return code;
     }
 
     /** A PAID order for the package and the ACTIVE subscription it created, as SQL. */

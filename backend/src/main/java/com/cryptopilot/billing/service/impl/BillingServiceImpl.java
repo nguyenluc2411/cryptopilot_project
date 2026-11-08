@@ -44,11 +44,13 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.random.RandomGenerator;
 import lombok.AccessLevel;
@@ -78,6 +80,12 @@ public class BillingServiceImpl implements BillingService {
 
     /** The scope of the Trader's billing lock (D-63), apart from the watchlist and plan writes. */
     static final String LOCK_SCOPE = "billing";
+
+    /**
+     * The orders the payment history shows: those a payment was actually made for, paid or failed. An order opened
+     * and never paid (PENDING, EXPIRED, withdrawn) is left out; the result page still reads it by its code.
+     */
+    static final Set<OrderStatus> HISTORY = EnumSet.of(OrderStatus.PAID, OrderStatus.FAILED);
 
     /** BR-54: minutes an order stays payable. */
     static final String ORDER_EXPIRY_MINUTES = "ORDER_EXPIRY_MINUTES";
@@ -203,7 +211,8 @@ public class BillingServiceImpl implements BillingService {
         Objects.requireNonNull(userId, "userId must not be null");
         Map<UUID, SubscriptionPackage> seen = new HashMap<>();
         return PageResponse.of(
-                orders.findByUserIdOrderByCreatedAtDescIdDesc(userId, Paging.of(page, pageSize)),
+                orders.findByUserIdAndOrderStatusInOrderByCreatedAtDescIdDesc(
+                        userId, HISTORY, Paging.of(page, pageSize)),
                 order -> toResponse(order, seen.computeIfAbsent(order.getPackageId(), this::packageOf)));
     }
 

@@ -99,7 +99,10 @@ public class BillingController {
         return billing.createOrder(callerOf(caller), request);
     }
 
-    @Operation(summary = "The caller's orders, newest first (SCR-32)")
+    @Operation(
+            summary = "The caller's payment history, newest first (SCR-32)",
+            description = "PAID and FAILED orders only: an order opened and never paid (PENDING, EXPIRED) is left"
+                    + " out. GET /orders/{orderCode} still reads any of the caller's orders.")
     @ApiResponse(responseCode = "200", description = "One page of orders")
     @ApiResponse(responseCode = "400", description = "MSG15: page or pageSize out of range")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
