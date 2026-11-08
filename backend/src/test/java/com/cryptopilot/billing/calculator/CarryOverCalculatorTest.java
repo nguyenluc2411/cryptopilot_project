@@ -176,6 +176,25 @@ class CarryOverCalculatorTest {
                 .isZero();
     }
 
+    @Test
+    void D146_aLowerPlansPayment_buysDaysAtThePricePaidForThePlanHeld() {
+        HeldSubscription premium = heldFor(PREMIUM_MONTHLY, 20, new BigDecimal("199000"));
+
+        // 990,000 VND at 199,000 VND for 30 days: 149.2 days, rounded down.
+        assertThat(CarryOverCalculator.convertedDays(new BigDecimal("990000"), premium, PREMIUM_MONTHLY))
+                .isEqualTo(149);
+        assertThat(CarryOverCalculator.convertedDays(BigDecimal.ZERO, premium, PREMIUM_MONTHLY))
+                .isZero();
+    }
+
+    @Test
+    void D146_aSubscriptionThatCostNothing_isValuedAtItsPackage() {
+        HeldSubscription gift = heldFor(PREMIUM_MONTHLY, 20, BigDecimal.ZERO);
+
+        assertThat(CarryOverCalculator.convertedDays(new BigDecimal("99000"), gift, PREMIUM_MONTHLY))
+                .isEqualTo(14);
+    }
+
     /** A subscription of {@code bought} with {@code daysLeft} days of its period left at {@link #NOW}. */
     private static HeldSubscription heldFor(PackageTerms bought, int daysLeft, BigDecimal value) {
         Instant end = NOW.plus(Duration.ofDays(daysLeft));

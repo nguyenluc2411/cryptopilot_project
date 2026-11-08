@@ -33,4 +33,14 @@ public interface PaymentGateway {
      * @throws GatewayUnavailableException when the gateway is not configured, cannot be reached or refuses the query
      */
     GatewayLookup lookup(String orderCode);
+
+    /**
+     * Asks the gateway to stop taking payment for the order, so a page or QR code the Trader still holds can no longer
+     * be paid. Called outside any transaction.
+     *
+     * @return {@code true} when nothing is payable any more (cancelled now or before, or never opened), {@code false}
+     *     when the gateway refused (already paid, or a payment method it cannot cancel): look the order up again
+     * @throws GatewayUnavailableException when the gateway is not configured or cannot be reached
+     */
+    boolean cancel(String orderCode);
 }

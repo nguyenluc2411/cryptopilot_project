@@ -19,6 +19,7 @@ import com.cryptopilot.billing.repository.SubscriptionPackageRepository;
 import com.cryptopilot.billing.repository.UserSubscriptionRepository;
 import com.cryptopilot.billing.service.PaymentSettlementService;
 import com.cryptopilot.common.lock.UserLock;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
@@ -41,8 +42,8 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>The subscription is worked out again from the one held when paid, never from the quote: an ACTIVE row past its
  * end is expired first; the same tier renews, a higher one upgrades with the unused value carried over, and a lower
- * one (the Trader upgraded through another order meanwhile) leaves the subscriptions alone and flags the paid order
- * for an administrator.
+ * one (the Trader upgraded through another order meanwhile) is turned into days of the plan held, so no paid order
+ * needs an administrator.
  *
  * <p>Rule: BR-53, BR-55, BR-56, BR-63 as amended by D-146; NSF-12; A-03.
  */
@@ -124,6 +125,18 @@ public class PaymentSettlementServiceImpl implements PaymentSettlementService {
         return true;
     }
 
+    @Override
+    @Transactional
+    public boolean withdraw(String orderCode) {
+        Optional<SubscriptionOrder> found = orders.lockByOrderCode(orderCode);
+        if (found.isEmpty() || found.get().getOrderStatus() != OrderStatus.PENDING) {
+            return false;
+        }
+        found.get().withdraw(clock.instant());
+        log.info("order {} withdrawn for a newer order", orderCode);
+        return true;
+    }
+
     private void activate(SubscriptionOrder order, Instant now) {
         SubscriptionPackage bought = packages.findById(order.getPackageId()).orElseThrow();
         UserSubscription held = subscriptions
@@ -142,11 +155,7 @@ public class PaymentSettlementServiceImpl implements PaymentSettlementService {
         }
         HeldSubscription current = held == null ? null : held.held(tierOf(held));
         if (OrderTypeResolver.resolve(current, bought.getTier(), now).isEmpty()) {
-            log.warn(
-                    "order {} for {} was paid after the Trader moved to a higher tier; flagged for an administrator",
-                    order.getOrderCode(),
-                    bought.getPackageCode());
-            order.flagForManualHandling();
+            convert(order, held, current, now);
             return;
         }
         SubscriptionTerms terms = CarryOverCalculator.terms(
@@ -171,6 +180,45 @@ public class PaymentSettlementServiceImpl implements PaymentSettlementService {
                 terms.endAt(),
                 terms.carriedValueVnd(),
                 terms.bonusDays()));
+    }
+
+    /**
+     * A payment for a lower plan than the one held (the Trader moved up through another order meanwhile) buys days of
+     * the plan held, at the price the Trader paid for it: nobody loses money and no administrator steps in (D-146).
+     */
+    private void convert(SubscriptionOrder order, UserSubscription held, HeldSubscription current, Instant now) {
+        SubscriptionPackage heldPackage = packageOf(held);
+        int days = CarryOverCalculator.convertedDays(
+                order.getAmount(),
+                current,
+                new PackageTerms(heldPackage.getTier(), heldPackage.getPriceAmount(), heldPackage.getDurationDays()));
+        held.extend(order.getAmount(), days);
+        log.info(
+                "order {} paid for a lower plan than {} holds; turned into {} more days of {}",
+                order.getOrderCode(),
+                order.getUserId(),
+                days,
+                heldPackage.getPackageCode());
+        events.publishEvent(new SubscriptionOrderPaid(
+                order.getId(),
+                order.getUserId(),
+                order.getOrderCode(),
+                heldPackage.getPackageName(),
+                order.getOrderType().name(),
+                order.getAmount(),
+                order.getCurrency(),
+                order.getPaymentGateway().name(),
+                order.getGatewayTransactionNo(),
+                now,
+                held.getStartAt(),
+                held.getEndAt(),
+                BigDecimal.ZERO,
+                days));
+    }
+
+    private SubscriptionPackage packageOf(UserSubscription subscription) {
+        SubscriptionOrder order = orders.findById(subscription.getOrderId()).orElseThrow();
+        return packages.findById(order.getPackageId()).orElseThrow();
     }
 
     private PlanTier tierOf(UserSubscription subscription) {

@@ -94,7 +94,7 @@ class SePayGatewayTest {
         SePayGateway unconfigured = new SePayGateway(
                 new SePayProperties("", "", "", SANDBOX.checkoutUrl(), SANDBOX.apiUrl()),
                 JsonMapper.builder().build(),
-                code -> Optional.empty());
+                new FakeOrders(Optional.empty(), SePayOrderApi.CancelAnswer.CANCELLED));
 
         assertThat(unconfigured.configured()).isFalse();
         assertThat(unconfigured.authentic("")).isFalse();
@@ -155,7 +155,8 @@ class SePayGatewayTest {
     }
 
     private static SePayGateway answering(Optional<String> answer) {
-        return new SePayGateway(SANDBOX, JsonMapper.builder().build(), code -> answer);
+        return new SePayGateway(
+                SANDBOX, JsonMapper.builder().build(), new FakeOrders(answer, SePayOrderApi.CancelAnswer.CANCELLED));
     }
 
     @Test
@@ -204,5 +205,31 @@ class SePayGatewayTest {
         assertThatExceptionOfType(GatewayUnavailableException.class).isThrownBy(() -> answering(
                         Optional.of("{\"data\": {\"order_status\": \"CAPTURED\", \"order_amount\": \"\"}}"))
                 .lookup("CP1"));
+    }
+
+    @Test
+    void D146_cancelling_isDoneWhenSePayCancelsOrNeverSawTheOrder_andNotWhenItRefuses() {
+        assertThat(cancelling(SePayOrderApi.CancelAnswer.CANCELLED).cancel("CP1"))
+                .isTrue();
+        assertThat(cancelling(SePayOrderApi.CancelAnswer.UNKNOWN).cancel("CP1")).isTrue();
+        assertThat(cancelling(SePayOrderApi.CancelAnswer.REFUSED).cancel("CP1")).isFalse();
+    }
+
+    private static SePayGateway cancelling(SePayOrderApi.CancelAnswer answer) {
+        return new SePayGateway(SANDBOX, JsonMapper.builder().build(), new FakeOrders(Optional.empty(), answer));
+    }
+
+    /** SePay's order API without a network: one detail answer and one cancellation answer. */
+    private record FakeOrders(Optional<String> detail, SePayOrderApi.CancelAnswer cancelled) implements SePayOrderApi {
+
+        @Override
+        public Optional<String> orderDetail(String orderCode) {
+            return detail;
+        }
+
+        @Override
+        public CancelAnswer cancel(String orderCode) {
+            return cancelled;
+        }
     }
 }

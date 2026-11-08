@@ -34,6 +34,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -64,6 +65,7 @@ class OrderReconciliationServiceImplTest {
         when(gateways.orderedStream()).thenAnswer(call -> installed.stream());
         when(sepay.code()).thenReturn(GatewayCode.SEPAY);
         when(sepay.configured()).thenReturn(true);
+        when(sepay.cancel(anyString())).thenReturn(true);
         installed.add(sepay);
         when(orders.findByOrderCode(anyString())).thenAnswer(call -> {
             String code = call.getArgument(0);
@@ -77,6 +79,14 @@ class OrderReconciliationServiceImplTest {
                 statuses.put(code, OrderStatus.EXPIRED);
             }
             return due;
+        });
+        when(settlement.withdraw(anyString())).thenAnswer(call -> {
+            String code = call.getArgument(0);
+            boolean pending = statuses.get(code) == OrderStatus.PENDING;
+            if (pending) {
+                statuses.put(code, OrderStatus.EXPIRED);
+            }
+            return pending;
         });
         doAnswer(call -> {
                     statuses.put(call.<PaymentResult>getArgument(0).orderCode(), OrderStatus.PAID);
@@ -198,11 +208,104 @@ class OrderReconciliationServiceImplTest {
         verify(sepay, never()).lookup("CP-SETTLED-MEANWHILE");
     }
 
+    @Test
+    void D146_anUnpaidOrderPastItsWindow_isCancelledAtTheGatewayBeforeItExpires() {
+        statuses.put("DUE-1", OrderStatus.PENDING);
+        when(sepay.lookup("DUE-1")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
+
+        assertThat(service.reconcile("DUE-1")).isEqualTo(OrderStatus.EXPIRED);
+
+        verify(sepay).cancel("DUE-1");
+    }
+
+    @Test
+    void D146_aRefusedCancellation_isLookedUpAgain_andAPaymentFoundThenIsSettled() {
+        statuses.put("DUE-PAID", OrderStatus.PENDING);
+        PaymentResult payment =
+                new PaymentResult(GatewayCode.SEPAY, "DUE-PAID", true, new BigDecimal("99000"), null, "CAPTURED", "{}");
+        when(sepay.lookup("DUE-PAID"))
+                .thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING))
+                .thenReturn(GatewayLookup.paid(payment));
+        when(sepay.cancel("DUE-PAID")).thenReturn(false);
+
+        assertThat(service.reconcile("DUE-PAID")).isEqualTo(OrderStatus.PAID);
+        verify(settlement).settle(payment);
+    }
+
+    @Test
+    void D146_anOrderTheGatewayWillNotCancel_staysPendingADay_thenExpires() {
+        statuses.put("DUE-CARD", OrderStatus.PENDING);
+        when(sepay.lookup("DUE-CARD")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
+        when(sepay.cancel("DUE-CARD")).thenReturn(false);
+
+        assertThat(service.reconcile("DUE-CARD")).isEqualTo(OrderStatus.PENDING);
+
+        statuses.put("DUE-OLD", OrderStatus.PENDING);
+        when(sepay.lookup("DUE-OLD")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
+        when(sepay.cancel("DUE-OLD")).thenReturn(false);
+        when(orders.findByOrderCode("DUE-OLD"))
+                .thenAnswer(
+                        call -> Optional.of(order("DUE-OLD", statuses.get("DUE-OLD"), NOW.minus(Duration.ofDays(2)))));
+
+        assertThat(service.reconcile("DUE-OLD")).isEqualTo(OrderStatus.EXPIRED);
+    }
+
+    @Test
+    void D146_releasingATradersPendingOrder_cancelsAndWithdrawsIt_beforeItsWindowCloses() {
+        SubscriptionOrder open = order("CP-OPEN", OrderStatus.PENDING, NOW.plus(Duration.ofMinutes(10)));
+        statuses.put("CP-OPEN", OrderStatus.PENDING);
+        UUID trader = UUID.randomUUID();
+        when(orders.findByUserIdAndOrderStatus(trader, OrderStatus.PENDING)).thenReturn(List.of(open));
+        when(sepay.lookup("CP-OPEN")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
+
+        service.releasePending(trader);
+
+        verify(sepay).cancel("CP-OPEN");
+        assertThat(statuses.get("CP-OPEN")).isEqualTo(OrderStatus.EXPIRED);
+    }
+
+    @Test
+    void D146_aPendingOrderTheGatewayWillNotCancel_isNotReleased() {
+        SubscriptionOrder open = order("CP-CARD", OrderStatus.PENDING, NOW.plus(Duration.ofMinutes(10)));
+        statuses.put("CP-CARD", OrderStatus.PENDING);
+        UUID trader = UUID.randomUUID();
+        when(orders.findByUserIdAndOrderStatus(trader, OrderStatus.PENDING)).thenReturn(List.of(open));
+        when(sepay.lookup("CP-CARD")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
+        when(sepay.cancel("CP-CARD")).thenReturn(false);
+
+        service.releasePending(trader);
+
+        assertThat(statuses.get("CP-CARD")).isEqualTo(OrderStatus.PENDING);
+        verify(settlement, never()).withdraw(anyString());
+    }
+
+    @Test
+    void D146_releasingAnOrderOfAGatewayThisDeploymentCannotAsk_withdrawsIt() {
+        when(sepay.configured()).thenReturn(false);
+        SubscriptionOrder open = order("CP-LOCAL", OrderStatus.PENDING, NOW.plus(Duration.ofMinutes(10)));
+        statuses.put("CP-LOCAL", OrderStatus.PENDING);
+        UUID trader = UUID.randomUUID();
+        when(orders.findByUserIdAndOrderStatus(trader, OrderStatus.PENDING)).thenReturn(List.of(open));
+
+        service.releasePending(trader);
+
+        assertThat(statuses.get("CP-LOCAL")).isEqualTo(OrderStatus.EXPIRED);
+    }
+
+    /** An order whose window closed a minute ago when its code starts with DUE, still open for 10 minutes otherwise. */
     private static SubscriptionOrder order(String code, OrderStatus status) {
+        return order(
+                code,
+                status,
+                code.startsWith("DUE") ? NOW.minus(Duration.ofMinutes(1)) : NOW.plus(Duration.ofMinutes(10)));
+    }
+
+    private static SubscriptionOrder order(String code, OrderStatus status, Instant expiresAt) {
         SubscriptionOrder order = mock(SubscriptionOrder.class);
         when(order.getOrderCode()).thenReturn(code);
         when(order.getOrderStatus()).thenReturn(status);
         when(order.getPaymentGateway()).thenReturn(GatewayCode.SEPAY);
+        when(order.getExpiresAt()).thenReturn(expiresAt);
         return order;
     }
 }

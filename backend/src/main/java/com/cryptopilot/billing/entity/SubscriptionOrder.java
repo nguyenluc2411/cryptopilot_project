@@ -39,6 +39,9 @@ public class SubscriptionOrder extends BaseEntity {
     /** The only currency an order is charged in. */
     static final String CURRENCY = "VND";
 
+    /** The response code kept on an order withdrawn for a newer one. */
+    public static final String WITHDRAWN = "WITHDRAWN";
+
     /** Longest note an administrator writes when handling a flagged order ({@code varchar(1000)}). */
     static final int HANDLING_NOTE_LENGTH = 1000;
 
@@ -195,6 +198,20 @@ public class SubscriptionOrder extends BaseEntity {
         if (now.isBefore(expiresAt)) {
             throw new IllegalStateException("order " + orderCode + " is payable until " + expiresAt);
         }
+        this.orderStatus = OrderStatus.EXPIRED;
+    }
+
+    /**
+     * Ends an unpaid order before its window closes, because the Trader started another one and the gateway
+     * confirmed nothing is payable any more (one PENDING order per Trader, D-146). Like an expired order it stays
+     * payable: a payment that still arrives is honoured (A-03).
+     *
+     * @throws IllegalStateException when the order is no longer PENDING
+     */
+    public void withdraw(Instant now) {
+        Objects.requireNonNull(now, "now must not be null");
+        requirePending("be withdrawn");
+        this.gatewayResponseCode = WITHDRAWN;
         this.orderStatus = OrderStatus.EXPIRED;
     }
 

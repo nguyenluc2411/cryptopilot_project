@@ -104,4 +104,24 @@ public final class CarryOverCalculator {
                 .divide(bought.price(), 0, RoundingMode.DOWN)
                 .intValueExact();
     }
+
+    /**
+     * The whole days of the held subscription that {@code amount} buys at the price the Trader paid for it: a payment
+     * for a lower plan that arrived after the Trader moved up is turned into time of the plan held (D-146). A
+     * subscription that cost nothing is valued at the package it was bought from, {@code fallback}.
+     */
+    public static int convertedDays(BigDecimal amount, HeldSubscription held, PackageTerms fallback) {
+        Objects.requireNonNull(amount, "amount must not be null");
+        Objects.requireNonNull(held, "held must not be null");
+        if (amount.signum() <= 0) {
+            return 0;
+        }
+        if (held.valueVnd().signum() <= 0) {
+            return bonusDays(amount, Objects.requireNonNull(fallback, "fallback must not be null"));
+        }
+        long seconds = Duration.between(held.startAt(), held.endAt()).toSeconds();
+        return amount.multiply(BigDecimal.valueOf(seconds))
+                .divide(held.valueVnd().multiply(BigDecimal.valueOf(86_400)), 0, RoundingMode.DOWN)
+                .intValueExact();
+    }
 }

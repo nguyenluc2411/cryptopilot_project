@@ -70,6 +70,9 @@ class BillingApiTest {
     /** Whether the stand-in gateway fails its next checkout. */
     static final AtomicBoolean SEPAY_DOWN = new AtomicBoolean();
 
+    /** Whether the stand-in gateway refuses to cancel an order. */
+    static final AtomicBoolean CANCEL_REFUSED = new AtomicBoolean();
+
     @Autowired
     private MockMvc mvc;
 
@@ -88,6 +91,7 @@ class BillingApiTest {
     @AfterEach
     void gatewayBackUp() {
         SEPAY_DOWN.set(false);
+        CANCEL_REFUSED.set(false);
     }
 
     @Test
@@ -284,11 +288,36 @@ class BillingApiTest {
                 .andExpect(jsonPath("$.items[0].orderCode").value(second))
                 .andExpect(jsonPath("$.items[1].orderCode").value(first))
                 .andExpect(jsonPath("$.items[1].packageName").value("Pro Monthly"));
+        // One PENDING order per Trader (D-146): the second order withdrew the first.
         mvc.perform(get(BILLING + "/orders/" + first).header("Authorization", token))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("EXPIRED"));
+        mvc.perform(get(BILLING + "/orders/" + second).header("Authorization", token))
                 .andExpect(jsonPath("$.status").value("PENDING"));
         mvc.perform(get(BILLING + "/orders/" + first).header("Authorization", bearer(trader())))
                 .andExpect(status().isNotFound());
+    }
+
+    /** D-146: a PENDING order the gateway will not cancel (a card payment under way) blocks a second order. */
+    @Test
+    void D146_anOrderTheGatewayWillNotCancel_blocksASecondOrder() throws Exception {
+        UUID trader = trader();
+        String token = bearer(trader);
+        String first = orderCode(mvc.perform(createOrder(token, "PRO_MONTHLY", "SEPAY"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+        CANCEL_REFUSED.set(true);
+
+        mvc.perform(createOrder(token, "PREMIUM_MONTHLY", "SEPAY"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ORDER_ALREADY_PENDING"))
+                .andExpect(jsonPath("$.messageArgs[0]").value(first));
+        assertThat(sql.sql("select count(*) from subscription_order where user_id = ?")
+                        .param(trader)
+                        .query(Long.class)
+                        .single())
+                .isEqualTo(1);
     }
 
     @Test
@@ -415,6 +444,11 @@ class BillingApiTest {
                 @Override
                 public GatewayLookup lookup(String orderCode) {
                     return GatewayLookup.of(GatewayLookup.State.AWAITING);
+                }
+
+                @Override
+                public boolean cancel(String orderCode) {
+                    return !CANCEL_REFUSED.get();
                 }
             };
         }

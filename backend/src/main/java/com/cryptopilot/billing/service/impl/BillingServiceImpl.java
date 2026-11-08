@@ -25,6 +25,7 @@ import com.cryptopilot.billing.model.HeldSubscription;
 import com.cryptopilot.billing.model.PackageTerms;
 import com.cryptopilot.billing.model.SubscriptionTerms;
 import com.cryptopilot.billing.model.enums.GatewayCode;
+import com.cryptopilot.billing.model.enums.OrderStatus;
 import com.cryptopilot.billing.model.enums.OrderType;
 import com.cryptopilot.billing.model.enums.PlanTier;
 import com.cryptopilot.billing.model.enums.SubscriptionStatus;
@@ -32,6 +33,7 @@ import com.cryptopilot.billing.repository.SubscriptionOrderRepository;
 import com.cryptopilot.billing.repository.SubscriptionPackageRepository;
 import com.cryptopilot.billing.repository.UserSubscriptionRepository;
 import com.cryptopilot.billing.service.BillingService;
+import com.cryptopilot.billing.service.OrderReconciliationService;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.lock.UserLock;
@@ -53,7 +55,9 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /**
@@ -94,6 +98,8 @@ public class BillingServiceImpl implements BillingService {
     private final SystemSettingApi settings;
     private final UserLock userLock;
     private final BillingProperties properties;
+    private final OrderReconciliationService reconciliation;
+    private final TransactionTemplate transactions;
     private final Clock clock;
 
     @Override
@@ -132,11 +138,37 @@ public class BillingServiceImpl implements BillingService {
                 terms.endAt());
     }
 
+    /**
+     * Creates the Trader's order. The Trader's unpaid order, if any, is first released at its gateway (outside any
+     * transaction, since the gateway is called): a Trader holds one PENDING order at a time, so a page or QR code left
+     * open can never pay a second plan (D-146).
+     */
     @Override
-    @Transactional
+    // SUPPORTS: no transaction of its own (the class default is read-only), so the gateway is called outside one.
+    @Transactional(propagation = Propagation.SUPPORTS)
     public CreateOrderResponse createOrder(UUID userId, CreateOrderRequest request) {
         Objects.requireNonNull(userId, "userId must not be null");
+        try {
+            reconciliation.releasePending(userId);
+        } catch (GatewayUnavailableException e) {
+            throw new BusinessException(
+                    ErrorCode.PAYMENT_GATEWAY_UNAVAILABLE,
+                    "the Trader's unpaid order could not be released: " + e.getMessage(),
+                    e);
+        }
+        return transactions.execute(status -> open(userId, request));
+    }
+
+    private CreateOrderResponse open(UUID userId, CreateOrderRequest request) {
         userLock.lock(LOCK_SCOPE, userId);
+        Optional<SubscriptionOrder> pending = orders.findByUserIdAndOrderStatus(userId, OrderStatus.PENDING).stream()
+                .findFirst();
+        if (pending.isPresent()) {
+            throw new BusinessException(
+                    ErrorCode.ORDER_ALREADY_PENDING,
+                    "order " + pending.get().getOrderCode() + " still awaits payment",
+                    pending.get().getOrderCode());
+        }
         SubscriptionPackage bought = onSale(request.packageCode());
         PaymentGateway gateway = openGateway(request.gateway());
         Instant now = clock.instant();

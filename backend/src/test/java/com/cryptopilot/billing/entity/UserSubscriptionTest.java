@@ -142,6 +142,24 @@ class UserSubscriptionTest {
         assertThatIllegalStateException().isThrownBy(() -> pro.remind(NOW.plus(Duration.ofDays(3))));
     }
 
+    @Test
+    void D146_anExtension_addsDaysAndValue_toAnActiveSubscriptionOnly() {
+        UserSubscription premium = UserSubscription.open(
+                paid(TRADER, PREMIUM_MONTHLY, OrderType.NEW),
+                CarryOverCalculator.terms(null, terms(PREMIUM_MONTHLY), NOW),
+                null);
+        Instant end = premium.getEndAt();
+        BigDecimal value = premium.getValueVnd();
+
+        premium.extend(new BigDecimal("99000"), 14);
+
+        assertThat(premium.getEndAt()).isEqualTo(end.plus(Duration.ofDays(14)));
+        assertThat(premium.getValueVnd()).isEqualByComparingTo(value.add(new BigDecimal("99000")));
+        assertThatIllegalArgumentException().isThrownBy(() -> premium.extend(new BigDecimal("-1"), 1));
+        premium.expire(premium.getEndAt());
+        assertThatIllegalStateException().isThrownBy(() -> premium.extend(BigDecimal.ONE, 1));
+    }
+
     private static SubscriptionOrder paid(UUID trader, SubscriptionPackage bought, OrderType type) {
         SubscriptionOrder order = SubscriptionOrder.create(
                 trader, bought, type, GatewayCode.SEPAY, "CP" + UUID.randomUUID(), NOW, Duration.ofMinutes(15));

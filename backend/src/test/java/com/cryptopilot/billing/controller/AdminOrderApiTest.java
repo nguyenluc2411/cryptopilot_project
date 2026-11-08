@@ -97,7 +97,7 @@ class AdminOrderApiTest {
     @Test
     void UC48_theList_filtersByEveryCriterion_newestFirst() throws Exception {
         Instant now = Instant.now();
-        String old = order(trader, "PENDING", now.minus(Duration.ofDays(3)), false);
+        String old = order(trader, "EXPIRED", now.minus(Duration.ofDays(3)), false);
         String pending = order(trader, "PENDING", now.minus(Duration.ofMinutes(1)), false);
         String flagged = order(trader, "PAID", now, true);
         UUID other = account(UserRole.TRADER);
@@ -112,7 +112,8 @@ class AdminOrderApiTest {
                 .andExpect(jsonPath("$.items[0].manualHandling").value(true))
                 .andExpect(jsonPath("$.items[2].orderCode").value(old));
         as(admin, get(ORDERS).param("userId", trader.toString()).param("status", "PENDING"))
-                .andExpect(jsonPath("$.total").value(2));
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].orderCode").value(pending));
         as(
                         admin,
                         get(ORDERS)

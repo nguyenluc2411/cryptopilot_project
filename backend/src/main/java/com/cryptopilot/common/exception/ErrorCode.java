@@ -601,7 +601,14 @@ public enum ErrorCode {
      * An administrator marked an order handled that is not waiting for one: it was never flagged, or was handled
      * already (UC-48, D-146). Borrows MSG43 (A-38). 409: the order's state refuses the command.
      */
-    ORDER_NOT_AWAITING_HANDLING(HttpStatus.CONFLICT, "MSG43");
+    ORDER_NOT_AWAITING_HANDLING(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The Trader already has an order awaiting payment that its gateway would not cancel, e.g. a card payment under
+     * way: one PENDING order per Trader (D-146). Borrows MSG43 (A-38); messageArgs is the order code. 409: finish or
+     * wait out that order first.
+     */
+    ORDER_ALREADY_PENDING(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

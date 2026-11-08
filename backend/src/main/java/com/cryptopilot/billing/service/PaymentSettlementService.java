@@ -23,4 +23,12 @@ public interface PaymentSettlementService {
      * @return whether the order was expired by this call
      */
     boolean expireIfDue(String orderCode);
+
+    /**
+     * Withdraws the order with this code when it is still PENDING, whatever its window: the Trader started another
+     * order and the gateway confirmed nothing is payable any more (D-146). It stays payable (A-03).
+     *
+     * @return whether the order was withdrawn by this call
+     */
+    boolean withdraw(String orderCode);
 }

@@ -10,6 +10,7 @@ import com.cryptopilot.billing.service.PaymentSettlementService;
 import com.cryptopilot.support.TestcontainersConfig;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
@@ -196,22 +197,62 @@ class PaymentSettlementServiceImplTest {
         assertThat(renewed.get("bonus_days")).isEqualTo(0);
     }
 
-    /** The order was created on PRO; the Trader then reached PREMIUM through another order: flag, change nothing. */
+    /**
+     * The order was created on PRO; the Trader then reached PREMIUM through another order. The payment buys days of
+     * PREMIUM at the price paid for it: no subscription is opened, nothing is flagged (D-146).
+     */
     @Test
-    void D146_anOrderThatBecameADowngrade_isPaidFlaggedAndChangesNoSubscription() {
+    void D146_aPaymentForALowerPlan_buysDaysOfThePlanHeld() {
         UUID trader = trader();
         String order = pendingOrder(trader, "PRO_YEARLY", "SEPAY", Instant.now());
         UUID premium =
                 subscribe(trader, "PREMIUM_MONTHLY", Instant.now().minus(Duration.ofDays(1)), Duration.ofDays(30));
+        Map<String, Object> before = active(trader);
+        BigDecimal value = (BigDecimal) before.get("value_vnd");
+        long expectedDays = new BigDecimal("990000")
+                .multiply(BigDecimal.valueOf(30))
+                .divide(value, 0, RoundingMode.DOWN)
+                .longValueExact();
 
         settlement.settle(paid(order, "990000"));
         entityManager.flush();
 
         assertThat(orderRow(order).get("order_status")).isEqualTo("PAID");
-        assertThat(orderRow(order).get("manual_handling")).isEqualTo(true);
+        assertThat(orderRow(order).get("manual_handling")).isEqualTo(false);
         assertThat(status(premium)).isEqualTo("ACTIVE");
         assertThat(subscriptions(trader)).hasSize(1);
-        assertThat(events.stream(SubscriptionOrderPaid.class)).isEmpty();
+        Map<String, Object> after = active(trader);
+        assertThat(after.get("value_vnd").toString())
+                .isEqualTo(value.add(new BigDecimal("990000")).toString());
+        assertThat(Duration.between(
+                                ((Timestamp) before.get("end_at")).toInstant(),
+                                ((Timestamp) after.get("end_at")).toInstant())
+                        .toDays())
+                .isEqualTo(expectedDays);
+        assertThat(events.stream(SubscriptionOrderPaid.class)).singleElement().satisfies(paid -> {
+            assertThat(paid.orderCode()).isEqualTo(order);
+            assertThat(paid.bonusDays()).isEqualTo((int) expectedDays);
+            assertThat(paid.endAt()).isEqualTo(((Timestamp) after.get("end_at")).toInstant());
+        });
+        assertThat(events.stream(PlanDowngraded.class)).isEmpty();
+    }
+
+    /** D-146: an order withdrawn for a newer one ends at once, and a payment that still arrives is honoured. */
+    @Test
+    void D146_aWithdrawnOrder_endsAtOnce_andStaysPayable() {
+        UUID trader = trader();
+        String order = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
+
+        assertThat(settlement.withdraw(order)).isTrue();
+        assertThat(settlement.withdraw(order)).isFalse();
+        entityManager.flush();
+        assertThat(orderRow(order).get("order_status")).isEqualTo("EXPIRED");
+        assertThat(orderRow(order).get("gateway_response_code")).isEqualTo("WITHDRAWN");
+
+        settlement.settle(paid(order, "99000"));
+        entityManager.flush();
+        assertThat(orderRow(order).get("order_status")).isEqualTo("PAID");
+        assertThat(subscriptions(trader)).hasSize(1);
     }
 
     /** An ACTIVE row past its end (the expiry job has not run) is expired, and the purchase is a new period. */
@@ -278,7 +319,7 @@ class PaymentSettlementServiceImplTest {
     void BR54_anUnpaidOrder_expiresWhenItsWindowHasClosed() {
         UUID trader = trader();
         String due = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now().minus(Duration.ofMinutes(20)));
-        String open = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
+        String open = pendingOrder(trader(), "PRO_MONTHLY", "SEPAY", Instant.now());
 
         assertThat(settlement.expireIfDue(due)).isTrue();
         assertThat(settlement.expireIfDue(open)).isFalse();

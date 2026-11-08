@@ -13,6 +13,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -43,14 +44,16 @@ public class UserSubscription extends BaseEntity {
     @Column(name = "start_at", nullable = false, updatable = false)
     private Instant startAt;
 
-    @Column(name = "end_at", nullable = false, updatable = false)
+    /** Moves later only when a payment is turned into days of this subscription ({@link #extend}). */
+    @Column(name = "end_at", nullable = false)
     private Instant endAt;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "subscription_status", nullable = false, length = 32)
     private SubscriptionStatus status;
 
-    @Column(name = "value_vnd", nullable = false, precision = 18, scale = 0, updatable = false)
+    /** Grows with {@link #extend}, so the value of a day stays what the Trader paid for it. */
+    @Column(name = "value_vnd", nullable = false, precision = 18, scale = 0)
     private BigDecimal valueVnd;
 
     @Column(name = "carried_value_vnd", nullable = false, precision = 18, scale = 0, updatable = false)
@@ -118,6 +121,22 @@ public class UserSubscription extends BaseEntity {
     public void replace() {
         requireActive("be replaced");
         this.status = SubscriptionStatus.REPLACED;
+    }
+
+    /**
+     * Adds {@code days} to the end of this subscription, bought with {@code amount}: a payment for a lower plan that
+     * arrived after the Trader moved up, turned into time of the plan held (D-146).
+     *
+     * @throws IllegalStateException when the subscription is not ACTIVE
+     */
+    public void extend(BigDecimal amount, int days) {
+        Objects.requireNonNull(amount, "amount must not be null");
+        requireActive("be extended");
+        if (amount.signum() < 0 || days < 0) {
+            throw new IllegalArgumentException("an extension adds value and days, was " + amount + ", " + days);
+        }
+        this.endAt = endAt.plus(Duration.ofDays(days));
+        this.valueVnd = valueVnd.add(amount);
     }
 
     /**

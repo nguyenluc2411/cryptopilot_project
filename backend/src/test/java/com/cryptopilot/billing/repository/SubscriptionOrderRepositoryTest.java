@@ -138,11 +138,12 @@ class SubscriptionOrderRepositoryTest {
     /** VNPAY stays legal for the rows written before SePay replaced it; anything else is refused. */
     @Test
     void D146_theGatewayColumn_takesMomoSepayAndLegacyVnpayOnly() {
-        UUID trader = trader();
+        // One Trader each: a Trader holds one PENDING order at a time.
         for (String gateway : new String[] {"VNPAY", "MOMO", "SEPAY"}) {
-            insertOrder(trader, gateway);
+            insertOrder(trader(), gateway);
         }
 
+        UUID trader = trader();
         assertThatExceptionOfType(DataIntegrityViolationException.class)
                 .isThrownBy(() -> insertOrder(trader, "PAYPAL"))
                 .withMessageContaining("ck_subscription_order_gateway");
@@ -228,6 +229,17 @@ class SubscriptionOrderRepositoryTest {
     private PackageTerms terms(String code) {
         SubscriptionPackage p = packages.findById(packageIds.get(code)).orElseThrow();
         return new PackageTerms(p.getTier(), p.getPriceAmount(), p.getDurationDays());
+    }
+
+    /** D-146: a second PENDING order of the same Trader is refused by the database too. */
+    @Test
+    void D146_aTrader_holdsOnePendingOrderAtATime() {
+        UUID trader = trader();
+        insertOrder(trader, "SEPAY");
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertOrder(trader, "SEPAY"))
+                .withMessageContaining("uq_subscription_order_one_pending");
     }
 
     private UUID insertOrder(UUID trader, String gateway) {

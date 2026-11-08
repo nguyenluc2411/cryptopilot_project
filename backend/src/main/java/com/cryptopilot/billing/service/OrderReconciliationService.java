@@ -1,6 +1,7 @@
 package com.cryptopilot.billing.service;
 
 import com.cryptopilot.billing.model.enums.OrderStatus;
+import java.util.UUID;
 
 /**
  * Settles the orders whose IPN never came by asking their gateway (NSF-13), and expires the ones nobody paid in time
@@ -28,4 +29,13 @@ public interface OrderReconciliationService {
      * @return how many orders changed status
      */
     int reconcileDue();
+
+    /**
+     * Clears the way for a new order of the Trader (one PENDING order per Trader, D-146): each PENDING order is asked
+     * about; a paid one is settled, and an unpaid one is cancelled at its gateway and withdrawn. An order the gateway
+     * refuses to cancel while it still awaits payment (a card payment under way) stays PENDING.
+     *
+     * @throws com.cryptopilot.billing.client.GatewayUnavailableException when a gateway cannot be asked
+     */
+    void releasePending(UUID userId);
 }

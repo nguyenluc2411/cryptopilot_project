@@ -182,6 +182,19 @@ class SubscriptionOrderTest {
         assertThat(order.getHandlingNote()).isNull();
     }
 
+    @Test
+    void D146_aPendingOrder_isWithdrawnOnce_andThenStaysPayable() {
+        SubscriptionOrder order = order();
+
+        order.withdraw(NOW);
+
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.EXPIRED);
+        assertThat(order.getGatewayResponseCode()).isEqualTo(SubscriptionOrder.WITHDRAWN);
+        assertThatIllegalStateException().isThrownBy(() -> order.withdraw(NOW));
+        order.markPaid("TX", "CAPTURED", "{}", NOW);
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.PAID);
+    }
+
     private static SubscriptionOrder order() {
         return SubscriptionOrder.create(
                 TRADER, PRO_MONTHLY, OrderType.NEW, GatewayCode.SEPAY, "CP261108030000ABCD", NOW, EXPIRY);

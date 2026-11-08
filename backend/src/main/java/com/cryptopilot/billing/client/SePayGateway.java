@@ -140,6 +140,14 @@ public class SePayGateway implements PaymentGateway {
                 answer.get()));
     }
 
+    @Override
+    public boolean cancel(String orderCode) {
+        return switch (orders.cancel(orderCode)) {
+            case CANCELLED, UNKNOWN -> true;
+            case REFUSED -> false;
+        };
+    }
+
     /** Whether an IPN carries this deployment's IPN secret key, compared in constant time. */
     public boolean authentic(String secretKeyHeader) {
         if (!configured() || secretKeyHeader == null) {

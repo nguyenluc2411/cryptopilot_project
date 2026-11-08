@@ -37,6 +37,14 @@ public interface SubscriptionOrderRepository
     @Transactional(readOnly = true)
     Optional<SubscriptionOrder> findByUserIdAndOrderCode(UUID userId, String orderCode);
 
+    /** The Trader's orders in this status: at most one PENDING (uq_subscription_order_one_pending). */
+    @Transactional(readOnly = true)
+    List<SubscriptionOrder> findByUserIdAndOrderStatus(UUID userId, OrderStatus status);
+
+    /** Whether the Trader has an order in this status. */
+    @Transactional(readOnly = true)
+    boolean existsByUserIdAndOrderStatus(UUID userId, OrderStatus status);
+
     /** Whether an order already has this code. */
     @Transactional(readOnly = true)
     boolean existsByOrderCode(String orderCode);

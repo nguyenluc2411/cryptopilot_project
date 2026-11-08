@@ -53,6 +53,21 @@ CREATE INDEX idx_subscription_order_handled_by ON subscription_order (handled_by
 CREATE INDEX idx_subscription_order_manual ON subscription_order (created_at)
     WHERE manual_handling AND handled_at IS NULL;
 
+-- One order awaiting payment per Trader (D-146): a new order first releases the old one at its gateway. Older rows
+-- with several PENDING orders keep the newest; the others expire, which leaves them payable (A-03).
+UPDATE subscription_order o
+   SET order_status = 'EXPIRED'
+ WHERE o.order_status = 'PENDING'
+   AND EXISTS (
+        SELECT 1
+          FROM subscription_order newer
+         WHERE newer.user_id = o.user_id
+           AND newer.order_status = 'PENDING'
+           AND (newer.created_at > o.created_at
+                OR (newer.created_at = o.created_at AND newer.order_id > o.order_id)));
+CREATE UNIQUE INDEX uq_subscription_order_one_pending ON subscription_order (user_id)
+    WHERE order_status = 'PENDING';
+
 -- ---------------------------------------------------------------------------------------------
 -- user_subscription
 -- ---------------------------------------------------------------------------------------------
