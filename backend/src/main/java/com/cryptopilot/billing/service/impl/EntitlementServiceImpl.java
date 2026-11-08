@@ -17,8 +17,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,8 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
  * Trader's ACTIVE subscription running now, else the single FREE package. Nothing is cached, so a subscription that
  * starts, ends or is replaced changes the answer on the next call.
  *
- * <p>Two ACTIVE subscriptions running at once should not exist (BR-55 keeps one); if the data holds them anyway the
- * highest tier wins and a warning is logged. A missing FREE package — a deployment without the package seed of
+ * <p>A Trader holds at most one ACTIVE subscription ({@code uq_user_subscription_one_active}, V63). A missing FREE package — a deployment without the package seed of
  * T-007 — and a feature no active package includes are configuration errors and fail loudly rather than guessing.
  *
  * <p>Rule: BR-62, BR-50, BR-15, BR-17; SRS v1.1 UC-53, CR-08, SRS 3.10.4; D-54, D-58, D-59, D-60, D-61.
@@ -40,8 +37,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class EntitlementServiceImpl implements EntitlementService {
 
-    private static final Logger log = LoggerFactory.getLogger(EntitlementServiceImpl.class);
-
     private final SubscriptionPackageRepository packages;
     private final SubscriberRepository subscribers;
     private final Clock clock;
@@ -50,13 +45,6 @@ public class EntitlementServiceImpl implements EntitlementService {
     public EffectivePlan effectivePlan(UUID userId) {
         Objects.requireNonNull(userId, "userId must not be null");
         List<SubscriptionPackage> held = packages.findHeldAt(userId, clock.instant());
-        if (held.size() > 1) {
-            log.warn(
-                    "User {} holds {} ACTIVE subscriptions at once; the highest tier, {}, applies",
-                    userId,
-                    held.size(),
-                    held.getFirst().getTier());
-        }
         SubscriptionPackage plan = held.isEmpty() ? freePackage() : held.getFirst();
         return new EffectivePlan(plan.getTier(), plan.entitlements());
     }
