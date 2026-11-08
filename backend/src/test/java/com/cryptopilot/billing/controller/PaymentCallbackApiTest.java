@@ -5,10 +5,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.cryptopilot.billing.calculator.MoMoSignature;
 import com.cryptopilot.support.TestcontainersConfig;
 import jakarta.persistence.EntityManager;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,12 +24,19 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.RequestBuilder;
 import org.springframework.transaction.annotation.Transactional;
 
-/** The SePay IPN end to end: open to the gateway, authenticated by its key, settling the order (BR-53, NSF-12). */
+/**
+ * The SePay and MoMo IPNs end to end: open to the gateway, authenticated by its key or signature, settling the order
+ * (BR-53, NSF-12).
+ */
 @SpringBootTest(
         properties = {
             "cryptopilot.billing.sepay.merchant-id=MERCHANT_TEST",
             "cryptopilot.billing.sepay.secret-key=spsk_test_secret",
-            "cryptopilot.billing.sepay.ipn-secret-key=ipn-test-secret"
+            "cryptopilot.billing.sepay.ipn-secret-key=ipn-test-secret",
+            "cryptopilot.billing.momo.partner-code=MOMO",
+            "cryptopilot.billing.momo.access-key=F8BBA842ECF85",
+            "cryptopilot.billing.momo.secret-key=K951B6PE1waDMi640xX08PD3vg6EkVlz",
+            "cryptopilot.billing.momo.ipn-url=https://api.example.test/api/v1/billing/ipn/momo"
         })
 @AutoConfigureMockMvc
 @Import(TestcontainersConfig.class)
@@ -34,6 +44,7 @@ import org.springframework.transaction.annotation.Transactional;
 class PaymentCallbackApiTest {
 
     private static final String IPN = "/api/v1/billing/ipn/sepay";
+    private static final String MOMO_IPN = "/api/v1/billing/ipn/momo";
 
     @Autowired
     private MockMvc mvc;
@@ -93,6 +104,63 @@ class PaymentCallbackApiTest {
         assertThat(statusOf(order)).isEqualTo("PENDING");
     }
 
+    @Test
+    void BR53_aSignedMoMoIpn_needsNoSession_settlesTheOrder_andIsAnsweredWith204() throws Exception {
+        UUID trader = trader();
+        String order = pendingOrder(trader, "MOMO");
+
+        mvc.perform(post(MOMO_IPN).contentType(MediaType.APPLICATION_JSON).content(momoIpn(order, 0)))
+                .andExpect(status().isNoContent());
+        entityManager.flush();
+
+        assertThat(statusOf(order)).isEqualTo("PAID");
+    }
+
+    @Test
+    void BR53_aMoMoIpnWithAnotherSignature_isABadRequest_andChangesNothing() throws Exception {
+        String order = pendingOrder(trader(), "MOMO");
+        String forged = momoIpn(order, 0).replace("\"amount\":99000", "\"amount\":1000");
+
+        mvc.perform(post(MOMO_IPN).contentType(MediaType.APPLICATION_JSON).content(forged))
+                .andExpect(status().isBadRequest());
+
+        assertThat(statusOf(order)).isEqualTo("PENDING");
+    }
+
+    @Test
+    void NSF12_aFailedMoMoPayment_failsTheOrder() throws Exception {
+        String order = pendingOrder(trader(), "MOMO");
+
+        mvc.perform(post(MOMO_IPN).contentType(MediaType.APPLICATION_JSON).content(momoIpn(order, 1006)))
+                .andExpect(status().isNoContent());
+        entityManager.flush();
+
+        assertThat(statusOf(order)).isEqualTo("FAILED");
+    }
+
+    /** A MoMo IPN about the order for 99,000 VND, signed with the sandbox secret key. */
+    private static String momoIpn(String order, int resultCode) {
+        Map<String, String> fields = new HashMap<>();
+        fields.put("accessKey", "F8BBA842ECF85");
+        fields.put("amount", "99000");
+        fields.put("extraData", "");
+        fields.put("message", "ok");
+        fields.put("orderId", order);
+        fields.put("orderInfo", "CryptoPilot");
+        fields.put("orderType", "momo_wallet");
+        fields.put("partnerCode", "MOMO");
+        fields.put("payType", "qr");
+        fields.put("requestId", order);
+        fields.put("responseTime", "1794144312797");
+        fields.put("resultCode", String.valueOf(resultCode));
+        fields.put("transId", "4088878653");
+        String signature = MoMoSignature.sign(MoMoSignature.IPN, fields, "K951B6PE1waDMi640xX08PD3vg6EkVlz");
+        return """
+                {"partnerCode":"MOMO","orderId":"%s","requestId":"%s","amount":99000,"orderInfo":"CryptoPilot",
+                 "orderType":"momo_wallet","transId":4088878653,"resultCode":%d,"message":"ok","payType":"qr",
+                 "responseTime":1794144312797,"extraData":"","signature":"%s"}""".formatted(order, order, resultCode, signature);
+    }
+
     private static RequestBuilder ipn(String key, String body) {
         var request = post(IPN).contentType(MediaType.APPLICATION_JSON).content(body);
         return key == null ? request : request.header("X-Secret-Key", key);
@@ -115,6 +183,10 @@ class PaymentCallbackApiTest {
     }
 
     private String pendingOrder(UUID trader) {
+        return pendingOrder(trader, "SEPAY");
+    }
+
+    private String pendingOrder(UUID trader, String gateway) {
         String code = "CP"
                 + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
         Timestamp now = Timestamp.from(Instant.now());
@@ -122,12 +194,13 @@ class PaymentCallbackApiTest {
                         insert into subscription_order (order_id, user_id, package_id, order_code, amount, currency,
                                                         payment_gateway, order_status, created_at, expires_at,
                                                         updated_at)
-                        values (?, ?, '019b76da-a800-7002-8000-000000000002', ?, 99000, 'VND', 'SEPAY', 'PENDING',
+                        values (?, ?, '019b76da-a800-7002-8000-000000000002', ?, 99000, 'VND', ?, 'PENDING',
                                 ?, ?, ?)""")
                 .params(
                         UUID.randomUUID(),
                         trader,
                         code,
+                        gateway,
                         now,
                         Timestamp.from(Instant.now().plusSeconds(900)),
                         now)

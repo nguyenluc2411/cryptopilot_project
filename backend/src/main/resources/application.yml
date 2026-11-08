@@ -139,6 +139,14 @@ cryptopilot:
       checkout-url: ${SEPAY_CHECKOUT_URL:https://pay-sandbox.sepay.vn/v1/checkout/init}
       # The order query API of NSF-13 (https://pgapi.sepay.vn in production).
       api-url: ${SEPAY_API_URL:https://pgapi-sandbox.sepay.vn}
+    # D-146: MoMo, test environment only (real MoMo payments need a registered business). Empty keys or an empty
+    # IPN address (the public URL of /api/v1/billing/ipn/momo) leave MoMo unavailable.
+    momo:
+      partner-code: ${MOMO_PARTNER_CODE:}
+      access-key: ${MOMO_ACCESS_KEY:}
+      secret-key: ${MOMO_SECRET_KEY:}
+      endpoint: ${MOMO_ENDPOINT:https://test-payment.momo.vn}
+      ipn-url: ${MOMO_IPN_URL:}
     # NSF-13: PENDING orders older than `after` are asked about every `interval`; on in the dev and prod profiles.
     reconcile:
       interval: PT5M

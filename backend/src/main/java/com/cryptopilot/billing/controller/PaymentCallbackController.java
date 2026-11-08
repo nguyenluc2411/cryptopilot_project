@@ -1,5 +1,6 @@
 package com.cryptopilot.billing.controller;
 
+import com.cryptopilot.billing.client.GatewayUnavailableException;
 import com.cryptopilot.billing.service.PaymentCallbackService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -45,5 +46,18 @@ public class PaymentCallbackController {
             return ResponseEntity.badRequest().body(Map.of("success", false));
         }
         return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    @Operation(summary = "MoMo IPN: the result of a payment of an order (NSF-12), test environment only")
+    @ApiResponse(responseCode = "204", description = "Received; MoMo stops sending it")
+    @ApiResponse(responseCode = "400", description = "Not a MoMo IPN signed with this deployment's secret key")
+    @PostMapping(path = "/momo", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Void> momo(@RequestBody String body) {
+        try {
+            callbacks.acceptMoMo(body);
+        } catch (IllegalArgumentException | GatewayUnavailableException e) {
+            return ResponseEntity.badRequest().build();
+        }
+        return ResponseEntity.noContent().build();
     }
 }

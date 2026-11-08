@@ -16,4 +16,13 @@ public interface PaymentCallbackService {
      * @throws IllegalArgumentException when an authentic IPN is not a SePay notification
      */
     boolean acceptSePay(String secretKey, String body);
+
+    /**
+     * Handles a MoMo IPN, authenticated by its signature.
+     *
+     * @param body the JSON body as received
+     * @throws IllegalArgumentException when the body is not a MoMo IPN signed with this deployment's secret key
+     * @throws com.cryptopilot.billing.client.GatewayUnavailableException when MoMo is not configured here
+     */
+    void acceptMoMo(String body);
 }

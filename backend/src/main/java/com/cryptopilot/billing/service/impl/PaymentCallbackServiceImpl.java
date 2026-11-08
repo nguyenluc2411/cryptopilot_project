@@ -1,5 +1,6 @@
 package com.cryptopilot.billing.service.impl;
 
+import com.cryptopilot.billing.client.MoMoGateway;
 import com.cryptopilot.billing.client.SePayGateway;
 import com.cryptopilot.billing.service.PaymentCallbackService;
 import com.cryptopilot.billing.service.PaymentSettlementService;
@@ -22,6 +23,7 @@ public class PaymentCallbackServiceImpl implements PaymentCallbackService {
     private static final Logger log = LoggerFactory.getLogger(PaymentCallbackServiceImpl.class);
 
     private final SePayGateway sepay;
+    private final MoMoGateway momo;
     private final PaymentSettlementService settlement;
 
     @Override
@@ -32,5 +34,10 @@ public class PaymentCallbackServiceImpl implements PaymentCallbackService {
         }
         sepay.interpret(body).ifPresent(settlement::settle);
         return true;
+    }
+
+    @Override
+    public void acceptMoMo(String body) {
+        momo.interpret(body).ifPresent(settlement::settle);
     }
 }

@@ -1,5 +1,6 @@
 package com.cryptopilot.billing.config;
 
+import com.cryptopilot.billing.client.MoMoProperties;
 import com.cryptopilot.billing.client.SePayProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
@@ -13,6 +14,7 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({
     BillingProperties.class,
     SePayProperties.class,
+    MoMoProperties.class,
     ReconcileProperties.class,
     SubscriptionSweepProperties.class
 })

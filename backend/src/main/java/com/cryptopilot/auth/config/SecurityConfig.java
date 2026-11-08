@@ -77,15 +77,12 @@ import org.springframework.security.web.SecurityFilterChain;
  * and trades in it is a conflict the SRS chose to avoid. The one row they share is the Security tab,
  * since an administrator must be able to change their own password.
  *
- * <p><b>The payment callbacks are not in the Trader area.</b> The IPN of a gateway that is built
- * ({@code /billing/ipn/sepay}, {@link #PAYMENT_CALLBACKS}) is open and checked by the gateway's own
- * credential (D-146); {@code /billing/ipn/momo} and any return path are not screens and not requests
- * from a signed-in Trader: the first two arrive from the payment gateway's servers and are
- * authenticated by their signature (BR-53), and the third is a browser redirect that carries no
- * header a client could have attached. Confining them to TRADER would break every payment. Naming
- * the three billing paths that are screens, rather than wildcarding {@code /billing/**}, leaves the
- * callbacks under {@code denyAll} until the task that builds them opens them together with the
- * signature check that is their real authentication.
+ * <p><b>The payment callbacks are not in the Trader area.</b> The IPN of each gateway
+ * ({@code /billing/ipn/sepay}, {@code /billing/ipn/momo}, {@link #PAYMENT_CALLBACKS}) is open: it arrives
+ * from the gateway's servers, not from a signed-in Trader, and is authenticated by the gateway's own
+ * credential or signature (BR-53, D-146). Confining it to TRADER would break every payment. Naming the
+ * billing paths that are screens, rather than wildcarding {@code /billing/**}, leaves any other
+ * callback under {@code denyAll} until the task that builds it opens it together with its check.
  *
  * <h2>What this chain does not decide</h2>
  *
@@ -207,7 +204,7 @@ public class SecurityConfig {
      * gateway's own credential in the controller (BR-53). Only the gateways built are listed; any other callback path
      * stays under {@code denyAll}.
      */
-    static final String[] PAYMENT_CALLBACKS = {"/api/v1/billing/ipn/sepay"};
+    static final String[] PAYMENT_CALLBACKS = {"/api/v1/billing/ipn/sepay", "/api/v1/billing/ipn/momo"};
 
     static final String[] PUBLIC_API_DOCS = {"/v3/api-docs", "/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**"};
 
