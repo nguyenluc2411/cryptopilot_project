@@ -1,10 +1,12 @@
 package com.cryptopilot.notification.service.impl;
 
+import com.cryptopilot.billing.event.SubscriptionEndingSoon;
 import com.cryptopilot.billing.event.SubscriptionOrderPaid;
 import com.cryptopilot.notification.model.NewNotification;
 import com.cryptopilot.notification.model.enums.NotificationReference;
 import com.cryptopilot.notification.model.enums.NotificationType;
 import com.cryptopilot.notification.service.BillingNotificationService;
+import com.cryptopilot.watchlist.event.AlertsPausedForPlan;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import lombok.RequiredArgsConstructor;
@@ -40,5 +42,34 @@ public class BillingNotificationServiceImpl implements BillingNotificationServic
                 NotificationReference.SUBSCRIPTION,
                 event.orderId(),
                 "ORDER_PAID:" + event.orderId()));
+    }
+
+    @Override
+    @Transactional
+    public void endingSoon(SubscriptionEndingSoon event) {
+        writer.write(new NewNotification(
+                event.userId(),
+                NotificationType.SUBSCRIPTION,
+                "Your plan ends soon",
+                "Your " + event.packageName() + " plan ends on " + DAY.format(event.endAt())
+                        + ". Renew it to keep its features.",
+                NotificationReference.SUBSCRIPTION,
+                event.subscriptionId(),
+                "SUBSCRIPTION_ENDING:" + event.subscriptionId()));
+    }
+
+    @Override
+    @Transactional
+    public void planDowngraded(AlertsPausedForPlan event) {
+        // MSG49.
+        writer.write(new NewNotification(
+                event.userId(),
+                NotificationType.SUBSCRIPTION,
+                "Your plan has changed",
+                "Your plan is now " + event.planName() + ". " + event.paused()
+                        + " alerts have been paused because of the plan limits.",
+                null,
+                null,
+                "PLAN_DOWNGRADED:" + event.userId() + ":" + event.at().toEpochMilli()));
     }
 }

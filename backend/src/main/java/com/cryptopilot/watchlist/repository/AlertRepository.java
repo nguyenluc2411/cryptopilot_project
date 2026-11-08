@@ -43,6 +43,10 @@ public interface AlertRepository extends Repository<Alert, UUID> {
     @Transactional(readOnly = true)
     long countByUserIdAndStatus(UUID userId, AlertStatus status);
 
+    /** The Trader's alerts in this status, most recently created first: the order BR-64 keeps them in. */
+    @Transactional(readOnly = true)
+    List<Alert> findByUserIdAndStatusOrderByCreatedAtDescIdDesc(UUID userId, AlertStatus status);
+
     @Transactional(readOnly = true)
     Page<Alert> findByUserId(UUID userId, Pageable page);
 

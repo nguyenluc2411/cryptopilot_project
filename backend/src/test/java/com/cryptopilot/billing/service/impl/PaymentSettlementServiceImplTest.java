@@ -2,6 +2,7 @@ package com.cryptopilot.billing.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.billing.event.PlanDowngraded;
 import com.cryptopilot.billing.event.SubscriptionOrderPaid;
 import com.cryptopilot.billing.model.PaymentResult;
 import com.cryptopilot.billing.model.enums.GatewayCode;
@@ -239,6 +240,37 @@ class PaymentSettlementServiceImplTest {
 
         assertThat(orderRow(order).get("order_status")).isEqualTo("PENDING");
         assertThat(subscriptions(trader)).isEmpty();
+    }
+
+    /** BR-64: a lower plan bought after a higher one ran out, before the hourly run, is still a drop. */
+    @Test
+    void BR64_buyingALowerPlanAfterAHigherOneEnded_announcesTheDrop() {
+        UUID trader = trader();
+        subscribe(trader, "PREMIUM_MONTHLY", Instant.now().minus(Duration.ofDays(31)), Duration.ofDays(30));
+        String order = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
+
+        settlement.settle(paid(order, "99000"));
+        entityManager.flush();
+
+        assertThat(active(trader).get("value_vnd").toString()).isEqualTo("99000");
+        assertThat(events.stream(PlanDowngraded.class)).singleElement().satisfies(drop -> {
+            assertThat(drop.userId()).isEqualTo(trader);
+            assertThat(drop.fromTier()).isEqualTo("PREMIUM");
+            assertThat(drop.toTier()).isEqualTo("PRO");
+        });
+    }
+
+    /** BR-64: renewing the same tier after it ran out is no drop. */
+    @Test
+    void BR64_buyingTheSameTierAfterItEnded_announcesNoDrop() {
+        UUID trader = trader();
+        subscribe(trader, "PRO_MONTHLY", Instant.now().minus(Duration.ofDays(31)), Duration.ofDays(30));
+        String order = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
+
+        settlement.settle(paid(order, "99000"));
+        entityManager.flush();
+
+        assertThat(events.stream(PlanDowngraded.class)).isEmpty();
     }
 
     /** BR-54: an unpaid order expires once its window has closed, and only then. */

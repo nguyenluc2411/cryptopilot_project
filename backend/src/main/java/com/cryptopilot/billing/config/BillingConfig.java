@@ -10,5 +10,10 @@ import org.springframework.context.annotation.Configuration;
  * <p>Rule: TECHNICAL_DESIGN 7.11; D-146.
  */
 @Configuration
-@EnableConfigurationProperties({BillingProperties.class, SePayProperties.class, ReconcileProperties.class})
+@EnableConfigurationProperties({
+    BillingProperties.class,
+    SePayProperties.class,
+    ReconcileProperties.class,
+    SubscriptionSweepProperties.class
+})
 class BillingConfig {}

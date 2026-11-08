@@ -106,6 +106,12 @@ UPDATE user_subscription s
 CREATE UNIQUE INDEX uq_user_subscription_one_active ON user_subscription (user_id)
     WHERE subscription_status = 'ACTIVE';
 
+-- When the Trader was told the subscription ends within 3 days (NSF-14), so the reminder is sent once.
+ALTER TABLE user_subscription ADD COLUMN reminded_at timestamptz;
+-- The hourly expiry and reminder runs read the ACTIVE subscriptions by their end.
+CREATE INDEX idx_user_subscription_active_end ON user_subscription (end_at)
+    WHERE subscription_status = 'ACTIVE';
+
 -- The application writes the owner and the value of every subscription it creates. A row inserted without them
 -- (sample data and test fixtures written as SQL) takes both from its order: the order's Trader, and what the order
 -- charged, which is the value of a subscription that carried nothing over.

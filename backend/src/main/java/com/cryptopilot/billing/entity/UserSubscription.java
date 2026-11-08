@@ -59,6 +59,10 @@ public class UserSubscription extends BaseEntity {
     @Column(name = "bonus_days", nullable = false, updatable = false)
     private int bonusDays;
 
+    /** When the Trader was told this subscription ends within 3 days (NSF-14), or {@code null}. */
+    @Column(name = "reminded_at")
+    private Instant remindedAt;
+
     /** The subscription this one replaced, or {@code null} for a NEW order. */
     @Column(name = "carried_from_id", updatable = false)
     private UUID carriedFromId;
@@ -114,6 +118,22 @@ public class UserSubscription extends BaseEntity {
     public void replace() {
         requireActive("be replaced");
         this.status = SubscriptionStatus.REPLACED;
+    }
+
+    /**
+     * Records that the Trader was told this subscription ends soon (NSF-14), once.
+     *
+     * @return whether this call recorded it, {@code false} when the Trader was told already
+     * @throws IllegalStateException when the subscription is not ACTIVE
+     */
+    public boolean remind(Instant now) {
+        Objects.requireNonNull(now, "now must not be null");
+        requireActive("remind");
+        if (remindedAt != null) {
+            return false;
+        }
+        this.remindedAt = now;
+        return true;
     }
 
     /**

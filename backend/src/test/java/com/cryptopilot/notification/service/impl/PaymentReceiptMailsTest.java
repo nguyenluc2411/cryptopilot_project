@@ -2,6 +2,7 @@ package com.cryptopilot.notification.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.billing.event.SubscriptionEndingSoon;
 import com.cryptopilot.billing.event.SubscriptionOrderPaid;
 import com.cryptopilot.notification.client.EmailMessage;
 import com.cryptopilot.notification.config.MailDeliveryProperties;
@@ -22,6 +23,19 @@ class PaymentReceiptMailsTest {
 
     private final PaymentReceiptMails mails =
             new PaymentReceiptMails(new MailDeliveryProperties("no-reply@example.com", URI.create("https://app.test")));
+
+    @Test
+    void NSF14_theReminder_givesTheEndInVietnamTime_andLinksToThePlans() {
+        EmailMessage mail = mails.endingSoon(
+                new SubscriptionEndingSoon(
+                        UUID.randomUUID(), UUID.randomUUID(), "Pro Monthly", Instant.parse("2026-12-08T03:00:00Z")),
+                "jane@example.com");
+
+        assertThat(mail.to()).isEqualTo("jane@example.com");
+        assertThat(mail.subject()).isEqualTo("Gói Pro Monthly của bạn sắp hết hạn");
+        assertThat(mail.text()).contains("08/12/2026 10:00").contains("https://app.test/subscription");
+        assertThat(mail.html()).contains("href=\"https://app.test/subscription\"");
+    }
 
     @Test
     void BR53_aNewOrder_isReceiptedWithItsAmountGatewayTransactionAndPeriod() {

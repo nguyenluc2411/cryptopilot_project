@@ -1,7 +1,9 @@
 package com.cryptopilot.notification.job;
 
+import com.cryptopilot.billing.event.SubscriptionEndingSoon;
 import com.cryptopilot.billing.event.SubscriptionOrderPaid;
 import com.cryptopilot.notification.service.BillingNotificationService;
+import com.cryptopilot.watchlist.event.AlertsPausedForPlan;
 import org.springframework.modulith.events.ApplicationModuleListener;
 import org.springframework.stereotype.Component;
 
@@ -23,5 +25,15 @@ public class BillingNotificationListener {
     @ApplicationModuleListener
     public void on(SubscriptionOrderPaid paid) {
         notifications.paid(paid);
+    }
+
+    @ApplicationModuleListener
+    public void on(SubscriptionEndingSoon endingSoon) {
+        notifications.endingSoon(endingSoon);
+    }
+
+    @ApplicationModuleListener
+    public void on(AlertsPausedForPlan paused) {
+        notifications.planDowngraded(paused);
     }
 }

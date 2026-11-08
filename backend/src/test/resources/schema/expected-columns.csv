@@ -779,6 +779,7 @@ user_subscription,carried_value_vnd,numeric,18,0,NO
 user_subscription,created_at,timestamp with time zone,,,NO
 user_subscription,end_at,timestamp with time zone,,,NO
 user_subscription,order_id,uuid,,,NO
+user_subscription,reminded_at,timestamp with time zone,,,YES
 user_subscription,start_at,timestamp with time zone,,,NO
 user_subscription,subscription_id,uuid,,,NO
 user_subscription,subscription_status,character varying,,,NO

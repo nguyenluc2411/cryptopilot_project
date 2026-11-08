@@ -1,5 +1,6 @@
 package com.cryptopilot.notification.service.impl;
 
+import com.cryptopilot.billing.event.SubscriptionEndingSoon;
 import com.cryptopilot.billing.event.SubscriptionOrderPaid;
 import com.cryptopilot.notification.client.EmailMessage;
 import com.cryptopilot.notification.config.MailDeliveryProperties;
@@ -28,6 +29,9 @@ import org.springframework.web.util.UriComponentsBuilder;
 public class PaymentReceiptMails {
 
     static final String HISTORY_ROUTE = "/subscription/payments";
+
+    /** The plans page, where a plan is renewed (SCR-30). */
+    static final String PLANS_ROUTE = "/subscription";
 
     private static final ZoneId VIETNAM = ZoneId.of("Asia/Ho_Chi_Minh");
     private static final DateTimeFormatter TIME =
@@ -86,6 +90,35 @@ public class PaymentReceiptMails {
 
         return new EmailMessage(
                 email, "Hoá đơn thanh toán CryptoPilot - đơn " + paid.orderCode(), text.toString(), html, link);
+    }
+
+    /** The reminder that {@code soon} ends within 3 days (NSF-14), to {@code email}, with a link to renew. */
+    public EmailMessage endingSoon(SubscriptionEndingSoon soon, String email) {
+        String link = UriComponentsBuilder.fromUri(properties.publicBaseUrl())
+                .path(PLANS_ROUTE)
+                .build()
+                .toUriString();
+        String body = "Gói " + soon.packageName() + " của bạn sẽ hết hạn vào " + TIME.format(soon.endAt())
+                + ". Gia hạn trước thời điểm này để tiếp tục dùng các tính năng của gói; thời gian còn lại được cộng"
+                + " dồn vào gói mới.";
+        String after = "Nếu không gia hạn, tài khoản sẽ về gói Free. Dữ liệu của bạn được giữ nguyên, các cảnh báo"
+                + " vượt giới hạn của gói Free sẽ được tạm dừng.";
+        String outro = "Đây là email tự động, vui lòng không trả lời.";
+        String text = body + "\n\n" + after + "\n\nGia hạn: " + link + "\n\n" + outro + "\n";
+        String html = """
+                <!DOCTYPE html>
+                <html><body style="font-family: Arial, sans-serif; line-height: 1.5; color: #0f172a">
+                <p>%s</p>
+                <p>%s</p>
+                <p style="margin-top: 20px"><a href="%s">Gia hạn gói</a></p>
+                <p style="color: #64748b; font-size: 12px">%s</p>
+                </body></html>
+                """.formatted(
+                        HtmlUtils.htmlEscape(body),
+                        HtmlUtils.htmlEscape(after),
+                        HtmlUtils.htmlEscape(link),
+                        HtmlUtils.htmlEscape(outro));
+        return new EmailMessage(email, "Gói " + soon.packageName() + " của bạn sắp hết hạn", text, html, link);
     }
 
     private static List<String[]> rows(SubscriptionOrderPaid paid) {

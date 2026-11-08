@@ -5,6 +5,7 @@ import com.cryptopilot.billing.calculator.OrderTypeResolver;
 import com.cryptopilot.billing.entity.SubscriptionOrder;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.billing.entity.UserSubscription;
+import com.cryptopilot.billing.event.PlanDowngraded;
 import com.cryptopilot.billing.event.SubscriptionOrderPaid;
 import com.cryptopilot.billing.model.HeldSubscription;
 import com.cryptopilot.billing.model.PackageTerms;
@@ -129,9 +130,15 @@ public class PaymentSettlementServiceImpl implements PaymentSettlementService {
                 .findByUserIdAndStatus(order.getUserId(), SubscriptionStatus.ACTIVE)
                 .orElse(null);
         if (held != null && !held.getEndAt().isAfter(now)) {
+            PlanTier ended = tierOf(held);
             held.expire(now);
             subscriptions.flush();
             held = null;
+            if (ended.rank() > bought.getTier().rank()) {
+                // The plan that ran out ranked higher than the one bought now: BR-64 applies as after any drop.
+                events.publishEvent(new PlanDowngraded(
+                        order.getUserId(), ended.name(), bought.getTier().name(), bought.getPackageName(), now));
+            }
         }
         HeldSubscription current = held == null ? null : held.held(tierOf(held));
         if (OrderTypeResolver.resolve(current, bought.getTier(), now).isEmpty()) {

@@ -126,6 +126,22 @@ class UserSubscriptionTest {
         assertThatIllegalStateException().isThrownBy(() -> subscription.expire(end));
     }
 
+    @Test
+    void NSF14_anActiveSubscription_isRemindedOnce_andAnEndedOneNever() {
+        UserSubscription pro = UserSubscription.open(
+                paid(TRADER, PRO_MONTHLY, OrderType.NEW),
+                CarryOverCalculator.terms(null, terms(PRO_MONTHLY), NOW.minus(Duration.ofDays(28))),
+                null);
+
+        assertThat(pro.remind(NOW)).isTrue();
+        assertThat(pro.getRemindedAt()).isEqualTo(NOW);
+        assertThat(pro.remind(NOW.plusSeconds(3600))).isFalse();
+        assertThat(pro.getRemindedAt()).isEqualTo(NOW);
+
+        pro.expire(NOW.plus(Duration.ofDays(3)));
+        assertThatIllegalStateException().isThrownBy(() -> pro.remind(NOW.plus(Duration.ofDays(3))));
+    }
+
     private static SubscriptionOrder paid(UUID trader, SubscriptionPackage bought, OrderType type) {
         SubscriptionOrder order = SubscriptionOrder.create(
                 trader, bought, type, GatewayCode.SEPAY, "CP" + UUID.randomUUID(), NOW, Duration.ofMinutes(15));
