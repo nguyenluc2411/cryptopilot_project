@@ -328,6 +328,12 @@ public class UserServiceImpl implements UserService {
                 account.lockoutMinutesRemainingAt(at));
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<String> emailOf(UUID userId) {
+        return accounts.findById(userId).map(UserAccount::getEmail);
+    }
+
     private static UserSummary summaryOf(UserAccount account) {
         return new UserSummary(
                 account.getId(),

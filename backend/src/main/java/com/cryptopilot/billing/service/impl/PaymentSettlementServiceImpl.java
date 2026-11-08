@@ -5,6 +5,7 @@ import com.cryptopilot.billing.calculator.OrderTypeResolver;
 import com.cryptopilot.billing.entity.SubscriptionOrder;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.billing.entity.UserSubscription;
+import com.cryptopilot.billing.event.SubscriptionOrderPaid;
 import com.cryptopilot.billing.model.HeldSubscription;
 import com.cryptopilot.billing.model.PackageTerms;
 import com.cryptopilot.billing.model.PaymentResult;
@@ -25,6 +26,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -57,6 +59,7 @@ public class PaymentSettlementServiceImpl implements PaymentSettlementService {
     private final SubscriptionPackageRepository packages;
     private final UserLock userLock;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional
@@ -131,6 +134,21 @@ public class PaymentSettlementServiceImpl implements PaymentSettlementService {
             subscriptions.flush();
         }
         subscriptions.save(UserSubscription.open(order, terms, held));
+        events.publishEvent(new SubscriptionOrderPaid(
+                order.getId(),
+                order.getUserId(),
+                order.getOrderCode(),
+                bought.getPackageName(),
+                terms.orderType().name(),
+                order.getAmount(),
+                order.getCurrency(),
+                order.getPaymentGateway().name(),
+                order.getGatewayTransactionNo(),
+                now,
+                terms.startAt(),
+                terms.endAt(),
+                terms.carriedValueVnd(),
+                terms.bonusDays()));
     }
 
     private PlanTier tierOf(UserSubscription subscription) {

@@ -2,6 +2,7 @@ package com.cryptopilot.billing.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.billing.event.SubscriptionOrderPaid;
 import com.cryptopilot.billing.model.PaymentResult;
 import com.cryptopilot.billing.model.enums.GatewayCode;
 import com.cryptopilot.billing.service.PaymentSettlementService;
@@ -19,6 +20,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -28,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest
 @Import(TestcontainersConfig.class)
 @Transactional
+@RecordApplicationEvents
 class PaymentSettlementServiceImplTest {
 
     private static final Map<String, UUID> PACKAGES = Map.of(
@@ -43,6 +47,9 @@ class PaymentSettlementServiceImplTest {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private ApplicationEvents events;
 
     @Test
     void NSF12_aConfirmedPayment_paysTheOrderAndOpensTheSubscription() {
@@ -62,6 +69,15 @@ class PaymentSettlementServiceImplTest {
         assertThat(subs.getFirst().get("subscription_status")).isEqualTo("ACTIVE");
         assertThat(subs.getFirst().get("value_vnd").toString()).isEqualTo("99000");
         assertThat(days(subs.getFirst())).isEqualTo(30);
+        assertThat(events.stream(SubscriptionOrderPaid.class)).singleElement().satisfies(paid -> {
+            assertThat(paid.orderCode()).isEqualTo(order);
+            assertThat(paid.userId()).isEqualTo(trader);
+            assertThat(paid.orderType()).isEqualTo("NEW");
+            assertThat(paid.amount()).isEqualByComparingTo("99000");
+            assertThat(paid.gateway()).isEqualTo("SEPAY");
+            assertThat(paid.transactionNo()).isEqualTo("TX-" + order);
+            assertThat(paid.bonusDays()).isZero();
+        });
     }
 
     /** BR-53: the same IPN twice opens one subscription. */
@@ -77,6 +93,7 @@ class PaymentSettlementServiceImplTest {
         entityManager.flush();
 
         assertThat(subscriptions(trader)).hasSize(1);
+        assertThat(events.stream(SubscriptionOrderPaid.class)).hasSize(1);
         assertThat(orderRow(order).get("order_status")).isEqualTo("PAID");
     }
 
@@ -193,6 +210,7 @@ class PaymentSettlementServiceImplTest {
         assertThat(orderRow(order).get("manual_handling")).isEqualTo(true);
         assertThat(status(premium)).isEqualTo("ACTIVE");
         assertThat(subscriptions(trader)).hasSize(1);
+        assertThat(events.stream(SubscriptionOrderPaid.class)).isEmpty();
     }
 
     /** An ACTIVE row past its end (the expiry job has not run) is expired, and the purchase is a new period. */
