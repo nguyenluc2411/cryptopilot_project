@@ -25,4 +25,10 @@ public interface UserSubscriptionRepository extends Repository<UserSubscription,
      */
     @Transactional(readOnly = true)
     Optional<UserSubscription> findByUserIdAndStatus(UUID userId, SubscriptionStatus status);
+
+    /**
+     * Writes the pending changes now. A subscription marked REPLACED or EXPIRED is flushed before its successor is
+     * inserted: Hibernate inserts before it updates, and {@code uq_user_subscription_one_active} would see two ACTIVE.
+     */
+    void flush();
 }

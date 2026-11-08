@@ -1,5 +1,6 @@
 package com.cryptopilot.billing.config;
 
+import com.cryptopilot.billing.client.SePayProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
@@ -9,5 +10,5 @@ import org.springframework.context.annotation.Configuration;
  * <p>Rule: TECHNICAL_DESIGN 7.11; D-146.
  */
 @Configuration
-@EnableConfigurationProperties(BillingProperties.class)
+@EnableConfigurationProperties({BillingProperties.class, SePayProperties.class})
 class BillingConfig {}

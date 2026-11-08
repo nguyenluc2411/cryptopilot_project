@@ -36,6 +36,8 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.oauth2.jwt.JwsHeader;
@@ -382,7 +384,9 @@ class BillingApiTest {
     @TestConfiguration
     static class StandInGateway {
 
+        /** Ahead of the real SePay bean, which has no credentials in a test. */
         @Bean
+        @Order(Ordered.HIGHEST_PRECEDENCE)
         PaymentGateway standInSepay() {
             return new PaymentGateway() {
                 @Override

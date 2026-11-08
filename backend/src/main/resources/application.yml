@@ -131,6 +131,12 @@ cryptopilot:
   billing:
     # D-146: the page a payment gateway sends the browser back to (SCR-31); the order code is added as orderCode.
     return-url: ${PUBLIC_BASE_URL:http://localhost:5173}/subscription/payment-result
+    # D-146: the SePay Payment Gateway; empty credentials leave SePay unavailable (deploy/.env.example).
+    sepay:
+      merchant-id: ${SEPAY_MERCHANT_ID:}
+      secret-key: ${SEPAY_SECRET_KEY:}
+      ipn-secret-key: ${SEPAY_IPN_SECRET_KEY:}
+      checkout-url: ${SEPAY_CHECKOUT_URL:https://pay-sandbox.sepay.vn/v1/checkout/init}
   notification:
     mail:
       # T-057: the sender address, and the web application the mailed links open (/verify-email, /reset-password).

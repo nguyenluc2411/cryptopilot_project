@@ -77,8 +77,9 @@ import org.springframework.security.web.SecurityFilterChain;
  * and trades in it is a conflict the SRS chose to avoid. The one row they share is the Security tab,
  * since an administrator must be able to change their own password.
  *
- * <p><b>The payment callbacks are deliberately not listed.</b> {@code /billing/ipn/vnpay},
- * {@code /billing/ipn/momo} and {@code /billing/return/{gateway}} are not screens and not requests
+ * <p><b>The payment callbacks are not in the Trader area.</b> The IPN of a gateway that is built
+ * ({@code /billing/ipn/sepay}, {@link #PAYMENT_CALLBACKS}) is open and checked by the gateway's own
+ * credential (D-146); {@code /billing/ipn/momo} and any return path are not screens and not requests
  * from a signed-in Trader: the first two arrive from the payment gateway's servers and are
  * authenticated by their signature (BR-53), and the third is a browser redirect that carries no
  * header a client could have attached. Confining them to TRADER would break every payment. Naming
@@ -201,6 +202,13 @@ public class SecurityConfig {
      */
     static final String[] PUBLIC_REALTIME = {"/ws", "/ws/**"};
 
+    /**
+     * The payment gateways' IPN (D-146): posted by the gateway's servers, so open to anyone and authenticated by the
+     * gateway's own credential in the controller (BR-53). Only the gateways built are listed; any other callback path
+     * stays under {@code denyAll}.
+     */
+    static final String[] PAYMENT_CALLBACKS = {"/api/v1/billing/ipn/sepay"};
+
     static final String[] PUBLIC_API_DOCS = {"/v3/api-docs", "/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**"};
 
     /**
@@ -271,6 +279,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, PUBLIC_API_DOCS)
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, PUBLIC_REALTIME)
+                        .permitAll()
+                        .requestMatchers(HttpMethod.POST, PAYMENT_CALLBACKS)
                         .permitAll()
                         .requestMatchers(SHARED_PASSWORD_CHANGE)
                         .hasAnyRole(UserRole.TRADER.name(), UserRole.ADMIN.name())
