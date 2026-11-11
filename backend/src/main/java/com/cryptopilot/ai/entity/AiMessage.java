@@ -17,7 +17,8 @@ import org.hibernate.type.SqlTypes;
 
 /**
  * One question or answer of an AI conversation (AI_MESSAGE). A question carries the context snapshot it was asked
- * with (T-074, BR-51); an answer carries the token usage of the call that produced it (NSF-16).
+ * with (T-074, BR-51); an answer carries the token usage of the call that produced it (NSF-16) and the question it
+ * answers, so the history keeps each answer after its own question when two were pending at once.
  *
  * <p>Rule: BR-50, BR-51; SRS 3.9.1, 3.9.2; TECHNICAL_DESIGN 7.14.
  */
@@ -32,6 +33,10 @@ public class AiMessage extends BaseEntity {
 
     @Column(name = "conversation_id", nullable = false, updatable = false)
     private UUID conversationId;
+
+    /** The question an answer answers; {@code null} on a question and on an answer stored before V64. */
+    @Column(name = "question_id", updatable = false)
+    private UUID questionId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "sender_role", nullable = false, length = 32, updatable = false)
@@ -58,6 +63,7 @@ public class AiMessage extends BaseEntity {
 
     private AiMessage(
             UUID conversationId,
+            UUID questionId,
             SenderRole role,
             String content,
             String contextSnapshot,
@@ -65,6 +71,7 @@ public class AiMessage extends BaseEntity {
             Integer outputTokens,
             MessageStatus status) {
         this.conversationId = Objects.requireNonNull(conversationId, "conversationId must not be null");
+        this.questionId = questionId;
         this.senderRole = Objects.requireNonNull(role, "role must not be null");
         this.content = Objects.requireNonNull(content, "content must not be null");
         this.contextSnapshot = contextSnapshot;
@@ -76,12 +83,27 @@ public class AiMessage extends BaseEntity {
     /** A Trader's question, PENDING until it is answered or fails. */
     public static AiMessage question(UUID conversationId, String question, String contextSnapshot) {
         return new AiMessage(
-                conversationId, SenderRole.USER, question.strip(), contextSnapshot, null, null, MessageStatus.PENDING);
+                conversationId,
+                null,
+                SenderRole.USER,
+                question.strip(),
+                contextSnapshot,
+                null,
+                null,
+                MessageStatus.PENDING);
     }
 
-    /** The assistant's answer, stored once it is complete. */
-    public static AiMessage answer(UUID conversationId, String text, int inputTokens, int outputTokens) {
+    /** The assistant's answer to {@code questionId}, stored once it is complete. */
+    public static AiMessage answer(
+            UUID conversationId, UUID questionId, String text, int inputTokens, int outputTokens) {
         return new AiMessage(
-                conversationId, SenderRole.ASSISTANT, text, null, inputTokens, outputTokens, MessageStatus.COMPLETED);
+                conversationId,
+                Objects.requireNonNull(questionId, "questionId must not be null"),
+                SenderRole.ASSISTANT,
+                text,
+                null,
+                inputTokens,
+                outputTokens,
+                MessageStatus.COMPLETED);
     }
 }

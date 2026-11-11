@@ -1,6 +1,7 @@
 package com.cryptopilot.ai.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -13,20 +14,27 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.ai.AiServiceException;
+import com.cryptopilot.ai.calculator.QuotaDay;
 import com.cryptopilot.ai.client.AiServiceClient;
 import com.cryptopilot.ai.model.AiChatAnswer;
 import com.cryptopilot.ai.model.AiChatRequest;
 import com.cryptopilot.ai.model.enums.SenderRole;
 import com.cryptopilot.ai.service.AiAnswerService;
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.journal.TradeRow;
+import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.jayway.jsonpath.JsonPath;
 import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,6 +54,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * The AI Assistant end to end against the real schema, billing and event registry (T-073, T-075); only the AI Service
@@ -73,10 +83,14 @@ class AiAssistantApiTest {
     @Autowired
     private AiAnswerService answers;
 
+    @Autowired
+    private Clock clock;
+
     @MockitoBean
     private AiServiceClient client;
 
     private final List<UUID> accounts = new ArrayList<>();
+    private final List<UUID> pairs = new ArrayList<>();
     private UUID free;
     private UUID pro;
 
@@ -90,6 +104,10 @@ class AiAssistantApiTest {
     @AfterEach
     void removeRows() {
         for (UUID account : accounts) {
+            sql.sql("delete from trading_journal where user_id = ?")
+                    .param(account)
+                    .update();
+            sql.sql("delete from trading_plan where user_id = ?").param(account).update();
             sql.sql("delete from ai_conversation where user_id = ?")
                     .param(account)
                     .update();
@@ -101,6 +119,7 @@ class AiAssistantApiTest {
                     .update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
+        pairs.forEach(new MarketTestData(sql, Instant.now())::remove);
     }
 
     @Test
@@ -205,8 +224,9 @@ class AiAssistantApiTest {
     @Test
     void BR50_withTodaysQuotaUsedUp_theNextQuestionIsRefusedWithMsg30_andDeletingDoesNotGiveItBack() throws Exception {
         UUID used = start(pro);
+        Instant today = QuotaDay.start(clock.instant()).plusSeconds(1);
         for (int i = 0; i < 30; i++) {
-            message(used, "USER", "COMPLETED", Instant.now().minusSeconds(60));
+            message(used, "USER", "COMPLETED", today);
         }
         as(pro, delete(AI + "/conversations/" + used)).andExpect(status().isNoContent());
         UUID fresh = start(pro);
@@ -250,13 +270,99 @@ class AiAssistantApiTest {
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content("{\"question\":\"Review my journal\",\"includePerformance\":true}"))
                 .andExpect(status().isAccepted()));
+        awaitStatus(question, "COMPLETED");
         String snapshot = sql.sql("select context_snapshot::text from ai_message where message_id = ?")
                 .param(question)
                 .query(String.class)
                 .single();
-        assertThat(snapshot.replace(" ", "")).contains("\"available\":false").doesNotContain("\"empty\"");
+        JsonNode performance = JsonMapper.builder().build().readTree(snapshot).path("performance");
+        assertThat(performance.path("available").asBoolean()).isFalse();
+        assertThat(performance.path("message").asString()).contains("no closed simulated trade");
+        assertThat(performance.path("summary").isMissingNode()
+                        || performance.path("summary").isNull())
+                .isTrue();
         assertThat(snapshot).doesNotContain(premium.toString());
         assertThat(snapshot).doesNotContain("@ai-assistant.invalid");
+    }
+
+    @Test
+    void BR51_onPremium_theSnapshotCarriesTheJournalsAggregates_andNothingOfTheTrades() throws Exception {
+        UUID premium = account();
+        subscribe(premium, PREMIUM_MONTHLY);
+        UUID pair = new MarketTestData(sql, Instant.now())
+                .pair(
+                        "AI" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT",
+                        true,
+                        true,
+                        "TRADING",
+                        "TRADING",
+                        0);
+        pairs.add(pair);
+        UUID plan = plan(premium, pair);
+        TradeRow.closed(premium, pair, Instant.now().minus(1, ChronoUnit.DAYS))
+                .simulated(plan)
+                .stop("90")
+                .amounts("20", "1")
+                .deviation("0.1")
+                .excursions("95", "125")
+                .review("my secret setup", "my lesson", "my mistake", null)
+                .insert(sql);
+        when(client.chat(any())).thenReturn(new AiChatAnswer("ok", "gemini-test", 1, 1));
+        UUID conversation = start(premium, "MY_TRADING");
+
+        UUID question = questionId(as(
+                        premium,
+                        post(AI + "/conversations/" + conversation + "/messages")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"question\":\"Review my journal\",\"includePerformance\":true}"))
+                .andExpect(status().isAccepted()));
+
+        awaitStatus(question, "COMPLETED");
+        String snapshot = sql.sql("select context_snapshot::text from ai_message where message_id = ?")
+                .param(question)
+                .query(String.class)
+                .single();
+        JsonNode root = JsonMapper.builder().build().readTree(snapshot);
+        assertThat(root.path("version").asInt()).isEqualTo(2);
+        JsonNode summary = root.path("performance").path("summary");
+        assertThat(root.path("performance").path("available").asBoolean()).isTrue();
+        assertThat(summary.path("trades").asInt()).isEqualTo(1);
+        assertThat(summary.path("wins").asInt()).isEqualTo(1);
+        assertThat(new java.math.BigDecimal(summary.path("totalNetPnl").asString()))
+                .isEqualByComparingTo("19");
+        assertThat(new java.math.BigDecimal(summary.path("averageRealizedR").asString()))
+                .isEqualByComparingTo("1.9");
+        assertThat(new java.math.BigDecimal(
+                        summary.path("averageEntryDeviationR").asString()))
+                .isEqualByComparingTo("0.1");
+        assertThat(new java.math.BigDecimal(summary.path("averageMaeR").asString()))
+                .isEqualByComparingTo("0.5");
+        assertThat(new java.math.BigDecimal(summary.path("averageMfeR").asString()))
+                .isEqualByComparingTo("2.5");
+        assertThat(summary.propertyNames())
+                .containsExactlyInAnyOrder(
+                        "trades",
+                        "wins",
+                        "losses",
+                        "breakeven",
+                        "winRate",
+                        "totalNetPnl",
+                        "totalFees",
+                        "totalFunding",
+                        "provisionalTrades",
+                        "profitFactor",
+                        "averageRealizedR",
+                        "tradesWithR",
+                        "averageEntryDeviationR",
+                        "costOfLateEntryR",
+                        "averageMaeR",
+                        "averageMfeR");
+        assertThat(snapshot)
+                .doesNotContain(premium.toString())
+                .doesNotContain(pair.toString())
+                .doesNotContain(plan.toString())
+                .doesNotContain("my secret setup")
+                .doesNotContain("my lesson");
     }
 
     @Test
@@ -382,6 +488,48 @@ class AiAssistantApiTest {
                 .isEqualTo(1);
     }
 
+    @Test
+    void NSF16_anAnswerThatArrivesLate_stillFollowsItsOwnQuestionInTheHistory() throws Exception {
+        CountDownLatch firstMayAnswer = new CountDownLatch(1);
+        when(client.chat(any())).thenAnswer(call -> {
+            String asked = call.<AiChatRequest>getArgument(0).question();
+            if (asked.equals("q1")) {
+                assertThat(firstMayAnswer.await(30, TimeUnit.SECONDS)).isTrue();
+            }
+            return new AiChatAnswer("a" + asked.substring(1), "gemini-test", 1, 1);
+        });
+        UUID conversation = start(pro);
+
+        UUID first = questionId(ask(pro, conversation, "q1"));
+        UUID second = questionId(ask(pro, conversation, "q2"));
+        awaitStatus(second, "COMPLETED");
+        firstMayAnswer.countDown();
+        awaitStatus(first, "COMPLETED");
+        UUID third = questionId(ask(pro, conversation, "q3"));
+        awaitStatus(third, "COMPLETED");
+
+        ArgumentCaptor<AiChatRequest> sent = ArgumentCaptor.forClass(AiChatRequest.class);
+        verify(client, org.mockito.Mockito.times(3)).chat(sent.capture());
+        AiChatRequest last = sent.getAllValues().stream()
+                .filter(request -> request.question().equals("q3"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(last.history())
+                .extracting(turn -> turn.text().substring(0, 2))
+                .containsExactly("q1", "a1", "q2", "a2");
+    }
+
+    private UUID plan(UUID owner, UUID pair) {
+        UUID id = UUID.randomUUID();
+        Timestamp at = Timestamp.from(Instant.now().minus(3, ChronoUnit.DAYS));
+        sql.sql("""
+                        insert into trading_plan (plan_id, user_id, pair_id, market_type, direction, entry_type,
+                                                  entry_price, stop_loss_price, take_profit_price, capital_amount,
+                                                  risk_percent, plan_status, analysis_timeframe, created_at, updated_at)
+                        values (?, ?, ?, 'SPOT', 'LONG', 'LIMIT', 100, 90, 110, 1000, 1, 'DRAFT', '1h', ?, ?)""").params(id, owner, pair, at, at).update();
+        return id;
+    }
+
     private UUID start(UUID user) throws Exception {
         return start(user, null);
     }
@@ -413,15 +561,10 @@ class AiAssistantApiTest {
         return UUID.fromString(JsonPath.read(asked.andReturn().getResponse().getContentAsString(), "$.question.id"));
     }
 
-    private void awaitStatus(UUID question, String expected) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 15_000;
-        while (System.currentTimeMillis() < deadline) {
-            if (expected.equals(statusOf(question))) {
-                return;
-            }
-            Thread.sleep(100);
-        }
-        assertThat(statusOf(question)).as("question %s", question).isEqualTo(expected);
+    private void awaitStatus(UUID question, String expected) {
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(statusOf(question))
+                .as("question %s", question)
+                .isEqualTo(expected));
     }
 
     private String statusOf(UUID message) {

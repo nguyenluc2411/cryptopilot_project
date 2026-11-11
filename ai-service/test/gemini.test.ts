@@ -216,6 +216,43 @@ describe("GeminiProvider", () => {
     });
   });
 
+  it("NSF16 sends nothing once the caller's deadline has passed", async () => {
+    const { fetch, calls } = scriptedFetch([answer("ok")]);
+    const deadline = new AbortController();
+    deadline.abort();
+
+    await expect(provider(fetch).generateText({ ...CHAT, signal: deadline.signal })).rejects.toMatchObject({
+      kind: "TIMEOUT",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("NSF16 does not retry a timeout once the deadline passed during the pause", async () => {
+    const timeout = Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    const { fetch, calls } = scriptedFetch([timeout, answer("too late")]);
+    const deadline = new AbortController();
+
+    const asked = provider(fetch, { sleep: async () => deadline.abort() }).generateText({
+      ...CHAT,
+      signal: deadline.signal,
+    });
+
+    await expect(asked).rejects.toMatchObject({ kind: "TIMEOUT" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("NSF16 the deadline aborts the call in flight", async () => {
+    const { fetch, calls } = scriptedFetch([answer("ok")]);
+    const deadline = new AbortController();
+
+    await provider(fetch).generateText({ ...CHAT, signal: deadline.signal });
+
+    const sent = calls[0]?.init.signal;
+    expect(sent?.aborted).toBe(false);
+    deadline.abort();
+    expect(sent?.aborted).toBe(true);
+  });
+
   it("NSF16 a conversation gets the same key rotation and retry as a summary", async () => {
     const { fetch, calls } = scriptedFetch([status(429), status(503), answer("ok")]);
 

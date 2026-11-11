@@ -95,7 +95,7 @@ class AiAnswerServiceImplTest {
 
     @Test
     void NSF16_aQuestionAlreadyDecided_isLeftAlone() {
-        AiMessage answered = AiMessage.answer(conversation.getId(), "done", 1, 1);
+        AiMessage answered = AiMessage.answer(conversation.getId(), UUID.randomUUID(), "done", 1, 1);
         when(messages.findById(answered.getId())).thenReturn(Optional.of(answered));
 
         service(10, 2000).answer(answered.getId());
@@ -164,7 +164,7 @@ class AiAnswerServiceImplTest {
         activeConfiguration();
         String longTurn = "x".repeat(250);
         when(messages.completedBefore(any(), any(), any()))
-                .thenReturn(List.of(AiMessage.answer(conversation.getId(), longTurn, 1, 1)));
+                .thenReturn(List.of(AiMessage.answer(conversation.getId(), UUID.randomUUID(), longTurn, 1, 1)));
         when(client.chat(any())).thenReturn(new AiChatAnswer("RSI đo động lượng.", "gemini-test", 10, 5));
         when(messages.decide(eq(question.getId()), eq("COMPLETED"), any())).thenReturn(1);
         when(messages.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -180,6 +180,7 @@ class AiAnswerServiceImplTest {
         ArgumentCaptor<AiMessage> stored = ArgumentCaptor.forClass(AiMessage.class);
         verify(messages).save(stored.capture());
         assertThat(stored.getValue().getContent()).endsWith("Disclaimer.");
+        assertThat(stored.getValue().getQuestionId()).isEqualTo(question.getId());
         ArgumentCaptor<AiAnswerPush> push = ArgumentCaptor.forClass(AiAnswerPush.class);
         verify(broker).convertAndSendToUser(eq(userId.toString()), eq(AiAnswerServiceImpl.QUEUE), push.capture());
         assertThat(push.getValue().status()).isEqualTo(MessageStatus.COMPLETED);

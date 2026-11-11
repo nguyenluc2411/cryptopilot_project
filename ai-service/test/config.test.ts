@@ -23,6 +23,8 @@ describe("environment", () => {
     expect(env.GEMINI_THINKING_LEVEL).toBeUndefined();
     expect(env.LLM_CHAT_API_KEY).toBeUndefined();
     expect(env).toMatchObject({ LLM_CHAT_REQUESTS_PER_MINUTE: 10, LLM_CHAT_MAX_CONCURRENT: 2 });
+    expect(2 * env.LLM_CHAT_TIMEOUT_MS + 1_000).toBeLessThanOrEqual(env.LLM_CHAT_BUDGET_MS);
+    expect(env.LLM_CHAT_BUDGET_MS).toBe(60_000);
   });
 
   it("NSF16 reads the assistant's own keys and limits, and takes a blank key list as none", () => {

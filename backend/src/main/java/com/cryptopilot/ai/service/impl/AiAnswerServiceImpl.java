@@ -46,9 +46,10 @@ import tools.jackson.databind.json.JsonMapper;
  * event cannot answer twice.
  *
  * <p>The history is the conversation's completed turns before the question, the most recent {@code historyTurns},
- * each cut to {@code historyTurnChars}; failed questions are not part of it. Every answer ends with the active
- * disclaimer (BR-51). Tokens are stored on the answer. A failure uses no quota (BR-50), because the quota counts only
- * pending and completed questions.
+ * each cut to {@code historyTurnChars}; failed questions are not part of it. A question may be asked while another is
+ * still pending, so the turns follow the questions, each answer after its own, not the order the answers arrived in.
+ * Every answer ends with the active disclaimer (BR-51). Tokens are stored on the answer. A failure uses no quota
+ * (BR-50), because the quota counts only pending and completed questions.
  *
  * <p>Rule: NSF-16, BR-50, BR-51; SRS 3.9.1, 3.9.2.
  */
@@ -201,8 +202,8 @@ public class AiAnswerServiceImpl implements AiAnswerService {
                 log.info("NSF-16 question {} was already decided; its late answer is dropped", pending.questionId());
                 return;
             }
-            AiMessage stored = messages.save(
-                    AiMessage.answer(pending.conversationId(), text, answer.inputTokens(), answer.outputTokens()));
+            AiMessage stored = messages.save(AiMessage.answer(
+                    pending.conversationId(), pending.questionId(), text, answer.inputTokens(), answer.outputTokens()));
             MessageResponse body = AiMessages.of(stored);
             pushAfterCommit(
                     pending.userId(),

@@ -27,16 +27,21 @@ public interface AiMessageRepository extends Repository<AiMessage, UUID> {
     Page<AiMessage> findByConversationIdOrderByCreatedAtDesc(UUID conversationId, Pageable page);
 
     /**
-     * The completed turns of a conversation before an instant, newest first: the history sent with a question
-     * (TECHNICAL_DESIGN 7.14 step 2). A failed question and the pending ones are not part of it.
+     * The completed turns of a conversation stored before an instant, newest first: the history sent with a question
+     * (TECHNICAL_DESIGN 7.14 step 2). A failed question and the pending ones are not part of it. The turns are in the
+     * order of the questions, each answer right after its own, so an answer that arrived late, after a later question
+     * was answered, still follows its question; an answer stored without its question keeps its own time.
      */
     @Transactional(readOnly = true)
     @Query("""
             select m from AiMessage m
+            left join AiMessage q on q.id = m.questionId
             where m.conversationId = :conversationId
               and m.createdAt < :before
               and m.status = com.cryptopilot.ai.model.enums.MessageStatus.COMPLETED
-            order by m.createdAt desc""")
+            order by coalesce(q.createdAt, m.createdAt) desc,
+                     case when m.senderRole = com.cryptopilot.ai.model.enums.SenderRole.ASSISTANT then 0 else 1 end,
+                     m.createdAt desc""")
     List<AiMessage> completedBefore(
             @Param("conversationId") UUID conversationId, @Param("before") Instant before, Pageable page);
 

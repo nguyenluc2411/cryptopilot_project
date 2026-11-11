@@ -30,6 +30,8 @@ export interface ChatRequest {
   turns: readonly ChatTurn[];
   temperature: number;
   maxOutputTokens: number;
+  /** Aborted once the caller's deadline passes or it hangs up: the call in flight stops and is not retried. */
+  signal?: AbortSignal;
 }
 
 /** A language model behind one API. A new provider is a new implementation; nothing else changes. */

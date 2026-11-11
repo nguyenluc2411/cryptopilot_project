@@ -36,6 +36,12 @@ public class AiServiceClient implements AutoCloseable {
     /** The header the AI Service checks, in constant time, before anything else. */
     public static final String SECRET_HEADER = "x-ai-service-secret";
 
+    /**
+     * The header a chat states this client's wait in, in milliseconds, so the AI Service drops the question once nobody
+     * waits for it any more (NSF-16).
+     */
+    public static final String BUDGET_HEADER = "x-request-budget-ms";
+
     private final AiServiceProperties properties;
     private final JsonMapper json;
     private final HttpClient http;
@@ -66,7 +72,7 @@ public class AiServiceClient implements AutoCloseable {
         if (request.feedback() != null) {
             body.put("feedback", request.feedback());
         }
-        JsonNode answer = post("/v1/news/summary", body, properties.requestTimeout());
+        JsonNode answer = post("/v1/news/summary", body, properties.requestTimeout(), Map.of());
         return new NewsSummaryResult(
                 text(answer, "title"),
                 text(answer, "summary"),
@@ -98,7 +104,11 @@ public class AiServiceClient implements AutoCloseable {
         if (request.context() != null && request.context().isObject()) {
             body.put("context", request.context());
         }
-        JsonNode answer = post("/v1/chat", body, request.timeout());
+        JsonNode answer = post(
+                "/v1/chat",
+                body,
+                request.timeout(),
+                Map.of(BUDGET_HEADER, Long.toString(request.timeout().toMillis())));
         return new AiChatAnswer(
                 text(answer, "text"),
                 answer.path("model").asString(request.model()),
@@ -118,14 +128,15 @@ public class AiServiceClient implements AutoCloseable {
         }
     }
 
-    private JsonNode post(String path, Object body, Duration timeout) {
+    private JsonNode post(String path, Object body, Duration timeout, Map<String, String> headers) {
         URI uri = properties.url().resolve(path);
-        HttpRequest request = HttpRequest.newBuilder(uri)
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
-                .header(SECRET_HEADER, properties.sharedSecret())
-                .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)))
+                .header(SECRET_HEADER, properties.sharedSecret());
+        headers.forEach(builder::header);
+        HttpRequest request = builder.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)))
                 .build();
         HttpResponse<String> response;
         try {

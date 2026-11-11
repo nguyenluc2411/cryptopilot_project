@@ -33,6 +33,7 @@ class AiServiceClientChatTest {
     private final JsonMapper json = JsonMapper.builder().build();
     private final AtomicReference<String> bodySeen = new AtomicReference<>();
     private final AtomicReference<String> secretSeen = new AtomicReference<>();
+    private final AtomicReference<String> budgetSeen = new AtomicReference<>();
     private final AtomicReference<String> answer = new AtomicReference<>();
     private final AtomicReference<Integer> status = new AtomicReference<>(200);
     private final CountDownLatch release = new CountDownLatch(1);
@@ -44,6 +45,7 @@ class AiServiceClientChatTest {
         server.createContext("/v1/chat", exchange -> {
             bodySeen.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             secretSeen.set(exchange.getRequestHeaders().getFirst(AiServiceClient.SECRET_HEADER));
+            budgetSeen.set(exchange.getRequestHeaders().getFirst(AiServiceClient.BUDGET_HEADER));
             if (answer.get() == null) {
                 try {
                     release.await();
@@ -81,6 +83,9 @@ class AiServiceClientChatTest {
 
         assertThat(result).isEqualTo(new AiChatAnswer("RSI 72 là vùng quá mua.", "gemini-test", 163, 59));
         assertThat(secretSeen.get()).isEqualTo(SECRET);
+        assertThat(budgetSeen.get())
+                .as("the AI Service drops the question past this wait")
+                .isEqualTo("5000");
         JsonNode sent = json.readTree(bodySeen.get());
         assertThat(sent.path("model").asString()).isEqualTo("gemini-test");
         assertThat(sent.path("systemPrompt").asString()).isEqualTo("Explain, never advise.");

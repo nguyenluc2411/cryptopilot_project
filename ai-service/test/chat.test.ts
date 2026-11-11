@@ -1,6 +1,7 @@
 import Bottleneck from "bottleneck";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp, SECRET_HEADER } from "../src/app.js";
+import { BUDGET_HEADER } from "../src/routes/chat.js";
 import { LlmError } from "../src/llm/provider.js";
 import { MAX_CONTEXT_CHARS, MAX_HISTORY_TURNS, MAX_QUESTION_CHARS, MAX_TURN_CHARS } from "../src/schemas/chat.js";
 import { FakeProvider } from "./fakes.js";
@@ -207,5 +208,89 @@ describe("POST /v1/chat", () => {
     });
 
     expect((await post(chat, BODY)).statusCode).toBe(500);
+  });
+
+  describe("deadline", () => {
+    /** One question at a time; each question's deadline is a controller the test aborts, so nothing waits on time. */
+    function deadlineApp(chat: FakeProvider) {
+      const limiter = new Bottleneck({ maxConcurrent: 1 });
+      const deadlines: { budgetMs: number; controller: AbortController }[] = [];
+      const built = buildApp({
+        sharedSecret: SECRET,
+        provider: new FakeProvider(),
+        limiter: new Bottleneck(),
+        chat: {
+          provider: chat,
+          limiter,
+          budgetMs: 60_000,
+          deadline: (budgetMs) => {
+            const controller = new AbortController();
+            deadlines.push({ budgetMs, controller });
+            return controller.signal;
+          },
+        },
+      });
+      apps.push(built);
+      const ask = (headers: Record<string, string> = {}) =>
+        built.inject({
+          method: "POST",
+          url: "/v1/chat",
+          payload: BODY,
+          headers: { [SECRET_HEADER]: SECRET, ...headers },
+        });
+      return { limiter, deadlines, ask };
+    }
+
+    it("NSF16 a queued question whose deadline passed is dropped without calling the provider", async () => {
+      let release: () => void = () => {};
+      let started: () => void = () => {};
+      const firstStarted = new Promise<void>((resolve) => (started = resolve));
+      const chat = new FakeProvider(undefined, async () => {
+        started();
+        await new Promise<void>((resolve) => (release = resolve));
+        return ANSWER;
+      });
+      const { limiter, deadlines, ask } = deadlineApp(chat);
+
+      const first = ask();
+      await firstStarted;
+      const queued = new Promise<void>((resolve) => limiter.once("queued", () => resolve()));
+      const second = ask({ [BUDGET_HEADER]: "60000" });
+      await queued;
+      deadlines[1]?.controller.abort();
+      release();
+
+      expect((await first).statusCode).toBe(200);
+      const dropped = await second;
+      expect(dropped.statusCode).toBe(504);
+      expect(dropped.json()).toMatchObject({ code: "LLM_TIMEOUT", retryable: true });
+      expect(chat.chats).toHaveLength(1);
+    });
+
+    it("NSF16 the call in flight gets the deadline, so the provider can stop it", async () => {
+      const chat = answering();
+      const { deadlines, ask } = deadlineApp(chat);
+
+      await ask();
+
+      const signal = chat.chats[0]?.signal;
+      expect(signal?.aborted).toBe(false);
+      deadlines[0]?.controller.abort();
+      expect(signal?.aborted).toBe(true);
+    });
+
+    it.each([
+      ["no header", undefined, 60_000],
+      ["a shorter budget from the backend", "45000", 45_000],
+      ["a longer budget than configured", "90000", 60_000],
+      ["a budget that is not a number", "soon", 60_000],
+      ["a budget of zero", "0", 60_000],
+    ])("NSF16 the deadline with %s is the expected budget", async (_case, header, expected) => {
+      const { deadlines, ask } = deadlineApp(answering());
+
+      await ask(header === undefined ? {} : { [BUDGET_HEADER]: header });
+
+      expect(deadlines.map((deadline) => deadline.budgetMs)).toEqual([expected]);
+    });
   });
 });

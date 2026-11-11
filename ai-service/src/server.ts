@@ -14,6 +14,7 @@ const app = buildApp({
       requestsPerMinute: env.LLM_CHAT_REQUESTS_PER_MINUTE,
       maxConcurrent: env.LLM_CHAT_MAX_CONCURRENT,
     }),
+    budgetMs: env.LLM_CHAT_BUDGET_MS,
   },
   logger: { level: "info", redact: [`req.headers["${SECRET_HEADER}"]`, "req.headers.authorization"] },
 });
