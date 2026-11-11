@@ -323,7 +323,7 @@ class AiAssistantApiTest {
                 .query(String.class)
                 .single();
         JsonNode root = JsonMapper.builder().build().readTree(snapshot);
-        assertThat(root.path("version").asInt()).isEqualTo(2);
+        assertThat(root.path("version").asInt()).isEqualTo(3);
         JsonNode summary = root.path("performance").path("summary");
         assertThat(root.path("performance").path("available").asBoolean()).isTrue();
         assertThat(summary.path("trades").asInt()).isEqualTo(1);

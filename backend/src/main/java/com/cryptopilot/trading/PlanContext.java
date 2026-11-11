@@ -32,7 +32,7 @@ import java.util.UUID;
  * @param analysisTimeframe the timeframe the plan was made on
  * @param status the plan's status
  * @param setupScoreAtPlan the setup score when the plan was saved, or {@code null}
- * @param setupScorePreset the preset of that score, e.g. {@code DAY_TRADING v1}, or {@code null}
+ * @param setupScorePreset the preset of that score, e.g. {@code DAY_TRADING v2}, or {@code null}
  * @param riskRewardRatio reward / risk
  * @param netRiskReward the risk/reward after fees, or {@code null} on a plan stored before fees were estimated
  * @param feeShareOfRisk the fees and slippage as a share of the risk, or {@code null}

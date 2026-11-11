@@ -17,8 +17,10 @@ import com.cryptopilot.market.dto.response.SpotSetupScoreResponse;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.CapReason;
 import com.cryptopilot.market.model.enums.DominantSide;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
@@ -123,6 +125,8 @@ class MarketApiPairAnalysisTest {
         assertThat(result.indicators().rsi14()).isNull();
         assertThat(result.lastPrice()).isNull();
         assertThat(result.dominantSide()).isNull();
+        assertThat(result.scoredSide()).isNull();
+        assertThat(result.capReason()).isNull();
         assertThat(result.markPrice()).isNull();
         assertThat(result.fundingRate()).isNull();
     }
@@ -156,6 +160,67 @@ class MarketApiPairAnalysisTest {
         assertThat(result.fundingRate()).isEqualByComparingTo("0.0001");
     }
 
+    /**
+     * A balanced trend has no dominant side, but the v2 score is still computed for one side, the sign of the MACD
+     * histogram; the context carries that side, and the dominant side stays market information.
+     */
+    @Test
+    void D146_aBalancedFuturesTrend_carriesTheSideTheScoreWasComputedFor_andANeutralDominantSide() {
+        pair(MarketType.FUTURES, true);
+        FuturesSetupScoreResponse score = mock(FuturesSetupScoreResponse.class);
+        when(score.score()).thenReturn(61);
+        when(score.dominantSide()).thenReturn(DominantSide.NEUTRAL);
+        when(score.scoredSide()).thenReturn(ScoredSide.SHORT);
+        AnalysisResponse response = response(null, null, score);
+        when(analysis.analysis("FUTURES", "BTCUSDT", "1h", userId)).thenReturn(response);
+        when(prices.latestLast(MarketType.FUTURES, "BTCUSDT")).thenReturn(PriceLookup.missing());
+        when(prices.latest(MarketType.FUTURES, "BTCUSDT")).thenReturn(PriceLookup.missing());
+
+        PairAnalysis result =
+                api.pairAnalysis(pairId, MarketType.FUTURES, "1h", userId).orElseThrow();
+
+        assertThat(result.dominantSide()).isEqualTo(DominantSide.NEUTRAL);
+        assertThat(result.scoredSide()).isEqualTo(ScoredSide.SHORT);
+        assertThat(result.capReason()).isNull();
+    }
+
+    @Test
+    void D146_aCappedScore_carriesLowRoom_onFuturesAndOnSpot() {
+        pair(MarketType.FUTURES, true);
+        FuturesSetupScoreResponse futures = mock(FuturesSetupScoreResponse.class);
+        when(futures.score()).thenReturn(54);
+        when(futures.dominantSide()).thenReturn(DominantSide.LONG);
+        when(futures.scoredSide()).thenReturn(ScoredSide.LONG);
+        when(futures.capReason()).thenReturn(CapReason.LOW_ROOM);
+        AnalysisResponse futuresResponse = response(null, null, futures);
+        when(analysis.analysis("FUTURES", "BTCUSDT", "1h", userId)).thenReturn(futuresResponse);
+        when(prices.latestLast(MarketType.FUTURES, "BTCUSDT")).thenReturn(PriceLookup.missing());
+        when(prices.latest(MarketType.FUTURES, "BTCUSDT")).thenReturn(PriceLookup.missing());
+
+        PairAnalysis onFutures =
+                api.pairAnalysis(pairId, MarketType.FUTURES, "1h", userId).orElseThrow();
+
+        assertThat(onFutures.setupScore()).isEqualTo(54);
+        assertThat(onFutures.capReason()).isEqualTo(CapReason.LOW_ROOM);
+        assertThat(onFutures.scoredSide()).isEqualTo(ScoredSide.LONG);
+
+        pair(MarketType.SPOT, true);
+        SpotSetupScoreResponse spot = mock(SpotSetupScoreResponse.class);
+        when(spot.score()).thenReturn(54);
+        when(spot.scoredSide()).thenReturn(ScoredSide.LONG);
+        when(spot.capReason()).thenReturn(CapReason.LOW_ROOM);
+        AnalysisResponse spotResponse = response(null, null, spot);
+        when(analysis.analysis("SPOT", "BTCUSDT", "1h", userId)).thenReturn(spotResponse);
+        when(prices.latestLast(MarketType.SPOT, "BTCUSDT")).thenReturn(PriceLookup.missing());
+
+        PairAnalysis onSpot =
+                api.pairAnalysis(pairId, MarketType.SPOT, "1h", userId).orElseThrow();
+
+        assertThat(onSpot.capReason()).isEqualTo(CapReason.LOW_ROOM);
+        assertThat(onSpot.scoredSide()).isEqualTo(ScoredSide.LONG);
+        assertThat(onSpot.dominantSide()).isNull();
+    }
+
     @Test
     void T074_anAnalysisWithoutScoreOrComponents_mapsThemToNothing() {
         pair(MarketType.SPOT, true);
@@ -169,5 +234,7 @@ class MarketApiPairAnalysisTest {
         assertThat(result.setupScore()).isNull();
         assertThat(result.preset()).isNull();
         assertThat(result.components()).isNull();
+        assertThat(result.scoredSide()).isNull();
+        assertThat(result.capReason()).isNull();
     }
 }
