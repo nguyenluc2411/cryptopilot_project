@@ -229,6 +229,13 @@ public interface UserApi {
     boolean isBanned(UUID userId);
 
     /**
+     * The address a notification may be mailed to (NSF-15), or empty when none should be sent: there is no such
+     * account, it is not ACTIVE, its address is not verified, or its profile has notification mail switched off
+     * (SRS 3.2.5, SCR-07).
+     */
+    Optional<String> notificationMailAddress(UUID userId);
+
+    /**
      * The Traders whose public name starts with {@code prefix}, case ignored, alphabetical, at most {@code limit}:
      * the members a Trader may mention in a post or a comment (D-125). Banned accounts are left out.
      */

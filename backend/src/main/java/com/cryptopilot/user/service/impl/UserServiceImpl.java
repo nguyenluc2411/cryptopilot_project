@@ -287,6 +287,17 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<String> notificationMailAddress(UUID userId) {
+        return accounts.findById(userId)
+                .filter(account -> account.getAccountStatus() == AccountStatus.ACTIVE && account.isEmailVerified())
+                .filter(account -> profiles.findById(userId)
+                        .map(UserProfile::isNotifyEmail)
+                        .orElse(false))
+                .map(UserAccount::getEmail);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<AuthorCard> searchMembers(String prefix, int limit) {
         String pattern = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
         return profiles.findTradersByNamePrefix(pattern, limit).stream()
