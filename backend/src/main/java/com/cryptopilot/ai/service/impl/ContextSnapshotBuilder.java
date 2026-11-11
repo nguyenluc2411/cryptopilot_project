@@ -6,6 +6,7 @@ import com.cryptopilot.ai.model.PerformanceContext;
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.journal.JournalApi;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairAnalysis;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -22,7 +23,8 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * Builds the context snapshot of a question (T-074, SRS 3.9.1): the chosen pair's analysis as the Trader sees it on
  * SCR-10 / SCR-11 (indicators, levels, setup score and its components when the plan shows them, Futures metrics), the
- * chosen plan's terms, ratios and warnings, and on PREMIUM the performance summary.
+ * chosen plan's terms, ratios and warnings, and on PREMIUM the performance summary of the journal (T-051) with the
+ * D-111 learning metrics, as aggregates only.
  *
  * <p>No personal data goes in (BR-51): the snapshot types have no field for an email, a name, a user id, the capital
  * or the Trader's note, so there is nothing to strip. The user id is used here only to read what the Trader may see.
@@ -30,7 +32,7 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>The plan, when chosen, supplies the pair, market and timeframe the Trader did not pick, so "explain my plan"
  * comes with the analysis of the plan's own series.
  *
- * <p>Rule: BR-51, BR-62 ({@code AI_PERFORMANCE_CONTEXT}); TECHNICAL_DESIGN 7.14 step 1.
+ * <p>Rule: BR-51, BR-62 ({@code AI_PERFORMANCE_CONTEXT}), BR-70; TECHNICAL_DESIGN 7.14 step 1; D-111.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -38,6 +40,7 @@ public class ContextSnapshotBuilder {
 
     private final MarketApi market;
     private final TradingPlanApi plans;
+    private final JournalApi journal;
     private final EntitlementApi entitlements;
     private final JsonMapper json;
     private final Clock clock;
@@ -57,7 +60,7 @@ public class ContextSnapshotBuilder {
         PerformanceContext performance = null;
         if (selection.includePerformance()) {
             entitlements.requireFeature(userId, Feature.AI_PERFORMANCE_CONTEXT);
-            performance = PerformanceContext.NOT_YET_AVAILABLE;
+            performance = PerformanceContext.of(journal.performanceDigest(userId));
         }
         UUID pairId = selection.pairId() != null ? selection.pairId() : plan == null ? null : plan.pairId();
         PairAnalysis analysis = null;

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -17,6 +18,8 @@ import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.journal.JournalApi;
+import com.cryptopilot.journal.PerformanceDigest;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairAnalysis;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -48,10 +51,11 @@ class ContextSnapshotBuilderTest {
 
     private final MarketApi market = mock(MarketApi.class);
     private final TradingPlanApi plans = mock(TradingPlanApi.class);
+    private final JournalApi journal = mock(JournalApi.class);
     private final EntitlementApi entitlements = mock(EntitlementApi.class);
     private final JsonMapper json = JsonMapper.builder().build();
     private final ContextSnapshotBuilder builder =
-            new ContextSnapshotBuilder(market, plans, entitlements, json, Clock.fixed(NOW, ZoneOffset.UTC));
+            new ContextSnapshotBuilder(market, plans, journal, entitlements, json, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @Test
     void BR51_thePairsAnalysis_isReadAsTheTraderSeesIt_onTheChosenSeries() {
@@ -96,20 +100,68 @@ class ContextSnapshotBuilderTest {
         assertThat(snapshot.carriesNothing()).isTrue();
         assertThat(builder.toJson(snapshot)).isNull();
         assertThat(builder.toJson(null)).isNull();
-        verifyNoInteractions(market, plans, entitlements);
+        verifyNoInteractions(market, plans, journal, entitlements);
     }
 
     @Test
-    void BR51_thePerformanceSummary_needsPremium_andSaysItIsNotAvailableYet() {
-        ContextSnapshot premium = builder.build(USER, new AiContextSelection(null, null, null, null, true));
-        assertThat(premium.performance()).isEqualTo(PerformanceContext.NOT_YET_AVAILABLE);
-        verify(entitlements).requireFeature(USER, Feature.AI_PERFORMANCE_CONTEXT);
+    void BR51_onPremiumWithClosedTrades_theSnapshotCarriesTheJournalsAggregatesAndLearningMetrics() {
+        when(journal.performanceDigest(USER)).thenReturn(digest());
 
+        ContextSnapshot premium = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        verify(entitlements).requireFeature(USER, Feature.AI_PERFORMANCE_CONTEXT);
+        assertThat(premium.performance().available()).isTrue();
+        assertThat(premium.performance().message()).isNull();
+        assertThat(premium.performance().summary()).isEqualTo(digest());
+        JsonNode summary =
+                json.readTree(builder.toJson(premium)).path("performance").path("summary");
+        assertThat(summary.path("trades").asInt()).isEqualTo(12);
+        assertThat(summary.path("winRate").asString()).isEqualTo("0.58333333");
+        assertThat(summary.path("averageRealizedR").asString()).isEqualTo("0.42");
+        assertThat(summary.path("averageEntryDeviationR").asString()).isEqualTo("0.08");
+        assertThat(summary.path("averageMaeR").asString()).isEqualTo("-0.61");
+        assertThat(summary.path("averageMfeR").asString()).isEqualTo("1.37");
+    }
+
+    @Test
+    void BR51_onPremiumWithoutAClosedTrade_theSummarySaysThereIsNothingToReview() {
+        when(journal.performanceDigest(USER))
+                .thenReturn(new PerformanceDigest(
+                        0,
+                        0,
+                        0,
+                        0,
+                        null,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        0,
+                        null,
+                        null,
+                        0,
+                        null,
+                        null,
+                        null,
+                        null));
+
+        ContextSnapshot premium = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        assertThat(premium.performance()).isEqualTo(PerformanceContext.NO_CLOSED_TRADES);
+        assertThat(premium.performance().available()).isFalse();
+        assertThat(premium.performance().summary()).isNull();
+        assertThat(premium.performance().message()).contains("no closed simulated trade");
+    }
+
+    @Test
+    void BR62_belowPremium_thePerformanceSummaryIsRefusedWithMsg29_andTheJournalIsNotRead() {
         doThrow(new BusinessException(ErrorCode.PLAN_FEATURE_NOT_INCLUDED, "PREMIUM only"))
                 .when(entitlements)
                 .requireFeature(USER, Feature.AI_PERFORMANCE_CONTEXT);
+
         assertThatThrownBy(() -> builder.build(USER, new AiContextSelection(null, null, null, null, true)))
-                .isInstanceOf(BusinessException.class);
+                .isInstanceOfSatisfying(BusinessException.class, refused -> assertThat(refused.errorCode())
+                        .isEqualTo(ErrorCode.PLAN_FEATURE_NOT_INCLUDED));
+        verify(journal, never()).performanceDigest(any());
     }
 
     @Test
@@ -125,6 +177,7 @@ class ContextSnapshotBuilderTest {
         when(plans.planContext(USER, PLAN)).thenReturn(plan());
         when(market.pairAnalysis(PAIR, MarketType.FUTURES, "1h", USER)).thenReturn(Optional.of(analysis()));
         when(entitlements.hasFeature(any(), any())).thenReturn(true);
+        when(journal.performanceDigest(USER)).thenReturn(digest());
 
         String stored = builder.toJson(builder.build(USER, new AiContextSelection(null, null, null, PLAN, true)));
 
@@ -138,6 +191,32 @@ class ContextSnapshotBuilderTest {
         assertThat(root.path("plan").path("riskRewardRatio").asString()).isEqualTo("2.5");
         assertThat(root.path("plan").path("warnings").get(0).path("type").asString())
                 .isEqualTo("HIGH_LEVERAGE");
+        assertThat(root.path("performance").path("summary").path("trades").asInt())
+                .isEqualTo(12);
+        JsonNode summary = root.path("performance").path("summary");
+        assertThat(summary.properties())
+                .as("aggregates only: no trade list, no nested record")
+                .allSatisfy(field -> assertThat(field.getValue().isContainer()).isFalse());
+    }
+
+    private static PerformanceDigest digest() {
+        return new PerformanceDigest(
+                12,
+                7,
+                5,
+                0,
+                new BigDecimal("0.58333333"),
+                new BigDecimal("184.20"),
+                new BigDecimal("12.40"),
+                new BigDecimal("-1.10"),
+                1,
+                new BigDecimal("1.9"),
+                new BigDecimal("0.42"),
+                11,
+                new BigDecimal("0.08"),
+                new BigDecimal("0.88"),
+                new BigDecimal("-0.61"),
+                new BigDecimal("1.37"));
     }
 
     private static List<String> fieldNames(JsonNode node) {
