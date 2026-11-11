@@ -12,6 +12,7 @@ import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.support.FixedClockConfig;
 import com.cryptopilot.support.PlanTraders;
@@ -113,11 +114,37 @@ class AnalysisControllerTest {
                 .andExpect(jsonPath("$.components", not(hasKey("derivatives"))))
                 .andExpect(jsonPath("$.setupScore.score").value(59))
                 .andExpect(jsonPath("$.setupScore.preset").value("DAY_TRADING"))
-                .andExpect(jsonPath("$.setupScore.presetVersion").value("v1"))
+                .andExpect(jsonPath("$.setupScore.presetVersion").value("v2")) // presets v2 (formulas v2)
                 .andExpect(jsonPath("$.setupScore.timeframe").value("1h"))
                 .andExpect(jsonPath("$.setupScore.openTime").value(hour.toString()))
                 .andExpect(jsonPath("$.setupScore", not(hasKey("dominantSide"))))
+                .andExpect(jsonPath("$.setupScore.scoredSide").value(nullValue())) // a v1 row stores no side
                 .andExpect(jsonPath("$.setupScore.components", not(hasKey("derivatives"))));
+    }
+
+    /** v2: a level of 5 leaves no room, so 35·100 + 30·100 + 15·100 + 20·5 = 8100 is capped at 54. */
+    @Test
+    void BR13_aV2RowWithNoRoom_answersTheCappedScoreAndItsReason() throws Exception {
+        UUID pair = data.pair("BTCUSDT", true, false, "TRADING", null, 0);
+        store(pair, MarketType.SPOT, "1h", hour, full(), spotV2("100", "100", "100", "5"));
+
+        analysis("spot", "BTCUSDT", "1h")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.components.formulaVersion").value("v2"))
+                .andExpect(jsonPath("$.setupScore.score").value(54))
+                .andExpect(jsonPath("$.setupScore.capReason").value("LOW_ROOM"))
+                .andExpect(jsonPath("$.setupScore.scoredSide").value("LONG"));
+    }
+
+    @Test
+    void BR13_anUncappedScore_hasNoCapReason() throws Exception {
+        UUID pair = data.pair("BTCUSDT", true, false, "TRADING", null, 0);
+        store(pair, MarketType.SPOT, "1h", hour, full(), spotV2("75", "50", "40", "60"));
+
+        analysis("spot", "BTCUSDT", "1h")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.setupScore.score").value(59))
+                .andExpect(jsonPath("$.setupScore.capReason").value(nullValue()));
     }
 
     /**
@@ -268,7 +295,7 @@ class AnalysisControllerTest {
                 .andExpect(jsonPath("$.components").value(nullValue()))
                 .andExpect(jsonPath("$.setupScore.score").value(59))
                 .andExpect(jsonPath("$.setupScore.preset").value("DAY_TRADING"))
-                .andExpect(jsonPath("$.setupScore.presetVersion").value("v1"))
+                .andExpect(jsonPath("$.setupScore.presetVersion").value("v2")) // presets v2 (formulas v2)
                 .andExpect(jsonPath("$.setupScore", hasKey("components")))
                 .andExpect(jsonPath("$.setupScore.components").value(nullValue()));
     }
@@ -398,6 +425,19 @@ class AnalysisControllerTest {
                 MarketType.SPOT, "1h", "v1", score(trend), score(momentum), score(volume), score(level), null);
     }
 
+    private static ComponentScores spotV2(String trend, String momentum, String volume, String level) {
+        return new ComponentScores(
+                MarketType.SPOT,
+                "1h",
+                "v2",
+                score(trend),
+                score(momentum),
+                score(volume),
+                score(level),
+                null,
+                ScoredSide.LONG);
+    }
+
     private static ComponentScores futures() {
         return new ComponentScores(
                 MarketType.FUTURES, "1h", "v1", score("100"), score("100"), score("50"), score("100"), score("50"));
@@ -419,7 +459,15 @@ class AnalysisControllerTest {
     private void store(
             UUID pair, MarketType market, String timeframe, Instant openTime, String[] values, ComponentScores c) {
         ComponentScores onTimeframe = new ComponentScores(
-                market, timeframe, c.formulaVersion(), c.trend(), c.momentum(), c.volume(), c.level(), c.derivatives());
+                market,
+                timeframe,
+                c.formulaVersion(),
+                c.trend(),
+                c.momentum(),
+                c.volume(),
+                c.level(),
+                c.derivatives(),
+                c.scoredSide());
         indicators.upsert(new StoredIndicators(
                 pair,
                 openTime,

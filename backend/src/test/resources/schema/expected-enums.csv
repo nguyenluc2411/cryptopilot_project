@@ -76,6 +76,7 @@ subscription_package,currency,ck_subscription_package_currency,VND
 subscription_package,tier,ck_subscription_package_tier,FREE|PRO|PREMIUM
 system_setting,value_type,ck_system_setting_value_type,INT|DECIMAL|BOOLEAN|STRING
 technical_indicator,market_type,ck_technical_indicator_market_type,SPOT|FUTURES
+technical_indicator,scored_side,ck_technical_indicator_scored_side,LONG|SHORT
 technical_indicator,timeframe,ck_technical_indicator_timeframe,15m|1h|4h|1d
 trading_journal,analysis_timeframe,ck_trading_journal_analysis_timeframe,15m|1h|4h|1d
 trading_journal,close_reason,ck_trading_journal_close_reason,TAKE_PROFIT|STOP_LOSS|MANUAL|LIQUIDATION

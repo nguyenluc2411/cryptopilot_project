@@ -5,7 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import com.cryptopilot.market.model.enums.MarketType;
@@ -14,6 +17,7 @@ import com.cryptopilot.trading.config.ReplayLockProperties;
 import java.time.Duration;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -163,6 +167,25 @@ class ReplayLockServiceImplTest {
         service(PROPERTIES).startHeartbeat();
 
         verify(scheduler).scheduleAtFixedRate(any(Runnable.class), eq(Duration.ofSeconds(30)));
+    }
+
+    @Test
+    void D85_noKeyHeld_schedulesNoHeartbeat() {
+        service(PROPERTIES);
+
+        verify(scheduler, never()).scheduleAtFixedRate(any(Runnable.class), any(Duration.class));
+    }
+
+    @Test
+    void D85_theFirstKeyHeld_startsTheHeartbeatOnce() {
+        doReturn(mock(ScheduledFuture.class))
+                .when(scheduler)
+                .scheduleAtFixedRate(any(Runnable.class), any(Duration.class));
+        ReplayLockServiceImpl holder = service(PROPERTIES);
+        holder.tryAcquire(MarketType.SPOT, PAIR);
+        holder.tryAcquire(MarketType.FUTURES, PAIR);
+
+        verify(scheduler, times(1)).scheduleAtFixedRate(any(Runnable.class), eq(Duration.ofSeconds(30)));
     }
 
     @Test

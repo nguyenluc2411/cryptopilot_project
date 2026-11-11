@@ -3,6 +3,7 @@ package com.cryptopilot.auth.config;
 import com.cryptopilot.user.model.enums.UserRole;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -243,7 +244,9 @@ public class SecurityConfig {
     private final AccessTokenAuthenticationConverter accessTokenConverter;
     private final SecurityProblemDetailHandler problemDetails;
 
+    /** Only in a web application: the calibration profile (market.tool) runs without a server and has no requests. */
     @Bean
+    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http.csrf(csrf -> csrf.disable())
                 // The policy is common.config.CorsConfig; a preflight is answered here, before authorization.

@@ -1,6 +1,7 @@
 package com.cryptopilot.market.model;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import java.math.BigDecimal;
 import java.util.Objects;
 
@@ -18,6 +19,7 @@ import java.util.Objects;
  * @param volume the volume component
  * @param level the level component
  * @param derivatives the derivatives component; always {@code null} on Spot
+ * @param scoredSide the side the components were scored for; {@code null} on v1 rows and when no side could be chosen
  */
 public record ComponentScores(
         MarketType market,
@@ -27,7 +29,21 @@ public record ComponentScores(
         BigDecimal momentum,
         BigDecimal volume,
         BigDecimal level,
-        BigDecimal derivatives) {
+        BigDecimal derivatives,
+        ScoredSide scoredSide) {
+
+    /** Scores with no scored side, as v1 stored them. */
+    public ComponentScores(
+            MarketType market,
+            String timeframe,
+            String formulaVersion,
+            BigDecimal trend,
+            BigDecimal momentum,
+            BigDecimal volume,
+            BigDecimal level,
+            BigDecimal derivatives) {
+        this(market, timeframe, formulaVersion, trend, momentum, volume, level, derivatives, null);
+    }
 
     public ComponentScores {
         Objects.requireNonNull(market, "market");

@@ -1,6 +1,8 @@
 package com.cryptopilot.market.dto.response;
 
+import com.cryptopilot.market.model.enums.CapReason;
 import com.cryptopilot.market.model.enums.DominantSide;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import java.time.Instant;
 
@@ -17,6 +19,10 @@ import java.time.Instant;
  * @param openTime the open time of the candle the components belong to, or {@code null} when none is stored
  * @param components the components the score was weighted from, or {@code null} when the plan locks them
  * @param dominantSide LONG, SHORT or NEUTRAL, or {@code null} when an EMA or the candle's close is missing
+ * @param capReason {@code LOW_ROOM} when the score was capped for too little room to the next level, else
+ *     {@code null}
+ * @param scoredSide the side the score is computed for (BR-51: information about the score, not a trade
+ *     recommendation); {@code null} on rows scored before it was stored and when no candle is analysed
  */
 public record FuturesSetupScoreResponse(
         Integer score,
@@ -25,5 +31,7 @@ public record FuturesSetupScoreResponse(
         String timeframe,
         Instant openTime,
         FuturesComponentsResponse components,
-        DominantSide dominantSide)
+        DominantSide dominantSide,
+        CapReason capReason,
+        ScoredSide scoredSide)
         implements SetupScoreResponse {}

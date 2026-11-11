@@ -11,6 +11,7 @@ import java.util.Objects;
  *
  * @param market the market of the series
  * @param timeframe the timeframe of the series, as BR-08 spells it
+ * @param open the candle's open, or {@code null} when not known
  * @param close the candle's close
  * @param volume the candle's base-asset volume
  * @param indicators the indicators after this candle
@@ -22,6 +23,7 @@ import java.util.Objects;
 public record ComponentInputs(
         MarketType market,
         String timeframe,
+        BigDecimal open,
         BigDecimal close,
         BigDecimal volume,
         IndicatorSnapshot indicators,

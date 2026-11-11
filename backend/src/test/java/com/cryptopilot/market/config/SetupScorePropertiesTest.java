@@ -1,17 +1,25 @@
 package com.cryptopilot.market.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.cryptopilot.market.SetupScoreTunings;
 import com.cryptopilot.market.model.ComponentWeights;
 import com.cryptopilot.market.model.StylePreset;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
+import java.math.BigDecimal;
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.mock.env.MockEnvironment;
 
 /**
- * The shipped presets are the D-53 v1 table, and a context with an invalid preset does not start.
+ * The shipped presets are the D-53 weights at version v2 with the v2 values, and a context with an invalid preset
+ * or v2 value does not start.
  *
  * <p>Rule: BR-13; D-53 (rules 4 and 6).
  */
@@ -21,11 +29,13 @@ class SetupScorePropertiesTest {
             .withInitializer(new ConfigDataApplicationContextInitializer())
             .withUserConfiguration(SetupScoreConfig.class);
 
+    private static final String V2 = "cryptopilot.market.setup-score.v2.";
+
     private final ApplicationContextRunner bare =
             new ApplicationContextRunner().withUserConfiguration(SetupScoreConfig.class);
 
     @Test
-    void D53_theShippedPresets_areTheV1Table() {
+    void D53_theShippedPresets_areTheD53WeightsAtVersionV2() {
         shipped.run(context -> {
             SetupScoreProperties properties = context.getBean(SetupScoreProperties.class);
 
@@ -85,9 +95,77 @@ class SetupScorePropertiesTest {
         bare.run(context -> assertThat(context).hasFailed());
     }
 
+    @Test
+    void BR13_theShippedV2Values_areTheDeclaredDefaults() {
+        shipped.run(context -> assertThat(
+                        context.getBean(SetupScoreProperties.class).v2())
+                .usingRecursiveComparison()
+                .withComparatorForType(BigDecimal::compareTo, BigDecimal.class)
+                .isEqualTo(SetupScoreTunings.DEFAULT));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(
+            strings = {
+                "against-side-factor=1.5",
+                "volume-saturation=0.5",
+                "funding-span=0",
+                "trend-band-sigma=-0.1",
+                "level-min-risk-sigma=6",
+                "room-cap-score=101",
+                "room-cap-to=10",
+                "funding-baseline=0.02"
+            })
+    void BR13_aV2ValueOutOfRange_stopsTheContext(String value) {
+        shipped.withPropertyValues(V2 + value)
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void BR13_aMissingV2Value_stopsTheContext() {
+        shipped.withPropertyValues(V2 + "room-cap-from=")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void BR13_aRoomCapNotBelowTheLowestAlertThreshold_stopsTheContext() {
+        shipped.withPropertyValues(V2 + "room-cap-score=55").run(context -> assertThat(context)
+                .hasFailed()
+                .getFailure()
+                .rootCause()
+                .hasMessageContaining("lowest alert threshold 55"));
+        shipped.withPropertyValues(
+                        V2 + "room-cap-score=60",
+                        "cryptopilot.user.risk-profiles.profiles.AGGRESSIVE.min-setup-score-to-alert=61")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void BR13_noAlertThresholdBound_failsStartUp() {
+        MockEnvironment noProfiles = new MockEnvironment();
+        MockEnvironment noThreshold =
+                new MockEnvironment().withProperty(SetupScoreConfig.RISK_PROFILES + ".AGGRESSIVE.max-leverage", "20");
+
+        for (MockEnvironment environment : List.of(noProfiles, noThreshold)) {
+            assertThatThrownBy(() -> SetupScoreConfig.alertThresholds(environment))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(SetupScoreConfig.RISK_PROFILES);
+        }
+    }
+
+    @Test
+    void BR13_requireCapBelow_comparesWithTheLowestThreshold() {
+        SetupScoreTunings.DEFAULT.requireCapBelow(List.of(75, 65, 55));
+        SetupScoreTunings.DEFAULT.requireCapBelow(List.of());
+
+        assertThatThrownBy(() -> SetupScoreTunings.DEFAULT.requireCapBelow(List.of(75, 54)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static void assertPreset(
             StylePreset preset, String timeframe, ComponentWeights spot, ComponentWeights futures) {
-        assertThat(preset.version()).isEqualTo("v1");
+        // v2: the preset version follows the component formulas v2; the weights are unchanged.
+        assertThat(preset.version()).isEqualTo("v2");
         assertThat(preset.timeframe()).isEqualTo(timeframe);
         assertThat(preset.spot()).isEqualTo(spot);
         assertThat(preset.futures()).isEqualTo(futures);

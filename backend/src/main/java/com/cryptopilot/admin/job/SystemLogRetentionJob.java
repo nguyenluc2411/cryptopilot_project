@@ -5,6 +5,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -13,9 +14,12 @@ import org.springframework.stereotype.Component;
  * The audit trail is not touched: what people did is kept as BR-57 says, what failed only as long as it helps to find
  * out why.
  *
+ * <p>Not on the {@code calibration} profile, a development tool that must store nothing and has no flag for this job.
+ *
  * <p>Rule: NSF-17; UC-52.
  */
 @Component
+@Profile("!calibration")
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class SystemLogRetentionJob {
 

@@ -17,6 +17,7 @@ import com.cryptopilot.market.model.IndicatorSnapshot;
 import com.cryptopilot.market.model.SeriesKey;
 import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
@@ -110,16 +111,19 @@ class IndicatorPipelineServiceTest {
         BigDecimal previous = store.macdHistogram(
                         pair, MarketType.SPOT, "1h", series.get(258).openTime())
                 .orElseThrow();
-        ComponentScores expected = SetupComponents.compute(new ComponentInputs(
-                MarketType.SPOT,
-                "1h",
-                series.get(259).close(),
-                series.get(259).volume(),
-                snapshot,
-                previous.doubleValue(),
-                levels.support(),
-                levels.resistance(),
-                null));
+        ComponentScores expected = SetupComponents.compute(
+                new ComponentInputs(
+                        MarketType.SPOT,
+                        "1h",
+                        series.get(259).open(),
+                        series.get(259).close(),
+                        series.get(259).volume(),
+                        snapshot,
+                        previous.doubleValue(),
+                        levels.support(),
+                        levels.resistance(),
+                        null),
+                presets.v2());
         assertThat(rows()).isEqualTo(2);
         assertThat(row.components()).isEqualTo(expected);
         assertThat(store.latest(pair, MarketType.SPOT, "1h").orElseThrow().components())
@@ -130,7 +134,13 @@ class IndicatorPipelineServiceTest {
         assertThat(row.nearestResistance()).isEqualTo(tenPlaces(levels.resistance()));
         assertThat(row.components().trend()).isNotNull();
         assertThat(row.components().momentum()).isNotNull();
-        assertThat(row.components().formulaVersion()).isEqualTo("v1");
+        assertThat(row.components().formulaVersion()).isEqualTo("v2");
+        assertThat(row.components().scoredSide()).isEqualTo(ScoredSide.LONG);
+        assertThat(sql.sql("select scored_side from technical_indicator where pair_id = ? and open_time = ?")
+                        .params(pair, Timestamp.from(series.get(259).openTime()))
+                        .query(String.class)
+                        .single())
+                .isEqualTo("LONG");
     }
 
     @Test
@@ -145,7 +155,8 @@ class IndicatorPipelineServiceTest {
                 .orElseThrow();
 
         assertThat(row.components().momentum()).isNotNull();
-        assertThat(SetupScoreCalculator.score(presets.preset(SetupStyle.DAY_TRADING), row.components(), null)
+        assertThat(SetupScoreCalculator.score(
+                                presets.preset(SetupStyle.DAY_TRADING), row.components(), null, presets.v2())
                         .score())
                 .isNotNull();
     }
@@ -196,12 +207,12 @@ class IndicatorPipelineServiceTest {
 
         pipeline.onCandleClosed(closed(MarketType.FUTURES, series.get(39)));
 
-        // funding 50·(0.0005 + 0.00025)/0.001 = 37.5; price and open interest both rose: 50
-        assertThat(store.latest(pair, MarketType.FUTURES, "1h")
-                        .orElseThrow()
-                        .components()
-                        .derivatives())
-                .isEqualByComparingTo("87.50");
+        // v2: funding 0.00025 is 0.15 of the span over the 0.0001 baseline, so LONG 50·0.35 = 17.5, SHORT 32.5;
+        // price and open interest rose: LONG 50, SHORT 0
+        ComponentScores components =
+                store.latest(pair, MarketType.FUTURES, "1h").orElseThrow().components();
+        assertThat(components.derivatives())
+                .isEqualByComparingTo(components.scoredSide() == ScoredSide.LONG ? "67.50" : "32.50");
     }
 
     /** Only a reading at the close and none an hour before: the changes are unknown, so is the component. */
