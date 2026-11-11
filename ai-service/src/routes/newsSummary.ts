@@ -1,5 +1,5 @@
 import type Bottleneck from "bottleneck";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { LlmError, type LlmProvider } from "../llm/provider.js";
 import { newsSummaryUserPrompt, unfence } from "../prompts/newsSummary.js";
 import {
@@ -8,20 +8,12 @@ import {
   NewsSummaryRequestSchema,
   type NewsSummaryResponse,
 } from "../schemas/newsSummary.js";
+import { failure, invalid } from "./failures.js";
 
 export interface NewsSummaryRouteDeps {
   provider: LlmProvider;
   limiter: Bottleneck;
 }
-
-/** The status and code each failure of the provider answers with; `retryable` tells the backend to try next run. */
-const FAILURES: Record<LlmError["kind"], { status: number; code: string }> = {
-  RATE_LIMITED: { status: 429, code: "LLM_RATE_LIMITED" },
-  UNAVAILABLE: { status: 503, code: "LLM_UNAVAILABLE" },
-  TIMEOUT: { status: 504, code: "LLM_TIMEOUT" },
-  REJECTED: { status: 502, code: "LLM_REJECTED" },
-  BAD_RESPONSE: { status: 502, code: "LLM_BAD_RESPONSE" },
-};
 
 /**
  * `POST /v1/news/summary`, NSF-11: one article in, its translated title, a summary, the article written again (D-129)
@@ -33,11 +25,7 @@ export function registerNewsSummary(app: FastifyInstance, deps: NewsSummaryRoute
   app.post("/v1/news/summary", async (request, reply) => {
     const parsed = NewsSummaryRequestSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({
-        code: "INVALID_REQUEST",
-        retryable: false,
-        issues: parsed.error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })),
-      });
+      return invalid(reply, parsed.error.issues);
     }
     const input = parsed.data;
     try {
@@ -73,11 +61,6 @@ export function registerNewsSummary(app: FastifyInstance, deps: NewsSummaryRoute
       throw error;
     }
   });
-}
-
-function failure(reply: FastifyReply, error: LlmError): FastifyReply {
-  const { status, code } = FAILURES[error.kind];
-  return reply.code(status).send({ code, retryable: error.retryable, message: error.message });
 }
 
 function json(text: string): unknown {

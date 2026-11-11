@@ -26,6 +26,21 @@ export const EnvSchema = z.object({
   LLM_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(10),
   LLM_MAX_CONCURRENT: z.coerce.number().int().positive().default(2),
   GEMINI_THINKING_LEVEL: z.enum(["minimal", "low", "medium", "high"]).optional(),
+  /**
+   * The assistant's own keys (NSF-16), so a conversation never waits behind the news summaries for the same quota.
+   * Gemini counts its limits per Google Cloud project, so these keys belong to another project. Left blank, the
+   * assistant shares LLM_API_KEY.
+   */
+  LLM_CHAT_API_KEY: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    commaList.pipe(z.array(z.string()).min(1, "needs at least one key")).optional(),
+  ),
+  LLM_CHAT_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(10),
+  LLM_CHAT_MAX_CONCURRENT: z.coerce.number().int().positive().default(2),
+  /** One assistant call; two of them and the pause before the retry fit inside the chat budget. */
+  LLM_CHAT_TIMEOUT_MS: z.coerce.number().int().positive().default(25_000),
+  /** How long a question may take here, queue included, when the backend does not say; the backend waits 60 s. */
+  LLM_CHAT_BUDGET_MS: z.coerce.number().int().positive().default(60_000),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

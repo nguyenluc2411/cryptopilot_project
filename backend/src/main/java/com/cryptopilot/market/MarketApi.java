@@ -138,6 +138,17 @@ public interface MarketApi {
      */
     String presetTimeframe(SetupStyle style);
 
+    /**
+     * The analysis of a pair as the Trader would see it on SCR-10 / SCR-11 now, with the same plan gates; empty when
+     * the pair is not enabled on that market (BR-07).
+     *
+     * @param timeframe {@code 15m}, {@code 1h}, {@code 4h} or {@code 1d}; {@code null} for 1h
+     * @param userId the Trader, whose profile selects the preset and whose plan the gates read
+     * @throws com.cryptopilot.common.exception.BusinessException {@code VALIDATION_FAILED} (MSG01) for an unknown
+     *     timeframe; on Futures {@code PLAN_FEATURE_NOT_INCLUDED} (MSG29) for a plan without {@code FUTURES_ANALYSIS}
+     */
+    Optional<PairAnalysis> pairAnalysis(UUID pairId, MarketType market, String timeframe, UUID userId);
+
     /** The pair's Futures leverage brackets, smallest notional first; empty when none are stored. */
     List<LeverageTier> leverageBrackets(UUID pairId);
 

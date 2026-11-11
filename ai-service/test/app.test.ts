@@ -1,7 +1,8 @@
 import Bottleneck from "bottleneck";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp, SECRET_HEADER } from "../src/app.js";
-import { LlmError, type GenerateRequest, type GenerateResult, type LlmProvider } from "../src/llm/provider.js";
+import { LlmError, type LlmProvider } from "../src/llm/provider.js";
+import { FakeProvider } from "./fakes.js";
 
 const SECRET = "s".repeat(48);
 
@@ -12,19 +13,6 @@ const BODY = {
   maxOutputTokens: 256,
   article: { title: "Bitcoin holds $81K", source: "CoinDesk Markets", text: "Bitcoin traded flat at $81,000." },
 };
-
-/** A provider that answers from a function and remembers what it was asked. */
-class FakeProvider implements LlmProvider {
-  readonly name = "fake";
-  readonly requests: GenerateRequest[] = [];
-
-  constructor(private readonly answer: (request: GenerateRequest) => GenerateResult | Promise<GenerateResult>) {}
-
-  async generateJson(request: GenerateRequest): Promise<GenerateResult> {
-    this.requests.push(request);
-    return this.answer(request);
-  }
-}
 
 const apps: ReturnType<typeof buildApp>[] = [];
 
