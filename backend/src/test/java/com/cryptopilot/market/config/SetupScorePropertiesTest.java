@@ -15,6 +15,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.mock.env.MockEnvironment;
 
 /**
  * The shipped presets are the D-53 weights at version v2 with the v2 values, and a context with an invalid preset
@@ -137,6 +138,19 @@ class SetupScorePropertiesTest {
                         V2 + "room-cap-score=60",
                         "cryptopilot.user.risk-profiles.profiles.AGGRESSIVE.min-setup-score-to-alert=61")
                 .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void BR13_noAlertThresholdBound_failsStartUp() {
+        MockEnvironment noProfiles = new MockEnvironment();
+        MockEnvironment noThreshold =
+                new MockEnvironment().withProperty(SetupScoreConfig.RISK_PROFILES + ".AGGRESSIVE.max-leverage", "20");
+
+        for (MockEnvironment environment : List.of(noProfiles, noThreshold)) {
+            assertThatThrownBy(() -> SetupScoreConfig.alertThresholds(environment))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(SetupScoreConfig.RISK_PROFILES);
+        }
     }
 
     @Test

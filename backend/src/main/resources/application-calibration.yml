@@ -9,9 +9,12 @@
 # the run opens no market stream, schedules no job and stores nothing; the security filter chain is not built without
 # a server. The indicator pipeline has no flag of its own: it only follows the candles the stream and the backfill
 # close, and both are off.
+# Flyway is off: the run expects a database that is already migrated and never changes its schema.
 spring:
   main:
     web-application-type: none
+  flyway:
+    enabled: false
   autoconfigure:
     # The hourly and daily time events of Spring Modulith, which nothing here listens to: no flag turns them off.
     exclude: org.springframework.modulith.moments.autoconfigure.MomentsAutoConfiguration
@@ -83,3 +86,6 @@ cryptopilot:
       enabled: false
     summary:
       enabled: false
+  ai:
+    assistant:
+      sweep-enabled: false

@@ -51,7 +51,13 @@ import org.springframework.web.context.WebApplicationContext;
  *
  * <p>Rule: BR-13; TECHNICAL_DESIGN 7.4.
  */
-@SpringBootTest(properties = {OwnDatabaseConfig.PROPERTY + "=" + CalibrationProfileTest.DATABASE, "DB_PASSWORD=unused"})
+// The profile turns Flyway off for a real run; the test's own empty database still needs the schema.
+@SpringBootTest(
+        properties = {
+            OwnDatabaseConfig.PROPERTY + "=" + CalibrationProfileTest.DATABASE,
+            "DB_PASSWORD=unused",
+            "spring.flyway.enabled=true"
+        })
 @ActiveProfiles({"dev", "calibration"})
 @Import({TestcontainersConfig.class, OwnDatabaseConfig.class})
 class CalibrationProfileTest {

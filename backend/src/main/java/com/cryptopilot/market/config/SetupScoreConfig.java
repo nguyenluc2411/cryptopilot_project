@@ -33,7 +33,7 @@ public class SetupScoreConfig {
                 Map.class,
                 ResolvableType.forClass(String.class),
                 ResolvableType.forClassWithGenerics(Map.class, String.class, String.class)));
-        return Binder.get(environment)
+        List<Integer> thresholds = Binder.get(environment)
                 .bind(RISK_PROFILES, profiles)
                 .map(Map::values)
                 .map(values -> values.stream()
@@ -42,5 +42,11 @@ public class SetupScoreConfig {
                         .map(Integer::valueOf)
                         .toList())
                 .orElse(List.of());
+        // Nothing bound (e.g. the property was renamed) would let the cap check pass with nothing to compare against.
+        if (thresholds.isEmpty()) {
+            throw new IllegalStateException(
+                    "No " + MIN_SCORE_TO_ALERT + " is bound under " + RISK_PROFILES + ", so the room cap is unchecked");
+        }
+        return thresholds;
     }
 }
