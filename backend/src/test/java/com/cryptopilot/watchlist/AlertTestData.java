@@ -1,13 +1,15 @@
 package com.cryptopilot.watchlist;
 
+import static org.awaitility.Awaitility.await;
+
 import com.cryptopilot.market.MarketTestData;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
@@ -15,6 +17,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * tests; {@link #clear()} removes everything it wrote.
  */
 public final class AlertTestData {
+
+    private static final Duration WAIT = Duration.ofSeconds(10);
 
     private final JdbcClient sql;
     private final MarketTestData market;
@@ -189,38 +193,23 @@ public final class AlertTestData {
     }
 
     /**
-     * A triggered alert notifies its owner after the commit (T-056), so a notification can still be written while the
-     * rows are removed; it goes first, and the removal is tried again when one arrived meanwhile.
+     * A triggered alert notifies its owner after the commit (T-056), so the account's deliveries are awaited before its
+     * rows go; a failed one runs nothing until the outbox resubmits it.
      */
     private void removeAccount(UUID account) {
-        for (int attempt = 1; ; attempt++) {
-            try {
-                sql.sql("delete from notification where user_id = ?")
-                        .param(account)
-                        .update();
-                sql.sql("delete from alert where user_id = ?").param(account).update();
-                sql.sql("delete from watchlist where user_id = ?")
-                        .param(account)
-                        .update();
-                sql.sql("delete from user_account where user_id = ?")
-                        .param(account)
-                        .update();
-                return;
-            } catch (DataIntegrityViolationException lateNotification) {
-                if (attempt == 5) {
-                    throw lateNotification;
-                }
-                pause();
-            }
-        }
-    }
-
-    private static void pause() {
-        try {
-            Thread.sleep(200);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        await().atMost(WAIT)
+                .until(() -> sql.sql("""
+                                select count(*) from event_publication
+                                 where listener_id like '%AlertNotificationListener%' and completion_date is null
+                                   and coalesce(status, '') <> 'FAILED' and serialized_event like ?""")
+                                .param("%" + account + "%")
+                                .query(Long.class)
+                                .single()
+                        == 0);
+        sql.sql("delete from notification where user_id = ?").param(account).update();
+        sql.sql("delete from alert where user_id = ?").param(account).update();
+        sql.sql("delete from watchlist where user_id = ?").param(account).update();
+        sql.sql("delete from user_account where user_id = ?").param(account).update();
     }
 
     private static OffsetDateTime now() {

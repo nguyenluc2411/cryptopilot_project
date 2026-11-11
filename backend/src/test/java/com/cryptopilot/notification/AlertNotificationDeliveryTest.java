@@ -3,6 +3,7 @@ package com.cryptopilot.notification;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import com.cryptopilot.common.service.OutboxService;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.watchlist.event.AlertTriggered;
@@ -51,6 +52,11 @@ class AlertNotificationDeliveryTest {
 
     private static final Duration WAIT = Duration.ofSeconds(10);
 
+    // Only this feature's rows, so other suites' publications are left alone.
+    private static final String ALERT_LISTENERS = "%AlertNotificationListener%";
+
+    private static final String MAIL_LISTENER = "%AlertNotificationListener.mail%";
+
     @Autowired
     private ApplicationEventPublisher events;
 
@@ -63,12 +69,15 @@ class AlertNotificationDeliveryTest {
     @Autowired
     private JdbcClient sql;
 
+    @Autowired
+    private OutboxService outbox;
+
     private final List<UUID> accounts = new ArrayList<>();
 
     @BeforeEach
     void emptyTheMailboxAndTheOutbox() {
         smtp.clear();
-        sql.sql("delete from event_publication").update();
+        deleteAlertPublications();
     }
 
     @AfterEach
@@ -85,7 +94,7 @@ class AlertNotificationDeliveryTest {
             sql.sql("delete from user_profile where user_id = ?").param(account).update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
-        sql.sql("delete from event_publication").update();
+        deleteAlertPublications();
     }
 
     @Test
@@ -147,11 +156,32 @@ class AlertNotificationDeliveryTest {
         transactions.executeWithoutResult(status -> events.publishEvent(event));
 
         await().atMost(WAIT).until(() -> unfinishedDeliveries() == 0);
-        assertThat(sql.sql("select count(*) from notification where user_id = ?")
-                        .param(trader)
-                        .query(Long.class)
-                        .single())
-                .isEqualTo(1L);
+        assertThat(notificationsOf(trader)).isEqualTo(1L);
+    }
+
+    /** NSF-15, T-056: an SMTP failure keeps the in-app notice and the outbox resends the mail (Richardson 2018, ch. 3). */
+    @Test
+    void NSF15_aMailServerFailure_keepsTheNoticeAndRetriesTheMail() throws Exception {
+        UUID trader = trader(true, true);
+        subscribeToPro(trader);
+        smtp.failing(true);
+
+        AlertTriggered event = fire(trader, true);
+
+        awaitNotification(event);
+        await().atMost(WAIT).until(() -> failedMailDeliveries() == 1);
+        assertThat(notificationsOf(trader)).isEqualTo(1L);
+        assertThat(smtp.sent()).isEmpty();
+
+        smtp.failing(false);
+        assertThat(outbox.retryFailedDeliveries()).isEqualTo(1);
+
+        await().atMost(WAIT).until(() -> unfinishedDeliveries() == 0);
+        assertThat(smtp.sent()).hasSize(1);
+        MimeMessage mail = smtp.sent().get(0);
+        assertThat(mail.getAllRecipients()[0].toString()).isEqualTo(address(trader));
+        assertThat(mail.getSubject()).isEqualTo("CryptoPilot alert: BTCUSDT Spot");
+        assertThat(notificationsOf(trader)).isEqualTo(1L);
     }
 
     private AlertTriggered fire(UUID trader, boolean notifyEmail) {
@@ -243,10 +273,31 @@ class AlertNotificationDeliveryTest {
         return RecordingMailSender.partOf(mail, "text/plain");
     }
 
-    private long unfinishedDeliveries() {
-        return sql.sql("select count(*) from event_publication")
+    private long notificationsOf(UUID trader) {
+        return sql.sql("select count(*) from notification where user_id = ?")
+                .param(trader)
                 .query(Long.class)
                 .single();
+    }
+
+    private long unfinishedDeliveries() {
+        return sql.sql("select count(*) from event_publication where listener_id like ? and completion_date is null")
+                .param(ALERT_LISTENERS)
+                .query(Long.class)
+                .single();
+    }
+
+    private long failedMailDeliveries() {
+        return sql.sql("select count(*) from event_publication where listener_id like ? and status = 'FAILED'")
+                .param(MAIL_LISTENER)
+                .query(Long.class)
+                .single();
+    }
+
+    private void deleteAlertPublications() {
+        sql.sql("delete from event_publication where listener_id like ?")
+                .param(ALERT_LISTENERS)
+                .update();
     }
 
     @TestConfiguration(proxyBeanMethods = false)
