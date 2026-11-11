@@ -1,4 +1,4 @@
-# Continuous integration of the backend: every pull request into develop or main, and every push to
+# Continuous integration of the backend and the AI Service: every pull request into develop or main, and every push to
 # develop, builds the backend and runs the whole suite exactly as the team does locally —
 #
 #     ./mvnw -B verify
@@ -84,3 +84,37 @@ jobs:
           path: backend/target/site/jacoco/
           if-no-files-found: ignore
           retention-days: 14
+
+  # The AI Service (Node.js, TypeScript): the type check and the vitest suite, on the same triggers as the
+  # backend. Its tests replace the LLM provider, so no key or secret is needed.
+  ai-service-test:
+    name: ai-service-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ai-service
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22 (engines in ai-service/package.json) with the npm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ai-service/package-lock.json
+
+      - name: Install the locked dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run the tests
+        run: npm test
