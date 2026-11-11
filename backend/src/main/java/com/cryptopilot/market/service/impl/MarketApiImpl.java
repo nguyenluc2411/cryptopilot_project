@@ -26,8 +26,10 @@ import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.FuturesPriceSnapshot;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.CapReason;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
@@ -306,6 +308,8 @@ public class MarketApiImpl implements MarketApi {
                 scoreOf(a.setupScore()),
                 presetOf(a.setupScore()),
                 a.setupScore() instanceof FuturesSetupScoreResponse f ? f.dominantSide() : null,
+                scoredSideOf(a.setupScore()),
+                capReasonOf(a.setupScore()),
                 futures ? currentMarkPrice(a.symbol()).orElse(null) : null,
                 futures ? currentFundingRate(a.symbol()).orElse(null) : null);
     }
@@ -350,6 +354,22 @@ public class MarketApiImpl implements MarketApi {
             case null -> null;
             case SpotSetupScoreResponse spot -> spot.preset();
             case FuturesSetupScoreResponse fut -> fut.preset();
+        };
+    }
+
+    private static ScoredSide scoredSideOf(SetupScoreResponse s) {
+        return switch (s) {
+            case null -> null;
+            case SpotSetupScoreResponse spot -> spot.scoredSide();
+            case FuturesSetupScoreResponse fut -> fut.scoredSide();
+        };
+    }
+
+    private static CapReason capReasonOf(SetupScoreResponse s) {
+        return switch (s) {
+            case null -> null;
+            case SpotSetupScoreResponse spot -> spot.capReason();
+            case FuturesSetupScoreResponse fut -> fut.capReason();
         };
     }
 

@@ -22,7 +22,10 @@ import com.cryptopilot.journal.JournalApi;
 import com.cryptopilot.journal.PerformanceDigest;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairAnalysis;
+import com.cryptopilot.market.model.enums.CapReason;
+import com.cryptopilot.market.model.enums.DominantSide;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.trading.PlanContext;
 import com.cryptopilot.trading.TradingPlanApi;
@@ -69,6 +72,20 @@ class ContextSnapshotBuilderTest {
         assertThat(snapshot.market()).isEqualTo(analysis());
         assertThat(snapshot.plan()).isNull();
         assertThat(snapshot.performance()).isNull();
+    }
+
+    /** Version 3 (D-146): the stored market part names the side the score was computed for and why it is capped. */
+    @Test
+    void D146_theStoredSnapshot_carriesTheScoredSideAndTheCapReason_besideTheDominantSide() {
+        when(market.pairAnalysis(PAIR, MarketType.FUTURES, "1h", USER)).thenReturn(Optional.of(analysis()));
+
+        JsonNode root = json.readTree(builder.toJson(
+                builder.build(USER, new AiContextSelection(PAIR, MarketType.FUTURES, "1h", null, false))));
+
+        assertThat(root.path("version").asInt()).isEqualTo(3);
+        assertThat(root.path("market").path("scoredSide").asString()).isEqualTo("SHORT");
+        assertThat(root.path("market").path("capReason").asString()).isEqualTo("LOW_ROOM");
+        assertThat(root.path("market").path("dominantSide").asString()).isEqualTo("NEUTRAL");
     }
 
     @Test
@@ -256,7 +273,9 @@ class ContextSnapshotBuilderTest {
                         new BigDecimal("55")),
                 72,
                 SetupStyle.DAY_TRADING,
-                null,
+                DominantSide.NEUTRAL,
+                ScoredSide.SHORT,
+                CapReason.LOW_ROOM,
                 new BigDecimal("78040"),
                 new BigDecimal("0.0001"));
     }

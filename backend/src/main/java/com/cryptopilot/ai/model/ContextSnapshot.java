@@ -20,8 +20,11 @@ import java.time.Instant;
 public record ContextSnapshot(
         int version, Instant builtAt, PairAnalysis market, PlanContext plan, PerformanceContext performance) {
 
-    /** 2: the performance summary carries the journal's aggregates (T-074, D-111). */
-    public static final int VERSION = 2;
+    /**
+     * 3: the market part carries the side the setup score was computed for and its cap reason (D-146); 2: the
+     * performance summary carries the journal's aggregates (T-074, D-111).
+     */
+    public static final int VERSION = 3;
 
     /** Whether there is nothing to send: a general question carries no snapshot. Not a bean getter, so not serialized. */
     public boolean carriesNothing() {

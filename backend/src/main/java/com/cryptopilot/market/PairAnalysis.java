@@ -1,7 +1,9 @@
 package com.cryptopilot.market;
 
+import com.cryptopilot.market.model.enums.CapReason;
 import com.cryptopilot.market.model.enums.DominantSide;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -27,7 +29,11 @@ import java.util.Objects;
  * @param components the component scores, or {@code null} when locked or not stored
  * @param setupScore the setup score, or {@code null} when it cannot be read
  * @param preset the style preset the score was weighted under
- * @param dominantSide the winning side of the trend on Futures; {@code null} on Spot
+ * @param dominantSide the winning side of the trend on Futures, market information only; {@code null} on Spot
+ * @param scoredSide the side the setup score was computed for (on Futures the MACD histogram decides it when the
+ *     trend is NEUTRAL), context for the score and not a trade recommendation (BR-51, D-146); {@code null} on rows
+ *     scored before it was stored
+ * @param capReason {@code LOW_ROOM} when the score was capped for too little room to the next level, else {@code null}
  * @param markPrice the Futures mark price, or {@code null}
  * @param fundingRate the Futures funding rate as a fraction (0.0001 = 0.01 %), or {@code null}
  */
@@ -45,6 +51,8 @@ public record PairAnalysis(
         Integer setupScore,
         SetupStyle preset,
         DominantSide dominantSide,
+        ScoredSide scoredSide,
+        CapReason capReason,
         BigDecimal markPrice,
         BigDecimal fundingRate) {
 
