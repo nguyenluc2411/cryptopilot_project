@@ -35,6 +35,7 @@ public final class IndicatorEngine {
 
     private Instant lastOpenTime;
     private IndicatorSnapshot snapshot;
+    private IndicatorSnapshot previousSnapshot;
 
     /** @param interval the length of one candle of the series */
     public IndicatorEngine(Duration interval) {
@@ -84,6 +85,11 @@ public final class IndicatorEngine {
         return snapshot;
     }
 
+    /** The indicators after the candle before the last one taken, or {@code null} before the second. */
+    public IndicatorSnapshot previousSnapshot() {
+        return previousSnapshot;
+    }
+
     private void take(Instant openTime, double close, double volume) {
         OptionalDouble e20 = ema20.update(close);
         OptionalDouble e50 = ema50.update(close);
@@ -94,6 +100,7 @@ public final class IndicatorEngine {
         OptionalDouble vol = volumeSma20.update(volume);
         int candles = snapshot == null ? 1 : snapshot.candles() + 1;
         lastOpenTime = openTime;
+        previousSnapshot = snapshot;
         snapshot = new IndicatorSnapshot(
                 openTime,
                 candles,
