@@ -450,14 +450,12 @@ class AlertApiTest {
     // Plan features and limits (BR-17, BR-62)
     // ------------------------------------------------------------------------------------------
 
+    /** BR-62: FREE is refused indicator and external-channel alerts; Futures alerts are any Trader's since V61. */
     @Test
-    void BR62_aFreeTrader_isRefusedIndicatorFuturesAndExternalAlerts_withMsg29() throws Exception {
+    void BR62_aFreeTrader_isRefusedIndicatorAndExternalAlerts_withMsg29_butAlertsOnFutures() throws Exception {
         UUID trader = trader();
 
         as(trader, post(ALERTS), indicator(pairs.get(0), "SPOT", "RSI_14", "1h", "LESS_THAN", "30"))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.messageCode").value("MSG29"));
-        as(trader, post(ALERTS), price(pairs.get(0), "FUTURES", "1"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.messageCode").value("MSG29"));
         as(
@@ -473,9 +471,11 @@ class AlertApiTest {
                                 "notifyPush", true))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.messageCode").value("MSG29"));
-
         assertThat(alertsOf(trader, null)).isZero();
         assertThat(watchRows(trader)).isZero();
+
+        as(trader, post(ALERTS), price(pairs.get(0), "FUTURES", "1")).andExpect(status().isCreated());
+        assertThat(alertsOf(trader, null)).isOne();
     }
 
     @Test

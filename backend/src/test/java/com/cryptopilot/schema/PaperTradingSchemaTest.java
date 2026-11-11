@@ -43,12 +43,14 @@ class PaperTradingSchemaTest {
     private UUID userId;
     private UUID pairId;
     private UUID usdtId;
+    private UUID btcId;
 
     @BeforeEach
     void insertReferenceRows() {
         userId = insertUser("paper.trader@cryptopilot.test");
         usdtId = insertCoin("PUSDT");
-        UUID base = insertCoin("PBTC");
+        btcId = insertCoin("PBTC");
+        UUID base = btcId;
         pairId = UUID.randomUUID();
         jdbc.sql("""
                         insert into crypto_pair (pair_id, base_coin_id, quote_coin_id, symbol,
@@ -95,11 +97,20 @@ class PaperTradingSchemaTest {
     // ---------------------------------------------------------------- wallets
 
     @Test
-    void aBalance_mayBeZeroButNeverNegative() {
+    void aSpotBalance_mayBeZeroButNeverNegative() {
         insertBalance("SPOT", usdtId, BigDecimal.ZERO, BigDecimal.ZERO);
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertBalance("FUTURES", usdtId, new BigDecimal("-0.00000001"), BigDecimal.ZERO));
+                .isThrownBy(() -> insertBalance("SPOT", btcId, new BigDecimal("-0.00000001"), BigDecimal.ZERO));
+    }
+
+    /** D-127: a cross loss may take the Futures wallet below zero while cross positions are open; it locks nothing. */
+    @Test
+    void theFuturesBalance_mayBeNegativeButNeverLocksAnything() {
+        insertBalance("FUTURES", usdtId, new BigDecimal("-500"), BigDecimal.ZERO);
+
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> insertBalance("FUTURES", btcId, BigDecimal.TEN, BigDecimal.ONE));
     }
 
     @Test

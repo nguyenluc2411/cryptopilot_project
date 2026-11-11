@@ -3,6 +3,7 @@ package com.cryptopilot.paper.job;
 import com.cryptopilot.market.PairMarketDisabled;
 import com.cryptopilot.market.event.SpotPairStoppedTrading;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.service.impl.FuturesPairStop;
 import com.cryptopilot.paper.service.impl.PairStopCancellation;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -22,7 +23,10 @@ import org.springframework.transaction.annotation.Propagation;
  * stop the others, and the delivery then fails so the outbox delivers it again. A delivery run again cancels nothing
  * twice, as an account whose orders are cancelled has none left open.
  *
- * <p>Rule: TR-02; NSF-01; BR-07, UC-45; ADR-010.
+ * <p>A Futures market taken out of service ends the paper Futures of the pair instead ({@link FuturesPairStop}): its
+ * orders cancelled and its positions closed at the mark (TR-46, plan 9.7).
+ *
+ * <p>Rule: TR-02, TR-46; NSF-01; BR-07, UC-45; ADR-010.
  *
  * <p>Reference: Richardson, C. (2018). <i>Microservices Patterns</i>. Manning, ch. 3 (Transactional Outbox; idempotent
  * consumers).
@@ -33,9 +37,11 @@ public class PairStopListener {
     private static final Logger log = LoggerFactory.getLogger(PairStopListener.class);
 
     private final PairStopCancellation cancellation;
+    private final FuturesPairStop futures;
 
-    public PairStopListener(PairStopCancellation cancellation) {
+    public PairStopListener(PairStopCancellation cancellation, FuturesPairStop futures) {
         this.cancellation = cancellation;
+        this.futures = futures;
     }
 
     // No transaction of its own: each account takes one.
@@ -44,11 +50,31 @@ public class PairStopListener {
         cancelAll(stopped.pairId(), stopped.symbol());
     }
 
-    // Paper orders are Spot only, so a Futures market taken out of service leaves them as they are.
     @ApplicationModuleListener(propagation = Propagation.NOT_SUPPORTED)
     public void on(PairMarketDisabled disabled) {
         if (disabled.market() == MarketType.SPOT) {
             cancelAll(disabled.pairId(), disabled.symbol());
+        } else {
+            stopFutures(disabled.pairId(), disabled.symbol());
+        }
+    }
+
+    private void stopFutures(UUID pairId, String symbol) {
+        int failed = 0;
+        for (UUID userId : futures.accountsOn(pairId)) {
+            try {
+                futures.stop(userId, pairId);
+            } catch (RuntimeException failure) {
+                failed++;
+                log.warn(
+                        "TR-46 paper Futures of account {} on {} not ended; the delivery is tried again: {}",
+                        userId,
+                        symbol,
+                        failure.toString());
+            }
+        }
+        if (failed > 0) {
+            throw new IllegalStateException(failed + " accounts with paper Futures on " + symbol + " not ended yet");
         }
     }
 

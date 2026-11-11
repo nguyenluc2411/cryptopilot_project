@@ -20,6 +20,7 @@ import com.cryptopilot.market.client.StreamMessage.Level;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.event.MarketStreamReconnected;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.model.enums.BinanceVenue;
@@ -30,11 +31,13 @@ import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.market.service.impl.LatestMarketData;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import jakarta.annotation.PreDestroy;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -56,7 +59,8 @@ import org.springframework.stereotype.Component;
  * 7.1 step 1), a pair's streams never split across two. The pairs are read again after every symbol
  * synchronisation of the market and every {@code refreshInterval}; when the set has changed, that market's
  * connections are replaced, and a pair no longer streamed is dropped from the latest prices (BR-07). An unchanged
- * set touches nothing.
+ * set touches nothing. A Futures pair's best bid and ask and depth (TR-38) go on connections of their own, on the
+ * exchange's {@code /public} route; everything else of the market shares the {@code /market} ones.
  *
  * <h2>Routing, without blocking a reader</h2>
  *
@@ -95,6 +99,7 @@ public class MarketStreamSupervisor {
     private final TradingMarketData trading;
     private final List<MarketTradeListener> tradeListeners;
     private final List<MarkPriceListener> markListeners;
+    private final Clock clock;
     private final Map<MarketType, MarketStreams> running = new EnumMap<>(MarketType.class);
 
     public MarketStreamSupervisor(
@@ -109,7 +114,8 @@ public class MarketStreamSupervisor {
             List<MinuteKlineListener> minuteListeners,
             TradingMarketData trading,
             List<MarketTradeListener> tradeListeners,
-            List<MarkPriceListener> markListeners) {
+            List<MarkPriceListener> markListeners,
+            Clock clock) {
         this.streams = streams;
         this.candles = candles;
         this.latest = latest;
@@ -122,6 +128,7 @@ public class MarketStreamSupervisor {
         this.trading = trading;
         this.tradeListeners = List.copyOf(tradeListeners);
         this.markListeners = List.copyOf(markListeners);
+        this.clock = clock;
     }
 
     /** Opens the streams of both markets and schedules the refresh, when enabled. */
@@ -144,6 +151,37 @@ public class MarketStreamSupervisor {
     public void onSymbolsSynchronised(SymbolsSynchronised event) {
         if (properties.enabled()) {
             refresh(event.market());
+        }
+    }
+
+    /**
+     * An administrator brought a pair into service: its streams open now, not at the next refresh. After commit, so the
+     * pair is read as saved, and on the scheduler, so the administrator's answer does not wait for the reconnection.
+     */
+    @EventListener
+    public void onPairMarketEnabled(PairMarketEnabled event) {
+        if (!properties.enabled()) {
+            return;
+        }
+        AfterCommit.run(() -> {
+            try {
+                scheduler.schedule(() -> refreshFor(event), clock.instant());
+            } catch (RuntimeException refused) {
+                // Shutting down: the next refresh opens the streams anyway.
+                log.warn("NSF-03 {} could not schedule {}: {}", event.market(), event.symbol(), refused.toString());
+            }
+        });
+    }
+
+    private void refreshFor(PairMarketEnabled event) {
+        try {
+            refresh(event.market());
+        } catch (RuntimeException failure) {
+            log.error(
+                    "NSF-03 {} could not open {}; the next refresh tries again",
+                    event.market(),
+                    event.symbol(),
+                    failure);
         }
     }
 
@@ -202,19 +240,33 @@ public class MarketStreamSupervisor {
         BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
         BinanceStreamShard.Listener listener = new Router(market, bySymbol);
         List<BinanceStreamShard> shards = new ArrayList<>();
+        pack(
+                targets,
+                target -> streams.streamsFor(venue, target.symbol()),
+                batch -> shards.add(streams.shard(venue, market + "-" + shards.size(), batch, listener)));
+        // TR-38: the Futures best bid and ask and depth are served under /public only, on connections of their own.
+        pack(
+                targets,
+                target -> streams.publicStreamsFor(venue, target.symbol()),
+                batch -> shards.add(streams.publicShard(market + "-PUBLIC-" + shards.size(), batch, listener)));
+        return shards;
+    }
+
+    /** Packs the streams of the targets into batches of at most one connection's, a pair's never split. */
+    private void pack(
+            List<StreamTarget> targets, Function<StreamTarget, List<String>> namesOf, Consumer<List<String>> open) {
         List<String> batch = new ArrayList<>();
         for (StreamTarget target : targets) {
-            List<String> names = streams.streamsFor(venue, target.symbol());
-            if (batch.size() + names.size() > streams.maxStreamsPerConnection()) {
-                shards.add(streams.shard(venue, market + "-" + shards.size(), batch, listener));
+            List<String> names = namesOf.apply(target);
+            if (!batch.isEmpty() && batch.size() + names.size() > streams.maxStreamsPerConnection()) {
+                open.accept(batch);
                 batch = new ArrayList<>();
             }
             batch.addAll(names);
         }
         if (!batch.isEmpty()) {
-            shards.add(streams.shard(venue, market + "-" + shards.size(), batch, listener));
+            open.accept(batch);
         }
-        return shards;
     }
 
     /** What one market streams now. */
@@ -247,7 +299,13 @@ public class MarketStreamSupervisor {
                         pipeline.submit(market, target, kline);
                     }
                 }
-                case TickerMessage ticker -> latest.recordTicker(target.pairId(), ticker);
+                case TickerMessage ticker -> {
+                    // The Spot snapshots (spot_market_data) are kept by pair: a futures ticker of the same pair,
+                    // read for the trading screen's 24-hour figures only, must not take a Spot one's place.
+                    if (market == MarketType.SPOT) {
+                        latest.recordTicker(target.pairId(), ticker);
+                    }
+                }
                 case MarkPriceMessage markPrice -> {
                     latest.recordMarkPrice(target.pairId(), markPrice);
                     toMarkListeners(target, markPrice);

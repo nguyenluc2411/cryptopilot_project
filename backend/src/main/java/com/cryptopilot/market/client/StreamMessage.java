@@ -36,12 +36,12 @@ public sealed interface StreamMessage {
             implements StreamMessage {}
 
     /**
-     * The Spot rolling 24-hour ticker, {@code <symbol>@ticker}, once a second.
+     * The rolling 24-hour ticker, {@code <symbol>@ticker}, once a second, on Spot and on futures.
      *
      * @param symbol the pair
      * @param lastPrice the last traded price
-     * @param bestBidPrice the best bid
-     * @param bestAskPrice the best ask
+     * @param bestBidPrice the best bid; {@code null} on futures, whose ticker does not carry it
+     * @param bestAskPrice the best ask; {@code null} on futures
      * @param highPrice24h the highest price of the last 24 hours
      * @param lowPrice24h the lowest price of the last 24 hours
      * @param priceChangePercent24h the change of the last 24 hours, in percent

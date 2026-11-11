@@ -34,7 +34,7 @@ class CryptoPairTest {
 
     /** TR-02: the other Spot filters are stored and read back with the three; futures keeps none of them. */
     @Test
-    void TR02_theOtherSpotFilters_areStoredAndReadBack_onSpotOnly() {
+    void TR02_theOtherSpotFilters_areStoredAndReadBack_andFuturesKeepOnlyTheirOwn() {
         SymbolRules rules = new SymbolRules(
                 new BigDecimal("0.01"),
                 new BigDecimal("1000000"),
@@ -67,7 +67,17 @@ class CryptoPairTest {
                         FUTURES_FILTERS.tickSize(), FUTURES_FILTERS.stepSize(), FUTURES_FILTERS.minNotional(), rules));
 
         assertThat(pair.filters(MarketType.SPOT)).contains(spot);
-        assertThat(pair.filters(MarketType.FUTURES).orElseThrow().rules()).isEqualTo(SymbolRules.NONE);
+        // Futures keep only their own: the price and quantity bounds, PERCENT_PRICE (the BUY's upper and the SELL's
+        // lower
+        // multiplier) and the caps; no maximum notional and no trailing delta.
+        SymbolRules futures = pair.filters(MarketType.FUTURES).orElseThrow().rules();
+        assertThat(futures.minPrice()).isEqualByComparingTo(rules.minPrice());
+        assertThat(futures.marketMaxQuantity()).isEqualByComparingTo(rules.marketMaxQuantity());
+        assertThat(futures.maxNotional()).isNull();
+        assertThat(futures.minTrailingAboveDelta()).isNull();
+        assertThat(futures.bidMultiplierUp()).isEqualByComparingTo(rules.bidMultiplierUp());
+        assertThat(futures.askMultiplierDown()).isEqualByComparingTo(rules.askMultiplierDown());
+        assertThat(futures.maxNumOrders()).isEqualTo(rules.maxNumOrders());
     }
 
     /** BR-07: a new pair is known and not available — INACTIVE, both markets off, no filters yet. */
@@ -85,6 +95,25 @@ class CryptoPairTest {
         assertThat(pair.isEnabledOn(MarketType.SPOT)).isFalse();
         assertThat(pair.getBaseCoinId()).isEqualTo(BTC);
         assertThat(pair.getQuoteCoinId()).isEqualTo(USDT);
+    }
+
+    /** UC-45: making a pair INACTIVE turns both markets off and drops the Futures ceiling; ACTIVE turns none on. */
+    @Test
+    void UC45_anInactivePair_hasBothMarketsOff_andActivatingItOpensNone() {
+        CryptoPair pair = CryptoPair.register(BTC, USDT, "BTCUSDT");
+        pair.enable(MarketType.SPOT);
+        pair.enable(MarketType.FUTURES);
+        pair.limitLeverage(20);
+
+        pair.changeStatus(PairStatus.INACTIVE);
+
+        assertThat(pair.isSpotEnabled()).isFalse();
+        assertThat(pair.isFuturesEnabled()).isFalse();
+        assertThat(pair.getMaxLeverage()).isNull();
+
+        pair.changeStatus(PairStatus.ACTIVE);
+        assertThat(pair.isEnabledOn(MarketType.SPOT)).isFalse();
+        assertThat(pair.isEnabledOn(MarketType.FUTURES)).isFalse();
     }
 
     /** One symbol, two markets: each keeps its own filters, and applying one leaves the other untouched. */
@@ -113,6 +142,55 @@ class CryptoPairTest {
 
         assertThat(pair.filters(MarketType.SPOT)).contains(SPOT_FILTERS);
         assertThat(pair.filters(MarketType.FUTURES)).contains(FUTURES_FILTERS);
+    }
+
+    /**
+     * TR-39: Futures keep PERCENT_PRICE, one pair of multipliers read back for both sides, and the order caps; the
+     * Spot-only rules are not kept for Futures.
+     */
+    @Test
+    void TR39_futuresKeepTheirBounds_percentPrice_andTheOrderCaps() {
+        CryptoPair pair = CryptoPair.register(BTC, USDT, "BTCUSDT");
+        SymbolRules sent = new SymbolRules(
+                new BigDecimal("1"),
+                new BigDecimal("4529764"),
+                new BigDecimal("0.001"),
+                new BigDecimal("1000"),
+                new BigDecimal("0.002"),
+                new BigDecimal("120"),
+                new BigDecimal("0.001"),
+                null,
+                null,
+                null,
+                new BigDecimal("1.05"),
+                new BigDecimal("0.95"),
+                new BigDecimal("1.05"),
+                new BigDecimal("0.95"),
+                null,
+                null,
+                null,
+                null,
+                200,
+                10);
+
+        pair.applyFilters(
+                MarketType.FUTURES,
+                new PairFilters(new BigDecimal("0.1"), new BigDecimal("0.001"), new BigDecimal("5"), sent));
+
+        SymbolRules kept = pair.filters(MarketType.FUTURES).orElseThrow().rules();
+        assertThat(kept.minPrice()).isEqualByComparingTo("1");
+        assertThat(kept.maxPrice()).isEqualByComparingTo("4529764");
+        assertThat(kept.minQuantity()).isEqualByComparingTo("0.001");
+        assertThat(kept.maxQuantity()).isEqualByComparingTo("1000");
+        assertThat(kept.marketMinQuantity()).isEqualByComparingTo("0.002");
+        assertThat(kept.marketMaxQuantity()).isEqualByComparingTo("120");
+        assertThat(kept.marketStepSize()).isEqualByComparingTo("0.001");
+        assertThat(kept.bidMultiplierUp()).isEqualByComparingTo("1.05");
+        assertThat(kept.askMultiplierUp()).isEqualByComparingTo("1.05");
+        assertThat(kept.bidMultiplierDown()).isEqualByComparingTo("0.95");
+        assertThat(kept.askMultiplierDown()).isEqualByComparingTo("0.95");
+        assertThat(kept.maxNumOrders()).isEqualTo(200);
+        assertThat(kept.maxNumAlgoOrders()).isEqualTo(10);
     }
 
     /** A later synchronisation replaces the filters of that market. */

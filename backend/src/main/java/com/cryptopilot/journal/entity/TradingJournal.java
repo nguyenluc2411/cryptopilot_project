@@ -59,6 +59,10 @@ public class TradingJournal extends BaseEntity {
     @Column(name = "plan_id", updatable = false)
     private UUID planId;
 
+    /** The strategy the Trader assigned; {@code null} until then. Written by the review (T-049). */
+    @Column(name = "strategy_id", insertable = false, updatable = false)
+    private UUID strategyId;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "source", nullable = false, length = 32, updatable = false)
     private TradeSource source;
@@ -152,6 +156,22 @@ public class TradingJournal extends BaseEntity {
     /** How many changes of the levels were made; written by the change only. */
     @Column(name = "level_change_count", nullable = false, updatable = false)
     private int levelChangeCount;
+
+    /** The Trader's review (SCR-21); written by T-049. */
+    @Column(name = "setup_description", insertable = false, updatable = false)
+    private String setupDescription;
+
+    /** The Trader's review (SCR-21); written by T-049. */
+    @Column(name = "lessons_learned", insertable = false, updatable = false)
+    private String lessonsLearned;
+
+    /** The Trader's review (SCR-21); written by T-049. */
+    @Column(name = "mistakes", insertable = false, updatable = false)
+    private String mistakes;
+
+    /** The Trader's review (SCR-21); written by T-049. */
+    @Column(name = "chart_image_url", length = 500, insertable = false, updatable = false)
+    private String chartImageUrl;
 
     /** The settlement instants known to be missing, oldest first; {@code null} when none. */
     @JdbcTypeCode(SqlTypes.ARRAY)

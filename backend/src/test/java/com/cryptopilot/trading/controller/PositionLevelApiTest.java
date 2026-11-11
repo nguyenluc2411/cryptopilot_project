@@ -20,6 +20,7 @@ import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.support.ClosedKlines;
+import com.cryptopilot.support.PlanNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.entity.TradingPlan;
@@ -213,7 +214,7 @@ class PositionLevelApiTest {
                     .update();
             jdbc.sql("delete from audit_log where user_id = ?").param(admin).update();
             for (UUID each : pairs) {
-                deleteNotifications(each);
+                PlanNotifications.removeOfPair(jdbc, each);
                 jdbc.sql("""
                                 delete from trading_journal_level_change where journal_id in
                                        (select journal_id from trading_journal where pair_id = ?)""").param(each).update();
@@ -671,20 +672,6 @@ class PositionLevelApiTest {
                                                   updated_at)
                         values (?, ?, 'x', ?, 'ACTIVE', ?, ?)""").params(id, id + "@tpe.invalid", role.name(), now(), now()).update();
         return id;
-    }
-
-    /** Waits for the notifications the closed positions of the pair send after their commit, and deletes them. */
-    private void deleteNotifications(UUID of) {
-        awaitUntil(
-                () -> jdbc.sql("""
-                                        select count(*) from trading_journal j
-                                         where j.pair_id = ? and j.trade_status = 'CLOSED'
-                                           and not exists (select 1 from notification n
-                                                            where n.source_key = 'POSITION_CLOSED:' || j.journal_id)""").param(of).query(Long.class).single() == 0,
-                "the notifications of the closed positions");
-        jdbc.sql("""
-                        delete from notification where source_key in
-                               (select 'POSITION_CLOSED:' || journal_id from trading_journal where pair_id = ?)""").param(of).update();
     }
 
     /** An access token, timed by the test's clock that the token validator reads. */

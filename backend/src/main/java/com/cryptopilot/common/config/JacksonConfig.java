@@ -6,6 +6,7 @@ import org.springframework.boot.jackson.autoconfigure.JsonMapperBuilderCustomize
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.core.StreamWriteFeature;
+import tools.jackson.databind.DeserializationFeature;
 
 /**
  * How every response body writes a decimal: as a string, in plain notation.
@@ -40,5 +41,14 @@ public class JacksonConfig {
                 .withConfigOverride(
                         BigDecimal.class,
                         override -> override.setFormat(JsonFormat.Value.forShape(JsonFormat.Shape.STRING)));
+    }
+
+    /**
+     * A whole-number field takes whole numbers only: {@code "maxLeverage": 20.5} is refused (MSG01) instead of being
+     * cut to 20 without a word, which is what Jackson does by default. A request that means 20 sends 20.
+     */
+    @Bean
+    JsonMapperBuilderCustomizer wholeNumbersOnly() {
+        return builder -> builder.disable(DeserializationFeature.ACCEPT_FLOAT_AS_INT);
     }
 }

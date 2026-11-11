@@ -55,6 +55,16 @@ class GlobalExceptionHandlerTest {
     @Autowired
     private MockMvcTester mockMvc;
 
+    /** UC-52: the system log names a request by its route; without one, ids in the path are hidden. */
+    @Test
+    void UC52_theOperation_isTheRoute_orThePathWithItsIdsHidden() {
+        assertThat(GlobalExceptionHandler.operation()).as("no request").isEqualTo("unknown");
+        assertThat(GlobalExceptionHandler.idsHidden("/api/v1/plans/019b76da-a800-7d01-8000-0000000000a1/legs/7/v2"))
+                .isEqualTo("/api/v1/plans/{id}/legs/{id}/v2");
+        assertThat(GlobalExceptionHandler.idsHidden("/api/v1/coins/1inch")).isEqualTo("/api/v1/coins/1inch");
+        assertThat(GlobalExceptionHandler.idsHidden(null)).isEmpty();
+    }
+
     @Test
     void businessException_answersWithTheStatusAndCodesOfItsErrorCode() {
         MvcTestResult result = mockMvc.get().uri("/test-errors/business").exchange();
@@ -147,6 +157,16 @@ class GlobalExceptionHandlerTest {
      * <p>The constraint name identifies which rule fired, so it belongs in the log and not in the
      * response — it tells a caller what the tables are called and which column is unique.
      */
+    /** A NUL byte the database cannot store is the request's fault: 400 MSG01, never a 409 "conflict". */
+    @Test
+    void textTheDatabaseCannotStore_answers400() {
+        MvcTestResult result = mockMvc.get().uri("/test-errors/unstorable").exchange();
+
+        assertThat(result).hasStatus(HttpStatus.BAD_REQUEST);
+        assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("VALIDATION_FAILED");
+        assertThat(result).bodyJson().extractingPath("$.messageCode").isEqualTo("MSG01");
+    }
+
     @Test
     void refusedWrite_answers409AndNamesNoConstraintInTheResponse() throws UnsupportedEncodingException {
         MvcTestResult result = mockMvc.get().uri("/test-errors/duplicate").exchange();
@@ -248,6 +268,13 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/broken")
         void broken() {
             throw new IllegalStateException("connection string postgres://user:secret@db/cryptopilot is invalid");
+        }
+
+        @GetMapping("/unstorable")
+        void unstorable() {
+            throw new DataIntegrityViolationException(
+                    "could not execute statement",
+                    new SQLException("ERROR: invalid byte sequence for encoding \"UTF8\": 0x00", "22021"));
         }
 
         @GetMapping("/duplicate")

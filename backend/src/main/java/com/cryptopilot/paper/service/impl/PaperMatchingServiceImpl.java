@@ -4,7 +4,10 @@ import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.entity.FuturesAccountConfig;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.model.CrossAccount;
+import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
@@ -12,6 +15,7 @@ import com.cryptopilot.paper.model.TriggerOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.repository.FuturesAccountConfigRepository;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperMatchingWatermarkRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
@@ -22,6 +26,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -38,10 +43,15 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * A stop limit or a trailing stop the price triggered is triggered the same way, under the lock, and only once.
  *
+ * <p>A Futures order's fill is applied to the Trader's position by {@link FuturesSettlement} (TR-16), and a Futures
+ * conditional order the price triggered places the order it carries through {@link FuturesTrigger} (TR-20). An
+ * isolated position a mark reached is liquidated through {@link FuturesLiquidation} (TR-22), cross positions through
+ * {@link FuturesCrossLiquidation} (TR-23).
+ *
  * <p>An order of a Spot pair the system no longer trades, stopped by the exchange or disabled by an administrator, is
  * cancelled instead ({@code PAIR_NOT_TRADING}), by the cancellation the pair's stop runs.
  *
- * <p>Rule: TR-02, TR-09, TR-11; NSF-01, NSF-07; Q-T6.
+ * <p>Rule: TR-02, TR-09, TR-11, TR-16, TR-20, TR-22, TR-23, TR-42; NSF-01, NSF-07; Q-T6.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -52,12 +62,20 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     private final PaperAccountRepository accounts;
     private final PaperOrderRepository orders;
     private final SpotSettlement settlement;
+    private final FuturesSettlement futuresSettlement;
+    private final FuturesTrigger futuresTrigger;
+    private final FuturesLiquidation liquidation;
+    private final FuturesCrossLiquidation crossLiquidation;
+    private final FuturesMarginCalls marginCalls;
+    private final FuturesAccountConfigRepository accountConfigs;
+    private final FuturesOrderLists futuresTpSl;
     private final SpotStopTrigger stopTrigger;
     private final PaperOrderLists lists;
     private final PairStopCancellation pairStops;
     private final PaperMatchingWatermarkRepository watermarks;
     private final UserLock lock;
     private final MarketApi market;
+    private final FuturesMarkCatchUp markCatchUp;
     private final QuoteUsdtRate usdtRates;
     private final Clock clock;
 
@@ -86,6 +104,43 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             return false;
         }
         PaperOrder order = found.get();
+        if (order.getMarketType() == MarketType.FUTURES) {
+            if (order.getAmendedAt() != null && resting.placedAt().isBefore(order.getAmendedAt())) {
+                // Amended since the engine tracked it (TR-25): the copy the engine reached is gone, the amended order
+                // is tracked anew.
+                return false;
+            }
+            if (order.expiredBy(tradedAt)) {
+                // Its good-till date came before the price reached it: the GTD job expires it (TR-44).
+                return false;
+            }
+            // The rest at the limit price, as a maker; what the position does not take ends the order (TR-16). A
+            // replayed fill is dated when it is applied, with the candle's time kept apart (plan 9.5), even when that
+            // is past the good-till date of an order the candle reached in time.
+            Instant at = source == FillSource.REPLAY ? clock.instant() : tradedAt;
+            if (source == FillSource.REPLAY) {
+                futuresSettlement.executeReplayed(
+                        account,
+                        order,
+                        order.getLimitPrice(),
+                        order.remainingQuantity(),
+                        Liquidity.MAKER,
+                        at,
+                        tradedAt);
+            } else {
+                futuresSettlement.execute(
+                        account, order, order.getLimitPrice(), order.remainingQuantity(), Liquidity.MAKER, source, at);
+            }
+            futuresTpSl.settle(account, order, at);
+            log.info(
+                    "TR-16 paper Futures order {} filled at {} ({}, {}): {}",
+                    order.getId(),
+                    order.getLimitPrice(),
+                    tradedAt,
+                    source,
+                    order.getOrderStatus());
+            return true;
+        }
         if (cancelledAsNotTrading(account, order)) {
             return false;
         }
@@ -114,6 +169,72 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<TriggerOrder> markTriggerOrders() {
+        return orders.findAwaitingMarkTrigger(OrderStatus.OPEN);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LiquidationLevel> liquidationLevels() {
+        return liquidation.levels();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LiquidationLevel> liquidationLevels(UUID userId, UUID pairId) {
+        return liquidation.levels(userId, pairId);
+    }
+
+    @Override
+    @Transactional
+    public boolean liquidate(LiquidationLevel level, BigDecimal mark, Instant at) {
+        PaperAccount account = accounts.findByUserId(level.userId())
+                .orElseThrow(() -> new IllegalStateException("account " + level.userId() + " is not stored"));
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.userId());
+        return liquidation.liquidate(account, level.positionId(), mark, at);
+    }
+
+    @Override
+    @Transactional
+    public Optional<UUID> liquidateCross(UUID userId, UUID pairId, Instant at) {
+        Optional<PaperAccount> account = accounts.findByUserId(userId);
+        if (account.isEmpty()) {
+            return Optional.empty();
+        }
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        return crossLiquidation.step(account.get(), pairId, at);
+    }
+
+    @Override
+    @Transactional
+    public boolean marginCall(UUID userId, UUID positionId, BigDecimal mark, Instant at) {
+        return accounts.findByUserId(userId)
+                .map(account -> marginCalls.call(account, positionId, mark, at))
+                .orElse(false);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UUID> liquidatingSince(Instant at) {
+        return accountConfigs.findByLiquidatingSinceLessThanEqual(at).stream()
+                .map(FuturesAccountConfig::userId)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CrossAccount> crossAccounts() {
+        return crossLiquidation.accounts();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<CrossAccount> crossAccount(UUID userId) {
+        return crossLiquidation.account(userId);
+    }
+
+    @Override
     @Transactional
     public boolean trigger(
             TriggerOrder watched, Instant at, BigDecimal stopPrice, FillSource source, BigDecimal candleOpen) {
@@ -126,6 +247,11 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
             return false;
         }
         PaperOrder order = found.get();
+        if (order.getMarketType() == MarketType.FUTURES) {
+            // A replay reached the trigger in the past; the order it places takes the book now (plan 9.5).
+            futuresTrigger.execute(account, order, source == FillSource.REPLAY ? clock.instant() : at, source);
+            return true;
+        }
         if (cancelledAsNotTrading(account, order)) {
             return false;
         }
@@ -194,5 +320,22 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     @Transactional
     public void advanceWatermark(MarketType market, UUID pairId, Instant openTime) {
         watermarks.advance(market.name(), pairId, openTime, clock.instant());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Instant> markWatermark(UUID pairId) {
+        return watermarks.lastMarkCandleOpenTime(pairId);
+    }
+
+    @Override
+    @Transactional
+    public void advanceMarkWatermark(UUID pairId, Instant openTime) {
+        watermarks.advanceMark(pairId, openTime, clock.instant());
+    }
+
+    @Override
+    public void markCatchingUp(UUID pairId, boolean catchingUp) {
+        market.pairListings(Set.of(pairId)).forEach(pair -> markCatchUp.set(pair.symbol(), catchingUp));
     }
 }

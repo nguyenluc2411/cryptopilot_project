@@ -100,4 +100,37 @@ public final class StreamFrames {
                         + "\"asks\":[[\"84282.01\",\"7.90\"],[\"84283.00\",\"1.25\"]]}}")
                 .formatted(symbol.toLowerCase(Locale.ROOT), lastUpdateId);
     }
+
+    /** A Futures best bid and ask, as the /public route sends it: with an event type and an event time (TR-38). */
+    public static String futuresBookTicker(String symbol, long updateId, String bid, String ask, Instant at) {
+        return ("{\"stream\":\"%s@bookTicker\",\"data\":{\"e\":\"bookTicker\",\"u\":%d,\"s\":\"%s\","
+                        + "\"ps\":\"%s\",\"b\":\"%s\",\"B\":\"3.661\",\"a\":\"%s\",\"A\":\"2.768\","
+                        + "\"T\":%d,\"E\":%d,\"st\":1}}")
+                .formatted(
+                        symbol.toLowerCase(Locale.ROOT),
+                        updateId,
+                        symbol,
+                        symbol,
+                        bid,
+                        ask,
+                        at.toEpochMilli() - 1,
+                        at.toEpochMilli());
+    }
+
+    /** A Futures partial depth of two levels a side, as the /public route sends it: a depthUpdate (TR-38). */
+    public static String futuresDepth(String symbol, long lastUpdateId, Instant at) {
+        return ("{\"stream\":\"%s@depth20@100ms\",\"data\":{\"e\":\"depthUpdate\",\"E\":%d,\"T\":%d,"
+                        + "\"s\":\"%s\",\"ps\":\"%s\",\"U\":%d,\"u\":%d,\"pu\":%d,"
+                        + "\"b\":[[\"79996.90\",\"3.662\"],[\"79996.80\",\"0.002\"]],"
+                        + "\"a\":[[\"79997.00\",\"2.768\"],[\"79997.10\",\"0.010\"]]}}")
+                .formatted(
+                        symbol.toLowerCase(Locale.ROOT),
+                        at.toEpochMilli(),
+                        at.toEpochMilli() - 2,
+                        symbol,
+                        symbol,
+                        lastUpdateId - 9,
+                        lastUpdateId,
+                        lastUpdateId - 10);
+    }
 }

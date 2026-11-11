@@ -169,7 +169,7 @@ class EntitlementServiceImplTest {
     /** Table 3.1 and D-58: switches as 0/1, limits as numbers, {@code -} for unlimited. */
     @ParameterizedTest(name = "{0}: FREE {1}, PRO {2}, PREMIUM {3}")
     @CsvSource({
-        "FUTURES_ANALYSIS, 0, 1, 1",
+        "FUTURES_ANALYSIS, 1, 1, 1",
         "SCORE_COMPONENTS, 0, 1, 1",
         "ACTIVE_PLAN_MAX, 3, -, -",
         "WATCHLIST_MAX, 5, 50, 100",
@@ -212,7 +212,7 @@ class EntitlementServiceImplTest {
         Map<PlanTier, UUID> traders = tradersOnEachTier();
 
         assertThatExceptionOfType(BusinessException.class)
-                .isThrownBy(() -> service.requireFeature(traders.get(PlanTier.FREE), Feature.FUTURES_ANALYSIS))
+                .isThrownBy(() -> service.requireFeature(traders.get(PlanTier.FREE), Feature.SCORE_COMPONENTS))
                 .satisfies(e -> {
                     assertThat(e.errorCode()).isEqualTo(ErrorCode.PLAN_FEATURE_NOT_INCLUDED);
                     assertThat(e.messageArgs()).containsExactly("PRO");
@@ -242,7 +242,7 @@ class EntitlementServiceImplTest {
         UUID free = trader();
 
         assertThatExceptionOfType(BusinessException.class)
-                .isThrownBy(() -> service.requireFeature(free, Feature.FUTURES_ANALYSIS))
+                .isThrownBy(() -> service.requireFeature(free, Feature.SCORE_COMPONENTS))
                 .satisfies(e -> assertThat(e.messageArgs()).containsExactly("PREMIUM"));
     }
 

@@ -101,6 +101,27 @@ public class PaperWallets {
     }
 
     /**
+     * Changes the Futures wallet by a signed amount and records it, creating the balance the first time: a realised
+     * profit or loss, a clearance or funding fee, or an insurance cover. Unlike {@link #debit} it never refuses, as the
+     * Futures wallet may go below zero while cross positions are open (D-127).
+     *
+     * @param pairId the pair of the position it comes from, which the income history shows (TR-19)
+     * @return the ledger entry written
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public PaperLedgerEntry changeFutures(
+            PaperAccount account, UUID pairId, CoinListing coin, BigDecimal amount, LedgerEntryType type, Ref ref) {
+        PaperBalance balance = find(account, WalletType.FUTURES, coin)
+                .orElseGet(() -> remember(
+                        balances.save(PaperBalance.empty(account.userId(), WalletType.FUTURES, coin.coinId()))));
+        balance.changeFutures(amount);
+        PaperLedgerEntry entry =
+                ledger.save(PaperLedgerEntry.of(balance, type, amount, ref).onPair(pairId));
+        feed.balance(account, balance, coin.symbol());
+        return entry;
+    }
+
+    /**
      * Holds back part of the free amount of a coin for a working order. The total does not change, so no ledger entry
      * is written.
      *

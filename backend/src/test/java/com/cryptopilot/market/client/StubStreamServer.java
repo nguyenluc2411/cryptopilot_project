@@ -189,7 +189,8 @@ public final class StubStreamServer implements AutoCloseable {
             for (String line = readLine(in); !line.isEmpty(); line = readLine(in)) {
                 lines.add(line);
             }
-            paths.add(lines.getFirst().split(" ")[1]);
+            String path = lines.getFirst().split(" ")[1];
+            paths.add(path);
             signal();
             if (refusals.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
                 out.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -210,7 +211,7 @@ public final class StubStreamServer implements AutoCloseable {
                             + "Sec-WebSocket-Accept: " + accept + "\r\n\r\n")
                     .getBytes(StandardCharsets.US_ASCII));
             out.flush();
-            Connection connection = new Connection(socket, in, out);
+            Connection connection = new Connection(path, socket, in, out);
             synchronized (connections) {
                 connections.add(connection);
                 connections.notifyAll();
@@ -249,6 +250,7 @@ public final class StubStreamServer implements AutoCloseable {
     /** One upgraded connection, seen from the server. */
     public static final class Connection {
 
+        private final String path;
         private final Socket socket;
         private final InputStream in;
         private final OutputStream out;
@@ -256,10 +258,16 @@ public final class StubStreamServer implements AutoCloseable {
         private volatile Integer closeCode;
         private volatile boolean ended;
 
-        private Connection(Socket socket, InputStream in, OutputStream out) {
+        private Connection(String path, Socket socket, InputStream in, OutputStream out) {
+            this.path = path;
             this.socket = socket;
             this.in = in;
             this.out = out;
+        }
+
+        /** The request target of its handshake, e.g. {@code /stream?streams=...}. */
+        public String path() {
+            return path;
         }
 
         /** Sends one text frame. */

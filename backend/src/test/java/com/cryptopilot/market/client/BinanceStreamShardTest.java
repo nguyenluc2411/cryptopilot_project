@@ -415,6 +415,7 @@ class BinanceStreamShardTest {
                 Duration.ofMinutes(2),
                 2,
                 100,
-                new BinanceStreamProperties.Trading(false, 20, Duration.ofSeconds(10), 50));
+                new BinanceStreamProperties.Trading(
+                        false, false, URI.create("wss://fstream.binance.com/public"), 20, Duration.ofSeconds(10), 50));
     }
 }

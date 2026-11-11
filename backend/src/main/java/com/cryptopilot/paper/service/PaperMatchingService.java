@@ -1,6 +1,8 @@
 package com.cryptopilot.paper.service;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.paper.model.CrossAccount;
+import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.ReplayedCandle;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
@@ -16,7 +18,7 @@ import java.util.UUID;
  * The storage side of the paper matching engine: the orders its book starts from, the fills it decides, and how far
  * it has matched.
  *
- * <p>Rule: TR-02, TR-09, TR-11; NSF-07; Q-T6.
+ * <p>Rule: TR-02, TR-09, TR-11, TR-42; NSF-07; Q-T6.
  */
 public interface PaperMatchingService {
 
@@ -25,6 +27,50 @@ public interface PaperMatchingService {
 
     /** Every stop limit and trailing stop that still waits for its trigger. */
     List<TriggerOrder> triggerOrders();
+
+    /** Every Futures conditional order that waits for the mark price to trigger it (TR-20). */
+    List<TriggerOrder> markTriggerOrders();
+
+    /** The liquidation levels of every open isolated Futures position (TR-22). */
+    List<LiquidationLevel> liquidationLevels();
+
+    /** The liquidation levels of one Trader's open isolated Futures positions on one pair, as they are now (TR-22). */
+    List<LiquidationLevel> liquidationLevels(UUID userId, UUID pairId);
+
+    /**
+     * Liquidates the position of the level under its Trader's lock if the mark still reaches it (TR-22).
+     *
+     * @return whether it was liquidated; {@code false} for a level the database no longer bears out
+     */
+    boolean liquidate(LiquidationLevel level, BigDecimal mark, Instant at);
+
+    /**
+     * One step of the Trader's cross liquidation under their lock (TR-23): judged on the database at the latest marks;
+     * when due, the account is marked as liquidating, its orders cancelled, and the cross position losing most is
+     * closed if it is on {@code pairId}.
+     *
+     * @param pairId the pair the step acts for; {@code null} to only name the pair to close first
+     * @return the pair whose cross position is to close next, or empty when nothing more is due
+     */
+    Optional<UUID> liquidateCross(UUID userId, UUID pairId, Instant at);
+
+    /**
+     * Sends a margin call if the margin ratio holds on the database now (TR-43): of the isolated position, or of the
+     * Trader's cross positions together when {@code positionId} is {@code null}.
+     *
+     * @param mark the mark of the isolated position's pair; unused for the cross positions
+     * @return whether a call was sent
+     */
+    boolean marginCall(UUID userId, UUID positionId, BigDecimal mark, Instant at);
+
+    /** The Traders whose cross liquidation started at or before {@code at} and still runs (TR-23). */
+    List<UUID> liquidatingSince(Instant at);
+
+    /** The cross side of every Trader with an open cross position, which the engine screens on each mark (TR-23). */
+    List<CrossAccount> crossAccounts();
+
+    /** The cross side of one Trader's account as it is now, or empty without an open cross position (TR-23). */
+    Optional<CrossAccount> crossAccount(UUID userId);
 
     /**
      * Triggers a stop limit or a trailing stop the last price reached, under its Trader's lock, if it still waits: it
@@ -67,4 +113,19 @@ public interface PaperMatchingService {
 
     /** Records that the candle opened at {@code openTime} is closed and fully matched; never moves backwards. */
     void advanceWatermark(MarketType market, UUID pairId, Instant openTime);
+
+    /**
+     * The open time of the Futures pair's last 1-minute mark price candle its mark triggers and liquidations ran over,
+     * from which a mark replay starts; or empty (TR-42).
+     */
+    Optional<Instant> markWatermark(UUID pairId);
+
+    /** Records that the mark price candle opened at {@code openTime} was run over; never moves backwards (TR-42). */
+    void advanceMarkWatermark(UUID pairId, Instant openTime);
+
+    /**
+     * Whether the engine is catching up on the Futures pair's missed marks: meanwhile the pair is {@code MARK_STALE}
+     * whatever its latest mark (TR-42, plan 9.5).
+     */
+    void markCatchingUp(UUID pairId, boolean catchingUp);
 }

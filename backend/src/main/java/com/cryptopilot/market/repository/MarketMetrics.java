@@ -2,6 +2,7 @@ package com.cryptopilot.market.repository;
 
 import com.cryptopilot.admin.AdminMetricSource;
 import com.cryptopilot.admin.model.enums.ReportGrouping;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -35,6 +36,9 @@ public class MarketMetrics implements AdminMetricSource {
     /** How far back the cheap look goes: past the longest timeframe stored, a day, with room to spare. */
     static final Duration RECENT = Duration.ofDays(2);
 
+    /** The shortest timeframe BR-08 stores: a healthy feed closes one at least this often. */
+    static final MarketInterval SHORTEST_STORED_TIMEFRAME = MarketInterval.FIFTEEN_MINUTES;
+
     private final JdbcClient sql;
 
     @Override
@@ -44,6 +48,28 @@ public class MarketMetrics implements AdminMetricSource {
             latestClose(market, now).ifPresent(close -> latest.put(market.name(), close));
         }
         return Map.of("latestCandle", latest);
+    }
+
+    /**
+     * The health panel's ingestion figures: the latest stored candle of each market, and the markets whose Binance
+     * IP ban (T-017) has not ended yet, with when it ends, and the shortest stored timeframe the feed is judged by.
+     */
+    @Override
+    public Map<String, Object> health(Instant now) {
+        Map<String, Instant> latest = new TreeMap<>();
+        for (MarketType market : MarketType.values()) {
+            latestClose(market, now).ifPresent(close -> latest.put(market.name(), close));
+        }
+        Map<String, Instant> bans = new TreeMap<>();
+        sql.sql("select market_type, banned_until from binance_ban where banned_until > ?")
+                .param(Timestamp.from(now))
+                .query((row, index) -> Map.entry(
+                        row.getString("market_type"),
+                        row.getTimestamp("banned_until").toInstant()))
+                .list()
+                .forEach(ban -> bans.put(ban.getKey(), ban.getValue()));
+        return Map.of(
+                "latestCandle", latest, "binanceBans", bans, "shortestTimeframe", SHORTEST_STORED_TIMEFRAME.duration());
     }
 
     private Optional<Instant> latestClose(MarketType market, Instant now) {

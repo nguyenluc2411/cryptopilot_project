@@ -85,7 +85,11 @@ class BaselineSchemaTest {
             "academy_article",
             "academy_term",
             "academy_progress",
-            "user_relation");
+            "user_relation",
+            "futures_account_config",
+            "futures_symbol_config",
+            "futures_position",
+            "futures_margin_adjustment");
 
     @Autowired
     private JdbcClient jdbc;
@@ -112,7 +116,7 @@ class BaselineSchemaTest {
     @Test
     void schema_holdsTheFiftyBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(51);
+        assertThat(BUSINESS_TABLES).hasSize(55);
     }
 
     @Test
@@ -123,7 +127,8 @@ class BaselineSchemaTest {
                         + " dropped_backfill_gap (V20, the gaps the backfill gave up on) and order_matching_watermark"
                         + " (V21, where the paper matching engine stopped) are technical tables, not"
                         + " business entities; legacy_paper_account and legacy_paper_transfer keep the rows V47"
-                        + " folded into the Trader and the ledger, untouched, until a later migration drops them")
+                        + " folded into the Trader and the ledger, untouched, until a later migration drops them;"
+                        + " system_event (V59, the system log of UC-52) is operational state too")
                 .contains(
                         "event_publication",
                         "flyway_schema_history",
@@ -132,8 +137,9 @@ class BaselineSchemaTest {
                         "dropped_backfill_gap",
                         "order_matching_watermark",
                         "legacy_paper_account",
-                        "legacy_paper_transfer")
-                .hasSize(BUSINESS_TABLES.size() + 8);
+                        "legacy_paper_transfer",
+                        "system_event")
+                .hasSize(BUSINESS_TABLES.size() + 9);
     }
 
     @Test

@@ -2,11 +2,15 @@ package com.cryptopilot.common.exception;
 
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.common.web.CorrelationIdFilter;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
@@ -20,8 +24,11 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 import tools.jackson.core.JacksonException;
 
@@ -50,6 +57,19 @@ import tools.jackson.core.JacksonException;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
+
+    /** Told of every unexpected error, for the system log (UC-52); {@code null} in a unit test. */
+    private final ApplicationEventPublisher events;
+
+    /** Without anyone told of unexpected errors, as a unit test builds it. */
+    public GlobalExceptionHandler() {
+        this(null);
+    }
+
+    @Autowired
+    public GlobalExceptionHandler(ApplicationEventPublisher events) {
+        this.events = events;
+    }
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
@@ -117,6 +137,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ProblemDetail> handleDataIntegrityViolation(DataIntegrityViolationException exception) {
         String reference = CorrelationIdFilter.currentCorrelationId()
                 .orElseGet(() -> UuidV7.next().toString());
+        if (UNREADABLE_TEXT.equals(sqlState(exception))) {
+            // A NUL or a broken UTF-8 sequence in a parameter: the request is wrong, nothing conflicts.
+            log.info("Request refused: text the database cannot store, reference {}", reference);
+            ProblemDetail body = problemDetail(ErrorCode.VALIDATION_FAILED, VALIDATION_DETAIL, reference);
+            return ResponseEntity.status(ErrorCode.VALIDATION_FAILED.status()).body(body);
+        }
         log.warn("Integrity constraint refused a write, reference {}: {}", reference, mostSpecificMessage(exception));
         ProblemDetail body = problemDetail(ErrorCode.DATA_CONFLICT, CONFLICT_DETAIL, reference);
         return ResponseEntity.status(ErrorCode.DATA_CONFLICT.status()).body(body);
@@ -143,21 +169,63 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         String reference = CorrelationIdFilter.currentCorrelationId()
                 .orElseGet(() -> UuidV7.next().toString());
         log.error("Unhandled exception, reference {}", reference, exception);
+        publish(exception, reference);
         ProblemDetail body = problemDetail(ErrorCode.INTERNAL_ERROR, UNEXPECTED_DETAIL, reference);
         return ResponseEntity.status(ErrorCode.INTERNAL_ERROR.status()).body(body);
     }
 
+    /** Tells the system log; a listener that fails must not change the answer. */
+    private void publish(Exception exception, String reference) {
+        if (events == null) {
+            return;
+        }
+        try {
+            events.publishEvent(new UnexpectedFailure(operation(), exception, reference));
+        } catch (RuntimeException listenerFailed) {
+            log.warn("The unexpected error {} could not be passed on: {}", reference, listenerFailed.toString());
+        }
+    }
+
+    /**
+     * The current request's method and route, e.g. {@code GET /api/v1/plans/{planId}}, so the failures of one endpoint
+     * share a fingerprint whatever ids they were called with. Never the query, which may carry personal data.
+     */
+    static String operation() {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes)) {
+            return "unknown";
+        }
+        HttpServletRequest request = attributes.getRequest();
+        Object route = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        String path =
+                route instanceof String pattern && !pattern.isBlank() ? pattern : idsHidden(request.getRequestURI());
+        return request.getMethod() + " " + path;
+    }
+
+    /** The path with each UUID or all-digit segment as {@code {id}}, for a request no handler matched. */
+    static String idsHidden(String uri) {
+        if (uri == null) {
+            return "";
+        }
+        return ID_SEGMENT.matcher(uri).replaceAll("/{id}");
+    }
+
+    private static final Pattern ID_SEGMENT = Pattern.compile(
+            "/(?:[0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?=/|$)");
+
     /**
      * A request body that failed Bean Validation. The offending fields are reported one by one
      * under {@code errors}, so the web client can show each message under its own input instead of
-     * one banner for the whole form.
+     * one banner for the whole form. A value that could not be converted answers the default text: the binder's own
+     * message names Java types and repeats the input.
      */
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
             MethodArgumentNotValidException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
         Map<String, String> errors = new LinkedHashMap<>();
         for (FieldError fieldError : exception.getBindingResult().getFieldErrors()) {
-            errors.putIfAbsent(fieldError.getField(), messageOf(fieldError));
+            errors.putIfAbsent(
+                    fieldError.getField(),
+                    fieldError.isBindingFailure() ? DEFAULT_FIELD_MESSAGE : messageOf(fieldError));
         }
         for (ObjectError globalError : exception.getBindingResult().getGlobalErrors()) {
             errors.putIfAbsent(globalError.getObjectName(), messageOf(globalError));
@@ -237,6 +305,27 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static String traceId() {
         return CorrelationIdFilter.currentCorrelationId().orElse(null);
+    }
+
+    /**
+     * PostgreSQL's SQLSTATE 22021, "character not in repertoire": a NUL byte or an invalid UTF-8 sequence in a value,
+     * which no text column can store. Spring reports it as a {@link DataIntegrityViolationException}, as it does a
+     * unique key, but it is the request's text, not a conflict with stored data.
+     */
+    static final String UNREADABLE_TEXT = "22021";
+
+    /** The SQLSTATE of the deepest {@link java.sql.SQLException} in the chain, or {@code null}. */
+    private static String sqlState(Throwable exception) {
+        String state = null;
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.sql.SQLException sql && sql.getSQLState() != null) {
+                state = sql.getSQLState();
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return state;
     }
 
     /** The innermost message, which is where the driver puts the name of the constraint. */

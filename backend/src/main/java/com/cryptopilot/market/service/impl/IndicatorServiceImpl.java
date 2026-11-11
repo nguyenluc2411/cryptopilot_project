@@ -64,14 +64,14 @@ public class IndicatorServiceImpl implements IndicatorService {
         synchronized (state) {
             if (state.engine == null) {
                 state.engine = rebuild(key, interval, candle.openTime());
-                return new IndicatorUpdate(IndicatorOutcome.RESTORED, state.engine.snapshot());
+                return update(IndicatorOutcome.RESTORED, state.engine);
             }
             IndicatorOutcome outcome = state.engine.offer(
                     candle.openTime(),
                     candle.close().doubleValue(),
                     candle.baseVolume().doubleValue());
             if (outcome == IndicatorOutcome.ACCEPTED || outcome == IndicatorOutcome.DUPLICATE) {
-                return new IndicatorUpdate(outcome, state.engine.snapshot());
+                return update(outcome, state.engine);
             }
             Instant last = state.engine.lastOpenTime();
             log.warn(
@@ -83,7 +83,7 @@ public class IndicatorServiceImpl implements IndicatorService {
                     last);
             Instant upTo = candle.openTime().isAfter(last) ? candle.openTime() : last;
             state.engine = rebuild(key, interval, upTo);
-            return new IndicatorUpdate(outcome, state.engine.snapshot());
+            return update(outcome, state.engine);
         }
     }
 
@@ -96,6 +96,12 @@ public class IndicatorServiceImpl implements IndicatorService {
         synchronized (state) {
             return Optional.ofNullable(state.engine).map(IndicatorEngine::snapshot);
         }
+    }
+
+    /** The update after {@code engine}'s latest candle; a rebuilt engine knows the candle before it too. */
+    private static IndicatorUpdate update(IndicatorOutcome outcome, IndicatorEngine engine) {
+        IndicatorSnapshot previous = engine.previousSnapshot();
+        return new IndicatorUpdate(outcome, engine.snapshot(), previous == null ? null : previous.macdHistogram());
     }
 
     /** An engine fed the latest stored candles opened up to {@code upTo}, started over after the last hole. */

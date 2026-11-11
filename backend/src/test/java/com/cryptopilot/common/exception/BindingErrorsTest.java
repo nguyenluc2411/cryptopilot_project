@@ -6,13 +6,25 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.support.TestcontainersConfig;
+import com.cryptopilot.user.model.enums.UserRole;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
@@ -31,6 +43,12 @@ class BindingErrorsTest {
 
     @Autowired
     private MockMvc mvc;
+
+    @Autowired
+    private JwtEncoder jwtEncoder;
+
+    @Autowired
+    private Clock clock;
 
     /** A timestamp that is not ISO 8601. */
     @Test
@@ -86,6 +104,35 @@ class BindingErrorsTest {
                         .content("{\"email\": \"a@b.invalid\", \"password\": \"x\", \"rememberMe\": [1]}")),
                 "rememberMe",
                 "is not readable");
+    }
+
+    /** A filter bound into a record: the binder's own message names Java types and repeats the input. */
+    @ParameterizedTest
+    @CsvSource({"market, BOTH", "source, X", "pairId, 1", "strategyId, 1"})
+    void TD51_aFilterRecordFieldThatCannotBeConverted_isMsg01NamingTheField(String field, String value)
+            throws Exception {
+        assertMsg01(
+                mvc.perform(get("/api/v1/journal/performance/summary")
+                        .param(field, value)
+                        .header(HttpHeaders.AUTHORIZATION, trader())),
+                field,
+                "is invalid");
+    }
+
+    private String trader() {
+        Instant now = clock.instant();
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer(JwtConfig.ISSUER)
+                .subject(UUID.randomUUID().toString())
+                .issuedAt(now)
+                .expiresAt(now.plusSeconds(300))
+                .claim(JwtConfig.ROLE_CLAIM, UserRole.TRADER.name())
+                .build();
+        return "Bearer "
+                + jwtEncoder
+                        .encode(JwtEncoderParameters.from(
+                                JwsHeader.with(JwtConfig.ALGORITHM).build(), claims))
+                        .getTokenValue();
     }
 
     private static void assertMsg01(ResultActions result, String field, String message) throws Exception {

@@ -1,0 +1,25 @@
+{
+  "cases": [
+    { "id": "POS-01", "source": "Open long", "fn": "applyFill",
+      "input": { "quantityBefore": "0", "entryPriceBefore": null, "side": "BUY", "quantity": "0.1", "price": "60000" },
+      "expect": { "closedQuantity": "0", "realizedPnl": "0", "openedQuantity": "0.1", "quantityAfter": "0.1", "entryPriceAfter": "60000" } },
+    { "id": "POS-02", "source": "Increase: long 0.1 @ 60,000 buys 0.05 @ 63,000, entry 61,000", "fn": "applyFill",
+      "input": { "quantityBefore": "0.1", "entryPriceBefore": "60000", "side": "BUY", "quantity": "0.05", "price": "63000" },
+      "expect": { "closedQuantity": "0", "realizedPnl": "0", "openedQuantity": "0.05", "quantityAfter": "0.15", "entryPriceAfter": "61000" } },
+    { "id": "POS-03", "source": "Reduce: the entry stays", "fn": "applyFill",
+      "input": { "quantityBefore": "0.1", "entryPriceBefore": "60000", "side": "SELL", "quantity": "0.04", "price": "62000" },
+      "expect": { "closedQuantity": "0.04", "realizedPnl": "80", "openedQuantity": "0", "quantityAfter": "0.06", "entryPriceAfter": "60000" } },
+    { "id": "POS-04", "source": "Close a short with profit", "fn": "applyFill",
+      "input": { "quantityBefore": "-1", "entryPriceBefore": "3000", "side": "BUY", "quantity": "1", "price": "2900" },
+      "expect": { "closedQuantity": "1", "realizedPnl": "100", "openedQuantity": "0", "quantityAfter": "0", "entryPriceAfter": null } },
+    { "id": "POS-05", "source": "Reversal: long 0.1 @ 60,000 sells 0.15 @ 62,000, +200 then short 0.05 @ 62,000", "fn": "applyFill",
+      "input": { "quantityBefore": "0.1", "entryPriceBefore": "60000", "side": "SELL", "quantity": "0.15", "price": "62000" },
+      "expect": { "closedQuantity": "0.1", "realizedPnl": "200", "openedQuantity": "0.05", "quantityAfter": "-0.05", "entryPriceAfter": "62000" } },
+    { "id": "UPNL-01", "source": "Long 0.1 @ 60,000 at mark 61,000", "fn": "unrealizedPnl",
+      "input": { "direction": "LONG", "quantity": "0.1", "entryPrice": "60000", "markPrice": "61000" },
+      "expect": { "value": "100" } },
+    { "id": "UPNL-02", "source": "Short 1 ETH @ 3,000 at mark 3,100", "fn": "unrealizedPnl",
+      "input": { "direction": "SHORT", "quantity": "1", "entryPrice": "3000", "markPrice": "3100" },
+      "expect": { "value": "-100" } }
+  ]
+}

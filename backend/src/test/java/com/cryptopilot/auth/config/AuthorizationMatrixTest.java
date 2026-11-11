@@ -158,9 +158,11 @@ class AuthorizationMatrixTest {
                     "/api/v1/alerts",
                     "/api/v1/notifications",
                     "/api/v1/plans",
+                    "/api/v1/strategies",
                     "/api/v1/paper/wallets/NONE",
                     "/api/v1/journal",
-                    "/api/v1/performance",
+                    "/api/v1/journal/00000000-0000-0000-0000-000000000000",
+                    "/api/v1/journal/performance/summary",
                     "/api/v1/posts",
                     "/api/v1/comments/1",
                     "/api/v1/media/upload-signature",
@@ -182,9 +184,15 @@ class AuthorizationMatrixTest {
                     "/api/v1/alerts",
                     "/api/v1/notifications",
                     "/api/v1/plans",
+                    "/api/v1/strategies",
                     "/api/v1/paper/account",
                     "/api/v1/journal",
-                    "/api/v1/performance",
+                    "/api/v1/journal/00000000-0000-0000-0000-000000000000",
+                    "/api/v1/journal/performance/summary",
+                    "/api/v1/journal/performance/by-coin",
+                    "/api/v1/journal/performance/by-strategy",
+                    "/api/v1/journal/performance/by-market",
+                    "/api/v1/journal/performance/equity-curve",
                     "/api/v1/comments/1",
                     "/api/v1/news",
                     "/api/v1/ai/conversations",
@@ -202,9 +210,15 @@ class AuthorizationMatrixTest {
                     "/api/v1/alerts",
                     "/api/v1/notifications",
                     "/api/v1/plans",
+                    "/api/v1/strategies",
                     "/api/v1/paper/account",
                     "/api/v1/journal",
-                    "/api/v1/performance",
+                    "/api/v1/journal/00000000-0000-0000-0000-000000000000",
+                    "/api/v1/journal/performance/summary",
+                    "/api/v1/journal/performance/by-coin",
+                    "/api/v1/journal/performance/by-strategy",
+                    "/api/v1/journal/performance/by-market",
+                    "/api/v1/journal/performance/equity-curve",
                     "/api/v1/comments/1",
                     "/api/v1/news",
                     "/api/v1/ai/conversations",
@@ -321,6 +335,8 @@ class AuthorizationMatrixTest {
                     "/api/v1/admin/ai-configurations",
                     "/api/v1/admin/settings",
                     "/api/v1/admin/audit-log",
+                    "/api/v1/admin/system-events",
+                    "/api/v1/admin/system-health",
                     "/api/v1/admin/announcements"
                 })
         void SRS313_theAdministrationConsole_admitsAnAdmin(String path) throws Exception {
@@ -335,15 +351,18 @@ class AuthorizationMatrixTest {
                     "/api/v1/admin/reports-queue",
                     "/api/v1/admin/settings",
                     "/api/v1/admin/audit-log",
+                    "/api/v1/admin/system-events",
+                    "/api/v1/admin/system-health",
                     "/api/v1/admin/announcements"
                 })
         void SRS313_theAdministrationConsole_refusesATrader(String path) throws Exception {
             assertForbidden(mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, bearer(UserRole.TRADER))));
         }
 
-        @Test
-        void SRS313_theAdministrationConsole_challengesAGuest() throws Exception {
-            assertUnauthenticated(mvc.perform(get(ADMIN_USERS)));
+        @ParameterizedTest(name = "{0} challenges a Guest")
+        @ValueSource(strings = {ADMIN_USERS, "/api/v1/admin/system-events", "/api/v1/admin/system-health"})
+        void SRS313_theAdministrationConsole_challengesAGuest(String path) throws Exception {
+            assertUnauthenticated(mvc.perform(get(path)));
         }
     }
 
@@ -459,9 +478,9 @@ class AuthorizationMatrixTest {
                             "/api/v1/alerts/**",
                             "/api/v1/notifications/**",
                             "/api/v1/plans/**",
+                            "/api/v1/strategies",
                             "/api/v1/paper/**",
                             "/api/v1/journal/**",
-                            "/api/v1/performance",
                             "/api/v1/posts/**",
                             "/api/v1/comments/**",
                             "/api/v1/community/**",

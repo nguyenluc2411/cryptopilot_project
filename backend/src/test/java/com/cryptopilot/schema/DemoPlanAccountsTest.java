@@ -121,7 +121,7 @@ class DemoPlanAccountsTest {
     /** UC-53: on the day of the demonstration each account is on its own tier. */
     @ParameterizedTest(name = "{0} is on {1}")
     @CsvSource({
-        "trader.free@cryptopilot.invalid,    FREE,    false, 5",
+        "trader.free@cryptopilot.invalid,    FREE,    true,  5",
         "trader.pro@cryptopilot.invalid,     PRO,     true,  50",
         "trader.premium@cryptopilot.invalid, PREMIUM, true,  100"
     })

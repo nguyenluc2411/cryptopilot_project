@@ -94,7 +94,7 @@ public class SpotArrival {
     public void limitOnArrival(
             PaperAccount account, PaperOrder order, PairCoins coins, Optional<Book> book, Instant now) {
         TimeInForce timeInForce = order.getTimeInForce();
-        boolean decidedNow = timeInForce == TimeInForce.IOC || timeInForce == TimeInForce.FOK;
+        boolean decidedNow = timeInForce.immediate();
         CoinListing locked = lockedCoin(order, coins);
         BookSweep.Result sweep = book.map(found -> BookSweep.ofQuantity(
                         found.levels(), order.getSide(), order.remainingQuantity(), order.getLimitPrice()))

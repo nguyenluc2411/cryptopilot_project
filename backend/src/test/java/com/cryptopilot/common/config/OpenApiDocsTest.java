@@ -64,6 +64,13 @@ class OpenApiDocsTest {
             "/api/v1/plans/calculate",
             "/api/v1/plans/{id}",
             "/api/v1/journal",
+            "/api/v1/journal/{id}",
+            "/api/v1/strategies",
+            "/api/v1/journal/performance/summary",
+            "/api/v1/journal/performance/by-coin",
+            "/api/v1/journal/performance/by-strategy",
+            "/api/v1/journal/performance/by-market",
+            "/api/v1/journal/performance/equity-curve",
             "/api/v1/plans/{id}/activate",
             "/api/v1/plans/{id}/cancel",
             "/api/v1/plans/{id}/close-estimate",
@@ -83,6 +90,37 @@ class OpenApiDocsTest {
             "/api/v1/paper/order-lists/{listId}/cancel",
             "/api/v1/paper/spot/pnl",
             "/api/v1/paper/equity",
+            "/api/v1/paper/futures/accountConfig",
+            "/api/v1/paper/futures/commissionRate",
+            "/api/v1/paper/futures/positionSide/dual",
+            "/api/v1/paper/futures/symbolConfig",
+            "/api/v1/paper/futures/leverage",
+            "/api/v1/paper/futures/marginType",
+            "/api/v1/paper/futures/leverageBracket",
+            "/api/v1/paper/futures/order",
+            "/api/v1/paper/futures/order/warnings",
+            "/api/v1/paper/futures/allOpenOrders",
+            "/api/v1/paper/futures/openOrders",
+            "/api/v1/paper/futures/allOrders",
+            "/api/v1/paper/futures/userTrades",
+            "/api/v1/paper/futures/positionRisk",
+            "/api/v1/paper/futures/account",
+            "/api/v1/paper/futures/balance",
+            "/api/v1/paper/futures/positionMargin",
+            "/api/v1/paper/futures/positionMargin/history",
+            "/api/v1/paper/futures/closePosition",
+            "/api/v1/paper/futures/algoOrder",
+            "/api/v1/paper/futures/algoOpenOrders",
+            "/api/v1/paper/futures/openAlgoOrders",
+            "/api/v1/paper/futures/allAlgoOrders",
+            "/api/v1/paper/futures/forceOrders",
+            "/api/v1/paper/futures/income",
+            "/api/v1/paper/futures/positionHistory",
+            "/api/v1/paper/futures/calculator/pnl",
+            "/api/v1/paper/futures/calculator/target",
+            "/api/v1/paper/futures/calculator/liquidation",
+            "/api/v1/paper/futures/calculator/maxOpen",
+            "/api/v1/paper/futures/calculator/openPrice",
             "/api/v1/watchlist",
             "/api/v1/watchlist/{id}",
             "/api/v1/alerts",
@@ -158,6 +196,11 @@ class OpenApiDocsTest {
             "/api/v1/admin/dashboard",
             "/api/v1/admin/reports",
             "/api/v1/admin/reports/export",
+            "/api/v1/admin/audit-log",
+            "/api/v1/admin/audit-log/export",
+            "/api/v1/admin/system-events",
+            "/api/v1/admin/system-health",
+            "/api/v1/admin/pairs/bracket-templates",
             "/api/v1/admin/news-sources",
             "/api/v1/admin/news-sources/{id}",
             "/api/v1/admin/news-sources/{id}/crawl-logs",
@@ -170,7 +213,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/news-articles/{id}/restore",
             "/api/v1/admin/news-articles/{id}/summarize");
 
-    private static final int OPERATIONS = 173;
+    private static final int OPERATIONS = 222;
 
     @Autowired
     private MockMvc mvc;
@@ -205,6 +248,38 @@ class OpenApiDocsTest {
                 .isEqualTo("string");
         assertThat((String) JsonPath.read(body, "$.components.schemas.PairResponse.properties.tickSize.format"))
                 .isEqualTo("decimal");
+    }
+
+    /** SCR-21: the detail documents the fields of a list row at the top level, beside the review. */
+    @Test
+    void UC22_theEntryDetail_documentsTheRowFieldsBesideTheReview() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        Map<String, Object> properties =
+                JsonPath.read(body, "$.components.schemas.JournalEntryDetailResponse.properties");
+        assertThat(properties).containsKeys("id", "strategyName", "netPnl", "setupDescription", "chartImageUrl");
+        assertThat(properties).doesNotContainKey("entry");
+    }
+
+    /** D-140: each list names the column of its period and the default of its source. */
+    @Test
+    void D140_theDescriptions_nameThePeriodColumnAndTheSourceDefault() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+
+        assertThat(parameter(body, "/api/v1/journal", "from")).contains("entry_time");
+        assertThat(parameter(body, "/api/v1/journal", "to")).contains("entry_time");
+        assertThat(parameter(body, "/api/v1/journal", "source")).contains("default ALL");
+        assertThat(parameter(body, "/api/v1/journal", "market")).contains("ALL");
+        String summary = "/api/v1/journal/performance/summary";
+        assertThat(parameter(body, summary, "from")).contains("exit_time");
+        assertThat(parameter(body, summary, "to")).contains("exit_time");
+        assertThat(parameter(body, summary, "source")).contains("default SIMULATED");
+    }
+
+    private static String parameter(String body, String path, String name) {
+        List<String> descriptions =
+                JsonPath.read(body, "$.paths['" + path + "'].get.parameters[?(@.name == '" + name + "')].description");
+        return String.join(" ", descriptions);
     }
 
     /** D-76: a line cross has no threshold, and the MSG26 confirmation may name the count it confirms. */

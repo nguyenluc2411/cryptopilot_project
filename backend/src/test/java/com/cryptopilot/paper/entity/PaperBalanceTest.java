@@ -97,4 +97,17 @@ class PaperBalanceTest {
         assertThatIllegalArgumentException().isThrownBy(() -> balance.credit(BigDecimal.ZERO));
         assertThatIllegalArgumentException().isThrownBy(() -> balance.credit(new BigDecimal("-1")));
     }
+
+    /** D-127: only the Futures wallet goes below zero, and never by a change of zero. */
+    @Test
+    void TR16_theFuturesWallet_mayGoBelowZero_andNoOtherWallet() {
+        PaperBalance futures = PaperBalance.empty(UUID.randomUUID(), WalletType.FUTURES, UUID.randomUUID());
+        PaperBalance spot = PaperBalance.empty(UUID.randomUUID(), WalletType.SPOT, UUID.randomUUID());
+
+        futures.changeFutures(new BigDecimal("-12.5"));
+
+        assertThat(futures.getFreeAmount()).isEqualByComparingTo("-12.5");
+        assertThatIllegalArgumentException().isThrownBy(() -> futures.changeFutures(BigDecimal.ZERO));
+        assertThatIllegalStateException().isThrownBy(() -> spot.changeFutures(BigDecimal.ONE));
+    }
 }

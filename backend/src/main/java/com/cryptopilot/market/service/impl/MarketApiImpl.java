@@ -15,6 +15,7 @@ import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.model.CachedPrice;
+import com.cryptopilot.market.model.FuturesPriceSnapshot;
 import com.cryptopilot.market.model.PriceLookup;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -23,10 +24,13 @@ import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.repository.FuturesMetricsRepository;
 import com.cryptopilot.market.repository.LeverageBracketRepository;
+import com.cryptopilot.market.repository.MarketDataQueryRepository;
 import com.cryptopilot.market.service.AnalysisService;
 import com.cryptopilot.market.service.MinuteKlineService;
 import com.cryptopilot.market.service.PriceCacheService;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
@@ -60,7 +64,9 @@ public class MarketApiImpl implements MarketApi {
     private final CoinWriter coinWriter;
     private final TradingMarketData trading;
     private final FuturesMetricsRepository metrics;
+    private final MarketDataQueryRepository data;
     private final AnalysisService analysis;
+    private final Clock clock;
 
     @Override
     @Transactional(readOnly = true)
@@ -226,6 +232,24 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public Optional<BigDecimal> currentMarkPrice(String symbol) {
         return current(MarketType.FUTURES, symbol, CachedPrice::markPrice);
+    }
+
+    @Override
+    public Optional<BigDecimal> currentMarkPrice(String symbol, Duration maxAge) {
+        PriceLookup lookup = prices.latest(MarketType.FUTURES, symbol);
+        if (lookup.status() != PriceLookup.Status.FOUND) {
+            return Optional.empty();
+        }
+        Instant oldest = clock.instant().minus(maxAge);
+        return lookup.price()
+                .filter(price -> !price.sourceTime().isBefore(oldest))
+                .map(CachedPrice::markPrice);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<BigDecimal> latestStoredMarkPrice(UUID pairId) {
+        return data.latestFuturesPrice(pairId).map(FuturesPriceSnapshot::markPrice);
     }
 
     @Override
