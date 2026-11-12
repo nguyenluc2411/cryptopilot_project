@@ -19,15 +19,15 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
-/** The SePay protocol of D-146: the checkout form, the IPN key and the IPN body, from the documented examples. */
+/** The SePay protocol of D-147: the checkout form, the IPN key and the IPN body, from the documented examples. */
 class SePayGatewayTest {
 
     private static final SePayProperties SANDBOX = new SePayProperties(
             "MERCHANT_123",
             "spsk_test_secret",
             "ipn-secret",
-            URI.create("https://pay-sandbox.sepay.vn/v1/checkout/init"),
-            URI.create("https://pgapi-sandbox.sepay.vn"));
+            "https://pay-sandbox.sepay.vn/v1/checkout/init",
+            "https://pgapi-sandbox.sepay.vn");
 
     private static final SePayGateway GATEWAY = answering(Optional.empty());
 
@@ -52,7 +52,7 @@ class SePayGatewayTest {
              "customer": null, "agreement": null}""";
 
     @Test
-    void D146_theCheckout_isTheDocumentedFormPostedToTheConfiguredEndpoint() {
+    void D147_theCheckout_isTheDocumentedFormPostedToTheConfiguredEndpoint() {
         Checkout checkout = GATEWAY.checkout(REQUEST);
 
         assertThat(checkout.method()).isEqualTo("POST");
@@ -81,7 +81,7 @@ class SePayGatewayTest {
     }
 
     @Test
-    void D146_theCheckoutSignature_coversTheSignedFieldsUnderTheMerchantSecret() {
+    void D147_theCheckoutSignature_coversTheSignedFieldsUnderTheMerchantSecret() {
         Map<String, String> fields =
                 new LinkedHashMap<>(GATEWAY.checkout(REQUEST).fields());
         String signature = fields.remove("signature");
@@ -90,7 +90,7 @@ class SePayGatewayTest {
     }
 
     @Test
-    void D146_withoutCredentials_SePayIsUnavailable() {
+    void D147_withoutCredentials_SePayIsUnavailable() {
         SePayGateway unconfigured = new SePayGateway(
                 new SePayProperties("", "", "", SANDBOX.checkoutUrl(), SANDBOX.apiUrl()),
                 JsonMapper.builder().build(),
@@ -208,7 +208,7 @@ class SePayGatewayTest {
     }
 
     @Test
-    void D146_cancelling_isDoneWhenSePayCancelsOrNeverSawTheOrder_andNotWhenItRefuses() {
+    void D147_cancelling_isDoneWhenSePayCancelsOrNeverSawTheOrder_andNotWhenItRefuses() {
         assertThat(cancelling(SePayOrderApi.CancelAnswer.CANCELLED).cancel("CP1"))
                 .isTrue();
         assertThat(cancelling(SePayOrderApi.CancelAnswer.UNKNOWN).cancel("CP1")).isTrue();

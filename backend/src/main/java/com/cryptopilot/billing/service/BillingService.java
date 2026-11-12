@@ -1,13 +1,13 @@
 package com.cryptopilot.billing.service;
 
-import com.cryptopilot.billing.dto.CreateOrderRequest;
-import com.cryptopilot.billing.dto.CreateOrderResponse;
-import com.cryptopilot.billing.dto.GatewayResponse;
-import com.cryptopilot.billing.dto.OrderResponse;
-import com.cryptopilot.billing.dto.PackageResponse;
-import com.cryptopilot.billing.dto.QuoteRequest;
-import com.cryptopilot.billing.dto.QuoteResponse;
-import com.cryptopilot.billing.dto.SubscriptionResponse;
+import com.cryptopilot.billing.dto.request.CreateOrderRequest;
+import com.cryptopilot.billing.dto.request.QuoteRequest;
+import com.cryptopilot.billing.dto.response.CreateOrderResponse;
+import com.cryptopilot.billing.dto.response.GatewayResponse;
+import com.cryptopilot.billing.dto.response.OrderResponse;
+import com.cryptopilot.billing.dto.response.PackageResponse;
+import com.cryptopilot.billing.dto.response.QuoteResponse;
+import com.cryptopilot.billing.dto.response.SubscriptionResponse;
 import com.cryptopilot.common.web.PageResponse;
 import java.util.List;
 import java.util.UUID;
@@ -16,7 +16,7 @@ import java.util.UUID;
  * The Trader side of subscriptions and payment: the packages on sale, the gateways open, a quote, an order and its
  * status, and the plan held (SCR-30, SCR-31, SCR-32, SCR-07).
  *
- * <p>Rule: BR-53…BR-56, BR-63 as amended by D-146; SRS 3.10; TECHNICAL_DESIGN 7.11.
+ * <p>Rule: BR-53…BR-56, BR-63; SRS 3.10; TECHNICAL_DESIGN 7.11.
  */
 public interface BillingService {
 

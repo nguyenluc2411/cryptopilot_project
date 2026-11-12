@@ -12,7 +12,7 @@ import org.springframework.web.client.RestClientException;
 /**
  * {@link MoMoApi} over HTTP, with short timeouts: a create waits on it while the Trader waits for the payment page.
  *
- * <p>Rule: D-146.
+ * <p>Rule: D-147.
  */
 @Component
 class MoMoHttpApi implements MoMoApi {
@@ -27,7 +27,7 @@ class MoMoHttpApi implements MoMoApi {
                 HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build());
         requests.setReadTimeout(READ_TIMEOUT);
         this.rest = RestClient.builder()
-                .baseUrl(properties.endpoint().toString())
+                .baseUrl(properties.endpoint())
                 .requestFactory(requests)
                 .build();
     }

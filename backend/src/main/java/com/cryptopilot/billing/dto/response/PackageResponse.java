@@ -1,4 +1,4 @@
-package com.cryptopilot.billing.dto;
+package com.cryptopilot.billing.dto.response;
 
 import com.cryptopilot.billing.model.enums.PlanTier;
 import java.math.BigDecimal;

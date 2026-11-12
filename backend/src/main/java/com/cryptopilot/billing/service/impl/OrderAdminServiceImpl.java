@@ -5,8 +5,8 @@ import com.cryptopilot.admin.AdminMetricSource;
 import com.cryptopilot.admin.AuditEntry;
 import com.cryptopilot.admin.model.enums.AuditAction;
 import com.cryptopilot.admin.model.enums.AuditedEntity;
-import com.cryptopilot.billing.dto.AdminOrderDetailResponse;
-import com.cryptopilot.billing.dto.AdminOrderResponse;
+import com.cryptopilot.billing.dto.response.AdminOrderDetailResponse;
+import com.cryptopilot.billing.dto.response.AdminOrderResponse;
 import com.cryptopilot.billing.entity.SubscriptionOrder;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.billing.model.enums.OrderStatus;
@@ -50,7 +50,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p>The list names the Trader by id only: the {@code user} module depends on this one, so this module does not read
  * accounts. The console opens the account from the id.
  *
- * <p>Rule: UC-48; NSF-13; BR-57; D-146.
+ * <p>Rule: UC-48; NSF-13; BR-57; D-147.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

@@ -1,4 +1,4 @@
-package com.cryptopilot.billing.dto;
+package com.cryptopilot.billing.dto.request;
 
 import com.cryptopilot.billing.model.enums.GatewayCode;
 import jakarta.validation.constraints.NotBlank;

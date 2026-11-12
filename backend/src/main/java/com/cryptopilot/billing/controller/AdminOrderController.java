@@ -1,8 +1,8 @@
 package com.cryptopilot.billing.controller;
 
-import com.cryptopilot.billing.dto.AdminOrderDetailResponse;
-import com.cryptopilot.billing.dto.AdminOrderResponse;
-import com.cryptopilot.billing.dto.HandleOrderRequest;
+import com.cryptopilot.billing.dto.request.HandleOrderRequest;
+import com.cryptopilot.billing.dto.response.AdminOrderDetailResponse;
+import com.cryptopilot.billing.dto.response.AdminOrderResponse;
 import com.cryptopilot.billing.model.enums.GatewayCode;
 import com.cryptopilot.billing.model.enums.OrderStatus;
 import com.cryptopilot.billing.model.enums.OrderType;
@@ -34,7 +34,7 @@ import org.springframework.web.bind.annotation.RestController;
  * The subscription orders in the administration console (SCR-40, UC-48). Admin only, by the {@code /api/v1/admin/**}
  * rule of the security chain.
  *
- * <p>Rule: UC-48; NSF-13; BR-57; D-146.
+ * <p>Rule: UC-48; NSF-13; BR-57; D-147.
  */
 @Tag(name = "Admin: payments", description = "Subscription orders, reconciliation with the gateway, flagged orders.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)

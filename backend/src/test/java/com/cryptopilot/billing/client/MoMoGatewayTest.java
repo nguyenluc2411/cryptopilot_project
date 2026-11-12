@@ -24,16 +24,16 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * The MoMo v2 protocol of D-146 with MoMo's public sandbox keys. The signatures were computed apart from this code
+ * The MoMo v2 protocol of D-147 with made-up test keys. The signatures were computed apart from this code
  * (Python hmac), and the query answers are the ones the test environment gave on 2026-11-08.
  */
 class MoMoGatewayTest {
 
     private static final MoMoProperties SANDBOX = new MoMoProperties(
             "MOMO",
-            "F8BBA842ECF85",
-            "K951B6PE1waDMi640xX08PD3vg6EkVlz",
-            URI.create("https://test-payment.momo.vn"),
+            "TESTACCESSKEY",
+            "momo-test-secret",
+            "https://test-payment.momo.vn",
             "https://api.example.test/api/v1/billing/ipn/momo");
 
     private static final CheckoutRequest REQUEST = new CheckoutRequest(
@@ -63,18 +63,18 @@ class MoMoGatewayTest {
             {"partnerCode":"MOMO","orderId":"CP-NO-SUCH","requestId":"X","responseTime":1794144312905,
              "resultCode":1005,"message":"Transaction expired or did not exist."}""";
 
-    /** A paid IPN, signed with the sandbox secret key apart from this code. */
+    /** A paid IPN, signed with the test secret key apart from this code. */
     private static final String PAID_IPN = """
             {"partnerCode":"MOMO","orderId":"CP261108030000ABCD","requestId":"CP261108030000ABCD","amount":99000,
              "orderInfo":"CryptoPilot PRO_MONTHLY CP261108030000ABCD","orderType":"momo_wallet",
              "transId":4088878653,"resultCode":0,"message":"Thanh cong.","payType":"qr",
              "responseTime":1794144312797,"extraData":"",
-             "signature":"6c14bece825fa704de676e1d0488fbb214731ecb0780713926331e16474a4742"}""";
+             "signature":"c4b56d18e05d4b6fc612718c6d0ef1b5ac886aea1ed1aa030d835e2c9bed941b"}""";
 
     @Test
-    void D146_aCreateRequest_isSignedInMoMosOrder() {
+    void D147_aCreateRequest_isSignedInMoMosOrder() {
         Map<String, String> fields = new HashMap<>();
-        fields.put("accessKey", "F8BBA842ECF85");
+        fields.put("accessKey", "TESTACCESSKEY");
         fields.put("amount", "99000");
         fields.put("extraData", "");
         fields.put("ipnUrl", SANDBOX.ipnUrl());
@@ -86,11 +86,11 @@ class MoMoGatewayTest {
         fields.put("requestType", "captureWallet");
 
         assertThat(MoMoSignature.sign(MoMoSignature.CREATE, fields, SANDBOX.secretKey()))
-                .isEqualTo("e36922fb277fda60cef98d28cdbcc48402aadd0ef39b678a363abd906f3e7b9d");
+                .isEqualTo("c8c9f86ff4ed351d023d0449fe121f70f6375f70c4618bfee3daf2cef24b4f2b");
     }
 
     @Test
-    void D146_theCheckout_postsTheSignedCreate_andSendsTheBrowserToThePayUrl() {
+    void D147_theCheckout_postsTheSignedCreate_andSendsTheBrowserToThePayUrl() {
         Recording api = new Recording(CREATED);
 
         Checkout checkout = gateway(api).checkout(REQUEST);
@@ -105,11 +105,11 @@ class MoMoGatewayTest {
                 .containsEntry("orderId", "CP261108030000ABCD")
                 .containsEntry("requestType", "captureWallet")
                 .containsEntry("ipnUrl", SANDBOX.ipnUrl())
-                .containsEntry("signature", "e36922fb277fda60cef98d28cdbcc48402aadd0ef39b678a363abd906f3e7b9d");
+                .containsEntry("signature", "c8c9f86ff4ed351d023d0449fe121f70f6375f70c4618bfee3daf2cef24b4f2b");
     }
 
     @Test
-    void D146_aRefusedCreate_isAnUnavailableGateway() {
+    void D147_aRefusedCreate_isAnUnavailableGateway() {
         assertThatExceptionOfType(GatewayUnavailableException.class)
                 .isThrownBy(() -> gateway(new Recording("{\"resultCode\":41,\"message\":\"Duplicate\"}"))
                         .checkout(REQUEST));
@@ -145,7 +145,7 @@ class MoMoGatewayTest {
                 .isEqualTo(MoMoSignature.sign(
                         MoMoSignature.QUERY,
                         Map.of(
-                                "accessKey", "F8BBA842ECF85",
+                                "accessKey", "TESTACCESSKEY",
                                 "orderId", "CP261108030000ABCD",
                                 "partnerCode", "MOMO",
                                 "requestId", (String) sent.get("requestId")),
@@ -191,9 +191,9 @@ class MoMoGatewayTest {
     }
 
     @Test
-    void D146_withoutKeysOrAnIpnAddress_MoMoIsUnavailable_andCancellingStopsNothing() {
+    void D147_withoutKeysOrAnIpnAddress_MoMoIsUnavailable_andCancellingStopsNothing() {
         MoMoGateway unconfigured = new MoMoGateway(
-                new MoMoProperties("MOMO", "F8BBA842ECF85", "K951B6PE1waDMi640xX08PD3vg6EkVlz", SANDBOX.endpoint(), ""),
+                new MoMoProperties("MOMO", "TESTACCESSKEY", "momo-test-secret", SANDBOX.endpoint(), ""),
                 new Recording(""),
                 JsonMapper.builder().build(),
                 CLOCK);
@@ -204,10 +204,10 @@ class MoMoGatewayTest {
         assertThat(gateway(new Recording("")).code()).isEqualTo(GatewayCode.MOMO);
     }
 
-    /** An IPN with this result code, signed with the sandbox key by the code under test. */
+    /** An IPN with this result code, signed with the test key by the code under test. */
     private static String signedIpn(int resultCode) {
         Map<String, String> fields = new HashMap<>();
-        fields.put("accessKey", "F8BBA842ECF85");
+        fields.put("accessKey", "TESTACCESSKEY");
         fields.put("amount", "99000");
         fields.put("extraData", "");
         fields.put("message", "x");

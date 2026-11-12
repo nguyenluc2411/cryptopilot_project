@@ -1,7 +1,7 @@
 package com.cryptopilot.billing.service;
 
-import com.cryptopilot.billing.dto.AdminOrderDetailResponse;
-import com.cryptopilot.billing.dto.AdminOrderResponse;
+import com.cryptopilot.billing.dto.response.AdminOrderDetailResponse;
+import com.cryptopilot.billing.dto.response.AdminOrderResponse;
 import com.cryptopilot.billing.model.enums.GatewayCode;
 import com.cryptopilot.billing.model.enums.OrderStatus;
 import com.cryptopilot.billing.model.enums.OrderType;
@@ -13,7 +13,7 @@ import java.util.UUID;
  * The subscription orders of every Trader, for the administrator (SCR-40, UC-48): the list, one order with what its
  * gateway answered, asking the gateway again, and recording how a flagged order was handled.
  *
- * <p>Rule: UC-48; NSF-13; BR-57; D-146.
+ * <p>Rule: UC-48; NSF-13; BR-57; D-147.
  */
 public interface OrderAdminService {
 

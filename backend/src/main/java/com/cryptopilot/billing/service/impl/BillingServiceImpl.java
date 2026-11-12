@@ -7,15 +7,15 @@ import com.cryptopilot.billing.calculator.OrderTypeResolver;
 import com.cryptopilot.billing.client.GatewayUnavailableException;
 import com.cryptopilot.billing.client.PaymentGateway;
 import com.cryptopilot.billing.config.BillingProperties;
-import com.cryptopilot.billing.dto.CheckoutResponse;
-import com.cryptopilot.billing.dto.CreateOrderRequest;
-import com.cryptopilot.billing.dto.CreateOrderResponse;
-import com.cryptopilot.billing.dto.GatewayResponse;
-import com.cryptopilot.billing.dto.OrderResponse;
-import com.cryptopilot.billing.dto.PackageResponse;
-import com.cryptopilot.billing.dto.QuoteRequest;
-import com.cryptopilot.billing.dto.QuoteResponse;
-import com.cryptopilot.billing.dto.SubscriptionResponse;
+import com.cryptopilot.billing.dto.request.CreateOrderRequest;
+import com.cryptopilot.billing.dto.request.QuoteRequest;
+import com.cryptopilot.billing.dto.response.CheckoutResponse;
+import com.cryptopilot.billing.dto.response.CreateOrderResponse;
+import com.cryptopilot.billing.dto.response.GatewayResponse;
+import com.cryptopilot.billing.dto.response.OrderResponse;
+import com.cryptopilot.billing.dto.response.PackageResponse;
+import com.cryptopilot.billing.dto.response.QuoteResponse;
+import com.cryptopilot.billing.dto.response.SubscriptionResponse;
 import com.cryptopilot.billing.entity.SubscriptionOrder;
 import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.billing.entity.UserSubscription;
@@ -66,12 +66,12 @@ import org.springframework.web.util.UriComponentsBuilder;
  * The Trader side of subscriptions and payment (SCR-30…32, SCR-07).
  *
  * <p>An order is created under the Trader's billing lock, so two tabs cannot both price an upgrade from the same
- * subscription. Its type is decided from the ACTIVE subscription held: a lower tier is refused (D-146). Its amount is
+ * subscription. Its type is decided from the ACTIVE subscription held: a lower tier is refused (D-147). Its amount is
  * the package price now (BR-56). The gateway must take new orders (not the legacy VNPAY), be switched on by an
  * administrator and be configured on this deployment; switching it off later does not touch orders already created.
  * The gateway is asked for its payment page inside the transaction, so an order it refuses is not kept.
  *
- * <p>Rule: BR-53…BR-56, BR-63 as amended by D-146; SRS 3.10; TECHNICAL_DESIGN 7.11.
+ * <p>Rule: BR-53…BR-56, BR-63; SRS 3.10; TECHNICAL_DESIGN 7.11.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -90,7 +90,7 @@ public class BillingServiceImpl implements BillingService {
     /** BR-54: minutes an order stays payable. */
     static final String ORDER_EXPIRY_MINUTES = "ORDER_EXPIRY_MINUTES";
 
-    /** The administrator's switch of each gateway that takes new orders (D-146). */
+    /** The administrator's switch of each gateway that takes new orders (D-147). */
     static final Map<GatewayCode, String> SWITCHES =
             Map.of(GatewayCode.MOMO, "PAYMENT_MOMO_ENABLED", GatewayCode.SEPAY, "PAYMENT_SEPAY_ENABLED");
 
@@ -149,7 +149,7 @@ public class BillingServiceImpl implements BillingService {
     /**
      * Creates the Trader's order. The Trader's unpaid order, if any, is first released at its gateway (outside any
      * transaction, since the gateway is called): a Trader holds one PENDING order at a time, so a page or QR code left
-     * open can never pay a second plan (D-146).
+     * open can never pay a second plan (D-147).
      */
     @Override
     // SUPPORTS: no transaction of its own (the class default is read-only), so the gateway is called outside one.

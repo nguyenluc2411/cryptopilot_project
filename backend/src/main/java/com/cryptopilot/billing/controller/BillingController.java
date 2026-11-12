@@ -1,13 +1,13 @@
 package com.cryptopilot.billing.controller;
 
-import com.cryptopilot.billing.dto.CreateOrderRequest;
-import com.cryptopilot.billing.dto.CreateOrderResponse;
-import com.cryptopilot.billing.dto.GatewayResponse;
-import com.cryptopilot.billing.dto.OrderResponse;
-import com.cryptopilot.billing.dto.PackageResponse;
-import com.cryptopilot.billing.dto.QuoteRequest;
-import com.cryptopilot.billing.dto.QuoteResponse;
-import com.cryptopilot.billing.dto.SubscriptionResponse;
+import com.cryptopilot.billing.dto.request.CreateOrderRequest;
+import com.cryptopilot.billing.dto.request.QuoteRequest;
+import com.cryptopilot.billing.dto.response.CreateOrderResponse;
+import com.cryptopilot.billing.dto.response.GatewayResponse;
+import com.cryptopilot.billing.dto.response.OrderResponse;
+import com.cryptopilot.billing.dto.response.PackageResponse;
+import com.cryptopilot.billing.dto.response.QuoteResponse;
+import com.cryptopilot.billing.dto.response.SubscriptionResponse;
 import com.cryptopilot.billing.service.BillingService;
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
@@ -37,7 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
  * The subscription and payment endpoints of SCR-30…32 and the plan of SCR-07, Trader only. The caller is always the
  * owner: an order of another Trader reads as not found.
  *
- * <p>Rule: BR-53…BR-56, BR-63 as amended by D-146; SRS 3.10; TECHNICAL_DESIGN 7.11.
+ * <p>Rule: BR-53…BR-56, BR-63; SRS 3.10; TECHNICAL_DESIGN 7.11.
  */
 @Tag(name = "Billing", description = "Packages, payment orders and the plan held (SCR-30…32, SCR-07). Trader.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
@@ -56,7 +56,7 @@ public class BillingController {
         return billing.packages();
     }
 
-    @Operation(summary = "The payment gateways and whether each takes new orders now (SCR-30, D-146)")
+    @Operation(summary = "The payment gateways and whether each takes new orders now (SCR-30, D-147)")
     @ApiResponse(responseCode = "200", description = "MOMO and SEPAY; `enabled` is false when switched off")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @GetMapping("/gateways")

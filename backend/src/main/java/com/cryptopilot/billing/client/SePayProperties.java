@@ -1,14 +1,13 @@
 package com.cryptopilot.billing.client;
 
-import jakarta.validation.constraints.NotNull;
-import java.net.URI;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
 
 /**
- * The SePay Payment Gateway credentials of a deployment ({@code SEPAY_*}). The defaults point at the sandbox; going
- * live is the production merchant id and keys and the two production addresses, nothing else.
+ * The SePay Payment Gateway credentials and addresses of a deployment ({@code SEPAY_*}). None has a default: an empty
+ * key or address leaves SePay unavailable. The dev profile names the sandbox; going live is the production merchant
+ * id, keys and addresses, nothing else.
  *
  * @param merchantId the MERCHANT ID; empty leaves SePay unavailable
  * @param secretKey the merchant SECRET KEY ({@code spsk_test_...} or {@code spsk_live_...}): signs the checkout form
@@ -24,15 +23,15 @@ public record SePayProperties(
         @DefaultValue("") String merchantId,
         @DefaultValue("") String secretKey,
         @DefaultValue("") String ipnSecretKey,
+        @DefaultValue("") String checkoutUrl,
+        @DefaultValue("") String apiUrl) {
 
-        @NotNull @DefaultValue("https://pay-sandbox.sepay.vn/v1/checkout/init")
-        URI checkoutUrl,
-
-        @NotNull @DefaultValue("https://pgapi-sandbox.sepay.vn")
-        URI apiUrl) {
-
-    /** Whether every credential is present. */
+    /** Whether every credential and both addresses are present. */
     public boolean configured() {
-        return !merchantId.isBlank() && !secretKey.isBlank() && !ipnSecretKey.isBlank();
+        return !merchantId.isBlank()
+                && !secretKey.isBlank()
+                && !ipnSecretKey.isBlank()
+                && !checkoutUrl.isBlank()
+                && !apiUrl.isBlank();
     }
 }

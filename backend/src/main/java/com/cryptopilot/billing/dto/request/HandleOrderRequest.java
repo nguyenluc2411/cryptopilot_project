@@ -1,4 +1,4 @@
-package com.cryptopilot.billing.dto;
+package com.cryptopilot.billing.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;

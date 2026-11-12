@@ -1,4 +1,4 @@
-package com.cryptopilot.billing.dto;
+package com.cryptopilot.billing.dto.response;
 
 /**
  * A PENDING order and the way to its payment page.

@@ -7,6 +7,7 @@ import com.cryptopilot.billing.model.GatewayLookup;
 import com.cryptopilot.billing.model.PaymentResult;
 import com.cryptopilot.billing.model.enums.GatewayCode;
 import java.math.BigDecimal;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
@@ -22,7 +23,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * The SePay Payment Gateway (D-146), its documented protocol only:
+ * The SePay Payment Gateway (D-147), its documented protocol only:
  *
  * <ul>
  *   <li>Checkout: the browser posts a form to {@code /v1/checkout/init} with the fields in the documented order and
@@ -33,7 +34,7 @@ import tools.jackson.databind.json.JsonMapper;
  *       our order code. Any other notification (a void) changes nothing here and is left to an administrator.
  * </ul>
  *
- * <p>Rule: BR-53; TECHNICAL_DESIGN 7.11; D-146. Reference: SePay developer documentation, "Cổng thanh toán" (2025).
+ * <p>Rule: BR-53; TECHNICAL_DESIGN 7.11; D-147. Reference: SePay developer documentation, "Cổng thanh toán" (2025).
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -88,7 +89,7 @@ public class SePayGateway implements PaymentGateway {
         fields.put("cancel_url", back);
         fields.put("lang", "vi");
         fields.put("signature", SePaySignature.sign(fields, properties.secretKey()));
-        return Checkout.form(properties.checkoutUrl(), fields);
+        return Checkout.form(URI.create(properties.checkoutUrl()), fields);
     }
 
     /**

@@ -18,7 +18,7 @@ import org.springframework.web.client.RestClientException;
  * {@link SePayOrderApi} over HTTP: Basic authentication with {@code merchant_id:secret_key}, short timeouts, since a
  * reconciliation run asks about many orders and one slow answer must not hold the others.
  *
- * <p>Rule: NSF-13; D-146. Reference: SePay developer documentation, "Tổng quan API", "API lấy chi tiết đơn hàng".
+ * <p>Rule: NSF-13; D-147. Reference: SePay developer documentation, "Tổng quan API", "API lấy chi tiết đơn hàng".
  */
 @Component
 class SePayHttpOrderApi implements SePayOrderApi {
@@ -35,7 +35,7 @@ class SePayHttpOrderApi implements SePayOrderApi {
                 HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build());
         requests.setReadTimeout(READ_TIMEOUT);
         this.rest = RestClient.builder()
-                .baseUrl(properties.apiUrl().toString())
+                .baseUrl(properties.apiUrl())
                 .requestFactory(requests)
                 .build();
     }

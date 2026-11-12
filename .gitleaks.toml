@@ -5,19 +5,18 @@
 # and the team decides whether the history is rewritten.
 #
 # Full-history scan of every branch on 2026-09-25 (gitleaks 8.30.1, 104 commits): no finding, so no
-# allowlist entry was needed then.
+# allowlist entry is needed yet.
 
 title = "cryptopilot"
 
 [extend]
 useDefault = true
 
-# MoMo's public sandbox secret key, which MoMo publishes in its own demo code (github.com/momo-wallet/payment)
-# together with partner code MOMO and access key F8BBA842ECF85. It only signs requests to the test environment
-# (test-payment.momo.vn) and opens no merchant account; the payment callback test signs its IPN bodies with it
-# (T-066). Allowed only in that file and only for that exact value.
+# One past commit of the payment branch (T-068) signed a test IPN with a public gateway sandbox key. The key is not
+# in the current tree any more (tests use made-up keys) and the history is not rewritten, so only that commit and that
+# file are allowed; the value itself is not repeated here.
 [[allowlists]]
-description = "MoMo public sandbox secret key in the payment callback test"
+description = "Test IPN signed with a public sandbox key in one past commit (T-068)"
 condition = "AND"
+commits = ["53ba9aa6bf1ddefc10075cee3b0f5f597ba1c16b"]
 paths = ['''backend/src/test/java/com/cryptopilot/billing/controller/PaymentCallbackApiTest\.java''']
-regexes = ['''K951B6PE1waDMi640xX08PD3vg6EkVlz''']

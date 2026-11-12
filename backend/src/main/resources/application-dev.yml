@@ -34,6 +34,12 @@ cryptopilot:
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:500}
       guest: ${RATE_LIMIT_GUEST:3000}
   billing:
+    # The gateways' test environments; production names its own addresses.
+    sepay:
+      checkout-url: ${SEPAY_CHECKOUT_URL:https://pay-sandbox.sepay.vn/v1/checkout/init}
+      api-url: ${SEPAY_API_URL:https://pgapi-sandbox.sepay.vn}
+    momo:
+      endpoint: ${MOMO_ENDPOINT:https://test-payment.momo.vn}
     reconcile:
       # NSF-13 runs in this profile: unconfirmed orders are asked about at their gateway, unpaid ones expire.
       enabled: true
