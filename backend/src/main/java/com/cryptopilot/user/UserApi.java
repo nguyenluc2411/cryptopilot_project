@@ -240,4 +240,10 @@ public interface UserApi {
      * the members a Trader may mention in a post or a comment (D-125). Banned accounts are left out.
      */
     List<AuthorCard> searchMembers(String prefix, int limit);
+
+    /**
+     * The address of an account, whatever its status: where a mail about something the account already did goes, such
+     * as the receipt of a payment (T-069). Empty when there is no such account.
+     */
+    Optional<String> emailOf(UUID userId);
 }

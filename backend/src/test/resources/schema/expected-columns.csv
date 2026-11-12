@@ -493,12 +493,18 @@ subscription_order,amount,numeric,18,0,NO
 subscription_order,created_at,timestamp with time zone,,,NO
 subscription_order,currency,character varying,,,NO
 subscription_order,expires_at,timestamp with time zone,,,NO
+subscription_order,gateway_payload,jsonb,,,YES
 subscription_order,gateway_response_code,character varying,,,YES
 subscription_order,gateway_transaction_no,character varying,,,YES
+subscription_order,handled_at,timestamp with time zone,,,YES
+subscription_order,handled_by,uuid,,,YES
+subscription_order,handling_note,character varying,,,YES
 subscription_order,ipn_received_at,timestamp with time zone,,,YES
+subscription_order,manual_handling,boolean,,,NO
 subscription_order,order_code,character varying,,,NO
 subscription_order,order_id,uuid,,,NO
 subscription_order,order_status,character varying,,,NO
+subscription_order,order_type,character varying,,,NO
 subscription_order,package_id,uuid,,,NO
 subscription_order,paid_at,timestamp with time zone,,,YES
 subscription_order,payment_gateway,character varying,,,NO
@@ -772,13 +778,19 @@ user_relation,source_user_id,uuid,,,NO
 user_relation,target_user_id,uuid,,,NO
 user_relation,updated_at,timestamp with time zone,,,NO
 user_relation,version,bigint,64,0,NO
+user_subscription,bonus_days,integer,32,0,NO
+user_subscription,carried_from_id,uuid,,,YES
+user_subscription,carried_value_vnd,numeric,18,0,NO
 user_subscription,created_at,timestamp with time zone,,,NO
 user_subscription,end_at,timestamp with time zone,,,NO
 user_subscription,order_id,uuid,,,NO
+user_subscription,reminded_at,timestamp with time zone,,,YES
 user_subscription,start_at,timestamp with time zone,,,NO
 user_subscription,subscription_id,uuid,,,NO
 user_subscription,subscription_status,character varying,,,NO
 user_subscription,updated_at,timestamp with time zone,,,NO
+user_subscription,user_id,uuid,,,NO
+user_subscription,value_vnd,numeric,18,0,NO
 user_subscription,version,bigint,64,0,NO
 user_token,created_at,timestamp with time zone,,,NO
 user_token,expires_at,timestamp with time zone,,,NO

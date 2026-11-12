@@ -27,6 +27,10 @@ public interface SubscriptionPackageRepository extends Repository<SubscriptionPa
     @Transactional(readOnly = true)
     Optional<SubscriptionPackage> findByPackageCode(String packageCode);
 
+    /** Every package, inactive ones included: the names an order list shows (SCR-40). */
+    @Transactional(readOnly = true)
+    List<SubscriptionPackage> findAll();
+
     /** The packages of a tier; FREE has exactly one ({@code uq_subscription_package_one_free}). */
     @Transactional(readOnly = true)
     List<SubscriptionPackage> findByTier(PlanTier tier);

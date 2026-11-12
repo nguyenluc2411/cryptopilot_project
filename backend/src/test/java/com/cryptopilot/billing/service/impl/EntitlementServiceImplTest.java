@@ -32,6 +32,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -134,14 +135,20 @@ class EntitlementServiceImplTest {
         assertThat(service.effectivePlan(trader).tier()).isEqualTo(PlanTier.FREE);
     }
 
-    /** Two ACTIVE subscriptions at once should not exist; when they do, the higher tier applies. */
+    /** A Trader holds at most one ACTIVE subscription: the database refuses a second one (V67). */
     @Test
-    void BR62_twoOverlappingActiveSubscriptions_giveTheHigherTier() {
+    void BR55_aSecondActiveSubscription_isRefusedByTheDatabase() {
         UUID trader = trader();
         subscribe(trader, "PRO_YEARLY", "ACTIVE", NOW.minus(Duration.ofDays(10)), NOW.plus(Duration.ofDays(355)));
-        subscribe(trader, "PREMIUM_MONTHLY", "ACTIVE", NOW.minus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(29)));
 
-        assertThat(service.effectivePlan(trader).tier()).isEqualTo(PlanTier.PREMIUM);
+        assertThatExceptionOfType(DataIntegrityViolationException.class)
+                .isThrownBy(() -> subscribe(
+                        trader,
+                        "PREMIUM_MONTHLY",
+                        "ACTIVE",
+                        NOW.minus(Duration.ofDays(1)),
+                        NOW.plus(Duration.ofDays(29))))
+                .withMessageContaining("uq_user_subscription_one_active");
     }
 
     /** Another Trader's subscription is not mine. */

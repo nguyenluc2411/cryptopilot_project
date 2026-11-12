@@ -16,6 +16,13 @@ cryptopilot:
   outbox:
     # T-056 runs in this profile: failed event deliveries (mail) are retried.
     enabled: true
+  billing:
+    reconcile:
+      # NSF-13 runs in this profile: unconfirmed orders are asked about at their gateway, unpaid ones expire.
+      enabled: true
+    subscription-sweep:
+      # NSF-14 runs in this profile: ended subscriptions expire hourly (BR-64), the 3-day reminder is sent once.
+      enabled: true
   media:
     sweep:
       # Runs in this profile: files no post carries are deleted from Cloudinary daily.

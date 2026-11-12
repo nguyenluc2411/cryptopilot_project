@@ -52,25 +52,28 @@ ON CONFLICT (user_id) DO NOTHING;
 INSERT INTO subscription_order (
     order_id, user_id, package_id, order_code, amount, currency, payment_gateway, order_status,
     gateway_transaction_no, gateway_response_code, created_at, ipn_received_at, paid_at, expires_at,
-    updated_at, version)
+    updated_at, version, order_type)
 VALUES
     ('019b76da-a800-7d02-8000-000000000001', '019b76da-a800-7d01-8000-000000000002',
      '019b76da-a800-7002-8000-000000000003', 'DEMO-PRO-YEARLY', 990000, 'VND', 'VNPAY', 'PAID',
      NULL, NULL, TIMESTAMPTZ '2026-09-28 00:00:00+00', NULL, TIMESTAMPTZ '2026-09-28 00:00:00+00',
-     TIMESTAMPTZ '2026-09-28 00:15:00+00', TIMESTAMPTZ '2026-09-28 00:00:00+00', 0),
+     TIMESTAMPTZ '2026-09-28 00:15:00+00', TIMESTAMPTZ '2026-09-28 00:00:00+00', 0, 'NEW'),
     ('019b76da-a800-7d02-8000-000000000002', '019b76da-a800-7d01-8000-000000000003',
      '019b76da-a800-7002-8000-000000000005', 'DEMO-PREMIUM-YEARLY', 1990000, 'VND', 'VNPAY', 'PAID',
      NULL, NULL, TIMESTAMPTZ '2026-09-28 00:00:00+00', NULL, TIMESTAMPTZ '2026-09-28 00:00:00+00',
-     TIMESTAMPTZ '2026-09-28 00:15:00+00', TIMESTAMPTZ '2026-09-28 00:00:00+00', 0)
+     TIMESTAMPTZ '2026-09-28 00:15:00+00', TIMESTAMPTZ '2026-09-28 00:00:00+00', 0, 'NEW')
 ON CONFLICT (order_id) DO NOTHING;
 
 INSERT INTO user_subscription (
-    subscription_id, order_id, start_at, end_at, subscription_status, created_at, updated_at, version)
+    subscription_id, order_id, start_at, end_at, subscription_status, created_at, updated_at, version,
+    user_id, value_vnd)
 VALUES
     ('019b76da-a800-7d03-8000-000000000001', '019b76da-a800-7d02-8000-000000000001',
      TIMESTAMPTZ '2026-09-28 00:00:00+00', TIMESTAMPTZ '2027-09-28 00:00:00+00', 'ACTIVE',
-     TIMESTAMPTZ '2026-09-28 00:00:00+00', TIMESTAMPTZ '2026-09-28 00:00:00+00', 0),
+     TIMESTAMPTZ '2026-09-28 00:00:00+00', TIMESTAMPTZ '2026-09-28 00:00:00+00', 0,
+     '019b76da-a800-7d01-8000-000000000002', 990000),
     ('019b76da-a800-7d03-8000-000000000002', '019b76da-a800-7d02-8000-000000000002',
      TIMESTAMPTZ '2026-09-28 00:00:00+00', TIMESTAMPTZ '2027-09-28 00:00:00+00', 'ACTIVE',
-     TIMESTAMPTZ '2026-09-28 00:00:00+00', TIMESTAMPTZ '2026-09-28 00:00:00+00', 0)
+     TIMESTAMPTZ '2026-09-28 00:00:00+00', TIMESTAMPTZ '2026-09-28 00:00:00+00', 0,
+     '019b76da-a800-7d01-8000-000000000003', 1990000)
 ON CONFLICT (subscription_id) DO NOTHING;

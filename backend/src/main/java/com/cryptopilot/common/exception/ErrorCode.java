@@ -570,7 +570,45 @@ public enum ErrorCode {
      * A post or comment of a banned member stays hidden (D-125): a ban is final (BR-05), so restoring their content
      * would bring a banned member back into the community. Borrows MSG43 (A-38). 409: the author refuses it.
      */
-    AUTHOR_BANNED(HttpStatus.CONFLICT, "MSG43");
+    AUTHOR_BANNED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The package is not on sale: inactive, not purchasable, or FREE (SRS 3.11.5). Borrows MSG43 (A-38). 409: the
+     * package refuses the order.
+     */
+    PACKAGE_NOT_ON_SALE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The package is of a lower tier than the paid subscription the Trader holds, which may only be renewed or
+     * upgraded (D-147, replacing BR-55's downgrade). Borrows MSG43 (A-38); messageArgs are the plan held and its end
+     * instant. 409: the subscription refuses the order.
+     */
+    SUBSCRIPTION_DOWNGRADE_REFUSED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The payment gateway is switched off by an administrator, or not available on this deployment (D-147). Borrows
+     * MSG43 (A-38). 409: the Trader may choose another gateway.
+     */
+    PAYMENT_GATEWAY_DISABLED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The payment gateway could not be reached or refused to open a payment page; no order was kept (D-147). Borrows
+     * MSG43 (A-38). 503: the same request may succeed later, or through another gateway.
+     */
+    PAYMENT_GATEWAY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43"),
+
+    /**
+     * An administrator marked an order handled that is not waiting for one: it was never flagged, or was handled
+     * already (UC-48, D-147). Borrows MSG43 (A-38). 409: the order's state refuses the command.
+     */
+    ORDER_NOT_AWAITING_HANDLING(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The Trader already has an order awaiting payment that its gateway would not cancel, e.g. a card payment under
+     * way: one PENDING order per Trader (D-147). Borrows MSG43 (A-38); messageArgs is the order code. 409: finish or
+     * wait out that order first.
+     */
+    ORDER_ALREADY_PENDING(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

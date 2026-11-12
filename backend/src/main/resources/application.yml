@@ -128,6 +128,32 @@ cryptopilot:
       zone: UTC
       grace: 24h
       max-pages: 20
+  billing:
+    # D-147: the page a payment gateway sends the browser back to (SCR-31); the order code is added as orderCode.
+    return-url: ${PUBLIC_BASE_URL:http://localhost:5173}/subscription/payment-result
+    # D-147: the SePay Payment Gateway; empty credentials leave SePay unavailable (deploy/.env.example).
+    sepay:
+      merchant-id: ${SEPAY_MERCHANT_ID:}
+      secret-key: ${SEPAY_SECRET_KEY:}
+      ipn-secret-key: ${SEPAY_IPN_SECRET_KEY:}
+      # The checkout form and the order query API of NSF-13; empty here (SePay unavailable), the dev profile names
+      # the sandbox.
+      checkout-url: ${SEPAY_CHECKOUT_URL:}
+      api-url: ${SEPAY_API_URL:}
+    # D-147: MoMo, test environment only (real MoMo payments need a registered business). Empty keys, an empty
+    # endpoint (named in the dev profile) or an empty IPN address (the public URL of /api/v1/billing/ipn/momo) leave
+    # MoMo unavailable.
+    momo:
+      partner-code: ${MOMO_PARTNER_CODE:}
+      access-key: ${MOMO_ACCESS_KEY:}
+      secret-key: ${MOMO_SECRET_KEY:}
+      endpoint: ${MOMO_ENDPOINT:}
+      ipn-url: ${MOMO_IPN_URL:}
+    # NSF-13: PENDING orders older than `after` are asked about every `interval`; on in the dev and prod profiles.
+    reconcile:
+      interval: PT5M
+      after: PT5M
+      batch-size: 50
   notification:
     mail:
       # T-057: the sender address, and the web application the mailed links open (/verify-email, /reset-password).

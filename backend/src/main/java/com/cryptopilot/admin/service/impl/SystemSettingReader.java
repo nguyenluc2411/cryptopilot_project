@@ -27,6 +27,7 @@ public class SystemSettingReader implements SystemSettingApi {
 
     private static final String DECIMAL = "DECIMAL";
     private static final String INT = "INT";
+    private static final String BOOLEAN = "BOOLEAN";
 
     private final SystemSettingRepository settings;
     private final Map<String, StoredSetting> cache = new ConcurrentHashMap<>();
@@ -41,6 +42,12 @@ public class SystemSettingReader implements SystemSettingApi {
     @Transactional(readOnly = true)
     public int integer(String key) {
         return Integer.parseInt(read(key, INT));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean flag(String key) {
+        return Boolean.parseBoolean(read(key, BOOLEAN));
     }
 
     /** Drops a key from the cache, so the next read goes to the table. */

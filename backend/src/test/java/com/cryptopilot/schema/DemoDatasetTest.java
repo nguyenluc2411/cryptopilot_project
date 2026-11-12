@@ -156,8 +156,9 @@ class DemoDatasetTest {
                 .as("the demo set adds no setting: the reference values are the same in every environment"
                         + " (V3's sixteen, less the two plan limits V10 and the two thresholds V13 removes,"
                         + " plus the clearance fee V26 adds, the four plan validity settings V32 adds, the two"
-                        + " resend limits V33 adds and the fee share threshold V34 adds)")
-                .isEqualTo(20);
+                        + " resend limits V33 adds, the fee share threshold V34 adds and the two gateway switches"
+                        + " V67 adds)")
+                .isEqualTo(22);
         assertThat(count("trading_strategy")).isEqualTo(3);
         assertThat(count("crypto_pair"))
                 .as("pairs come from the symbol synchronisation (NSF-01); deploy/demo/load-wf01.ps1 enables the demo"

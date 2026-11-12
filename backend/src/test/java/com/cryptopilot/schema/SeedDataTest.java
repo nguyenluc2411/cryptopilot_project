@@ -76,10 +76,10 @@ class SeedDataTest {
      * liquidation clearance fee (BR-36); V32 the entry deviation, setup score drop and slippage settings (BR-36, BR-69,
      * BR-70), V33 the two resend limits (BR-65), V34 the fee share threshold of HIGH_FEE_SHARE (BR-29, D-116); V11
      * seeds the five packages; V39 the Academy's 8 topics, 21 lessons and 64 glossary terms (T-114); V62 the first active
-     * AI Assistant configuration (T-073).
+     * AI Assistant configuration (T-073); V67 the switches of the two payment gateways (D-147).
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
-            "system_setting", 20,
+            "system_setting", 22,
             "trading_strategy", 3,
             "user_account", 1,
             "user_profile", 1,
@@ -123,7 +123,7 @@ class SeedDataTest {
 
     @ParameterizedTest(name = "{0} holds {1} seeded rows")
     @CsvSource({
-        "system_setting, 20",
+        "system_setting, 22",
         "trading_strategy, 3",
         "user_account, 1",
         "user_profile, 1",
@@ -419,7 +419,7 @@ class SeedDataTest {
                 .query()
                 .listOfRows();
 
-        assertThat(settings).hasSize(20).allSatisfy(setting -> {
+        assertThat(settings).hasSize(22).allSatisfy(setting -> {
             String key = (String) setting.get("setting_key");
             String value = (String) setting.get("setting_value");
             switch ((String) setting.get("value_type")) {

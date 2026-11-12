@@ -11,3 +11,12 @@ title = "cryptopilot"
 
 [extend]
 useDefault = true
+
+# One past commit of the payment branch (T-068) signed a test IPN with a public gateway sandbox key. The key is not
+# in the current tree any more (tests use made-up keys) and the history is not rewritten, so only that commit and that
+# file are allowed; the value itself is not repeated here.
+[[allowlists]]
+description = "Test IPN signed with a public sandbox key in one past commit (T-068)"
+condition = "AND"
+commits = ["53ba9aa6bf1ddefc10075cee3b0f5f597ba1c16b"]
+paths = ['''backend/src/test/java/com/cryptopilot/billing/controller/PaymentCallbackApiTest\.java''']
