@@ -77,6 +77,11 @@ cryptopilot:
   journal:
     funding-correction:
       enabled: false
+  billing:
+    reconcile:
+      enabled: false
+    subscription-sweep:
+      enabled: false
   alert:
     enabled: false
     expiry-sweep:
