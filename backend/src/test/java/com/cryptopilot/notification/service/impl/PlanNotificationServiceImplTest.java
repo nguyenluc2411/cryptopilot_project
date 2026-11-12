@@ -10,6 +10,7 @@ import com.cryptopilot.notification.model.enums.NotificationReference;
 import com.cryptopilot.notification.model.enums.NotificationType;
 import com.cryptopilot.trading.event.PlanFilled;
 import com.cryptopilot.trading.event.PositionClosed;
+import com.cryptopilot.trading.event.SetupScoreDropped;
 import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.event.TradingPlanInvalidated;
 import com.cryptopilot.trading.model.enums.CloseReason;
@@ -49,6 +50,32 @@ class PlanNotificationServiceImplTest {
         assertThat(written.referenceId()).isEqualTo(filled.planId());
         assertThat(written.recipientId()).isEqualTo(filled.userId());
         assertThat(written.sourceKey()).isEqualTo("PLAN_FILLED:" + filled.planId());
+    }
+
+    /** MSG55: the pair and both scores, as plain decimals, once per plan. */
+    @Test
+    void MSG55_aDroppedSetupScore_namesThePairAndBothScores() {
+        SetupScoreDropped dropped = new SetupScoreDropped(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                Direction.LONG,
+                "BTCUSDT",
+                new BigDecimal("72.00"),
+                new BigDecimal("57.00"),
+                Instant.parse("2026-11-12T08:00:00Z"));
+
+        notifications.setupScoreDropped(dropped);
+
+        NewNotification written = written();
+        assertThat(written.content())
+                .isEqualTo("BTCUSDT entry filled with a setup score of 57, down from 72 when planned.");
+        assertThat(written.title()).isEqualTo("Setup score dropped");
+        assertThat(written.type()).isEqualTo(NotificationType.PLAN);
+        assertThat(written.referenceType()).isEqualTo(NotificationReference.PLAN);
+        assertThat(written.referenceId()).isEqualTo(dropped.planId());
+        assertThat(written.recipientId()).isEqualTo(dropped.userId());
+        assertThat(written.sourceKey()).isEqualTo("SETUP_SCORE_DROPPED:" + dropped.planId());
     }
 
     @Test

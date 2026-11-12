@@ -2,6 +2,7 @@ package com.cryptopilot.notification.service;
 
 import com.cryptopilot.trading.event.PlanFilled;
 import com.cryptopilot.trading.event.PositionClosed;
+import com.cryptopilot.trading.event.SetupScoreDropped;
 import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.event.TradingPlanInvalidated;
 import com.cryptopilot.trading.event.TradingPlanWithdrawn;
@@ -29,4 +30,7 @@ public interface PlanNotificationService {
 
     /** Tells the owner that a plan was invalidated before its entry was filled, and why (MSG54). */
     void invalidated(TradingPlanInvalidated event);
+
+    /** Tells the owner that a plan's entry filled with a setup score well below the one at activation (MSG55). */
+    void setupScoreDropped(SetupScoreDropped event);
 }

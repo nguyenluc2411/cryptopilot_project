@@ -1,10 +1,12 @@
 package com.cryptopilot.market.service;
 
+import com.cryptopilot.market.ClosedCandleIndicators;
 import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.dto.response.AnalysisResponse;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -42,6 +44,13 @@ public interface AnalysisService {
      */
     SetupScoreReading closedCandleSetupScore(
             UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at);
+
+    /**
+     * The indicator values of the pair's latest candle of {@code timeframe} closed at {@code at}, as
+     * {@link com.cryptopilot.market.MarketApi#closedCandleIndicators} describes it.
+     */
+    Optional<ClosedCandleIndicators> closedCandleIndicators(
+            UUID pairId, MarketType market, String timeframe, Instant at);
 
     /**
      * The timeframe a preset reads its setup score on, as {@link com.cryptopilot.market.MarketApi#presetTimeframe}

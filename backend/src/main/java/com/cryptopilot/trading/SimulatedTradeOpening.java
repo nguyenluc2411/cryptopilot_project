@@ -30,6 +30,7 @@ import java.util.UUID;
  * @param takeProfit the take profit the position starts with
  * @param liquidationPrice the liquidation price of a Futures position at its fill price, or {@code null} for Spot and
  *     for a position no price can liquidate
+ * @param learning the learning data of the fill (BR-70); {@link SimulatedFillLearning#none()} when none was taken
  */
 public record SimulatedTradeOpening(
         UUID planId,
@@ -45,9 +46,45 @@ public record SimulatedTradeOpening(
         BigDecimal entryFee,
         BigDecimal stopLoss,
         BigDecimal takeProfit,
-        BigDecimal liquidationPrice) {
+        BigDecimal liquidationPrice,
+        SimulatedFillLearning learning) {
+
+    /** An opening without learning data. */
+    public SimulatedTradeOpening(
+            UUID planId,
+            UUID userId,
+            UUID pairId,
+            MarketType market,
+            Direction direction,
+            Integer leverage,
+            BigDecimal entryPrice,
+            Instant entryTime,
+            BigDecimal quantity,
+            LiquidityRole entryLiquidity,
+            BigDecimal entryFee,
+            BigDecimal stopLoss,
+            BigDecimal takeProfit,
+            BigDecimal liquidationPrice) {
+        this(
+                planId,
+                userId,
+                pairId,
+                market,
+                direction,
+                leverage,
+                entryPrice,
+                entryTime,
+                quantity,
+                entryLiquidity,
+                entryFee,
+                stopLoss,
+                takeProfit,
+                liquidationPrice,
+                SimulatedFillLearning.none());
+    }
 
     public SimulatedTradeOpening {
+        learning = Objects.requireNonNullElseGet(learning, SimulatedFillLearning::none);
         Objects.requireNonNull(planId, "planId");
         Objects.requireNonNull(userId, "userId");
         Objects.requireNonNull(pairId, "pairId");

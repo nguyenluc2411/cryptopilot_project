@@ -1,6 +1,7 @@
 package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.BookTop;
+import com.cryptopilot.market.ClosedCandleIndicators;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.FundingHistory;
 import com.cryptopilot.market.LeverageTier;
@@ -278,6 +279,12 @@ public class MarketApiImpl implements MarketApi {
     public SetupScoreReading closedCandleSetupScore(
             UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at) {
         return analysis.closedCandleSetupScore(pairId, market, timeframe, style, presetVersion, at);
+    }
+
+    @Override
+    public Optional<ClosedCandleIndicators> closedCandleIndicators(
+            UUID pairId, MarketType market, String timeframe, Instant at) {
+        return analysis.closedCandleIndicators(pairId, market, timeframe, at);
     }
 
     @Override

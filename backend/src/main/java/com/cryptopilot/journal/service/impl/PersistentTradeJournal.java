@@ -5,6 +5,7 @@ import com.cryptopilot.journal.model.PlanPosition;
 import com.cryptopilot.journal.repository.LevelChangeLog;
 import com.cryptopilot.journal.repository.TradingJournalRepository;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PositionExcursion;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.RecordedPosition;
@@ -34,9 +35,14 @@ import org.springframework.transaction.annotation.Transactional;
  * The journal's side of the plans' fills and exits: it writes the OPEN record inside the fill's transaction, closes it
  * with a compare-and-set inside the exit's, and answers what the plans and the matching engine need to know about
  * their positions, changes their levels with a compare-and-set and keeps the history of those changes (TP-E). The
- * plan's module computes every value; this class stores and reads.
+ * learning data of a fill goes into the OPEN record, so the unique plan key that refuses a replayed fill refuses its
+ * learning data too; the extremes of an open position only ever widen. The plan's module computes every value; this
+ * class stores and reads.
  *
- * <p>Rule: BR-34, BR-35, BR-62; UC-20, UC-21; D-63, D-97, D-119, D-124.
+ * <p>Rule: BR-34, BR-35, BR-62, BR-70; UC-20, UC-21; D-63, D-97, D-111, D-119, D-124.
+ *
+ * <p>Reference: Helland, P. (2012). Idempotence is not a medical condition. <i>ACM Queue</i>, 10(4) (a repeated
+ * message changes nothing).
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -92,6 +98,8 @@ public class PersistentTradeJournal implements TradeJournal {
                         closing.fundingFeeAmount(),
                         closing.fundingIncomplete(),
                         MissingFundingTimes.literal(closing.missingFundingTimes()),
+                        closing.excursion() == null ? null : closing.excursion().adverse(),
+                        closing.excursion() == null ? null : closing.excursion().favorable(),
                         clock.instant())
                 == 1;
         if (closed) {
@@ -172,5 +180,13 @@ public class PersistentTradeJournal implements TradeJournal {
     @Transactional(readOnly = true)
     public Map<UUID, List<PositionLevelChange>> openLevelChanges() {
         return levelChanges.ofOpenSimulated();
+    }
+
+    @Override
+    @Transactional
+    public void widenExcursions(Collection<PositionExcursion> excursions) {
+        for (PositionExcursion excursion : excursions) {
+            records.widenExcursionIfOpen(excursion.positionId(), excursion.adverse(), excursion.favorable());
+        }
     }
 }

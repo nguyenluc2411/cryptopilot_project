@@ -3,6 +3,7 @@ package com.cryptopilot.trading.service.impl;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PositionExcursion;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.SlippageCalculator;
@@ -19,6 +20,7 @@ import com.cryptopilot.trading.service.MatchingService;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -121,6 +123,14 @@ public class MatchingServiceImpl implements MatchingService {
     @Transactional
     public boolean close(PositionExit exit) {
         return closer.close(exit);
+    }
+
+    @Override
+    @Transactional
+    public void widenExcursions(Collection<PositionExcursion> excursions) {
+        if (!excursions.isEmpty()) {
+            journal.widenExcursions(excursions);
+        }
     }
 
     @Override

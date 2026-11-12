@@ -9,6 +9,7 @@ import com.cryptopilot.support.PlanNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
+import com.cryptopilot.trading.calculator.EntryDeviationCalculator;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.model.Fill;
@@ -166,6 +167,34 @@ class JournalOpeningTest {
             assertThat(position.status()).isEqualTo(PositionStatus.OPEN);
             assertThat(position.entryTime()).isEqualTo(FILLED_AT);
         });
+    }
+
+    /**
+     * BR-70: the same fill stores its learning data with the record: the planned entry and the deviation of BR-69, the
+     * snapshot's risk, the plan's timeframe and preset, and both extremes at the fill price. No indicator row is stored
+     * for the pair, so the score at the fill and the indicators are null and nothing is compared (D-112).
+     */
+    @Test
+    void BR70_aFillByTheEngine_storesItsLearningData() {
+        UUID id = activePlan();
+        TradingPlan plan = plan(id);
+
+        assertThat(matching.fill(limitFill(id, new BigDecimal("99.5")))).isPresent();
+
+        Map<String, Object> row = record(id);
+        assertThat((BigDecimal) row.get("planned_entry_price")).isEqualByComparingTo(plan.getPlannedEntryPrice());
+        assertThat((BigDecimal) row.get("entry_deviation_r"))
+                .isEqualByComparingTo(EntryDeviationCalculator.deviationR(
+                        Direction.LONG, plan.getPlannedEntryPrice(), new BigDecimal("99.5"), plan.getStopLoss()));
+        assertThat((BigDecimal) row.get("risk_amount"))
+                .isEqualByComparingTo(plan.getSnapshot().riskAmount());
+        assertThat(row.get("analysis_timeframe")).isEqualTo("1h");
+        assertThat(row.get("setup_score_preset")).isEqualTo(plan.getSetupScorePreset());
+        assertThat(row.get("setup_score_at_fill")).isNull();
+        assertThat(row.get("setup_score_drop_warned")).isNull();
+        assertThat(row.get("fill_indicators")).isNull();
+        assertThat((BigDecimal) row.get("max_adverse_price")).isEqualByComparingTo("99.5");
+        assertThat((BigDecimal) row.get("max_favorable_price")).isEqualByComparingTo("99.5");
     }
 
     /** BR-34: a fill that finds the plan cancelled first changes nothing and writes no record. */

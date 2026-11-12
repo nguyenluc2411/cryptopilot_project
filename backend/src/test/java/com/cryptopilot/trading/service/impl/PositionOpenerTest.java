@@ -7,6 +7,7 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -15,15 +16,20 @@ import com.cryptopilot.admin.SystemSettingApi;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
+import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.SimulatedFillLearning;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.PlanFilled;
+import com.cryptopilot.trading.event.SetupScoreDropped;
 import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.TrackedPosition;
+import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
@@ -56,7 +62,8 @@ class PositionOpenerTest {
     private final SystemSettingApi settings = mock(SystemSettingApi.class);
     private final MarketApi market = mock(MarketApi.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
-    private final PositionOpener opener = new PositionOpener(journal, new FeeRates(settings), market, events);
+    private final PositionOpener opener = new PositionOpener(
+            journal, new FeeRates(settings), market, new FillLearningCapture(market, settings), events);
 
     @BeforeEach
     void rates() {
@@ -238,6 +245,69 @@ class PositionOpenerTest {
         verifyNoInteractions(events);
     }
 
+    /** BR-70: the learning data of the fill goes with its opening, so the record holds it from the start. */
+    @Test
+    void BR70_theLearningDataOfTheFill_goesWithItsOpening() {
+        TradingPlan plan = executed(LiquidityRole.TAKER, "99");
+        when(plan.getPlannedEntryPrice()).thenReturn(new BigDecimal("100"));
+        when(plan.getAnalysisTimeframe()).thenReturn(AnalysisTimeframe.ONE_HOUR);
+
+        opener.open(plan);
+
+        SimulatedTradeOpening opened = opened();
+        assertThat(opened.learning().plannedEntryPrice()).isEqualByComparingTo("100");
+        // SHORT sold at 99 against 100 planned, stop 105: −1 × (99 − 100) / 5 = +0.2 R.
+        assertThat(opened.learning().entryDeviationR()).isEqualByComparingTo("0.2");
+        assertThat(opened.learning().riskAmount()).isEqualByComparingTo("10");
+        assertThat(opened.learning().analysisTimeframe()).isEqualTo("1h");
+        assertThat(opened.entryLiquidity()).isEqualTo(LiquidityRole.TAKER);
+    }
+
+    /** MSG55: a fill whose setup score fell by the threshold publishes the drop beside the fill. */
+    @Test
+    void MSG55_aDroppedSetupScore_publishesSetupScoreDropped_besidePlanFilled() {
+        TradingPlan plan = dropped("70.00", 55);
+
+        opener.open(plan);
+
+        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+        verify(events, times(2)).publishEvent(published.capture());
+        assertThat(published.getAllValues().getFirst()).isInstanceOf(PlanFilled.class);
+        assertThat(published.getAllValues().getLast())
+                .isEqualTo(new SetupScoreDropped(
+                        PLAN,
+                        JOURNAL,
+                        USER,
+                        Direction.SHORT,
+                        "BTCUSDT",
+                        new BigDecimal("70.00"),
+                        new BigDecimal("55.00"),
+                        FILLED_AT));
+        assertThat(opened().learning().setupScoreDropWarned()).isTrue();
+    }
+
+    /** MSG55: a drop below the threshold publishes only the fill. */
+    @Test
+    void MSG55_aDropBelowTheThreshold_publishesOnlyTheFill() {
+        opener.open(dropped("69.00", 55));
+
+        verify(events, times(1)).publishEvent(any(PlanFilled.class));
+        verify(events, never()).publishEvent(any(SetupScoreDropped.class));
+    }
+
+    /** BR-70: whatever fails while the learning data is taken, the fill is recorded without it. */
+    @Test
+    void BR70_aFailureTakingTheLearningData_neverBlocksTheFill() {
+        TradingPlan plan = executed(LiquidityRole.MAKER, "100");
+        when(plan.getPlannedEntryPrice()).thenThrow(new IllegalStateException("broken plan"));
+
+        TrackedPosition tracked = opener.open(plan);
+
+        assertThat(tracked.positionId()).isEqualTo(JOURNAL);
+        assertThat(opened().learning()).isEqualTo(SimulatedFillLearning.none());
+        assertThat(published().planId()).isEqualTo(PLAN);
+    }
+
     /** BR-34: only an EXECUTED plan has a position to open. */
     @Test
     void BR34_aPlanThatIsNotExecuted_isRefused_andNothingIsRecorded() {
@@ -281,6 +351,18 @@ class PositionOpenerTest {
                 opening.takeProfit(),
                 opening.liquidationPrice(),
                 7);
+    }
+
+    /** A plan whose setup score at activation was {@code atPlan} and is {@code atFill} at the fill (SWING v1, 4h). */
+    private TradingPlan dropped(String atPlan, int atFill) {
+        TradingPlan plan = executed(LiquidityRole.MAKER, "100");
+        when(plan.getSetupScoreAtPlan()).thenReturn(new BigDecimal(atPlan));
+        when(plan.getSetupScorePreset()).thenReturn("SWING v1");
+        when(settings.integer(FillLearningCapture.SETUP_SCORE_DROP_WARN)).thenReturn(15);
+        when(market.presetTimeframe(SetupStyle.SWING)).thenReturn("4h");
+        when(market.closedCandleSetupScore(PAIR, MarketType.FUTURES, "4h", SetupStyle.SWING, "v1", FILLED_AT))
+                .thenReturn(new SetupScoreReading(atFill, SetupStyle.SWING, "v1", "4h", FILLED_AT));
+        return plan;
     }
 
     /** A Futures SHORT, 10x, quantity 2, capital 1000, filled at {@code price}; its estimate is 109.00. */

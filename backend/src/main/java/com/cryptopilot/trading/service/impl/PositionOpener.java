@@ -4,11 +4,13 @@ import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.SimulatedFillLearning;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.LiquidationCalculator;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.PlanFilled;
+import com.cryptopilot.trading.event.SetupScoreDropped;
 import com.cryptopilot.trading.model.LeverageBracket;
 import com.cryptopilot.trading.model.LiquidationEstimate;
 import com.cryptopilot.trading.model.LiquidationInput;
@@ -28,9 +30,11 @@ import org.springframework.stereotype.Component;
 /**
  * Hands a plan that has just filled to the journal, inside the transaction of the fill, on every fill path: the
  * resting LIMIT and the STOP the engine fills, and the LIMIT or MARKET filled at activation. In the same transaction it
- * publishes {@link PlanFilled}, so the Trader is told of every fill that commits and of no other (Q-81).
+ * publishes {@link PlanFilled}, so the Trader is told of every fill that commits and of no other (Q-81). The fill's
+ * learning data goes into the same record, so a replayed fill, which the journal refuses, adds none either; a setup
+ * score drop is published as {@link SetupScoreDropped} in the same transaction (MSG55).
  *
- * <p>Rule: BR-27, BR-34, BR-36; MSG22; D-78, D-97, D-111 E1, D-119; Q-81.
+ * <p>Rule: BR-27, BR-34, BR-36, BR-70; MSG22, MSG55; D-78, D-97, D-111 E1 and M4, D-119; Q-81.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -41,14 +45,16 @@ public class PositionOpener {
     private final TradeJournal journal;
     private final FeeRates feeRates;
     private final MarketApi market;
+    private final FillLearningCapture learning;
     private final ApplicationEventPublisher events;
 
     /**
      * Records the OPEN position of an EXECUTED plan: its fill price, fill time and liquidity role, the snapshot's
      * quantity, the levels it starts with, the entry fee at the rate of that role, rounded to the stored scale as the
-     * close rounds it, and, on Futures, the liquidation price at the fill price; then publishes {@link PlanFilled}.
+     * close rounds it, on Futures the liquidation price at the fill price, and the learning data of the fill; then
+     * publishes {@link PlanFilled}, and {@link SetupScoreDropped} when the setup score fell enough.
      *
-     * <p>Rule: BR-27, BR-34, BR-36; D-97; D-111 E1; TECHNICAL_DESIGN 7.6 and 7.8.
+     * <p>Rule: BR-27, BR-34, BR-36, BR-70; D-97; D-111 E1 and M4; TECHNICAL_DESIGN 7.6 and 7.8.
      *
      * @return the position as the matching engine tracks it
      * @throws IllegalStateException when the plan is not EXECUTED
@@ -61,6 +67,7 @@ public class PositionOpener {
         BigDecimal entryFee = Rounding.toAmount(
                 feeRates.of(plan.getMarket()).fee(plan.getFillLiquidity(), plan.getFillPrice(), quantity));
         Optional<TradablePair> pair = market.tradablePair(plan.getPairId(), plan.getMarket());
+        SimulatedFillLearning fillLearning = learningOf(plan);
         TrackedPosition position = TrackedPosition.of(journal.openSimulatedTrade(new SimulatedTradeOpening(
                 plan.getId(),
                 plan.getUserId(),
@@ -75,7 +82,8 @@ public class PositionOpener {
                 entryFee,
                 plan.getStopLoss(),
                 plan.getTakeProfit(),
-                liquidationPrice(plan, quantity, pair))));
+                liquidationPrice(plan, quantity, pair),
+                fillLearning)));
         events.publishEvent(new PlanFilled(
                 plan.getId(),
                 position.positionId(),
@@ -87,7 +95,33 @@ public class PositionOpener {
                 quantity,
                 plan.getFillLiquidity(),
                 plan.getExecutedAt()));
+        if (Boolean.TRUE.equals(fillLearning.setupScoreDropWarned())) {
+            log.info(
+                    "BR-70 plan {} filled with setup score {}, down from {}",
+                    plan.getId(),
+                    fillLearning.setupScoreAtFill(),
+                    fillLearning.setupScoreAtPlan());
+            events.publishEvent(new SetupScoreDropped(
+                    plan.getId(),
+                    position.positionId(),
+                    plan.getUserId(),
+                    plan.getDirection(),
+                    pair.map(TradablePair::symbol).orElse(null),
+                    fillLearning.setupScoreAtPlan(),
+                    fillLearning.setupScoreAtFill(),
+                    plan.getExecutedAt()));
+        }
         return position;
+    }
+
+    /** The learning data of the fill; whatever goes wrong taking it, the fill goes on without it (BR-70). */
+    private SimulatedFillLearning learningOf(TradingPlan plan) {
+        try {
+            return learning.of(plan);
+        } catch (RuntimeException e) {
+            log.warn("BR-70 plan {} filled without learning data: {}", plan.getId(), e.toString());
+            return SimulatedFillLearning.none();
+        }
     }
 
     /**

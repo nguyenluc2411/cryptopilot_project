@@ -20,3 +20,13 @@ description = "Test IPN signed with a public sandbox key in one past commit (T-0
 condition = "AND"
 commits = ["53ba9aa6bf1ddefc10075cee3b0f5f597ba1c16b"]
 paths = ['''backend/src/test/java/com/cryptopilot/billing/controller/PaymentCallbackApiTest\.java''']
+
+# One commit of the journal review (T-049) built media keys of the form "cryptopilot/journal/<owner>/<uuid>" in a test
+# variable named key; the generic-api-key rule reads that as a key. It is a storage path made of test ids, not a
+# secret. The variable is renamed in the current tree and the history is not rewritten, so only that commit and that
+# file are allowed.
+[[allowlists]]
+description = "Media storage paths in a test variable named key, one past commit (T-049)"
+condition = "AND"
+commits = ["729041e1826088108ff2c8d8b7ff394046f29846"]
+paths = ['''backend/src/test/java/com/cryptopilot/journal/controller/JournalReviewApiTest\.java''']

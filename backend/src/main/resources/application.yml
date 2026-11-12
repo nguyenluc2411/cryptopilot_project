@@ -494,6 +494,18 @@ cryptopilot:
       enabled: false
       cron: "0 * * * * *"
       zone: UTC
+  journal:
+    chart-image:
+      # T-049: the chart image of a trade review (SCR-21), on the community's Cloudinary account (same variables) in
+      # a folder of its own, outside the folder the post media sweep lists. All three empty: uploads are refused.
+      cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+      api-key: ${CLOUDINARY_API_KEY:}
+      api-secret: ${CLOUDINARY_API_SECRET:}
+      api-base-url: https://api.cloudinary.com
+      # Every image is stored under <folder>/<owner account>/<random key>.
+      folder: cryptopilot/journal
+      connect-timeout: 5s
+      read-timeout: 10s
   academy:
     cover:
       # T-114: the cover photos of Academy lessons, on the community's Cloudinary account (same variables) in a folder of

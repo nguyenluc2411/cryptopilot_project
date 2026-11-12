@@ -4,6 +4,7 @@ import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.market.ClosedCandleIndicators;
 import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.calculator.SetupComponents;
@@ -176,6 +177,39 @@ public class AnalysisServiceImpl implements AnalysisService {
                         .score())
                 .orElse(null);
         return new SetupScoreReading(score, preset.style(), version, timeframe, latestClosedOpen);
+    }
+
+    /**
+     * The indicators of the candle {@link #closedCandleSetupScore} would score: the latest one of {@code timeframe}
+     * closed at {@code at}, never a forming one nor an older stored row. Read outside a caller's transaction for the
+     * same reason as the score.
+     *
+     * <p>Rule: BR-12, BR-70; D-112.
+     *
+     * @throws IllegalArgumentException for a timeframe outside BR-08, or an instant after now
+     */
+    @Override
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public Optional<ClosedCandleIndicators> closedCandleIndicators(
+            UUID pairId, MarketType market, String timeframe, Instant at) {
+        if (at.isAfter(clock.instant())) {
+            throw new IllegalArgumentException("indicators are read at or before now, not at " + at);
+        }
+        MarketInterval interval = MarketInterval.fromCode(timeframe)
+                .filter(CandleBackfillServiceImpl.TIMEFRAMES::contains)
+                .orElseThrow(() -> new IllegalArgumentException(timeframe + " is not a BR-08 timeframe"));
+        return indicators
+                .at(pairId, market, timeframe, latestClosedOpen(interval, at))
+                .map(row -> new ClosedCandleIndicators(
+                        timeframe,
+                        row.openTime(),
+                        row.rsi14(),
+                        row.ema20(),
+                        row.ema50(),
+                        row.ema200(),
+                        row.macdLine(),
+                        row.macdSignal(),
+                        row.macdHistogram()));
     }
 
     @Override

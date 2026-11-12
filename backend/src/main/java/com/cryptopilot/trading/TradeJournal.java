@@ -74,4 +74,14 @@ public interface TradeJournal {
      * rebuilds the levels in force at each candle a replay serves; positions never changed are absent.
      */
     Map<UUID, List<PositionLevelChange>> openLevelChanges();
+
+    /**
+     * Widens the stored most adverse and most favourable price of OPEN simulated positions by the ones the engine holds
+     * now: a stored extreme is replaced only by a worse (adverse) or better (favourable) one, so the update is
+     * monotonic and a repeat changes nothing. Neither the version nor the levels of a row change, so no close or level
+     * change racing it is refused. Unknown or closed positions are skipped.
+     *
+     * <p>Rule: BR-70; D-111 (M4), D-112 R5.
+     */
+    void widenExcursions(Collection<PositionExcursion> excursions);
 }

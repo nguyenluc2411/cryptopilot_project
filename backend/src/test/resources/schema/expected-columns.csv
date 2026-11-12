@@ -619,6 +619,7 @@ trade_order,user_id,uuid,,,NO
 trade_order,version,bigint,64,0,NO
 trade_order,working_type,character varying,,,YES
 trading_journal,analysis_timeframe,character varying,,,YES
+trading_journal,chart_image_public_id,character varying,,,YES
 trading_journal,chart_image_url,character varying,,,YES
 trading_journal,close_reason,character varying,,,YES
 trading_journal,created_at,timestamp with time zone,,,NO

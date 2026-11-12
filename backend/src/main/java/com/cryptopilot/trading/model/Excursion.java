@@ -46,6 +46,14 @@ public record Excursion(BigDecimal adverse, BigDecimal favorable) {
     }
 
     /**
+     * This excursion widened by one price the position traded at, such as the price of a manual close, which counts on
+     * both sides.
+     */
+    public Excursion through(Direction direction, BigDecimal price) {
+        return new Excursion(worse(direction, adverse, price), better(direction, favorable, price));
+    }
+
+    /**
      * This excursion widened by the candle the position exited in, each extreme of that candle clamped at the exit
      * price on the side the exit was reached.
      */

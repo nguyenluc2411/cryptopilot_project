@@ -3,6 +3,7 @@ package com.cryptopilot.trading.matching;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PositionExcursion;
 import com.cryptopilot.trading.model.Excursion;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.PlanOutcome;
@@ -297,6 +298,39 @@ class MatchingEngineExitTest {
                 false));
         assertThat(engine.excursion(fresh.positionId()))
                 .contains(new Excursion(new BigDecimal("104"), new BigDecimal("95")));
+    }
+
+    /**
+     * BR-70: the positions whose excursions a range widened are handed over once, with their extremes so far; a range
+     * inside them, and a drain with nothing new, hand over nothing.
+     */
+    @Test
+    void BR70_widenedExcursions_areDrainedOnce_andOnlyWhenTheyWiden() {
+        TrackedPosition held = position(Direction.LONG, "100", EARLIER, "90", "120", null);
+        engine.open(held);
+
+        engine.onRange(last("100", "97", "105"));
+        assertThat(engine.drainWidenedExcursions())
+                .containsExactly(new PositionExcursion(held.positionId(), new BigDecimal("97"), new BigDecimal("105")));
+        assertThat(engine.drainWidenedExcursions()).isEmpty();
+
+        engine.onRange(last("100", "98", "104"));
+        assertThat(engine.drainWidenedExcursions()).isEmpty();
+
+        engine.onRange(last("100", "96", "104"));
+        assertThat(engine.drainWidenedExcursions())
+                .containsExactly(new PositionExcursion(held.positionId(), new BigDecimal("96"), new BigDecimal("105")));
+    }
+
+    /** BR-70: a position that exited leaves no widened excursion behind; its excursion goes with the close. */
+    @Test
+    void BR70_anExitedPosition_isNotDrained() {
+        TrackedPosition target = position(Direction.LONG, "100", EARLIER, "95", "115", null);
+        engine.open(target);
+
+        engine.onRange(last("110", "98", "116"));
+
+        assertThat(engine.drainWidenedExcursions()).isEmpty();
     }
 
     /** D-112 R5: the exit candle is clamped at the exit price on the side of the exit. */

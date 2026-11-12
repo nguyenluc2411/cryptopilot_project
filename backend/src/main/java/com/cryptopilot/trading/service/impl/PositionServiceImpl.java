@@ -84,7 +84,8 @@ public class PositionServiceImpl implements PositionService {
         boolean closed = closer.close(new PositionExit(
                 TrackedPosition.of(trade),
                 new Exit(planId, CloseReason.MANUAL, currentPrice, now),
-                Excursion.at(trade.entryPrice())));
+                // The journal merges this with the extremes stored while the position was open.
+                Excursion.at(trade.entryPrice()).through(trade.direction(), currentPrice)));
         if (!closed) {
             // The engine's exit or another close committed between the read and the compare-and-set.
             throw new IllegalPlanStateException(planId, PlanStatus.EXECUTED, "close a position closed first");

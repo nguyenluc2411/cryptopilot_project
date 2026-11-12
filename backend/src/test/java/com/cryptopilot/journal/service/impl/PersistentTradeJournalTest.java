@@ -86,6 +86,8 @@ class PersistentTradeJournalTest {
                         any(),
                         eq(true),
                         eq("{\"2026-10-25T08:00:00Z\",\"2026-10-25T16:00:00Z\"}"),
+                        isNull(),
+                        isNull(),
                         eq(NOW)))
                 .thenReturn(1);
 
@@ -111,6 +113,8 @@ class PersistentTradeJournalTest {
                         any(),
                         anyBoolean(),
                         isNull(),
+                        any(),
+                        any(),
                         any()))
                 .thenReturn(0);
 

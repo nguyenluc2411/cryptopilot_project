@@ -24,6 +24,18 @@ import org.springframework.transaction.annotation.Transactional;
  */
 public interface TradingJournalRepository extends Repository<TradingJournal, UUID> {
 
+    /**
+     * The monotonic merge of a stored most adverse and most favourable price with new ones, by the row's direction:
+     * PostgreSQL's {@code least} and {@code greatest} skip a null, so a missing new value keeps the stored one and a
+     * missing stored value takes the new one (BR-70).
+     */
+    String WIDEN_EXCURSIONS = "max_adverse_price = case direction when 'LONG'"
+            + " then least(max_adverse_price, cast(:adverse as numeric))"
+            + " else greatest(max_adverse_price, cast(:adverse as numeric)) end,"
+            + " max_favorable_price = case direction when 'LONG'"
+            + " then greatest(max_favorable_price, cast(:favorable as numeric))"
+            + " else least(max_favorable_price, cast(:favorable as numeric)) end";
+
     /** The rows of {@link #search}, for its page and its count; a result only ever matches a CLOSED row (BR-42). */
     String SEARCHED_ROWS = " from trading_journal where user_id = :userId and trade_status in (:statuses)"
             + " and market_type in (:markets) and source in (:sources)"
@@ -111,7 +123,8 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     /**
      * Compare-and-set OPEN to CLOSED at one version, with the exit and the amounts: of two writers that read the same
      * version, exactly one changes the row; the other, and a replay of the same exit, see 0. The missing funding times
-     * are a PostgreSQL array literal, or {@code null} for none.
+     * are a PostgreSQL array literal, or {@code null} for none; the extremes are merged as {@link #WIDEN_EXCURSIONS}
+     * does, or kept when {@code null}.
      *
      * @return 1 when the record was OPEN at that version and is now CLOSED, otherwise 0
      */
@@ -121,8 +134,9 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
                     + " exit_time = :exitTime, close_reason = :reason, realized_pnl = :realizedPnl,"
                     + " fee_amount = :feeAmount, funding_fee_amount = :fundingFeeAmount,"
                     + " funding_incomplete = :fundingIncomplete,"
-                    + " missing_funding_times = cast(:missingFundingTimes as timestamptz[]),"
-                    + " updated_at = :now, version = version + 1"
+                    + " missing_funding_times = cast(:missingFundingTimes as timestamptz[]), "
+                    + WIDEN_EXCURSIONS
+                    + ", updated_at = :now, version = version + 1"
                     + " where journal_id = :id and trade_status = 'OPEN' and source = 'SIMULATED'"
                     + " and version = :version",
             nativeQuery = true)
@@ -137,7 +151,23 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             BigDecimal fundingFeeAmount,
             boolean fundingIncomplete,
             String missingFundingTimes,
+            BigDecimal adverse,
+            BigDecimal favorable,
             Instant now);
+
+    /**
+     * Widens the extremes of an OPEN SIMULATED record, see {@link #WIDEN_EXCURSIONS}. The version and the levels stay,
+     * so a close or a change of the levels racing it is never refused; nor does {@code updated_at} move, as nothing the
+     * Trader changed did.
+     *
+     * @return 1 when the record was OPEN, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "update trading_journal set " + WIDEN_EXCURSIONS
+                    + " where journal_id = :id and trade_status = 'OPEN' and source = 'SIMULATED'",
+            nativeQuery = true)
+    int widenExcursionIfOpen(UUID id, BigDecimal adverse, BigDecimal favorable);
 
     /** The user's OPEN SIMULATED records, oldest entry first: the positions whose current risk BR-29 counts. */
     @Transactional(readOnly = true)
@@ -162,6 +192,137 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             nativeQuery = true)
     int changeLevelsIfOpen(
             UUID id, long version, BigDecimal stopLoss, BigDecimal takeProfit, boolean widensStop, Instant now);
+
+    /**
+     * Replaces the review of one of the user's records: strategy, texts and chart image. Only these columns change:
+     * neither the execution facts (BR-40) nor the version, which the close and the level change of an open position
+     * compare and set, so a review never makes the matching engine's exit miss.
+     *
+     * @return 1 when the record is the user's, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "update trading_journal set strategy_id = cast(:strategyId as uuid),"
+                    + " setup_description = cast(:setupDescription as text),"
+                    + " lessons_learned = cast(:lessonsLearned as text), mistakes = cast(:mistakes as text),"
+                    + " chart_image_url = cast(:chartImageUrl as varchar),"
+                    + " chart_image_public_id = cast(:chartImagePublicId as varchar), updated_at = :now"
+                    + " where journal_id = :id and user_id = :userId",
+            nativeQuery = true)
+    int review(
+            UUID id,
+            UUID userId,
+            UUID strategyId,
+            String setupDescription,
+            String lessonsLearned,
+            String mistakes,
+            String chartImageUrl,
+            String chartImagePublicId,
+            Instant now);
+
+    /** The columns a manual trade is written with, by {@link #insertManual} and {@link #updateManual}. */
+    String MANUAL_VALUES = "cast(:pairId as uuid), cast(:strategyId as uuid), :market, :direction,"
+            + " cast(:leverage as integer), :entryPrice, cast(:stopLoss as numeric), cast(:takeProfit as numeric),"
+            + " :quantity, :entryTime, cast(:exitPrice as numeric), cast(:exitTime as timestamptz),"
+            + " cast(:closeReason as varchar), :feeAmount, cast(:fundingFeeAmount as numeric),"
+            + " cast(:realizedPnl as numeric), :status, cast(:setupDescription as text),"
+            + " cast(:lessonsLearned as text), cast(:mistakes as text)";
+
+    /** The column list matching {@link #MANUAL_VALUES}. */
+    String MANUAL_COLUMNS = "pair_id, strategy_id, market_type, direction, leverage, entry_price, stop_loss_price,"
+            + " take_profit_price, quantity, entry_time, exit_price, exit_time, close_reason, fee_amount,"
+            + " funding_fee_amount, realized_pnl, trade_status, setup_description, lessons_learned, mistakes";
+
+    /**
+     * Inserts a MANUAL record with every value the Trader entered and the amounts derived from them (BR-41). Native,
+     * because the entity maps the exit columns read-only: only the close writes them for a simulated trade.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "insert into trading_journal (journal_id, user_id, source, " + MANUAL_COLUMNS
+                    + ", created_at, updated_at, version) values (:id, :userId, 'MANUAL', " + MANUAL_VALUES
+                    + ", :now, :now, 0)",
+            nativeQuery = true)
+    int insertManual(
+            UUID id,
+            UUID userId,
+            UUID pairId,
+            UUID strategyId,
+            String market,
+            String direction,
+            Integer leverage,
+            BigDecimal entryPrice,
+            BigDecimal stopLoss,
+            BigDecimal takeProfit,
+            BigDecimal quantity,
+            Instant entryTime,
+            BigDecimal exitPrice,
+            Instant exitTime,
+            String closeReason,
+            BigDecimal feeAmount,
+            BigDecimal fundingFeeAmount,
+            BigDecimal realizedPnl,
+            String status,
+            String setupDescription,
+            String lessonsLearned,
+            String mistakes,
+            Instant now);
+
+    /**
+     * Replaces every entered value of one of the user's MANUAL records; its chart image stays. A SIMULATED record is
+     * never matched (BR-40).
+     *
+     * @return 1 when the record is the user's manual one, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "update trading_journal set (" + MANUAL_COLUMNS + ", updated_at, version) = (" + MANUAL_VALUES
+                    + ", :now, version + 1) where journal_id = :id and user_id = :userId and source = 'MANUAL'",
+            nativeQuery = true)
+    int updateManual(
+            UUID id,
+            UUID userId,
+            UUID pairId,
+            UUID strategyId,
+            String market,
+            String direction,
+            Integer leverage,
+            BigDecimal entryPrice,
+            BigDecimal stopLoss,
+            BigDecimal takeProfit,
+            BigDecimal quantity,
+            Instant entryTime,
+            BigDecimal exitPrice,
+            Instant exitTime,
+            String closeReason,
+            BigDecimal feeAmount,
+            BigDecimal fundingFeeAmount,
+            BigDecimal realizedPnl,
+            String status,
+            String setupDescription,
+            String lessonsLearned,
+            String mistakes,
+            Instant now);
+
+    /**
+     * Deletes one of the user's MANUAL records, permanently (SRS 4: manual trades are not soft deleted); a SIMULATED
+     * record is never matched (BR-40).
+     *
+     * @return 1 when it was deleted, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "delete from trading_journal where journal_id = :id and user_id = :userId and source = 'MANUAL'",
+            nativeQuery = true)
+    int deleteManual(UUID id, UUID userId);
+
+    /** The user's CLOSED SIMULATED records, the latest exit first (BR-70). */
+    @Transactional(readOnly = true)
+    @Query("select j from TradingJournal j where j.userId = :userId"
+            + " and j.status = com.cryptopilot.trading.model.enums.PositionStatus.CLOSED"
+            + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED"
+            + " order by j.exitTime desc, j.id desc")
+    List<TradingJournal> findLatestClosedSimulated(UUID userId, Limit limit);
 
     /** CLOSED records whose funding may still miss a settlement, the oldest exits first. */
     @Transactional(readOnly = true)

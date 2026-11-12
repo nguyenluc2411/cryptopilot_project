@@ -23,6 +23,8 @@ import java.util.UUID;
  * @param fundingFeeAmount the signed funding known so far; {@code null} for Spot (BR-37)
  * @param fundingIncomplete whether a settlement of the funding may be missing; always false for Spot
  * @param missingFundingTimes the settlement instants known to be missing, oldest first
+ * @param excursion the most adverse and most favourable price up to the exit, clamped at the exit price; merged with
+ *     the stored extremes, so the stored ones only ever widen (BR-70); {@code null} when none is known
  */
 public record SimulatedTradeClosing(
         UUID positionId,
@@ -34,7 +36,34 @@ public record SimulatedTradeClosing(
         BigDecimal feeAmount,
         BigDecimal fundingFeeAmount,
         boolean fundingIncomplete,
-        List<Instant> missingFundingTimes) {
+        List<Instant> missingFundingTimes,
+        PositionExcursion excursion) {
+
+    /** A closing without an excursion. */
+    public SimulatedTradeClosing(
+            UUID positionId,
+            long version,
+            BigDecimal exitPrice,
+            Instant exitTime,
+            CloseReason reason,
+            BigDecimal realizedPnl,
+            BigDecimal feeAmount,
+            BigDecimal fundingFeeAmount,
+            boolean fundingIncomplete,
+            List<Instant> missingFundingTimes) {
+        this(
+                positionId,
+                version,
+                exitPrice,
+                exitTime,
+                reason,
+                realizedPnl,
+                feeAmount,
+                fundingFeeAmount,
+                fundingIncomplete,
+                missingFundingTimes,
+                null);
+    }
 
     public SimulatedTradeClosing {
         Objects.requireNonNull(positionId, "positionId");

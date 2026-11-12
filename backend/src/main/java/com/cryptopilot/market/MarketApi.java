@@ -130,6 +130,18 @@ public interface MarketApi {
             UUID pairId, MarketType market, String timeframe, SetupStyle style, String presetVersion, Instant at);
 
     /**
+     * The indicator values of the pair's latest candle of {@code timeframe} closed at {@code at}. A candle still forming
+     * is never read, and neither is an older one: when that candle's row is not stored the result is empty.
+     *
+     * <p>Rule: BR-12, BR-70; D-112.
+     *
+     * @param timeframe one of the BR-08 timeframes, e.g. {@code 1h}
+     * @param at the instant the values are read for, e.g. a fill; not after now
+     */
+    Optional<ClosedCandleIndicators> closedCandleIndicators(
+            UUID pairId, MarketType market, String timeframe, Instant at);
+
+    /**
      * The timeframe a style preset reads its setup score on, as configured now, e.g. {@code 1h} for DAY_TRADING: the
      * one the analysis screen scores on whatever chart timeframe is open (D-53), and the only one
      * {@link #closedCandleSetupScore} weights for that preset.
