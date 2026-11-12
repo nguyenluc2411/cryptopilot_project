@@ -10,9 +10,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.ai.AssistantArticle;
+import com.cryptopilot.ai.AssistantNews;
+import com.cryptopilot.ai.AssistantNewsSource;
 import com.cryptopilot.ai.model.AiContextSelection;
 import com.cryptopilot.ai.model.ContextSnapshot;
+import com.cryptopilot.ai.model.NewsContext;
 import com.cryptopilot.ai.model.PerformanceContext;
+import com.cryptopilot.ai.model.TraderContext;
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
@@ -34,6 +39,10 @@ import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.model.enums.WarningSeverity;
 import com.cryptopilot.trading.model.enums.WarningType;
+import com.cryptopilot.user.TradingProfile;
+import com.cryptopilot.user.UserApi;
+import com.cryptopilot.user.model.enums.RiskProfile;
+import com.cryptopilot.user.model.enums.TradingStyle;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -41,6 +50,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -56,9 +66,16 @@ class ContextSnapshotBuilderTest {
     private final TradingPlanApi plans = mock(TradingPlanApi.class);
     private final JournalApi journal = mock(JournalApi.class);
     private final EntitlementApi entitlements = mock(EntitlementApi.class);
+    private final AssistantNewsSource news = mock(AssistantNewsSource.class);
+    private final UserApi users = mock(UserApi.class);
     private final JsonMapper json = JsonMapper.builder().build();
-    private final ContextSnapshotBuilder builder =
-            new ContextSnapshotBuilder(market, plans, journal, entitlements, json, Clock.fixed(NOW, ZoneOffset.UTC));
+    private final ContextSnapshotBuilder builder = new ContextSnapshotBuilder(
+            market, plans, journal, news, users, entitlements, json, Clock.fixed(NOW, ZoneOffset.UTC));
+
+    @BeforeEach
+    void noNewsByDefault() {
+        when(news.recentNews(any())).thenReturn(AssistantNews.NONE);
+    }
 
     @Test
     void BR51_thePairsAnalysis_isReadAsTheTraderSeesIt_onTheChosenSeries() {
@@ -82,7 +99,7 @@ class ContextSnapshotBuilderTest {
         JsonNode root = json.readTree(builder.toJson(
                 builder.build(USER, new AiContextSelection(PAIR, MarketType.FUTURES, "1h", null, false))));
 
-        assertThat(root.path("version").asInt()).isEqualTo(3);
+        assertThat(root.path("version").asInt()).isEqualTo(ContextSnapshot.VERSION);
         assertThat(root.path("market").path("scoredSide").asString()).isEqualTo("SHORT");
         assertThat(root.path("market").path("capReason").asString()).isEqualTo("LOW_ROOM");
         assertThat(root.path("market").path("dominantSide").asString()).isEqualTo("NEUTRAL");
@@ -117,7 +134,7 @@ class ContextSnapshotBuilderTest {
         assertThat(snapshot.carriesNothing()).isTrue();
         assertThat(builder.toJson(snapshot)).isNull();
         assertThat(builder.toJson(null)).isNull();
-        verifyNoInteractions(market, plans, journal, entitlements);
+        verifyNoInteractions(market, plans, journal, entitlements, news, users);
     }
 
     @Test
@@ -251,6 +268,100 @@ class ContextSnapshotBuilderTest {
         } else if (node.isArray()) {
             node.forEach(child -> collect(child, names));
         }
+    }
+
+    /** Version 4 (T-074): a question about a pair reads the news about its coin and the market, numbered to cite. */
+    @Test
+    void T074_aPairQuestion_carriesTheCoinNewsThenTheMarketNews_numberedFromOne_withTheTimeOfTheLastRead() {
+        Instant crawled = NOW.minusSeconds(420);
+        AssistantArticle coin = new AssistantArticle(
+                "ETF Bitcoin bị rút ròng",
+                "CoinDesk",
+                NOW.minusSeconds(3600),
+                "Quỹ ETF bị rút 635 triệu USD.",
+                "BEARISH",
+                "https://coindesk.example/etf");
+        AssistantArticle marketWide = new AssistantArticle(
+                "Sàn bị hack 6,3 tỷ USD",
+                "Cointelegraph",
+                NOW.minusSeconds(7200),
+                null,
+                null,
+                "https://ct.example/hack");
+        when(news.recentNews(PAIR)).thenReturn(new AssistantNews("BTC", crawled, List.of(coin), List.of(marketWide)));
+        when(market.pairAnalysis(PAIR, MarketType.SPOT, null, USER)).thenReturn(Optional.of(analysis()));
+
+        ContextSnapshot snapshot = builder.build(USER, new AiContextSelection(PAIR, null, null, null, false));
+
+        assertThat(snapshot.version()).isEqualTo(4);
+        assertThat(snapshot.news().coin()).isEqualTo("BTC");
+        assertThat(snapshot.news().checkedUpTo()).isEqualTo(crawled);
+        assertThat(snapshot.news().articles())
+                .containsExactly(
+                        new NewsContext.NewsItem(
+                                1,
+                                NewsContext.About.COIN,
+                                "ETF Bitcoin bị rút ròng",
+                                "CoinDesk",
+                                coin.publishedAt(),
+                                "Quỹ ETF bị rút 635 triệu USD.",
+                                "BEARISH",
+                                "https://coindesk.example/etf"),
+                        new NewsContext.NewsItem(
+                                2,
+                                NewsContext.About.MARKET,
+                                "Sàn bị hack 6,3 tỷ USD",
+                                "Cointelegraph",
+                                marketWide.publishedAt(),
+                                null,
+                                null,
+                                "https://ct.example/hack"));
+        JsonNode root = json.readTree(builder.toJson(snapshot));
+        assertThat(root.path("news").path("articles").get(0).path("ref").asInt())
+                .isEqualTo(1);
+        assertThat(root.path("news").path("articles").get(1).path("url").asString())
+                .isEqualTo("https://ct.example/hack");
+    }
+
+    @Test
+    void T074_aPlanQuestion_readsTheNewsOfThePlansPair_andAPairWithoutNews_saysWhenTheOutletsWereRead() {
+        when(plans.planContext(USER, PLAN)).thenReturn(plan());
+        when(market.pairAnalysis(PAIR, MarketType.FUTURES, "1h", USER)).thenReturn(Optional.of(analysis()));
+        when(news.recentNews(PAIR)).thenReturn(new AssistantNews("BTC", NOW, List.of(), List.of()));
+
+        ContextSnapshot snapshot = builder.build(USER, new AiContextSelection(null, null, null, PLAN, false));
+
+        verify(news).recentNews(PAIR);
+        assertThat(snapshot.news().articles()).isEmpty();
+        assertThat(snapshot.news().checkedUpTo()).isEqualTo(NOW);
+    }
+
+    @Test
+    void T074_aQuestionWithAnythingChosen_carriesTheTradersStyle_butNoNewsWithoutAPair() {
+        when(journal.performanceDigest(USER)).thenReturn(digest());
+        when(users.tradingProfileOf(USER))
+                .thenReturn(Optional.of(new TradingProfile(TradingStyle.SWING, RiskProfile.BALANCED)));
+
+        ContextSnapshot snapshot = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        assertThat(snapshot.trader()).isEqualTo(new TraderContext("SWING", "BALANCED"));
+        assertThat(snapshot.news()).isNull();
+        verifyNoInteractions(news);
+    }
+
+    @Test
+    void T074_aStyleTheProfileHasNotSet_isSentAsNull_andNoProfileSendsNoTrader() {
+        when(market.pairAnalysis(PAIR, MarketType.SPOT, null, USER)).thenReturn(Optional.of(analysis()));
+        when(users.tradingProfileOf(USER)).thenReturn(Optional.of(new TradingProfile(null, RiskProfile.CONSERVATIVE)));
+
+        assertThat(builder.build(USER, new AiContextSelection(PAIR, null, null, null, false))
+                        .trader())
+                .isEqualTo(new TraderContext(null, "CONSERVATIVE"));
+
+        when(users.tradingProfileOf(USER)).thenReturn(Optional.empty());
+        assertThat(builder.build(USER, new AiContextSelection(PAIR, null, null, null, false))
+                        .trader())
+                .isNull();
     }
 
     private static PairAnalysis analysis() {
