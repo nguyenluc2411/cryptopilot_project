@@ -32,7 +32,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * too, so a payment settling at the same moment either finds the subscription expired already or is waited for, and
  * the run then finds it REPLACED and leaves it alone.
  *
- * <p>Rule: NSF-14; BR-64; D-146.
+ * <p>Rule: NSF-14; BR-64; D-147.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

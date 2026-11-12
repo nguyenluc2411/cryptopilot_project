@@ -1,4 +1,4 @@
--- The order and subscription schema of the payment flow (T-066, D-58), as changed by D-146, which replaces
+-- The order and subscription schema of the payment flow (T-066, D-58), as changed by D-147, which replaces
 -- VNPay with SePay, adds a switch per gateway and drops the downgrade (BR-55 and BR-63 as amended):
 --
 --   * an order is NEW, RENEW (same tier) or UPGRADE (higher tier); a lower tier is refused when the order is created,
@@ -11,7 +11,8 @@
 --   * the gateways are MOMO and SEPAY. VNPAY stays in the list as a legacy value only: rows written before this
 --     change, the demonstration data among them, still name it, and no code creates a VNPay order any more.
 --
--- V62 is the AI Assistant's migration.
+-- V62 is the AI Assistant's migration. Numbered V63 on its branch until develop took V64…V66 first; renumbered V67
+-- (a local database that applied V63 is recreated).
 
 -- ---------------------------------------------------------------------------------------------
 -- subscription_order
@@ -53,8 +54,8 @@ CREATE INDEX idx_subscription_order_handled_by ON subscription_order (handled_by
 CREATE INDEX idx_subscription_order_manual ON subscription_order (created_at)
     WHERE manual_handling AND handled_at IS NULL;
 
--- One order awaiting payment per Trader (D-146): a new order first releases the old one at its gateway. Older rows
--- with several PENDING orders keep the newest; the others expire, which leaves them payable (A-03).
+-- One order awaiting payment per Trader (D-147): a new order first releases the old one at its gateway. Older rows
+-- with several PENDING orders keep the newest; the others expire.
 UPDATE subscription_order o
    SET order_status = 'EXPIRED'
  WHERE o.order_status = 'PENDING'

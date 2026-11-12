@@ -5,7 +5,7 @@ package com.cryptopilot.billing.model.enums;
  * Trader holds. The constants are the values of {@code ck_subscription_order_type}.
  *
  * <p>There is no DOWNGRADE: a package of a lower tier than the one held is refused when the order is created (BR-55
- * and BR-63 as amended, D-146).
+ * and BR-63 as amended, D-147).
  *
  * <p>Rule: BR-55, BR-63 (amended); SRS v1.1 SCR-30.
  */

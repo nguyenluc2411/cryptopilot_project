@@ -7,7 +7,7 @@ import java.util.Optional;
  * {@link SePayGateway}, and the cancellation {@code POST /v1/order/cancel}. Its own type so the protocol is tested
  * without a network.
  *
- * <p>Rule: NSF-13; D-146. Reference: SePay developer documentation, "API lấy chi tiết đơn hàng", "API hủy đơn hàng".
+ * <p>Rule: NSF-13; D-147. Reference: SePay developer documentation, "API lấy chi tiết đơn hàng", "API hủy đơn hàng".
  */
 public interface SePayOrderApi {
 

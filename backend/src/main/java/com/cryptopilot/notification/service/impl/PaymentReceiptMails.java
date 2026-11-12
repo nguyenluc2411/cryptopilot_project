@@ -23,7 +23,7 @@ import org.springframework.web.util.UriComponentsBuilder;
  * and the period of the subscription it bought, with the value carried over and the bonus days of an upgrade. The one
  * link opens the payment history (SCR-32). Times are shown in Vietnam time, amounts as whole dong grouped by dots.
  *
- * <p>Rule: BR-53, BR-55, BR-63 as amended by D-146; NSF-15.
+ * <p>Rule: BR-53, BR-55, BR-63 as amended by D-147; NSF-15.
  */
 @Component
 public class PaymentReceiptMails {

@@ -10,7 +10,7 @@ import com.cryptopilot.billing.model.enums.GatewayCode;
  * own protocol. Each gateway is a bean; one that is not configured on a deployment (no credentials) reports so and is
  * offered to nobody.
  *
- * <p>Rule: TECHNICAL_DESIGN 7.11; D-146.
+ * <p>Rule: TECHNICAL_DESIGN 7.11; D-147.
  */
 public interface PaymentGateway {
 

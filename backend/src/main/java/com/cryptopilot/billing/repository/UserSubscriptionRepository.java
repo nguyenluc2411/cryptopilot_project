@@ -15,7 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The subscriptions paid orders created.
  *
- * <p>Rule: BR-55 as amended by D-146; SRS v1.1 entity 36.
+ * <p>Rule: BR-55 as amended by D-147; SRS v1.1 entity 36.
  */
 public interface UserSubscriptionRepository extends Repository<UserSubscription, UUID> {
 

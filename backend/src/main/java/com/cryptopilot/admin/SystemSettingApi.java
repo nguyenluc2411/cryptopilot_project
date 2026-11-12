@@ -27,7 +27,7 @@ public interface SystemSettingApi {
     int integer(String key);
 
     /**
-     * The value of a switch, such as whether a payment gateway takes new orders (D-146).
+     * The value of a switch, such as whether a payment gateway takes new orders (D-147).
      *
      * @throws IllegalStateException when the setting is not stored or is not a {@code BOOLEAN}
      */

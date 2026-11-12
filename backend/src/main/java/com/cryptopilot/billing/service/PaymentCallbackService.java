@@ -3,7 +3,7 @@ package com.cryptopilot.billing.service;
 /**
  * The callbacks payment gateways send: authenticated by the gateway's own means, never by a session (BR-53).
  *
- * <p>Rule: BR-53; NSF-12; D-146.
+ * <p>Rule: BR-53; NSF-12; D-147.
  */
 public interface PaymentCallbackService {
 

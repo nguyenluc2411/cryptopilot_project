@@ -11,10 +11,10 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * The MoMo v2 signature (D-146): {@code name=value} pairs of the listed fields, in the listed order, joined by
+ * The MoMo v2 signature (D-147): {@code name=value} pairs of the listed fields, in the listed order, joined by
  * {@code &}, signed with HMAC-SHA256 under the secret key and written as lowercase hex. A missing value signs as empty.
  *
- * <p>Rule: BR-53; D-146. Reference: MoMo sample code, github.com/momo-wallet/payment (nodejs/MoMo.js, php/PayMoMo).
+ * <p>Rule: BR-53; D-147. Reference: MoMo sample code, github.com/momo-wallet/payment (nodejs/MoMo.js, php/PayMoMo).
  */
 public final class MoMoSignature {
 

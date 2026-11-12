@@ -135,7 +135,7 @@ class EntitlementServiceImplTest {
         assertThat(service.effectivePlan(trader).tier()).isEqualTo(PlanTier.FREE);
     }
 
-    /** A Trader holds at most one ACTIVE subscription: the database refuses a second one (V63). */
+    /** A Trader holds at most one ACTIVE subscription: the database refuses a second one (V67). */
     @Test
     void BR55_aSecondActiveSubscription_isRefusedByTheDatabase() {
         UUID trader = trader();

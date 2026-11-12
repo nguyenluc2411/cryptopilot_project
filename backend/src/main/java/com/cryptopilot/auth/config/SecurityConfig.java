@@ -81,7 +81,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * <p><b>The payment callbacks are not in the Trader area.</b> The IPN of each gateway
  * ({@code /billing/ipn/sepay}, {@code /billing/ipn/momo}, {@link #PAYMENT_CALLBACKS}) is open: it arrives
  * from the gateway's servers, not from a signed-in Trader, and is authenticated by the gateway's own
- * credential or signature (BR-53, D-146). Confining it to TRADER would break every payment. Naming the
+ * credential or signature (BR-53, D-147). Confining it to TRADER would break every payment. Naming the
  * billing paths that are screens, rather than wildcarding {@code /billing/**}, leaves any other
  * callback under {@code denyAll} until the task that builds it opens it together with its check.
  *
@@ -201,7 +201,7 @@ public class SecurityConfig {
     static final String[] PUBLIC_REALTIME = {"/ws", "/ws/**"};
 
     /**
-     * The payment gateways' IPN (D-146): posted by the gateway's servers, so open to anyone and authenticated by the
+     * The payment gateways' IPN (D-147): posted by the gateway's servers, so open to anyone and authenticated by the
      * gateway's own credential in the controller (BR-53). Only the gateways built are listed; any other callback path
      * stays under {@code denyAll}.
      */

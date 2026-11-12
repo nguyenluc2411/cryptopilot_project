@@ -32,7 +32,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
 
-/** The order and subscription mappings, and the rules V63 puts in the schema (D-146). */
+/** The order and subscription mappings, and the rules V67 puts in the schema (D-147). */
 @SpringBootTest
 @Import(TestcontainersConfig.class)
 @Transactional
@@ -63,7 +63,7 @@ class SubscriptionOrderRepositoryTest {
     }
 
     @Test
-    void D146_anOrder_survivesAWriteAndAReadWithEveryColumnIntact() {
+    void D147_anOrder_survivesAWriteAndAReadWithEveryColumnIntact() {
         UUID trader = trader();
         SubscriptionOrder order = newOrder(trader, "PRO_MONTHLY", OrderType.NEW);
         order.markPaid("TX-1", "00", "{\"code\": \"00\"}", NOW.plusSeconds(30));
@@ -97,7 +97,7 @@ class SubscriptionOrderRepositoryTest {
 
     /** The upgrade chain reads back: the old one REPLACED, the new one pointing at it with what it carried. */
     @Test
-    void D146_anUpgradeChain_survivesAWriteAndARead() {
+    void D147_anUpgradeChain_survivesAWriteAndARead() {
         UUID trader = trader();
         UserSubscription pro = open(trader, "PRO_MONTHLY", OrderType.NEW, null, NOW.minus(Duration.ofDays(10)));
         SubscriptionTerms upgrade = CarryOverCalculator.terms(pro.held(PlanTier.PRO), terms("PREMIUM_MONTHLY"), NOW);
@@ -137,7 +137,7 @@ class SubscriptionOrderRepositoryTest {
 
     /** VNPAY stays legal for the rows written before SePay replaced it; anything else is refused. */
     @Test
-    void D146_theGatewayColumn_takesMomoSepayAndLegacyVnpayOnly() {
+    void D147_theGatewayColumn_takesMomoSepayAndLegacyVnpayOnly() {
         // One Trader each: a Trader holds one PENDING order at a time.
         for (String gateway : new String[] {"VNPAY", "MOMO", "SEPAY"}) {
             insertOrder(trader(), gateway);
@@ -151,7 +151,7 @@ class SubscriptionOrderRepositoryTest {
 
     /** A row written as SQL without the new columns takes them from its order (sample data, fixtures). */
     @Test
-    void D146_aSubscriptionInsertedWithoutOwnerOrValue_takesThemFromItsOrder() {
+    void D147_aSubscriptionInsertedWithoutOwnerOrValue_takesThemFromItsOrder() {
         UUID trader = trader();
         UUID order = insertOrder(trader, "MOMO");
         UUID subscription = UUID.randomUUID();
@@ -231,9 +231,9 @@ class SubscriptionOrderRepositoryTest {
         return new PackageTerms(p.getTier(), p.getPriceAmount(), p.getDurationDays());
     }
 
-    /** D-146: a second PENDING order of the same Trader is refused by the database too. */
+    /** D-147: a second PENDING order of the same Trader is refused by the database too. */
     @Test
-    void D146_aTrader_holdsOnePendingOrderAtATime() {
+    void D147_aTrader_holdsOnePendingOrderAtATime() {
         UUID trader = trader();
         insertOrder(trader, "SEPAY");
 

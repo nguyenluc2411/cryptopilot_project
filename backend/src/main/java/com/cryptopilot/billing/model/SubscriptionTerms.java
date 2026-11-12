@@ -5,7 +5,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * The subscription a paid order creates, as the carry-over formula works it out (D-146).
+ * The subscription a paid order creates, as the carry-over formula works it out (D-147).
  *
  * @param orderType NEW, RENEW or UPGRADE
  * @param startAt when the order was paid

@@ -5,7 +5,7 @@ package com.cryptopilot.billing.service;
  * and telling Traders whose subscription ends within 3 days. Each subscription is handled in a transaction of its
  * own, so one failure leaves the others done.
  *
- * <p>Rule: NSF-14; BR-64; D-146 (no SCHEDULED subscription is activated any more).
+ * <p>Rule: NSF-14; BR-64; D-147 (no SCHEDULED subscription is activated any more).
  */
 public interface SubscriptionLifecycleService {
 

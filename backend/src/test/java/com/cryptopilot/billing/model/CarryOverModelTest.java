@@ -14,7 +14,7 @@ class CarryOverModelTest {
     private static final Instant END = Instant.parse("2026-12-01T00:00:00Z");
 
     @Test
-    void D146_aHeldSubscription_endsAfterItStartsAndIsWorthZeroOrMore() {
+    void D147_aHeldSubscription_endsAfterItStartsAndIsWorthZeroOrMore() {
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> new HeldSubscription(PlanTier.PRO, END, START, BigDecimal.ONE))
                 .withMessageContaining("ends after it starts");

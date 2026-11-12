@@ -67,7 +67,7 @@ class SystemSettingReaderTest {
     }
 
     @Test
-    void D146_theGatewaySwitches_areReadAsFlags() {
+    void D147_theGatewaySwitches_areReadAsFlags() {
         assertThat(settings.flag("PAYMENT_MOMO_ENABLED")).isTrue();
         assertThat(settings.flag("PAYMENT_SEPAY_ENABLED")).isTrue();
     }

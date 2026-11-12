@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  * Single backend instance (TECHNICAL_DESIGN 1.3); the billing lock and the once-only reminder mark keep a second run
  * from repeating anything anyway.
  *
- * <p>Rule: NSF-14; BR-64; D-146.
+ * <p>Rule: NSF-14; BR-64; D-147.
  */
 @Component
 public class SubscriptionSweepJob {

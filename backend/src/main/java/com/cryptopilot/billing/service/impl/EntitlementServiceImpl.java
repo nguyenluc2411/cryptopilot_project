@@ -25,7 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
  * Trader's ACTIVE subscription running now, else the single FREE package. Nothing is cached, so a subscription that
  * starts, ends or is replaced changes the answer on the next call.
  *
- * <p>A Trader holds at most one ACTIVE subscription ({@code uq_user_subscription_one_active}, V63). A missing FREE package — a deployment without the package seed of
+ * <p>A Trader holds at most one ACTIVE subscription ({@code uq_user_subscription_one_active}, V67). A missing FREE package — a deployment without the package seed of
  * T-007 — and a feature no active package includes are configuration errors and fail loudly rather than guessing.
  *
  * <p>Rule: BR-62, BR-50, BR-15, BR-17; SRS v1.1 UC-53, CR-08, SRS 3.10.4; D-54, D-58, D-59, D-60, D-61.

@@ -21,7 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
  * The callbacks of the payment gateways. They come from the gateway's servers, not from a signed-in user, so they are
  * open to anyone and authenticated by the gateway's own credential instead (BR-53).
  *
- * <p>Rule: BR-53; NSF-12; D-146.
+ * <p>Rule: BR-53; NSF-12; D-147.
  */
 @Tag(name = "Payment callbacks", description = "IPN of the payment gateways; authenticated by the gateway (BR-53).")
 @RestController

@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
  * {@code cryptopilot.billing.reconcile.interval} when enabled. Single backend instance (TECHNICAL_DESIGN 1.3), so no
  * distributed lock; the row lock of the settlement keeps a run and an IPN from settling one order twice anyway.
  *
- * <p>Rule: NSF-13; BR-54; D-146.
+ * <p>Rule: NSF-13; BR-54; D-147.
  */
 @Component
 public class OrderReconciliationJob {

@@ -14,7 +14,7 @@ import java.util.Optional;
  *
  * <p>A subscription still marked ACTIVE whose period has ended counts as none: the expiry job may not have run yet.
  *
- * <p>Rule: BR-55 and BR-63 as amended by D-146.
+ * <p>Rule: BR-55 and BR-63 as amended by D-147.
  */
 public final class OrderTypeResolver {
 

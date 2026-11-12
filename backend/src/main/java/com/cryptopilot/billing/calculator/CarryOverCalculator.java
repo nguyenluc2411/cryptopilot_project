@@ -11,7 +11,7 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * The subscription a paid order creates, carrying over the unused value of the one it replaces (D-146).
+ * The subscription a paid order creates, carrying over the unused value of the one it replaces (D-147).
  *
  * <p>What moves to the new subscription is the money not yet used, not the days, so an upgrade cannot be gamed by
  * buying a long cheap package and upgrading to a short expensive one:
@@ -32,7 +32,7 @@ import java.util.Objects;
  * <p>The formula runs when an order is quoted, to show the Trader, and again when it is paid, from the subscription
  * held then; the quote is never what activates it.
  *
- * <p>Rule: BR-55, BR-56, BR-63 as amended by D-146.
+ * <p>Rule: BR-55, BR-56, BR-63 as amended by D-147.
  */
 public final class CarryOverCalculator {
 
@@ -107,7 +107,7 @@ public final class CarryOverCalculator {
 
     /**
      * The whole days of the held subscription that {@code amount} buys at the price the Trader paid for it: a payment
-     * for a lower plan that arrived after the Trader moved up is turned into time of the plan held (D-146). A
+     * for a lower plan that arrived after the Trader moved up is turned into time of the plan held (D-147). A
      * subscription that cost nothing is valued at the package it was bought from, {@code fallback}.
      */
     public static int convertedDays(BigDecimal amount, HeldSubscription held, PackageTerms fallback) {

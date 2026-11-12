@@ -29,7 +29,7 @@ class SePaySignatureTest {
     }
 
     @Test
-    void D146_theSignedString_isTheDocumentedOne() {
+    void D147_theSignedString_isTheDocumentedOne() {
         assertThat(SePaySignature.signedString(documentedForm()))
                 .isEqualTo("order_amount=100000,merchant=MERCHANT_123,currency=VND,operation=PURCHASE,"
                         + "order_description=Payment for order #12345,order_invoice_number=INV_20231201_001,"
@@ -39,14 +39,14 @@ class SePaySignatureTest {
     }
 
     @Test
-    void D146_theSignature_isTheBase64HmacSha256OfTheSignedString() {
+    void D147_theSignature_isTheBase64HmacSha256OfTheSignedString() {
         assertThat(SePaySignature.sign(documentedForm(), "spsk_test_example"))
                 .isEqualTo("jryPr1SkCxiKw4I1lFhhUmVY7fMefcCNz6vgAyKvSWY=");
     }
 
     /** The documented order wins over the order the fields were put in. */
     @Test
-    void D146_theFieldOrder_isSePaysNotTheCallers() {
+    void D147_theFieldOrder_isSePaysNotTheCallers() {
         Map<String, String> reversed = new LinkedHashMap<>();
         documentedForm().entrySet().stream().toList().reversed().forEach(e -> reversed.put(e.getKey(), e.getValue()));
 
@@ -56,7 +56,7 @@ class SePaySignatureTest {
 
     /** Empty and "0" values are not signed; text is signed as UTF-8. */
     @Test
-    void D146_emptyAndZeroValuesAreSkipped_andTextIsUtf8() {
+    void D147_emptyAndZeroValuesAreSkipped_andTextIsUtf8() {
         Map<String, String> fields = new LinkedHashMap<>();
         fields.put("order_amount", "99000");
         fields.put("merchant", "M1");

@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
  * the payment history, the carried value and bonus days of an upgrade only, and an HTML body that escapes what it
  * shows.
  *
- * <p>Rule: BR-53, BR-63 as amended by D-146.
+ * <p>Rule: BR-53, BR-63.
  */
 class PaymentReceiptMailsTest {
 
@@ -59,7 +59,7 @@ class PaymentReceiptMailsTest {
     }
 
     @Test
-    void D146_anUpgrade_showsTheCarriedValueAndTheBonusDays() {
+    void D147_anUpgrade_showsTheCarriedValueAndTheBonusDays() {
         EmailMessage mail = mails.receipt(paid("UPGRADE", null, "98929", 15), "jane@example.com");
 
         assertThat(mail.text())
@@ -70,7 +70,7 @@ class PaymentReceiptMailsTest {
     }
 
     @Test
-    void D146_aRenewal_doesNotShowTheValueItKeepsAsDays() {
+    void D147_aRenewal_doesNotShowTheValueItKeepsAsDays() {
         assertThat(mails.receipt(paid("RENEW", "TX-2", "50000", 0), "jane@example.com")
                         .text())
                 .contains("Loại đơn: Gia hạn")

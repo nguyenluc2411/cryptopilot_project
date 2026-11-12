@@ -14,7 +14,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 
-/** BR-55 and BR-63 as amended by D-146: renew or upgrade, never downgrade. */
+/** BR-55 and BR-63 as amended by D-147: renew or upgrade, never downgrade. */
 class OrderTypeResolverTest {
 
     private static final Instant NOW = Instant.parse("2026-11-08T03:00:00Z");
@@ -23,25 +23,25 @@ class OrderTypeResolverTest {
     @EnumSource(
             value = PlanTier.class,
             names = {"PRO", "PREMIUM"})
-    void D146_withoutASubscription_anyPackageIsNew(PlanTier tier) {
+    void D147_withoutASubscription_anyPackageIsNew(PlanTier tier) {
         assertThat(OrderTypeResolver.resolve(null, tier, NOW)).contains(OrderType.NEW);
     }
 
     @ParameterizedTest(name = "holding {0}, buying {1} -> {2}")
     @CsvSource({"PRO, PRO, RENEW", "PREMIUM, PREMIUM, RENEW", "PRO, PREMIUM, UPGRADE"})
-    void D146_theSameTierRenews_aHigherOneUpgrades(PlanTier held, PlanTier bought, OrderType expected) {
+    void D147_theSameTierRenews_aHigherOneUpgrades(PlanTier held, PlanTier bought, OrderType expected) {
         assertThat(OrderTypeResolver.resolve(running(held), bought, NOW)).contains(expected);
     }
 
     @Test
-    void D146_aLowerTier_isRefused() {
+    void D147_aLowerTier_isRefused() {
         assertThat(OrderTypeResolver.resolve(running(PlanTier.PREMIUM), PlanTier.PRO, NOW))
                 .isEqualTo(Optional.empty());
     }
 
     /** At its end instant a subscription no longer runs, so even a lower tier is a fresh purchase. */
     @Test
-    void D146_aSubscriptionAtItsEnd_countsAsNone() {
+    void D147_aSubscriptionAtItsEnd_countsAsNone() {
         HeldSubscription ending =
                 new HeldSubscription(PlanTier.PREMIUM, NOW.minus(Duration.ofDays(30)), NOW, new BigDecimal("199000"));
 

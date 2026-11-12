@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
-/** The carry-over formula of D-146, with the prices V11 seeds. */
+/** The carry-over formula of D-147, with the prices V11 seeds. */
 class CarryOverCalculatorTest {
 
     private static final Instant NOW = Instant.parse("2026-11-08T03:00:00Z");
@@ -33,7 +33,7 @@ class CarryOverCalculatorTest {
         "365, PRO_YEARLY, PREMIUM_MONTHLY, 990000, 149, 179",
         "365, PRO_YEARLY, PREMIUM_YEARLY,  990000, 181, 546"
     })
-    void D146_anUpgrade_paysTheUnusedValueBackInDaysOfTheNewTier(
+    void D147_anUpgrade_paysTheUnusedValueBackInDaysOfTheNewTier(
             int daysLeft, String held, String bought, String carried, int bonusDays, int totalDays) {
         PackageTerms heldPackage = named(held);
         HeldSubscription subscription = heldFor(heldPackage, daysLeft, heldPackage.price());
@@ -49,7 +49,7 @@ class CarryOverCalculatorTest {
     }
 
     @Test
-    void D146_withoutASubscription_theOrderIsNewAndStartsWhenPaid() {
+    void D147_withoutASubscription_theOrderIsNewAndStartsWhenPaid() {
         SubscriptionTerms terms = CarryOverCalculator.terms(null, PRO_MONTHLY, NOW);
 
         assertThat(terms)
@@ -64,7 +64,7 @@ class CarryOverCalculatorTest {
 
     /** The expiry job may not have run yet: an ACTIVE row past its end is no subscription. */
     @Test
-    void D146_aSubscriptionPastItsEnd_isNoSubscription() {
+    void D147_aSubscriptionPastItsEnd_isNoSubscription() {
         HeldSubscription ended =
                 new HeldSubscription(PlanTier.PREMIUM, NOW.minus(Duration.ofDays(30)), NOW, new BigDecimal("199000"));
 
@@ -76,7 +76,7 @@ class CarryOverCalculatorTest {
 
     /** A renewal adds the new period after the current end, and keeps the value for the next upgrade. */
     @Test
-    void D146_aRenewal_addsThePeriodAfterTheCurrentEndWithoutBonusDays() {
+    void D147_aRenewal_addsThePeriodAfterTheCurrentEndWithoutBonusDays() {
         HeldSubscription held = heldFor(PRO_MONTHLY, 20, PRO_MONTHLY.price());
 
         SubscriptionTerms terms = CarryOverCalculator.terms(held, PRO_YEARLY, NOW);
@@ -95,7 +95,7 @@ class CarryOverCalculatorTest {
      * value_vnd rather than from any price.
      */
     @Test
-    void D146_anUpgradeThenARenewal_carriesTheValueOfTheWholeChain() {
+    void D147_anUpgradeThenARenewal_carriesTheValueOfTheWholeChain() {
         SubscriptionTerms upgraded =
                 CarryOverCalculator.terms(heldFor(PRO_MONTHLY, 20, PRO_MONTHLY.price()), PREMIUM_MONTHLY, NOW);
         HeldSubscription premium =
@@ -123,7 +123,7 @@ class CarryOverCalculatorTest {
     }
 
     @Test
-    void D146_aSubscriptionGivenAway_carriesNothing() {
+    void D147_aSubscriptionGivenAway_carriesNothing() {
         SubscriptionTerms terms =
                 CarryOverCalculator.terms(heldFor(PRO_YEARLY, 300, BigDecimal.ZERO), PREMIUM_MONTHLY, NOW);
 
@@ -134,7 +134,7 @@ class CarryOverCalculatorTest {
     }
 
     @Test
-    void D146_aLowerTier_isNeitherARenewalNorAnUpgrade() {
+    void D147_aLowerTier_isNeitherARenewalNorAnUpgrade() {
         HeldSubscription premium = heldFor(PREMIUM_MONTHLY, 10, PREMIUM_MONTHLY.price());
 
         assertThatIllegalStateException()
@@ -144,7 +144,7 @@ class CarryOverCalculatorTest {
 
     /** Seconds count, and the fraction of a VND is dropped. */
     @Test
-    void D146_theRemainingValue_isProportionalToTheSecondsLeftAndRoundedDown() {
+    void D147_theRemainingValue_isProportionalToTheSecondsLeftAndRoundedDown() {
         HeldSubscription held = new HeldSubscription(
                 PlanTier.PRO, NOW.minus(Duration.ofSeconds(1)), NOW.plus(Duration.ofSeconds(2)), new BigDecimal("100"));
 
@@ -152,7 +152,7 @@ class CarryOverCalculatorTest {
     }
 
     @Test
-    void D146_aSubscriptionNotStartedYet_isWorthItsWholeValue() {
+    void D147_aSubscriptionNotStartedYet_isWorthItsWholeValue() {
         HeldSubscription later = new HeldSubscription(
                 PlanTier.PRO, NOW.plus(Duration.ofDays(1)), NOW.plus(Duration.ofDays(31)), new BigDecimal("99000"));
 
@@ -160,14 +160,14 @@ class CarryOverCalculatorTest {
     }
 
     @Test
-    void D146_aSubscriptionThatHasEnded_isWorthNothing() {
+    void D147_aSubscriptionThatHasEnded_isWorthNothing() {
         HeldSubscription ended = heldFor(PRO_MONTHLY, 0, PRO_MONTHLY.price());
 
         assertThat(CarryOverCalculator.remainingValue(ended, NOW)).isZero();
     }
 
     @Test
-    void D146_lessThanADaysWorth_buysNoDay() {
+    void D147_lessThanADaysWorth_buysNoDay() {
         assertThat(CarryOverCalculator.bonusDays(new BigDecimal("6633"), PREMIUM_MONTHLY))
                 .isZero();
         assertThat(CarryOverCalculator.bonusDays(new BigDecimal("6634"), PREMIUM_MONTHLY))
@@ -177,7 +177,7 @@ class CarryOverCalculatorTest {
     }
 
     @Test
-    void D146_aLowerPlansPayment_buysDaysAtThePricePaidForThePlanHeld() {
+    void D147_aLowerPlansPayment_buysDaysAtThePricePaidForThePlanHeld() {
         HeldSubscription premium = heldFor(PREMIUM_MONTHLY, 20, new BigDecimal("199000"));
 
         // 990,000 VND at 199,000 VND for 30 days: 149.2 days, rounded down.
@@ -188,7 +188,7 @@ class CarryOverCalculatorTest {
     }
 
     @Test
-    void D146_aSubscriptionThatCostNothing_isValuedAtItsPackage() {
+    void D147_aSubscriptionThatCostNothing_isValuedAtItsPackage() {
         HeldSubscription gift = heldFor(PREMIUM_MONTHLY, 20, BigDecimal.ZERO);
 
         assertThat(CarryOverCalculator.convertedDays(new BigDecimal("99000"), gift, PREMIUM_MONTHLY))

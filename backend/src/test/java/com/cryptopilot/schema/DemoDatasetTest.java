@@ -157,7 +157,7 @@ class DemoDatasetTest {
                         + " (V3's sixteen, less the two plan limits V10 and the two thresholds V13 removes,"
                         + " plus the clearance fee V26 adds, the four plan validity settings V32 adds, the two"
                         + " resend limits V33 adds, the fee share threshold V34 adds and the two gateway switches"
-                        + " V63 adds)")
+                        + " V67 adds)")
                 .isEqualTo(22);
         assertThat(count("trading_strategy")).isEqualTo(3);
         assertThat(count("crypto_pair"))

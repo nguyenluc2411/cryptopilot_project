@@ -19,7 +19,7 @@ import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/** BR-55 and the carry-over of D-146 on the subscription itself. */
+/** BR-55 and the carry-over of D-147 on the subscription itself. */
 class UserSubscriptionTest {
 
     private static final Instant NOW = Instant.parse("2026-11-08T03:00:00Z");
@@ -31,7 +31,7 @@ class UserSubscriptionTest {
             "PREMIUM_MONTHLY", "Premium monthly", PlanTier.PREMIUM, new BigDecimal("199000"), 30, PlanFixtures.PREMIUM);
 
     @Test
-    void D146_aNewOrder_opensAnActiveSubscriptionWorthWhatWasPaid() {
+    void D147_aNewOrder_opensAnActiveSubscriptionWorthWhatWasPaid() {
         SubscriptionOrder order = paid(TRADER, PRO_MONTHLY, OrderType.NEW);
         SubscriptionTerms terms = CarryOverCalculator.terms(null, terms(PRO_MONTHLY), NOW);
 
@@ -50,7 +50,7 @@ class UserSubscriptionTest {
 
     /** The upgrade replaces the old subscription, points back at it and keeps the value it carried. */
     @Test
-    void D146_anUpgrade_replacesTheOldSubscriptionAndCarriesItsValue() {
+    void D147_anUpgrade_replacesTheOldSubscriptionAndCarriesItsValue() {
         UserSubscription pro = UserSubscription.open(
                 paid(TRADER, PRO_MONTHLY, OrderType.NEW),
                 CarryOverCalculator.terms(null, terms(PRO_MONTHLY), NOW.minus(Duration.ofDays(10))),
@@ -71,7 +71,7 @@ class UserSubscriptionTest {
     }
 
     @Test
-    void D146_theReplacedSubscription_mustMatchTheOrderType() {
+    void D147_theReplacedSubscription_mustMatchTheOrderType() {
         SubscriptionOrder order = paid(TRADER, PRO_MONTHLY, OrderType.NEW);
         SubscriptionTerms newTerms = CarryOverCalculator.terms(null, terms(PRO_MONTHLY), NOW);
         UserSubscription other = UserSubscription.open(order, newTerms, null);
@@ -86,7 +86,7 @@ class UserSubscriptionTest {
     }
 
     @Test
-    void D146_anotherTradersSubscription_cannotBeReplaced() {
+    void D147_anotherTradersSubscription_cannotBeReplaced() {
         UserSubscription theirs = UserSubscription.open(
                 paid(UUID.randomUUID(), PRO_MONTHLY, OrderType.NEW),
                 CarryOverCalculator.terms(null, terms(PRO_MONTHLY), NOW),
@@ -143,7 +143,7 @@ class UserSubscriptionTest {
     }
 
     @Test
-    void D146_anExtension_addsDaysAndValue_toAnActiveSubscriptionOnly() {
+    void D147_anExtension_addsDaysAndValue_toAnActiveSubscriptionOnly() {
         UserSubscription premium = UserSubscription.open(
                 paid(TRADER, PREMIUM_MONTHLY, OrderType.NEW),
                 CarryOverCalculator.terms(null, terms(PREMIUM_MONTHLY), NOW),

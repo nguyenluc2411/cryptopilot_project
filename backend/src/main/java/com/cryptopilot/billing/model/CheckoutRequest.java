@@ -11,7 +11,7 @@ import java.util.Objects;
  * @param orderCode the order's code, which the gateway sends back in its IPN
  * @param amount the amount in VND
  * @param description the line the Trader sees on the gateway's page
- * @param returnUrl where the gateway sends the browser afterwards; it carries the order code (D-146)
+ * @param returnUrl where the gateway sends the browser afterwards; it carries the order code (D-147)
  * @param expiresAt when the order stops being payable (BR-54)
  */
 public record CheckoutRequest(

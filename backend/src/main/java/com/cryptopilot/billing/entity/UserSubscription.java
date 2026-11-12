@@ -24,10 +24,10 @@ import lombok.Getter;
  *
  * <p>A Trader holds at most one ACTIVE subscription ({@code uq_user_subscription_one_active}). A renewal or an upgrade
  * marks the one it replaces REPLACED and points back at it through {@code carried_from_id}, with the value it carried
- * over and the bonus days that value bought (D-146). {@code value_vnd} is what the whole period is worth, which the
+ * over and the bonus days that value bought (D-147). {@code value_vnd} is what the whole period is worth, which the
  * next upgrade reads instead of any package's current price (BR-56).
  *
- * <p>Rule: BR-55, BR-56, BR-63 as amended by D-146; SRS v1.1 entity 36; D-58.
+ * <p>Rule: BR-55, BR-56, BR-63 as amended by D-147; SRS v1.1 entity 36; D-58.
  */
 @Getter
 @Entity
@@ -125,7 +125,7 @@ public class UserSubscription extends BaseEntity {
 
     /**
      * Adds {@code days} to the end of this subscription, bought with {@code amount}: a payment for a lower plan that
-     * arrived after the Trader moved up, turned into time of the plan held (D-146).
+     * arrived after the Trader moved up, turned into time of the plan held (D-147).
      *
      * @throws IllegalStateException when the subscription is not ACTIVE
      */

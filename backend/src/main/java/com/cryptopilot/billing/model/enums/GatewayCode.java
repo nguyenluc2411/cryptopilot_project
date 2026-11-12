@@ -6,7 +6,7 @@ package com.cryptopilot.billing.model.enums;
  * <p>VNPAY is a legacy value: orders written before SePay replaced it still name it, and no new order may use it
  * ({@link #acceptsNewOrders()}).
  *
- * <p>Rule: TECHNICAL_DESIGN 7.11; D-146 (VNPay replaced by SePay).
+ * <p>Rule: TECHNICAL_DESIGN 7.11; D-147, D-148 (VNPay replaced by SePay).
  */
 public enum GatewayCode {
 

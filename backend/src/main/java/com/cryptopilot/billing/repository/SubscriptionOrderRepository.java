@@ -20,7 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The subscription orders of every Trader.
  *
- * <p>Rule: BR-53, BR-54; SRS v1.1 entity 35; TECHNICAL_DESIGN 7.11; D-146.
+ * <p>Rule: BR-53, BR-54; SRS v1.1 entity 35; TECHNICAL_DESIGN 7.11; D-147.
  */
 public interface SubscriptionOrderRepository
         extends Repository<SubscriptionOrder, UUID>, JpaSpecificationExecutor<SubscriptionOrder> {

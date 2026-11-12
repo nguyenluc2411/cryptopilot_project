@@ -19,7 +19,7 @@ import javax.crypto.spec.SecretKeySpec;
  *
  * <p>The order is the documentation's and must not change: SePay recomputes the signature over the same sequence.
  *
- * <p>Rule: D-146. Reference: SePay, "Cổng thanh toán - Tạo form thanh toán", developer.sepay.vn (2025).
+ * <p>Rule: D-147. Reference: SePay, "Cổng thanh toán - Tạo form thanh toán", developer.sepay.vn (2025).
  */
 public final class SePaySignature {
 

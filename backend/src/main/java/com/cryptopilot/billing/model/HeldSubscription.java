@@ -11,7 +11,7 @@ import java.util.Objects;
  * @param tier the tier of its package
  * @param startAt when its period started
  * @param endAt when its period ends, after {@code startAt}
- * @param valueVnd what the whole period is worth: the amount paid for it plus the value it carried in (D-146)
+ * @param valueVnd what the whole period is worth: the amount paid for it plus the value it carried in (D-147)
  */
 public record HeldSubscription(PlanTier tier, Instant startAt, Instant endAt, BigDecimal valueVnd) {
 
