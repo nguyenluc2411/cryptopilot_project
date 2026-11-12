@@ -209,13 +209,13 @@ class JournalReviewApiTest {
     @Test
     void BR40_aChartImage_signedForTheOwner_isKept() throws Exception {
         UUID trade = simulated(trader);
-        String key = stored("png", FIVE_MB);
+        String imageId = stored("png", FIVE_MB);
 
-        review(trader, trade, "{\"chartImagePublicId\": \"%s\"}".formatted(key))
+        review(trader, trade, "{\"chartImagePublicId\": \"%s\"}".formatted(imageId))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.chartImageUrl").value("https://img.example/" + key + ".png"));
+                .andExpect(jsonPath("$.chartImageUrl").value("https://img.example/" + imageId + ".png"));
 
-        assertThat(row(trade).get("chart_image_public_id")).isEqualTo(key);
+        assertThat(row(trade).get("chart_image_public_id")).isEqualTo(imageId);
         verify(images, never()).destroy(any());
     }
 
@@ -263,8 +263,8 @@ class JournalReviewApiTest {
         when(images.issuedTo(trader, missing)).thenReturn(true);
         when(images.describe(missing)).thenReturn(Optional.empty());
 
-        for (String key : List.of(gif, large, missing, "cryptopilot/posts/someone/else")) {
-            review(trader, trade, "{\"chartImagePublicId\": \"%s\"}".formatted(key))
+        for (String imageId : List.of(gif, large, missing, "cryptopilot/posts/someone/else")) {
+            review(trader, trade, "{\"chartImagePublicId\": \"%s\"}".formatted(imageId))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.messageCode").value("MSG32"))
                     .andExpect(jsonPath("$.errors.chartImagePublicId").value("MSG32"));
@@ -274,11 +274,11 @@ class JournalReviewApiTest {
 
     @Test
     void BR40_aStorageThatCannotCheckTheImage_answers503() throws Exception {
-        String key = "cryptopilot/journal/" + trader + "/" + UUID.randomUUID();
-        when(images.issuedTo(trader, key)).thenReturn(true);
-        when(images.describe(key)).thenThrow(new ChartImageStorageException("down"));
+        String imageId = "cryptopilot/journal/" + trader + "/" + UUID.randomUUID();
+        when(images.issuedTo(trader, imageId)).thenReturn(true);
+        when(images.describe(imageId)).thenThrow(new ChartImageStorageException("down"));
 
-        review(trader, simulated(trader), "{\"chartImagePublicId\": \"%s\"}".formatted(key))
+        review(trader, simulated(trader), "{\"chartImagePublicId\": \"%s\"}".formatted(imageId))
                 .andExpect(status().isServiceUnavailable());
     }
 
@@ -307,12 +307,12 @@ class JournalReviewApiTest {
 
     /** A key signed for the trader and stored with the given format and size; its address ends with .png. */
     private String stored(String format, long bytes) {
-        String key = "cryptopilot/journal/" + trader + "/" + UUID.randomUUID();
-        when(images.issuedTo(trader, key)).thenReturn(true);
-        when(images.describe(key))
-                .thenReturn(
-                        Optional.of(new StoredChartImage(key, format, bytes, "https://img.example/" + key + ".png")));
-        return key;
+        String imageId = "cryptopilot/journal/" + trader + "/" + UUID.randomUUID();
+        when(images.issuedTo(trader, imageId)).thenReturn(true);
+        when(images.describe(imageId))
+                .thenReturn(Optional.of(
+                        new StoredChartImage(imageId, format, bytes, "https://img.example/" + imageId + ".png")));
+        return imageId;
     }
 
     private ResultActions review(UUID user, UUID trade, String body) throws Exception {
