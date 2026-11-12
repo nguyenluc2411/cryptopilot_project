@@ -30,6 +30,15 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class NewsForAssistant implements AssistantNewsSource {
 
+    /** The longest headline sent; an outlet's headline rarely needs more. */
+    static final int MAX_HEADLINE_CHARS = 200;
+
+    /**
+     * The longest link sent. A longer one (tracking parameters) is left out with its article, so that eight articles
+     * always fit in the context the AI Service accepts (NSF-16, 20,000 characters with the market and the plan).
+     */
+    static final int MAX_URL_CHARS = 500;
+
     private final NewsFeedRepository feed;
     private final MarketApi market;
     private final NewsAssistantProperties properties;
@@ -47,10 +56,12 @@ public class NewsForAssistant implements AssistantNewsSource {
                 .latestAboutCoin(
                         coins.get().base().coinId(), now.minus(properties.coinWindow()), properties.coinArticles())
                 .stream()
+                .filter(NewsForAssistant::usable)
                 .map(this::article)
                 .toList();
         List<AssistantArticle> aboutMarket =
                 feed.latestAboutMarket(now.minus(properties.marketWindow()), properties.marketArticles()).stream()
+                        .filter(NewsForAssistant::usable)
                         .map(this::article)
                         .toList();
         return new AssistantNews(
@@ -58,17 +69,30 @@ public class NewsForAssistant implements AssistantNewsSource {
     }
 
     private AssistantArticle article(FeedArticle article) {
-        String headline =
-                article.aiTitle() != null && !article.aiTitle().isBlank() ? article.aiTitle() : article.title();
+        String headline = headline(article);
         String summary =
                 article.aiSummary() != null && !article.aiSummary().isBlank() ? article.aiSummary() : article.excerpt();
         return new AssistantArticle(
-                headline,
+                cut(headline, MAX_HEADLINE_CHARS),
                 article.sourceName(),
                 article.publishedAt(),
                 cut(summary, properties.summaryChars()),
                 article.sentiment() == null ? null : article.sentiment().name(),
                 article.originalUrl());
+    }
+
+    /**
+     * Whether the article can be sent: its link fits, and it has a headline (the crawl stores none without one; this
+     * keeps one bad row from failing the question).
+     */
+    private static boolean usable(FeedArticle article) {
+        return article.originalUrl() != null
+                && article.originalUrl().length() <= MAX_URL_CHARS
+                && cut(headline(article), MAX_HEADLINE_CHARS) != null;
+    }
+
+    private static String headline(FeedArticle article) {
+        return article.aiTitle() != null && !article.aiTitle().isBlank() ? article.aiTitle() : article.title();
     }
 
     /** {@code text} at most {@code max} characters, cut at the last space before it and marked with an ellipsis. */

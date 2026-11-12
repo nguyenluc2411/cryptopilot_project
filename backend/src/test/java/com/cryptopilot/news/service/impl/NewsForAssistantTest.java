@@ -110,6 +110,54 @@ class NewsForAssistantTest {
     }
 
     @Test
+    void NSF16_aLongHeadlineIsCut_andAnArticleWithAVeryLongLinkIsLeftOut_soTheContextFits() {
+        when(market.pairCoins(PAIR))
+                .thenReturn(Optional.of(new PairCoins(
+                        PAIR, new CoinListing(BTC, "BTC", "BTC"), new CoinListing(UUID.randomUUID(), "USDT", "USDT"))));
+        FeedArticle longTitle = article("word ".repeat(100).strip(), null, "Excerpt.", null, null);
+        FeedArticle longLink = new FeedArticle(
+                UUID.randomUUID(),
+                "Tracked",
+                null,
+                "Desk",
+                "https://e.com/a?utm=" + "x".repeat(NewsForAssistant.MAX_URL_CHARS),
+                null,
+                null,
+                null,
+                NOW,
+                null,
+                null);
+        when(feed.latestAboutCoin(any(), any(), anyInt())).thenReturn(List.of(longTitle, longLink));
+        when(feed.latestAboutMarket(any(), anyInt())).thenReturn(List.of(longLink));
+        when(feed.lastCrawledAt()).thenReturn(Optional.empty());
+
+        AssistantNews read = news.recentNews(PAIR);
+
+        assertThat(read.coinArticles()).singleElement().satisfies(article -> assertThat(article.headline())
+                .hasSizeLessThanOrEqualTo(NewsForAssistant.MAX_HEADLINE_CHARS)
+                .endsWith("…"));
+        assertThat(read.marketArticles()).isEmpty();
+    }
+
+    @Test
+    void T074_anArticleWithoutAHeadline_isLeftOut_andTheOthersStillGo() {
+        when(market.pairCoins(PAIR))
+                .thenReturn(Optional.of(new PairCoins(
+                        PAIR, new CoinListing(BTC, "BTC", "BTC"), new CoinListing(UUID.randomUUID(), "USDT", "USDT"))));
+        FeedArticle blank = article("   ", " ", "Excerpt.", null, null);
+        FeedArticle translatedOnly = article("   ", "Tiêu đề", "Excerpt.", null, null);
+        when(feed.latestAboutCoin(any(), any(), anyInt())).thenReturn(List.of(blank, translatedOnly));
+        when(feed.latestAboutMarket(any(), anyInt())).thenReturn(List.of(blank));
+        when(feed.lastCrawledAt()).thenReturn(Optional.empty());
+
+        AssistantNews read = news.recentNews(PAIR);
+
+        assertThat(read.coinArticles()).singleElement().satisfies(article -> assertThat(article.headline())
+                .isEqualTo("Tiêu đề"));
+        assertThat(read.marketArticles()).isEmpty();
+    }
+
+    @Test
     void T074_aLongSummary_isCutAtAWord_andABlankOneIsDropped() {
         assertThat(NewsForAssistant.cut("one two three four", 12)).isEqualTo("one two…");
         assertThat(NewsForAssistant.cut("abcdefghijklmnop", 8)).isEqualTo("abcdefg…");
