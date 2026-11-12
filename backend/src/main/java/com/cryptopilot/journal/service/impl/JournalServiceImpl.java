@@ -3,6 +3,8 @@ package com.cryptopilot.journal.service.impl;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
+import com.cryptopilot.journal.FillLearning;
+import com.cryptopilot.journal.dto.response.FillLearningResponse;
 import com.cryptopilot.journal.dto.response.JournalEntryDetailResponse;
 import com.cryptopilot.journal.dto.response.JournalEntryResponse;
 import com.cryptopilot.journal.entity.TradingJournal;
@@ -13,6 +15,7 @@ import com.cryptopilot.journal.model.enums.PerformanceSource;
 import com.cryptopilot.journal.model.enums.TradeSource;
 import com.cryptopilot.journal.repository.TradingJournalRepository;
 import com.cryptopilot.journal.service.JournalService;
+import com.cryptopilot.market.ClosedCandleIndicators;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.StrategyCatalog;
 import com.cryptopilot.trading.TradeNetPnl;
@@ -84,7 +87,39 @@ public class JournalServiceImpl implements JournalService {
                 record.getSetupDescription(),
                 record.getLessonsLearned(),
                 record.getMistakes(),
-                record.getChartImageUrl());
+                record.getChartImageUrl(),
+                record.getSource() == TradeSource.SIMULATED ? learning(LearningData.of(record)) : null);
+    }
+
+    private static FillLearningResponse learning(FillLearning data) {
+        ClosedCandleIndicators read = data.indicators();
+        return new FillLearningResponse(
+                data.plannedEntryPrice(),
+                data.entryDeviationR(),
+                data.entryLiquidity(),
+                data.riskAmount(),
+                data.analysisTimeframe(),
+                data.setupScorePreset(),
+                data.setupScoreAtPlan(),
+                data.setupScoreAtFill(),
+                data.setupScoreDropWarned(),
+                read == null
+                        ? null
+                        : new FillLearningResponse.Indicators(
+                                read.timeframe(),
+                                read.openTime(),
+                                read.rsi14(),
+                                read.ema20(),
+                                read.ema50(),
+                                read.ema200(),
+                                read.macdLine(),
+                                read.macdSignal(),
+                                read.macdHistogram()),
+                data.maxAdversePrice(),
+                data.maxFavorablePrice(),
+                data.rMultiple(),
+                data.maeR(),
+                data.mfeR());
     }
 
     private static Set<String> markets(PerformanceMarket market) {

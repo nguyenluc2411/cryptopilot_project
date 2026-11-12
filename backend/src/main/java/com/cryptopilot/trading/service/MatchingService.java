@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.service;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PositionExcursion;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
@@ -8,6 +9,7 @@ import com.cryptopilot.trading.model.PositionExit;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.TrackedPosition;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -70,4 +72,12 @@ public interface MatchingService {
 
     /** Records that the candle opened at {@code openTime} is closed and fully matched; never moves backwards. */
     void advanceWatermark(MarketType market, UUID pairId, Instant openTime);
+
+    /**
+     * Stores the excursions the engine widened, as {@link com.cryptopilot.trading.TradeJournal#widenExcursions}
+     * describes.
+     *
+     * <p>Rule: BR-70; D-111 (M4).
+     */
+    void widenExcursions(Collection<PositionExcursion> excursions);
 }

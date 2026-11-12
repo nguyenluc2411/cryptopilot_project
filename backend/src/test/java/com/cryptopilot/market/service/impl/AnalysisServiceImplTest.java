@@ -16,6 +16,7 @@ import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.market.ClosedCandleIndicators;
 import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupScoreTunings;
 import com.cryptopilot.market.SetupStyleSource;
@@ -304,6 +305,69 @@ class AnalysisServiceImplTest {
     }
 
     /** A row whose four components all equal a number told apart by timeframe: 15m → 15, 1h → 10, 4h → 40. */
+    /** BR-70: the indicators of a fill are those of the latest candle closed at the fill, never a forming one. */
+    @Test
+    void BR70_theIndicatorsAtAnInstant_areThoseOfTheLatestClosedCandle() {
+        Instant closedOpen = Instant.parse("2026-09-27T09:00:00Z");
+        StoredIndicators stored = new StoredIndicators(
+                PAIR,
+                closedOpen,
+                null,
+                new BigDecimal("101"),
+                new BigDecimal("102"),
+                new BigDecimal("103"),
+                new BigDecimal("55.5"),
+                new BigDecimal("1.1"),
+                new BigDecimal("0.9"),
+                new BigDecimal("0.2"),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                row("1h").components(),
+                closedOpen);
+        when(indicators.at(PAIR, MarketType.SPOT, "1h", closedOpen)).thenReturn(Optional.of(stored));
+
+        ClosedCandleIndicators read = service(null)
+                .closedCandleIndicators(PAIR, MarketType.SPOT, "1h", NOW)
+                .orElseThrow();
+
+        assertThat(read)
+                .isEqualTo(new ClosedCandleIndicators(
+                        "1h",
+                        closedOpen,
+                        new BigDecimal("55.5"),
+                        new BigDecimal("101"),
+                        new BigDecimal("102"),
+                        new BigDecimal("103"),
+                        new BigDecimal("1.1"),
+                        new BigDecimal("0.9"),
+                        new BigDecimal("0.2")));
+        verify(indicators, never()).latest(any(), any(), anyString());
+    }
+
+    /** BR-70: a missing row of that candle reads nothing; an older row never stands in for it. */
+    @Test
+    void BR70_theIndicatorsOfACandleNotStored_areEmpty() {
+        when(indicators.at(any(), any(), anyString(), any())).thenReturn(Optional.empty());
+
+        assertThat(service(null).closedCandleIndicators(PAIR, MarketType.SPOT, "4h", NOW))
+                .isEmpty();
+    }
+
+    /** BR-70: a read after now, or on a timeframe outside BR-08, is a programming error. */
+    @Test
+    void BR70_anIndicatorReadAfterNowOrOnAnotherTimeframe_isRefused() {
+        AnalysisServiceImpl service = service(null);
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> service.closedCandleIndicators(PAIR, MarketType.SPOT, "1h", NOW.plusSeconds(1)));
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> service.closedCandleIndicators(PAIR, MarketType.SPOT, "5m", NOW));
+    }
+
     private static StoredIndicators row(String tf) {
         BigDecimal v = new BigDecimal(
                 switch (tf) {

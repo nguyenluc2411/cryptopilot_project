@@ -7,6 +7,7 @@ import com.cryptopilot.notification.model.enums.NotificationType;
 import com.cryptopilot.notification.service.PlanNotificationService;
 import com.cryptopilot.trading.event.PlanFilled;
 import com.cryptopilot.trading.event.PositionClosed;
+import com.cryptopilot.trading.event.SetupScoreDropped;
 import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.event.TradingPlanInvalidated;
 import com.cryptopilot.trading.event.TradingPlanWithdrawn;
@@ -130,6 +131,26 @@ public class PlanNotificationServiceImpl implements PlanNotificationService {
                 NotificationReference.PLAN,
                 event.planId(),
                 "PLAN_INVALIDATED:" + event.planId()));
+    }
+
+    /**
+     * MSG55 "{pair} entry filled with a setup score of {scoreAtFill}, down from {scoreAtPlan} when planned.", the scores
+     * as plain decimals without trailing zeros. The source key is the plan's, which fills at most once.
+     *
+     * <p>Rule: BR-70; MSG55; D-112.
+     */
+    @Override
+    @Transactional
+    public void setupScoreDropped(SetupScoreDropped event) {
+        writer.write(new NewNotification(
+                event.userId(),
+                NotificationType.PLAN,
+                "Setup score dropped",
+                pair(event.symbol()) + " entry filled with a setup score of " + plain(event.scoreAtFill())
+                        + ", down from " + plain(event.scoreAtPlan()) + " when planned.",
+                NotificationReference.PLAN,
+                event.planId(),
+                "SETUP_SCORE_DROPPED:" + event.planId()));
     }
 
     private static String pair(String symbol) {

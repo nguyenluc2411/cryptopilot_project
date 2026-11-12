@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.matching;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PositionExcursion;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.matching.PriceLevelBook.Side;
 import com.cryptopilot.trading.matching.WaitingPlanRule.Level;
@@ -75,6 +76,9 @@ public final class MatchingEngine {
 
     /** The open positions of each pair, in the order they were opened, whose excursions each range widens. */
     private final Map<BookKey, Set<UUID>> positionsByPair = new HashMap<>();
+
+    /** The open positions whose excursions widened since the last {@link #drainWidenedExcursions()}. */
+    private final Set<UUID> widened = new LinkedHashSet<>();
 
     /** The level changes of each open position that has any, oldest first (TP-E). */
     private final Map<UUID, List<PositionLevelChange>> levelChanges = new HashMap<>();
@@ -194,6 +198,24 @@ public final class MatchingEngine {
     /** How many open positions are tracked. */
     public int positionCount() {
         return positions.size();
+    }
+
+    /**
+     * The excursions of the open positions that widened since the last call, for the journal to store while they are
+     * open; positions that exited since are left out, their excursion goes with the close.
+     *
+     * <p>Rule: BR-70; D-111 (M4).
+     */
+    public List<PositionExcursion> drainWidenedExcursions() {
+        List<PositionExcursion> drained = new ArrayList<>();
+        for (UUID id : widened) {
+            OpenState state = positions.get(id);
+            if (state != null) {
+                drained.add(new PositionExcursion(id, state.excursion.adverse(), state.excursion.favorable()));
+            }
+        }
+        widened.clear();
+        return drained;
     }
 
     /** The excursions of a tracked open position, or empty when it is not tracked. */
@@ -326,8 +348,12 @@ public final class MatchingEngine {
             OpenState state = positions.get(id);
             OpenPosition levels = state.position.levels();
             if ((only == null || only.contains(id)) && ExitRule.actsOn(levels, range)) {
-                state.excursion =
+                Excursion wider =
                         state.excursion.with(state.position.direction(), range, ExitRule.isEntryCandle(levels, range));
+                if (!wider.equals(state.excursion)) {
+                    widened.add(id);
+                }
+                state.excursion = wider;
             }
         }
     }

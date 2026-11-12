@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.job;
 
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PositionExcursion;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.event.PositionClosed;
@@ -618,12 +619,34 @@ public class MatchingWorker {
             PairKey key = new PairKey(range.market(), range.pairId());
             retryDue(key);
             engine.onRange(range).forEach(outcome -> store(key, outcome, null, range));
+            storeExcursions(key);
             // The watermark follows the last price candles; the mark price candles of a replay come with them.
             if (range.closed()
                     && range.source() == PriceSource.LAST
                     && !retries.containsKey(key)
                     && !watermarkHeld.contains(key)) {
                 advanceWatermark(range);
+            }
+        }
+
+        /**
+         * Stores the excursions the range widened. A failure is logged and not retried: the engine keeps the cumulative
+         * extremes, so the next widening or the close stores them (BR-70).
+         */
+        private void storeExcursions(PairKey key) {
+            List<PositionExcursion> widened = engine.drainWidenedExcursions();
+            if (widened.isEmpty()) {
+                return;
+            }
+            try {
+                matching.widenExcursions(widened);
+            } catch (RuntimeException failure) {
+                log.warn(
+                        "BR-70 {} {} excursions of {} positions not stored: {}",
+                        key.market(),
+                        key.pairId(),
+                        widened.size(),
+                        failure.toString());
             }
         }
 

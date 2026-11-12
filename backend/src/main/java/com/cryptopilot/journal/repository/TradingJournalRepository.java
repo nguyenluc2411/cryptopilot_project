@@ -24,6 +24,18 @@ import org.springframework.transaction.annotation.Transactional;
  */
 public interface TradingJournalRepository extends Repository<TradingJournal, UUID> {
 
+    /**
+     * The monotonic merge of a stored most adverse and most favourable price with new ones, by the row's direction:
+     * PostgreSQL's {@code least} and {@code greatest} skip a null, so a missing new value keeps the stored one and a
+     * missing stored value takes the new one (BR-70).
+     */
+    String WIDEN_EXCURSIONS = "max_adverse_price = case direction when 'LONG'"
+            + " then least(max_adverse_price, cast(:adverse as numeric))"
+            + " else greatest(max_adverse_price, cast(:adverse as numeric)) end,"
+            + " max_favorable_price = case direction when 'LONG'"
+            + " then greatest(max_favorable_price, cast(:favorable as numeric))"
+            + " else least(max_favorable_price, cast(:favorable as numeric)) end";
+
     /** The rows of {@link #search}, for its page and its count; a result only ever matches a CLOSED row (BR-42). */
     String SEARCHED_ROWS = " from trading_journal where user_id = :userId and trade_status in (:statuses)"
             + " and market_type in (:markets) and source in (:sources)"
@@ -111,7 +123,8 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     /**
      * Compare-and-set OPEN to CLOSED at one version, with the exit and the amounts: of two writers that read the same
      * version, exactly one changes the row; the other, and a replay of the same exit, see 0. The missing funding times
-     * are a PostgreSQL array literal, or {@code null} for none.
+     * are a PostgreSQL array literal, or {@code null} for none; the extremes are merged as {@link #WIDEN_EXCURSIONS}
+     * does, or kept when {@code null}.
      *
      * @return 1 when the record was OPEN at that version and is now CLOSED, otherwise 0
      */
@@ -121,8 +134,9 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
                     + " exit_time = :exitTime, close_reason = :reason, realized_pnl = :realizedPnl,"
                     + " fee_amount = :feeAmount, funding_fee_amount = :fundingFeeAmount,"
                     + " funding_incomplete = :fundingIncomplete,"
-                    + " missing_funding_times = cast(:missingFundingTimes as timestamptz[]),"
-                    + " updated_at = :now, version = version + 1"
+                    + " missing_funding_times = cast(:missingFundingTimes as timestamptz[]), "
+                    + WIDEN_EXCURSIONS
+                    + ", updated_at = :now, version = version + 1"
                     + " where journal_id = :id and trade_status = 'OPEN' and source = 'SIMULATED'"
                     + " and version = :version",
             nativeQuery = true)
@@ -137,7 +151,23 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             BigDecimal fundingFeeAmount,
             boolean fundingIncomplete,
             String missingFundingTimes,
+            BigDecimal adverse,
+            BigDecimal favorable,
             Instant now);
+
+    /**
+     * Widens the extremes of an OPEN SIMULATED record, see {@link #WIDEN_EXCURSIONS}. The version and the levels stay,
+     * so a close or a change of the levels racing it is never refused; nor does {@code updated_at} move, as nothing the
+     * Trader changed did.
+     *
+     * @return 1 when the record was OPEN, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "update trading_journal set " + WIDEN_EXCURSIONS
+                    + " where journal_id = :id and trade_status = 'OPEN' and source = 'SIMULATED'",
+            nativeQuery = true)
+    int widenExcursionIfOpen(UUID id, BigDecimal adverse, BigDecimal favorable);
 
     /** The user's OPEN SIMULATED records, oldest entry first: the positions whose current risk BR-29 counts. */
     @Transactional(readOnly = true)
@@ -162,6 +192,14 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             nativeQuery = true)
     int changeLevelsIfOpen(
             UUID id, long version, BigDecimal stopLoss, BigDecimal takeProfit, boolean widensStop, Instant now);
+
+    /** The user's CLOSED SIMULATED records, the latest exit first (BR-70). */
+    @Transactional(readOnly = true)
+    @Query("select j from TradingJournal j where j.userId = :userId"
+            + " and j.status = com.cryptopilot.trading.model.enums.PositionStatus.CLOSED"
+            + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED"
+            + " order by j.exitTime desc, j.id desc")
+    List<TradingJournal> findLatestClosedSimulated(UUID userId, Limit limit);
 
     /** CLOSED records whose funding may still miss a settlement, the oldest exits first. */
     @Transactional(readOnly = true)

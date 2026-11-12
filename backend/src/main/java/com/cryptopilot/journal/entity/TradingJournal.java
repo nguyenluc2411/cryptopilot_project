@@ -1,12 +1,14 @@
 package com.cryptopilot.journal.entity;
 
 import com.cryptopilot.common.entity.BaseEntity;
+import com.cryptopilot.journal.model.FillIndicators;
 import com.cryptopilot.journal.model.enums.TradeSource;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.RecordedPosition;
+import com.cryptopilot.trading.SimulatedFillLearning;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
@@ -36,9 +38,11 @@ import org.hibernate.type.SqlTypes;
  * plan, which never changes once executed.
  *
  * <p>The close, a later funding correction and a change of the levels (TP-E) are compare-and-set updates in
- * {@code TradingJournalRepository}, so this entity only reads the exit columns and the change counters. The learning data of D-111 is mapped by T-048c.
+ * {@code TradingJournalRepository}, so this entity only reads the exit columns and the change counters. The learning
+ * data of a fill (D-111 M4) is written with the OPEN record and never changed, except the two extremes, which only the
+ * repository's monotonic update widens.
  *
- * <p>Rule: BR-34, BR-35, BR-36, BR-37, BR-40; D-78, D-97 and its note of 2026-10-24, D-119.
+ * <p>Rule: BR-34, BR-35, BR-36, BR-37, BR-40, BR-69, BR-70; D-78, D-97 and its note of 2026-10-24, D-111, D-112, D-119.
  *
  * <p>Reference: Evans, E. (2003). <i>Domain-Driven Design</i>. Addison-Wesley, ch. 5 (an entity is defined by its
  * identity and lifecycle).
@@ -178,6 +182,49 @@ public class TradingJournal extends BaseEntity {
     @Column(name = "missing_funding_times", insertable = false, updatable = false)
     private Instant[] missingFundingTimes;
 
+    /** The entered price for LIMIT and STOP, the reference price of the last draft save for MARKET (BR-69). */
+    @Column(name = "planned_entry_price", precision = 28, scale = 12, updatable = false)
+    private BigDecimal plannedEntryPrice;
+
+    /** The deviation of the fill from the planned entry in R; positive is a worse entry (BR-69). */
+    @Column(name = "entry_deviation_r", precision = 20, scale = 8, updatable = false)
+    private BigDecimal entryDeviationR;
+
+    /** The loss at the stop loss the plan was sized on: the denominator of every R (BR-70). */
+    @Column(name = "risk_amount", precision = 28, scale = 8, updatable = false)
+    private BigDecimal riskAmount;
+
+    /** The plan's chart timeframe, the one the fill's indicators are read on (D-112). */
+    @Column(name = "analysis_timeframe", length = 32, updatable = false)
+    private String analysisTimeframe;
+
+    /** The preset name and version both setup scores use, e.g. {@code DAY_TRADING v1} (D-112). */
+    @Column(name = "setup_score_preset", length = 32, updatable = false)
+    private String setupScorePreset;
+
+    @Column(name = "setup_score_at_plan", precision = 5, scale = 2, updatable = false)
+    private BigDecimal setupScoreAtPlan;
+
+    @Column(name = "setup_score_at_fill", precision = 5, scale = 2, updatable = false)
+    private BigDecimal setupScoreAtFill;
+
+    /** Whether the score fell by at least {@code SETUP_SCORE_DROP_WARN}; {@code null} when nothing was compared. */
+    @Column(name = "setup_score_drop_warned", updatable = false)
+    private Boolean setupScoreDropWarned;
+
+    /** The indicators at the fill as JSON, see {@link FillIndicators}; {@code null} when none were read. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "fill_indicators", updatable = false)
+    private String fillIndicators;
+
+    /** The most adverse price while open; widened by a monotonic update in the repository only (BR-70). */
+    @Column(name = "max_adverse_price", precision = 28, scale = 12, updatable = false)
+    private BigDecimal maxAdversePrice;
+
+    /** The most favourable price while open; widened by a monotonic update in the repository only (BR-70). */
+    @Column(name = "max_favorable_price", precision = 28, scale = 12, updatable = false)
+    private BigDecimal maxFavorablePrice;
+
     /** For JPA only. */
     protected TradingJournal() {}
 
@@ -206,7 +253,27 @@ public class TradingJournal extends BaseEntity {
         record.entryFee = opening.entryFee();
         record.liquidationPrice = opening.liquidationPrice();
         record.status = PositionStatus.OPEN;
+        SimulatedFillLearning learning = opening.learning();
+        record.plannedEntryPrice = learning.plannedEntryPrice();
+        record.entryDeviationR = learning.entryDeviationR();
+        record.riskAmount = learning.riskAmount();
+        record.analysisTimeframe = learning.analysisTimeframe();
+        record.setupScorePreset = learning.setupScorePreset();
+        record.setupScoreAtPlan = learning.setupScoreAtPlan();
+        record.setupScoreAtFill = learning.setupScoreAtFill();
+        record.setupScoreDropWarned = learning.setupScoreDropWarned();
+        record.fillIndicators = learning.indicators() == null
+                ? null
+                : FillIndicators.of(learning.indicators()).toJson();
+        // Both extremes start at the fill price (D-112 R5).
+        record.maxAdversePrice = opening.entryPrice();
+        record.maxFavorablePrice = opening.entryPrice();
         return record;
+    }
+
+    /** The indicators stored at the fill, or {@code null} when none were read. */
+    public FillIndicators indicatorsAtFill() {
+        return FillIndicators.fromJson(fillIndicators);
     }
 
     /** The position as the plan detail shows it. Only a SIMULATED record has a plan, and only it is asked. */

@@ -4,6 +4,7 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PositionExcursion;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.SimulatedTradeClosing;
@@ -46,6 +47,8 @@ import org.springframework.stereotype.Component;
  *   <li>{@code fee_amount} = the entry fee stored at the open + the exit fee by its liquidity role (take profit maker,
  *       stop loss taker), or the clearance fee for a liquidation, with the bracket of the entry notional.
  *   <li>The net profit and loss is {@link TradeAmounts#netPnl} of the stored amounts, never another formula.
+ *   <li>The excursions up to the exit go with the close; the journal keeps the wider of them and the stored ones
+ *       (BR-70).
  * </ul>
  *
  * <p>Rule: BR-35, BR-36, BR-37, BR-38, BR-39; D-97 and its note of 2026-10-24; D-111 E1, E5; D-124; Q-56, Q-57,
@@ -90,7 +93,11 @@ public class PositionCloser {
                 amounts.feeAmount(),
                 amounts.fundingFeeAmount(),
                 amounts.fundingIncomplete(),
-                closing.missingFundingTimes()));
+                closing.missingFundingTimes(),
+                new PositionExcursion(
+                        trade.positionId(),
+                        decided.excursion().adverse(),
+                        decided.excursion().favorable())));
         if (closed) {
             NetPnl net = amounts.netPnl();
             events.publishEvent(new PositionClosed(
