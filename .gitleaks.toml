@@ -5,9 +5,19 @@
 # and the team decides whether the history is rewritten.
 #
 # Full-history scan of every branch on 2026-09-25 (gitleaks 8.30.1, 104 commits): no finding, so no
-# allowlist entry is needed yet.
+# allowlist entry was needed then.
 
 title = "cryptopilot"
 
 [extend]
 useDefault = true
+
+# MoMo's public sandbox secret key, which MoMo publishes in its own demo code (github.com/momo-wallet/payment)
+# together with partner code MOMO and access key F8BBA842ECF85. It only signs requests to the test environment
+# (test-payment.momo.vn) and opens no merchant account; the payment callback test signs its IPN bodies with it
+# (T-066). Allowed only in that file and only for that exact value.
+[[allowlists]]
+description = "MoMo public sandbox secret key in the payment callback test"
+condition = "AND"
+paths = ['''backend/src/test/java/com/cryptopilot/billing/controller/PaymentCallbackApiTest\.java''']
+regexes = ['''K951B6PE1waDMi640xX08PD3vg6EkVlz''']
