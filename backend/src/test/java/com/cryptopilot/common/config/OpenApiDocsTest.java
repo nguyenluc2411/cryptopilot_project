@@ -233,7 +233,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/orders/{orderCode}/reconcile",
             "/api/v1/admin/orders/{orderCode}/handled");
 
-    private static final int OPERATIONS = 247;
+    private static final int OPERATIONS = 250;
 
     @Autowired
     private MockMvc mvc;

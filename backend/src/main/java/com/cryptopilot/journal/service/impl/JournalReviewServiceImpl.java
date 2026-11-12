@@ -158,10 +158,6 @@ public class JournalReviewServiceImpl implements JournalReviewService {
                 log.warn("BR-40 chart image {} no longer used could not be deleted: {}", publicId, failed.toString());
             }
         };
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            destroy.run();
-            return;
-        }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {

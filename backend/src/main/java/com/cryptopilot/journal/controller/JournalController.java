@@ -3,6 +3,7 @@ package com.cryptopilot.journal.controller;
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.journal.dto.request.JournalReviewRequest;
+import com.cryptopilot.journal.dto.request.ManualTradeRequest;
 import com.cryptopilot.journal.dto.response.ChartImageUploadResponse;
 import com.cryptopilot.journal.dto.response.JournalEntryDetailResponse;
 import com.cryptopilot.journal.dto.response.JournalEntryResponse;
@@ -12,6 +13,7 @@ import com.cryptopilot.journal.model.enums.PerformanceSource;
 import com.cryptopilot.journal.model.enums.TradeResult;
 import com.cryptopilot.journal.service.JournalReviewService;
 import com.cryptopilot.journal.service.JournalService;
+import com.cryptopilot.journal.service.ManualTradeService;
 import com.cryptopilot.trading.model.enums.PositionStatus;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -24,8 +26,10 @@ import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -33,13 +37,14 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The journal endpoints of SCR-20 and SCR-21 (UC-22, UC-23), Trader only. The caller is the owner of every record read; the
+ * The journal endpoints of SCR-20, SCR-21 and SCR-22 (UC-22, UC-23, UC-24), Trader only. The caller is the owner of every record read; the
  * service never loads another Trader's.
  *
- * <p>Rule: UC-22, UC-23; BR-40; SRS 3.6.1; CR-04; TECHNICAL_DESIGN 8.
+ * <p>Rule: UC-22, UC-23, UC-24; BR-40, BR-41; SRS 3.6.1, 3.6.2; CR-04; TECHNICAL_DESIGN 8.
  *
  * <p>Reference: Fowler, M. (2002). <i>Patterns of Enterprise Application Architecture</i>. Addison-Wesley, "Remote
  * Facade" over a "Service Layer".
@@ -53,6 +58,7 @@ public class JournalController {
 
     private final JournalService journal;
     private final JournalReviewService reviews;
+    private final ManualTradeService manualTrades;
 
     @Operation(
             summary = "The caller's trades, the latest entry first, 20 per page by default (SCR-20, CR-04)",
@@ -103,6 +109,53 @@ public class JournalController {
     @GetMapping("/{id}")
     public JournalEntryDetailResponse detail(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
         return journal.detail(UUID.fromString(caller.getSubject()), id);
+    }
+
+    @Operation(
+            summary = "Records a trade made outside CryptoPilot (SCR-22, UC-24)",
+            description = "Source MANUAL. With exitPrice and exitTime the trade is CLOSED by MANUAL, its realized P/L"
+                    + " computed from the prices (BR-35) and its fee 0 when left out; without them it is OPEN. The"
+                    + " performance endpoints read SIMULATED trades unless source says otherwise (BR-41)")
+    @ApiResponse(responseCode = "201", description = "The trade as GET /journal/{id} shows it")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01: a required field is missing; MSG15: a value out of range, an entry or exit in the"
+                    + " future, an exit before the entry, an unknown pair or strategy; MSG16: a Spot SHORT, or a"
+                    + " stop loss or take profit on the wrong side of the entry (BR-22)")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public JournalEntryDetailResponse record(
+            @AuthenticationPrincipal Jwt caller, @Valid @RequestBody ManualTradeRequest request) {
+        return manualTrades.record(UUID.fromString(caller.getSubject()), request);
+    }
+
+    @Operation(
+            summary = "Replaces every field of one of the caller's manual trades (SCR-22, UC-24)",
+            description = "The chart image is kept; it is changed with the review. A SIMULATED trade's execution facts"
+                    + " cannot be edited (BR-40)")
+    @ApiResponse(responseCode = "200", description = "The trade as GET /journal/{id} shows it")
+    @ApiResponse(responseCode = "400", description = "MSG01, MSG15, MSG16: as for recording a manual trade")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such trade among the caller's")
+    @ApiResponse(responseCode = "409", description = "MSG43: the trade is SIMULATED")
+    @PutMapping("/{id}")
+    public JournalEntryDetailResponse edit(
+            @AuthenticationPrincipal Jwt caller,
+            @PathVariable UUID id,
+            @Valid @RequestBody ManualTradeRequest request) {
+        return manualTrades.edit(UUID.fromString(caller.getSubject()), id, request);
+    }
+
+    @Operation(summary = "Deletes one of the caller's manual trades permanently, with its chart image (UC-24)")
+    @ApiResponse(responseCode = "204", description = "Deleted")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such trade among the caller's")
+    @ApiResponse(responseCode = "409", description = "MSG43: the trade is SIMULATED (BR-40)")
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
+        manualTrades.delete(UUID.fromString(caller.getSubject()), id);
     }
 
     @Operation(

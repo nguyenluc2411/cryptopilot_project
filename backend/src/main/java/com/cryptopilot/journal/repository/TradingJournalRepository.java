@@ -220,6 +220,102 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             String chartImagePublicId,
             Instant now);
 
+    /** The columns a manual trade is written with, by {@link #insertManual} and {@link #updateManual}. */
+    String MANUAL_VALUES = "cast(:pairId as uuid), cast(:strategyId as uuid), :market, :direction,"
+            + " cast(:leverage as integer), :entryPrice, cast(:stopLoss as numeric), cast(:takeProfit as numeric),"
+            + " :quantity, :entryTime, cast(:exitPrice as numeric), cast(:exitTime as timestamptz),"
+            + " cast(:closeReason as varchar), :feeAmount, cast(:fundingFeeAmount as numeric),"
+            + " cast(:realizedPnl as numeric), :status, cast(:setupDescription as text),"
+            + " cast(:lessonsLearned as text), cast(:mistakes as text)";
+
+    /** The column list matching {@link #MANUAL_VALUES}. */
+    String MANUAL_COLUMNS = "pair_id, strategy_id, market_type, direction, leverage, entry_price, stop_loss_price,"
+            + " take_profit_price, quantity, entry_time, exit_price, exit_time, close_reason, fee_amount,"
+            + " funding_fee_amount, realized_pnl, trade_status, setup_description, lessons_learned, mistakes";
+
+    /**
+     * Inserts a MANUAL record with every value the Trader entered and the amounts derived from them (BR-41). Native,
+     * because the entity maps the exit columns read-only: only the close writes them for a simulated trade.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "insert into trading_journal (journal_id, user_id, source, " + MANUAL_COLUMNS
+                    + ", created_at, updated_at, version) values (:id, :userId, 'MANUAL', " + MANUAL_VALUES
+                    + ", :now, :now, 0)",
+            nativeQuery = true)
+    int insertManual(
+            UUID id,
+            UUID userId,
+            UUID pairId,
+            UUID strategyId,
+            String market,
+            String direction,
+            Integer leverage,
+            BigDecimal entryPrice,
+            BigDecimal stopLoss,
+            BigDecimal takeProfit,
+            BigDecimal quantity,
+            Instant entryTime,
+            BigDecimal exitPrice,
+            Instant exitTime,
+            String closeReason,
+            BigDecimal feeAmount,
+            BigDecimal fundingFeeAmount,
+            BigDecimal realizedPnl,
+            String status,
+            String setupDescription,
+            String lessonsLearned,
+            String mistakes,
+            Instant now);
+
+    /**
+     * Replaces every entered value of one of the user's MANUAL records; its chart image stays. A SIMULATED record is
+     * never matched (BR-40).
+     *
+     * @return 1 when the record is the user's manual one, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "update trading_journal set (" + MANUAL_COLUMNS + ", updated_at, version) = (" + MANUAL_VALUES
+                    + ", :now, version + 1) where journal_id = :id and user_id = :userId and source = 'MANUAL'",
+            nativeQuery = true)
+    int updateManual(
+            UUID id,
+            UUID userId,
+            UUID pairId,
+            UUID strategyId,
+            String market,
+            String direction,
+            Integer leverage,
+            BigDecimal entryPrice,
+            BigDecimal stopLoss,
+            BigDecimal takeProfit,
+            BigDecimal quantity,
+            Instant entryTime,
+            BigDecimal exitPrice,
+            Instant exitTime,
+            String closeReason,
+            BigDecimal feeAmount,
+            BigDecimal fundingFeeAmount,
+            BigDecimal realizedPnl,
+            String status,
+            String setupDescription,
+            String lessonsLearned,
+            String mistakes,
+            Instant now);
+
+    /**
+     * Deletes one of the user's MANUAL records, permanently (SRS 4: manual trades are not soft deleted); a SIMULATED
+     * record is never matched (BR-40).
+     *
+     * @return 1 when it was deleted, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "delete from trading_journal where journal_id = :id and user_id = :userId and source = 'MANUAL'",
+            nativeQuery = true)
+    int deleteManual(UUID id, UUID userId);
+
     /** The user's CLOSED SIMULATED records, the latest exit first (BR-70). */
     @Transactional(readOnly = true)
     @Query("select j from TradingJournal j where j.userId = :userId"
