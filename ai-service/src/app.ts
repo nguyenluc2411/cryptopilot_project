@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type Bottleneck from "bottleneck";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import type { LlmProvider } from "./llm/provider.js";
+import { registerChat, type ChatRouteDeps } from "./routes/chat.js";
 import { registerNewsSummary } from "./routes/newsSummary.js";
 
 /** The header the backend proves itself with; nothing but the backend calls this service. */
@@ -11,6 +12,8 @@ export interface AppDeps {
   sharedSecret: string;
   provider: LlmProvider;
   limiter: Bottleneck;
+  /** The assistant's provider and limiter (NSF-16); the news ones when not given. */
+  chat?: ChatRouteDeps;
   logger?: FastifyServerOptions["logger"];
 }
 
@@ -39,6 +42,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   registerNewsSummary(app, { provider: deps.provider, limiter: deps.limiter });
+  registerChat(app, deps.chat ?? { provider: deps.provider, limiter: deps.limiter });
   return app;
 }
 

@@ -1,4 +1,10 @@
-import { LlmError, type GenerateRequest, type GenerateResult, type LlmProvider } from "./provider.js";
+import {
+  LlmError,
+  type ChatRequest,
+  type GenerateRequest,
+  type GenerateResult,
+  type LlmProvider,
+} from "./provider.js";
 
 export const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -54,14 +60,41 @@ export class GeminiProvider implements LlmProvider {
   }
 
   async generateJson(request: GenerateRequest): Promise<GenerateResult> {
-    const body = JSON.stringify(this.body(request));
+    return this.send(request.model, JSON.stringify(this.body(request)), undefined);
+  }
+
+  async generateText(request: ChatRequest): Promise<GenerateResult> {
+    return this.send(request.model, JSON.stringify(this.chatBody(request)), request.signal);
+  }
+
+  /** The request body of a conversation: plain text out, the assistant's turns under the role Gemini calls "model". */
+  chatBody(request: ChatRequest): Record<string, unknown> {
+    return {
+      systemInstruction: { parts: [{ text: request.systemPrompt }] },
+      contents: request.turns.map((turn) => ({
+        role: turn.role === "assistant" ? "model" : "user",
+        parts: [{ text: turn.text }],
+      })),
+      generationConfig: this.generationConfig(request, {}),
+    };
+  }
+
+  /**
+   * One call with the key rotation and the retry: a 429 moves to the next key, each key tried once; a server error,
+   * a timeout or a lost connection is retried once after a pause; anything else is final. Once `signal` is aborted
+   * nothing is sent any more.
+   */
+  private async send(model: string, body: string, signal: AbortSignal | undefined): Promise<GenerateResult> {
     let rateLimited = 0;
     let retried = false;
     let index = this.nextKey;
     for (;;) {
       const keyIndex = index % this.keys.length;
+      if (signal?.aborted) {
+        throw new LlmError("TIMEOUT", "the caller's deadline passed, Gemini was not called again");
+      }
       try {
-        const result = await this.call(this.keys[keyIndex] as string, request.model, body);
+        const result = await this.call(this.keys[keyIndex] as string, model, body, signal);
         this.nextKey = keyIndex;
         return result;
       } catch (error) {
@@ -84,23 +117,37 @@ export class GeminiProvider implements LlmProvider {
 
   /** The request body; exported shape checked by the tests, as the official REST reference writes it. */
   body(request: GenerateRequest): Record<string, unknown> {
-    const generationConfig: Record<string, unknown> = {
-      temperature: request.temperature,
-      maxOutputTokens: request.maxOutputTokens,
-      responseMimeType: "application/json",
-      responseSchema: request.responseSchema,
-    };
-    if (this.options.thinkingLevel !== undefined) {
-      generationConfig["thinkingConfig"] = { thinkingLevel: this.options.thinkingLevel };
-    }
     return {
       systemInstruction: { parts: [{ text: request.systemPrompt }] },
       contents: [{ role: "user", parts: [{ text: request.userPrompt }] }],
-      generationConfig,
+      generationConfig: this.generationConfig(request, {
+        responseMimeType: "application/json",
+        responseSchema: request.responseSchema,
+      }),
     };
   }
 
-  private async call(key: string, model: string, body: string): Promise<GenerateResult> {
+  private generationConfig(
+    request: { temperature: number; maxOutputTokens: number },
+    extra: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const config: Record<string, unknown> = {
+      temperature: request.temperature,
+      maxOutputTokens: request.maxOutputTokens,
+      ...extra,
+    };
+    if (this.options.thinkingLevel !== undefined) {
+      config["thinkingConfig"] = { thinkingLevel: this.options.thinkingLevel };
+    }
+    return config;
+  }
+
+  private async call(
+    key: string,
+    model: string,
+    body: string,
+    deadline: AbortSignal | undefined,
+  ): Promise<GenerateResult> {
     const url = `${this.baseUrl}/models/${encodeURIComponent(model)}:generateContent`;
     let response: Response;
     try {
@@ -108,7 +155,10 @@ export class GeminiProvider implements LlmProvider {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": key },
         body,
-        signal: AbortSignal.timeout(this.options.timeoutMs),
+        signal:
+          deadline === undefined
+            ? AbortSignal.timeout(this.options.timeoutMs)
+            : AbortSignal.any([AbortSignal.timeout(this.options.timeoutMs), deadline]),
       });
     } catch (error) {
       const name = error instanceof Error ? error.name : "";

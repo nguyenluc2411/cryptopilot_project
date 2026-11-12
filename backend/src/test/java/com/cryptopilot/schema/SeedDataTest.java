@@ -75,8 +75,8 @@ class SeedDataTest {
      * OVERSIZED_POSITION and HIGH_LEVERAGE thresholds, which are the risk profile's (BR-29, BR-66); V26 adds the
      * liquidation clearance fee (BR-36); V32 the entry deviation, setup score drop and slippage settings (BR-36, BR-69,
      * BR-70), V33 the two resend limits (BR-65), V34 the fee share threshold of HIGH_FEE_SHARE (BR-29, D-116); V11
-     * seeds the five packages; V39 the Academy's 8 topics, 21 lessons and 64 glossary terms (T-114); V63 the switches
-     * of the two payment gateways (D-146).
+     * seeds the five packages; V39 the Academy's 8 topics, 21 lessons and 64 glossary terms (T-114); V62 the first active
+     * AI Assistant configuration (T-073); V63 the switches of the two payment gateways (D-146).
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
             "system_setting", 22,
@@ -86,7 +86,8 @@ class SeedDataTest {
             "subscription_package", 5,
             "academy_topic", 8,
             "academy_article", 21,
-            "academy_term", 64);
+            "academy_term", 64,
+            "ai_configuration", 2);
 
     /**
      * The settings V3 seeds and a later migration deletes: V10 the plan limits (BR-62, D-58), V13 the thresholds the
@@ -296,6 +297,33 @@ class SeedDataTest {
     })
     void BR29_warningThreshold_isSeededWithTheValueTheRuleStates(String key, String expected) {
         assertThat(settingValue(key)).isEqualTo(expected);
+    }
+
+    /**
+     * UC-50, BR-51, D-146: V66 adds the AI configuration whose prompt explains the scored side and the LOW_ROOM cap
+     * and activates it, so exactly one version is active and V62's version is kept inactive as history.
+     */
+    @Test
+    void D146_afterV66_exactlyOneAiConfigurationIsActive_andItExplainsTheScoredSideAndTheCap() {
+        List<Map<String, Object>> active = jdbc.sql(
+                        "select config_id::text as id, system_prompt, model_name from ai_configuration where is_active")
+                .query()
+                .listOfRows();
+
+        assertThat(active).hasSize(1);
+        assertThat(active.getFirst().get("id")).isEqualTo("019b76da-a800-7002-8000-0000000a1002");
+        String prompt = (String) active.getFirst().get("system_prompt");
+        assertThat(prompt).contains("scoredSide", "LOW_ROOM", "dominantSide", "không phải khuyến nghị giao dịch");
+        assertThat(prompt.indexOf("8. Trong CONTEXT"))
+                .as("the new rule follows rule 7 and comes before the answer format")
+                .isGreaterThan(prompt.indexOf("7. Setup score"))
+                .isLessThan(prompt.indexOf("Cách trả lời:"));
+        assertThat(active.getFirst().get("model_name")).isEqualTo("gemini-3.5-flash-lite");
+        assertThat(jdbc.sql(
+                                "select is_active from ai_configuration where config_id = '019b76da-a800-7002-8000-0000000a1001'")
+                        .query(Boolean.class)
+                        .single())
+                .isFalse();
     }
 
     /**

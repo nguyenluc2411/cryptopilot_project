@@ -1,5 +1,6 @@
 package com.cryptopilot.market.model;
 
+import com.cryptopilot.market.model.enums.CapReason;
 import com.cryptopilot.market.model.enums.DominantSide;
 import com.cryptopilot.market.model.enums.SetupStyle;
 
@@ -15,6 +16,7 @@ import com.cryptopilot.market.model.enums.SetupStyle;
  * @param timeframe the timeframe the components were read on
  * @param dominantSide the winning side of the trend on Futures, beside the score and not part of it; {@code null} on
  *     Spot and when the trend could not be read
+ * @param capReason why the score was capped below its weighted sum, or {@code null} when it was not
  */
 public record SetupScore(
         Integer score,
@@ -22,4 +24,5 @@ public record SetupScore(
         SetupStyle style,
         String presetVersion,
         String timeframe,
-        DominantSide dominantSide) {}
+        DominantSide dominantSide,
+        CapReason capReason) {}

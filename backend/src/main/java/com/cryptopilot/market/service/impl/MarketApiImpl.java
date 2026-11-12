@@ -9,16 +9,27 @@ import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.OpenInterestSample;
 import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.PairAnalysis;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.TradablePair;
+import com.cryptopilot.market.dto.response.AnalysisResponse;
+import com.cryptopilot.market.dto.response.ComponentScoresResponse;
+import com.cryptopilot.market.dto.response.FuturesComponentsResponse;
+import com.cryptopilot.market.dto.response.FuturesSetupScoreResponse;
+import com.cryptopilot.market.dto.response.IndicatorsResponse;
+import com.cryptopilot.market.dto.response.SetupScoreResponse;
+import com.cryptopilot.market.dto.response.SpotComponentsResponse;
+import com.cryptopilot.market.dto.response.SpotSetupScoreResponse;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.model.CachedPrice;
 import com.cryptopilot.market.model.FuturesPriceSnapshot;
 import com.cryptopilot.market.model.PriceLookup;
+import com.cryptopilot.market.model.enums.CapReason;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
@@ -272,6 +283,94 @@ public class MarketApiImpl implements MarketApi {
     @Override
     public String presetTimeframe(SetupStyle style) {
         return analysis.presetTimeframe(style);
+    }
+
+    @Override
+    public Optional<PairAnalysis> pairAnalysis(UUID pairId, MarketType market, String timeframe, UUID userId) {
+        Optional<String> symbol =
+                pairs.findById(pairId).filter(pair -> pair.isEnabledOn(market)).map(pair -> pair.getSymbol());
+        return symbol.map(found -> analysisOf(analysis.analysis(market.name(), found, timeframe, userId), market));
+    }
+
+    private PairAnalysis analysisOf(AnalysisResponse a, MarketType market) {
+        boolean futures = market == MarketType.FUTURES;
+        return new PairAnalysis(
+                a.symbol(),
+                market,
+                a.timeframe(),
+                a.openTime(),
+                currentLastPrice(market, a.symbol()).orElse(null),
+                indicatorsOf(a.indicators()),
+                a.nearestSupport(),
+                a.nearestResistance(),
+                a.componentsLocked(),
+                componentsOf(a.components()),
+                scoreOf(a.setupScore()),
+                presetOf(a.setupScore()),
+                a.setupScore() instanceof FuturesSetupScoreResponse f ? f.dominantSide() : null,
+                scoredSideOf(a.setupScore()),
+                capReasonOf(a.setupScore()),
+                futures ? currentMarkPrice(a.symbol()).orElse(null) : null,
+                futures ? currentFundingRate(a.symbol()).orElse(null) : null);
+    }
+
+    private static PairAnalysis.Indicators indicatorsOf(IndicatorsResponse i) {
+        IndicatorsResponse v = i == null ? IndicatorsResponse.NONE : i;
+        return new PairAnalysis.Indicators(
+                v.sma20(),
+                v.ema20(),
+                v.ema50(),
+                v.ema200(),
+                v.rsi14(),
+                v.macdLine(),
+                v.macdSignal(),
+                v.macdHistogram(),
+                v.bbUpper(),
+                v.bbMiddle(),
+                v.bbLower(),
+                v.volumeSma20());
+    }
+
+    private static PairAnalysis.Components componentsOf(ComponentScoresResponse c) {
+        return switch (c) {
+            case null -> null;
+            case SpotComponentsResponse s ->
+                new PairAnalysis.Components(s.trend(), s.momentum(), s.volume(), s.level(), null);
+            case FuturesComponentsResponse f ->
+                new PairAnalysis.Components(f.trend(), f.momentum(), f.volume(), f.level(), f.derivatives());
+        };
+    }
+
+    private static Integer scoreOf(SetupScoreResponse s) {
+        return switch (s) {
+            case null -> null;
+            case SpotSetupScoreResponse spot -> spot.score();
+            case FuturesSetupScoreResponse fut -> fut.score();
+        };
+    }
+
+    private static SetupStyle presetOf(SetupScoreResponse s) {
+        return switch (s) {
+            case null -> null;
+            case SpotSetupScoreResponse spot -> spot.preset();
+            case FuturesSetupScoreResponse fut -> fut.preset();
+        };
+    }
+
+    private static ScoredSide scoredSideOf(SetupScoreResponse s) {
+        return switch (s) {
+            case null -> null;
+            case SpotSetupScoreResponse spot -> spot.scoredSide();
+            case FuturesSetupScoreResponse fut -> fut.scoredSide();
+        };
+    }
+
+    private static CapReason capReasonOf(SetupScoreResponse s) {
+        return switch (s) {
+            case null -> null;
+            case SpotSetupScoreResponse spot -> spot.capReason();
+            case FuturesSetupScoreResponse fut -> fut.capReason();
+        };
     }
 
     @Override

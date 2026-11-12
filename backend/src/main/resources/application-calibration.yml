@@ -1,0 +1,91 @@
+# Setup score calibration (development only, never set in a deployment). Run with the dev profile, on a copy of the
+# development database:
+#   ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev,calibration \
+#     -Dspring-boot.run.arguments="--pairs=BTCUSDT,ETHUSDT --candles=1000"
+# It reads stored candles and Futures data in a read-only transaction, writes calibration/report.csv and
+# calibration/summary.txt, and exits with status 0 (1 when it fails).
+#
+# Every flag the dev profile turns on is turned off again here, with the matching workers that are on by default, so
+# the run opens no market stream, schedules no job and stores nothing; the security filter chain is not built without
+# a server. The indicator pipeline has no flag of its own: it only follows the candles the stream and the backfill
+# close, and both are off.
+# Flyway is off: the run expects a database that is already migrated and never changes its schema.
+spring:
+  main:
+    web-application-type: none
+  flyway:
+    enabled: false
+  autoconfigure:
+    # The hourly and daily time events of Spring Modulith, which nothing here listens to: no flag turns them off.
+    exclude: org.springframework.modulith.moments.autoconfigure.MomentsAutoConfiguration
+
+logging:
+  level:
+    # The STOMP broker's statistics are logged every 30 minutes on the scheduler only when this logger is at INFO.
+    org.springframework.web.socket.config.WebSocketMessageBrokerStats: WARN
+
+cryptopilot:
+  outbox:
+    enabled: false
+  web:
+    rate-limit:
+      enabled: false
+  media:
+    sweep:
+      enabled: false
+  notification:
+    sweep:
+      enabled: false
+  auth:
+    token-sweep:
+      enabled: false
+  market:
+    sync:
+      enabled: false
+    backfill:
+      enabled: false
+    stream:
+      enabled: false
+    cache:
+      enabled: false
+    hub:
+      enabled: false
+    futures-metrics:
+      enabled: false
+    demo:
+      activate-seed-symbols: false
+  trading:
+    expiry:
+      enabled: false
+    matching:
+      enabled: false
+      replay:
+        enabled: false
+  paper:
+    equity-snapshot:
+      enabled: false
+    funding:
+      enabled: false
+    grant-cost:
+      enabled: false
+    pair-stop-sweep:
+      enabled: false
+    matching:
+      enabled: false
+      replay:
+        enabled: false
+  journal:
+    funding-correction:
+      enabled: false
+  alert:
+    enabled: false
+    expiry-sweep:
+      enabled: false
+  news:
+    crawl:
+      enabled: false
+    summary:
+      enabled: false
+  ai:
+    assistant:
+      sweep-enabled: false

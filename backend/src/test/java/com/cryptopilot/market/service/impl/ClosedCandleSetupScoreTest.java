@@ -132,12 +132,12 @@ class ClosedCandleSetupScoreTest {
 
         assertThat(analysed).isNotNull();
         assertThat(reading.score()).isEqualTo(analysed);
-        assertThat(reading.preset()).isEqualTo(preset.name() + " v1");
+        assertThat(reading.preset()).isEqualTo(preset.name() + " v2"); // presets v2 (formulas v2)
         assertThat(reading.openTime()).isEqualTo(closed);
         assertThat(reading.openTime().toString()).isEqualTo(JsonPath.read(body, "$.setupScore.openTime"));
     }
 
-    /** DAY_TRADING v1 on 1h: 35·75 + 30·50 + 15·40 + 20·60 = 5925, so 59 (TECHNICAL_DESIGN 7.4). */
+    /** DAY_TRADING v2 (same weights) on a stored v1 row, not capped: 35·75 + 30·50 + 15·40 + 20·60 = 5925, so 59 (TECHNICAL_DESIGN 7.4). */
     @Test
     void BR13_withoutAPreset_readsDayTradingAtItsCurrentVersion() {
         store(MarketType.SPOT, "1h", latestClosedOpen("1h"), "75", "50", "40", "60", null);
@@ -146,7 +146,7 @@ class ClosedCandleSetupScoreTest {
                 market.closedCandleSetupScore(pair, MarketType.SPOT, "1h", null, null, FixedClockConfig.NOW);
 
         assertThat(reading.score()).isEqualTo(59);
-        assertThat(reading.preset()).isEqualTo("DAY_TRADING v1");
+        assertThat(reading.preset()).isEqualTo("DAY_TRADING v2"); // presets v2 (formulas v2)
     }
 
     @Test
@@ -178,7 +178,7 @@ class ClosedCandleSetupScoreTest {
 
         assertThat(reading.score()).isNull();
         assertThat(reading.openTime()).isEqualTo(latestClosedOpen("4h"));
-        assertThat(reading.preset()).isEqualTo("SWING v1");
+        assertThat(reading.preset()).isEqualTo("SWING v2"); // presets v2 (formulas v2)
     }
 
     /** D-112: the latest closed candle's own row gives the score. */
@@ -221,7 +221,7 @@ class ClosedCandleSetupScoreTest {
                 market.closedCandleSetupScore(pair, MarketType.SPOT, timeframe, preset, null, FixedClockConfig.NOW);
 
         assertThat(reading.score()).isNull();
-        assertThat(reading.preset()).isEqualTo(preset.name() + " v1");
+        assertThat(reading.preset()).isEqualTo(preset.name() + " v2"); // presets v2 (formulas v2)
         assertThat(reading.timeframe()).isEqualTo(timeframe);
     }
 

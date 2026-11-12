@@ -297,24 +297,37 @@ cryptopilot:
       # where the history starts). No schedule: the indicators follow the closed candles.
       history-candles: 1000
     setup-score:
-      # T-027, D-53: style presets v1. Each market's weights add up to 100, each 1–40; checked at start-up.
+      # T-027, D-53: style presets (v2 with the component formulas v2). Each market's weights add up to 100,
+      # each 1–40; checked at start-up.
       # SCALPING's primary timeframe is 5m; 15m is the nearest one BR-08 ingests.
       presets:
         SCALPING:
-          version: v1
+          version: v2
           timeframe: 15m
           spot: { trend: 20, momentum: 40, volume: 25, level: 15 }
           futures: { trend: 15, momentum: 35, volume: 20, level: 10, derivatives: 20 }
         DAY_TRADING:
-          version: v1
+          version: v2
           timeframe: 1h
           spot: { trend: 35, momentum: 30, volume: 15, level: 20 }
           futures: { trend: 30, momentum: 25, volume: 15, level: 15, derivatives: 15 }
         SWING:
-          version: v1
+          version: v2
           timeframe: 4h
           spot: { trend: 40, momentum: 20, volume: 10, level: 30 }
           futures: { trend: 35, momentum: 15, volume: 10, level: 25, derivatives: 15 }
+      # Component formulas v2 and the no-room cap; checked at start-up. room-cap-score stays below the lowest
+      # min-setup-score-to-alert of cryptopilot.user.risk-profiles.profiles.
+      v2:
+        funding-baseline: 0.0001
+        funding-span: 0.001
+        trend-band-sigma: 0.1
+        volume-saturation: 2.0
+        against-side-factor: 0.5
+        level-min-risk-sigma: 0.5
+        room-cap-score: 54
+        room-cap-from: 10
+        room-cap-to: 30
     futures-metrics:
       # NSF-04: every 5 minutes, 90 s after the 5-minute instant, the funding settlements and then the open
       # interest and long/short account ratio of the pairs NSF-03 streams. Off here, on in the dev and prod
@@ -500,6 +513,15 @@ cryptopilot:
       connect-timeout: 5s
       # Above the AI Service's own 60-second limit and its one retry.
       request-timeout: 130s
+    assistant:
+      # T-073, TECHNICAL_DESIGN 7.14: the ten most recent completed turns go with a question, each cut to 2,000
+      # characters so a long answer does not cost its tokens again with every later question.
+      history-turns: 10
+      history-turn-chars: 2000
+      # SRS 3.9.1: on failure or after 60 seconds the question becomes FAILED (MSG31) and uses no quota.
+      answer-timeout: 60s
+      sweep-enabled: true
+      sweep-interval: 15s
   news:
     rss:
       # NSF-10: each feed is read with a 30-second timeout. UC-49 reads a feed once before an administrator saves it.

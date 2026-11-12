@@ -43,6 +43,7 @@ academy_topic,updated_at,timestamp with time zone,,,NO
 academy_topic,version,bigint,64,0,NO
 ai_configuration,config_id,uuid,,,NO
 ai_configuration,created_at,timestamp with time zone,,,NO
+ai_configuration,disclaimer,text,,,NO
 ai_configuration,is_active,boolean,,,NO
 ai_configuration,max_output_tokens,integer,32,0,NO
 ai_configuration,model_name,character varying,,,NO
@@ -54,7 +55,9 @@ ai_configuration,version,bigint,64,0,NO
 ai_conversation,conversation_id,uuid,,,NO
 ai_conversation,conversation_title,character varying,,,YES
 ai_conversation,created_at,timestamp with time zone,,,NO
+ai_conversation,deleted_at,timestamp with time zone,,,YES
 ai_conversation,pair_id,uuid,,,YES
+ai_conversation,topic,character varying,,,NO
 ai_conversation,updated_at,timestamp with time zone,,,NO
 ai_conversation,user_id,uuid,,,NO
 ai_conversation,version,bigint,64,0,NO
@@ -66,6 +69,7 @@ ai_message,input_tokens,integer,32,0,YES
 ai_message,message_id,uuid,,,NO
 ai_message,message_status,character varying,,,NO
 ai_message,output_tokens,integer,32,0,YES
+ai_message,question_id,uuid,,,YES
 ai_message,sender_role,character varying,,,NO
 ai_message,updated_at,timestamp with time zone,,,NO
 ai_message,version,bigint,64,0,NO
@@ -568,6 +572,7 @@ technical_indicator,nearest_support,numeric,28,10,YES
 technical_indicator,open_time,timestamp with time zone,,,NO
 technical_indicator,pair_id,uuid,,,NO
 technical_indicator,rsi_14,numeric,28,10,YES
+technical_indicator,scored_side,character varying,,,YES
 technical_indicator,score_version,character varying,,,YES
 technical_indicator,sma_20,numeric,28,10,YES
 technical_indicator,timeframe,character varying,,,NO

@@ -135,6 +135,46 @@ class IndicatorServiceTest {
                 .isEqualTo(IndicatorOutcome.DUPLICATE);
     }
 
+    @Test
+    void BR12_aRestoredSeries_givesThePreviousHistogramOfItsSecondToLastCandle() {
+        IndicatorService indicators = newService(1000);
+        store(fixture.subList(0, 300));
+
+        IndicatorUpdate update = indicators.onCandleClosed(closed(fixture.get(299)));
+
+        assertThat(update.previousMacdHistogram())
+                .isNotNull()
+                .isEqualTo(feed(fixture.subList(0, 299)).snapshot().macdHistogram());
+    }
+
+    @Test
+    void BR12_theNextCandle_givesTheHistogramOfTheStateBeforeIt() {
+        IndicatorService indicators = newService(1000);
+        store(fixture.subList(0, 301));
+        IndicatorSnapshot before =
+                indicators.onCandleClosed(closed(fixture.get(299))).snapshot();
+
+        IndicatorUpdate next = indicators.onCandleClosed(closed(fixture.get(300)));
+        IndicatorUpdate again = indicators.onCandleClosed(closed(fixture.get(300)));
+
+        assertThat(next.previousMacdHistogram()).isEqualTo(before.macdHistogram());
+        assertThat(again.previousMacdHistogram()).isEqualTo(before.macdHistogram());
+    }
+
+    @Test
+    void BR12_aGapRebuild_givesTheHistogramOfTheCandleBeforeTheOffered() {
+        IndicatorService indicators = newService(1000);
+        store(fixture.subList(0, 304));
+        indicators.onCandleClosed(closed(fixture.get(299)));
+
+        IndicatorUpdate update = indicators.onCandleClosed(closed(fixture.get(303)));
+
+        assertThat(update.outcome()).isEqualTo(IndicatorOutcome.GAP);
+        assertThat(update.previousMacdHistogram())
+                .isNotNull()
+                .isEqualTo(feed(fixture.subList(0, 303)).snapshot().macdHistogram());
+    }
+
     /** An older candle is refused and the series rebuilt up to the latest one it had taken — never set back. */
     @Test
     void BR12_anEarlierCandle_isRefusedAndTheSeriesRebuiltUpToTheLatest() {

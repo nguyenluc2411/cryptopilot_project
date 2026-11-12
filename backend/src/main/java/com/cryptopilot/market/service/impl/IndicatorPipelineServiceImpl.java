@@ -2,6 +2,7 @@ package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.calculator.SetupComponents;
 import com.cryptopilot.market.calculator.SwingSupportResistance;
+import com.cryptopilot.market.config.SetupScoreProperties;
 import com.cryptopilot.market.event.CandleClosed;
 import com.cryptopilot.market.event.IndicatorLevels;
 import com.cryptopilot.market.event.IndicatorsComputed;
@@ -9,6 +10,7 @@ import com.cryptopilot.market.model.ComponentInputs;
 import com.cryptopilot.market.model.ComponentScores;
 import com.cryptopilot.market.model.DerivativesInputs;
 import com.cryptopilot.market.model.IndicatorSnapshot;
+import com.cryptopilot.market.model.IndicatorUpdate;
 import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -54,11 +56,13 @@ public class IndicatorPipelineServiceImpl implements IndicatorPipelineService {
     private final MarketDataQueryRepository marketData;
     private final Clock clock;
     private final ApplicationEventPublisher events;
+    private final SetupScoreProperties setupScore;
 
     @Override
     @Transactional
     public Optional<StoredIndicators> onCandleClosed(CandleClosed candle) {
-        IndicatorSnapshot snapshot = indicators.onCandleClosed(candle).snapshot();
+        IndicatorUpdate update = indicators.onCandleClosed(candle);
+        IndicatorSnapshot snapshot = update.snapshot();
         // An out-of-order candle leaves the series at a later candle, whose row is already stored.
         if (snapshot == null || !snapshot.openTime().equals(candle.openTime())) {
             log.debug(
@@ -79,26 +83,31 @@ public class IndicatorPipelineServiceImpl implements IndicatorPipelineService {
                 null,
                 candle.openTime().plus(interval),
                 SWING_CANDLES));
-        Double previousHistogram = store.macdHistogram(
-                        candle.pairId(),
-                        candle.market(),
-                        candle.timeframe(),
-                        candle.openTime().minus(interval))
-                .map(BigDecimal::doubleValue)
-                .orElse(null);
+        Double previousHistogram = update.previousMacdHistogram() != null
+                ? update.previousMacdHistogram()
+                : store.macdHistogram(
+                                candle.pairId(),
+                                candle.market(),
+                                candle.timeframe(),
+                                candle.openTime().minus(interval))
+                        .map(BigDecimal::doubleValue)
+                        .orElse(null);
         DerivativesInputs derivatives = candle.market() == MarketType.FUTURES
                 ? marketData.derivativesAt(candle.pairId(), candle.closeTime())
                 : null;
-        ComponentScores components = SetupComponents.compute(new ComponentInputs(
-                candle.market(),
-                candle.timeframe(),
-                candle.close(),
-                candle.baseVolume(),
-                snapshot,
-                previousHistogram,
-                levels.support(),
-                levels.resistance(),
-                derivatives));
+        ComponentScores components = SetupComponents.compute(
+                new ComponentInputs(
+                        candle.market(),
+                        candle.timeframe(),
+                        candle.open(),
+                        candle.close(),
+                        candle.baseVolume(),
+                        snapshot,
+                        previousHistogram,
+                        levels.support(),
+                        levels.resistance(),
+                        derivatives),
+                setupScore.v2());
         StoredIndicators row = new StoredIndicators(
                 candle.pairId(),
                 candle.openTime(),

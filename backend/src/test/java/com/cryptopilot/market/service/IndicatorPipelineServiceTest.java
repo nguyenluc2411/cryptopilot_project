@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.calculator.SetupComponents;
+import com.cryptopilot.market.calculator.SetupScoreCalculator;
 import com.cryptopilot.market.calculator.SwingSupportResistance;
 import com.cryptopilot.market.client.Kline;
+import com.cryptopilot.market.config.SetupScoreProperties;
 import com.cryptopilot.market.event.CandleClosed;
 import com.cryptopilot.market.event.IndicatorLevels;
 import com.cryptopilot.market.event.IndicatorsComputed;
@@ -15,6 +17,8 @@ import com.cryptopilot.market.model.IndicatorSnapshot;
 import com.cryptopilot.market.model.SeriesKey;
 import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.model.enums.ScoredSide;
+import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.market.repository.OhlcvRepository;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -74,6 +78,9 @@ class IndicatorPipelineServiceTest {
     @Autowired
     private ApplicationEvents published;
 
+    @Autowired
+    private SetupScoreProperties presets;
+
     private MarketTestData data;
     private UUID pair;
 
@@ -104,16 +111,19 @@ class IndicatorPipelineServiceTest {
         BigDecimal previous = store.macdHistogram(
                         pair, MarketType.SPOT, "1h", series.get(258).openTime())
                 .orElseThrow();
-        ComponentScores expected = SetupComponents.compute(new ComponentInputs(
-                MarketType.SPOT,
-                "1h",
-                series.get(259).close(),
-                series.get(259).volume(),
-                snapshot,
-                previous.doubleValue(),
-                levels.support(),
-                levels.resistance(),
-                null));
+        ComponentScores expected = SetupComponents.compute(
+                new ComponentInputs(
+                        MarketType.SPOT,
+                        "1h",
+                        series.get(259).open(),
+                        series.get(259).close(),
+                        series.get(259).volume(),
+                        snapshot,
+                        previous.doubleValue(),
+                        levels.support(),
+                        levels.resistance(),
+                        null),
+                presets.v2());
         assertThat(rows()).isEqualTo(2);
         assertThat(row.components()).isEqualTo(expected);
         assertThat(store.latest(pair, MarketType.SPOT, "1h").orElseThrow().components())
@@ -124,7 +134,31 @@ class IndicatorPipelineServiceTest {
         assertThat(row.nearestResistance()).isEqualTo(tenPlaces(levels.resistance()));
         assertThat(row.components().trend()).isNotNull();
         assertThat(row.components().momentum()).isNotNull();
-        assertThat(row.components().formulaVersion()).isEqualTo("v1");
+        assertThat(row.components().formulaVersion()).isEqualTo("v2");
+        assertThat(row.components().scoredSide()).isEqualTo(ScoredSide.LONG);
+        assertThat(sql.sql("select scored_side from technical_indicator where pair_id = ? and open_time = ?")
+                        .params(pair, Timestamp.from(series.get(259).openTime()))
+                        .query(String.class)
+                        .single())
+                .isEqualTo("LONG");
+    }
+
+    @Test
+    void NSF05_aSeriesRebuiltWithoutThePreviousRow_stillHasMomentumAndASetupScore() {
+        List<Kline> series = series(260);
+        candles.insertAll(pair, MarketType.SPOT, "1h", series);
+        assertThat(store.macdHistogram(
+                        pair, MarketType.SPOT, "1h", series.get(258).openTime()))
+                .isEmpty();
+
+        StoredIndicators row = pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(259)))
+                .orElseThrow();
+
+        assertThat(row.components().momentum()).isNotNull();
+        assertThat(SetupScoreCalculator.score(
+                                presets.preset(SetupStyle.DAY_TRADING), row.components(), null, presets.v2())
+                        .score())
+                .isNotNull();
     }
 
     @Test
@@ -145,13 +179,14 @@ class IndicatorPipelineServiceTest {
         assertThat(again.ema20()).isEqualByComparingTo(first.ema20());
     }
 
-    /** 40 candles: no EMA200 and no earlier row, so trend and momentum cannot be computed and are stored null. */
+    /** 34 candles: no EMA200 and the first MACD histogram, so trend and momentum cannot be computed and are null. */
     @Test
     void NSF05_componentsWithoutTheirInputs_areStoredNull() {
-        List<Kline> series = series(40);
+        // 34, not 40: the previous histogram now comes from the series, which has one from candle 34 on.
+        List<Kline> series = series(34);
         candles.insertAll(pair, MarketType.SPOT, "1h", series);
 
-        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(39)));
+        pipeline.onCandleClosed(closed(MarketType.SPOT, series.get(33)));
 
         StoredIndicators row = store.latest(pair, MarketType.SPOT, "1h").orElseThrow();
         assertThat(row.ema200()).isNull();
@@ -172,12 +207,12 @@ class IndicatorPipelineServiceTest {
 
         pipeline.onCandleClosed(closed(MarketType.FUTURES, series.get(39)));
 
-        // funding 50·(0.0005 + 0.00025)/0.001 = 37.5; price and open interest both rose: 50
-        assertThat(store.latest(pair, MarketType.FUTURES, "1h")
-                        .orElseThrow()
-                        .components()
-                        .derivatives())
-                .isEqualByComparingTo("87.50");
+        // v2: funding 0.00025 is 0.15 of the span over the 0.0001 baseline, so LONG 50·0.35 = 17.5, SHORT 32.5;
+        // price and open interest rose: LONG 50, SHORT 0
+        ComponentScores components =
+                store.latest(pair, MarketType.FUTURES, "1h").orElseThrow().components();
+        assertThat(components.derivatives())
+                .isEqualByComparingTo(components.scoredSide() == ScoredSide.LONG ? "67.50" : "32.50");
     }
 
     /** Only a reading at the close and none an hour before: the changes are unknown, so is the component. */

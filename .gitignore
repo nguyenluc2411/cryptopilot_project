@@ -62,3 +62,6 @@ deploy/data/
 # ---- Local review notes (never committed)
 REVIEW_REPORT.md
 reviews/
+
+# Setup score calibration output (dev profile "calibration")
+calibration/
