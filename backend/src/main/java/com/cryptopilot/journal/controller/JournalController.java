@@ -2,12 +2,15 @@ package com.cryptopilot.journal.controller;
 
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
+import com.cryptopilot.journal.dto.request.JournalReviewRequest;
+import com.cryptopilot.journal.dto.response.ChartImageUploadResponse;
 import com.cryptopilot.journal.dto.response.JournalEntryDetailResponse;
 import com.cryptopilot.journal.dto.response.JournalEntryResponse;
 import com.cryptopilot.journal.model.JournalListQuery;
 import com.cryptopilot.journal.model.enums.PerformanceMarket;
 import com.cryptopilot.journal.model.enums.PerformanceSource;
 import com.cryptopilot.journal.model.enums.TradeResult;
+import com.cryptopilot.journal.service.JournalReviewService;
 import com.cryptopilot.journal.service.JournalService;
 import com.cryptopilot.trading.model.enums.PositionStatus;
 import io.swagger.v3.oas.annotations.Operation;
@@ -15,6 +18,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.UUID;
 import lombok.AccessLevel;
@@ -24,15 +28,18 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The journal endpoints of SCR-20 and SCR-21 (UC-22), Trader only. The caller is the owner of every record read; the
+ * The journal endpoints of SCR-20 and SCR-21 (UC-22, UC-23), Trader only. The caller is the owner of every record read; the
  * service never loads another Trader's.
  *
- * <p>Rule: UC-22; SRS 3.6.1; CR-04; TECHNICAL_DESIGN 8.
+ * <p>Rule: UC-22, UC-23; BR-40; SRS 3.6.1; CR-04; TECHNICAL_DESIGN 8.
  *
  * <p>Reference: Fowler, M. (2002). <i>Patterns of Enterprise Application Architecture</i>. Addison-Wesley, "Remote
  * Facade" over a "Service Layer".
@@ -45,6 +52,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class JournalController {
 
     private final JournalService journal;
+    private final JournalReviewService reviews;
 
     @Operation(
             summary = "The caller's trades, the latest entry first, 20 per page by default (SCR-20, CR-04)",
@@ -95,5 +103,37 @@ public class JournalController {
     @GetMapping("/{id}")
     public JournalEntryDetailResponse detail(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
         return journal.detail(UUID.fromString(caller.getSubject()), id);
+    }
+
+    @Operation(
+            summary = "Saves the review of one of the caller's trades (SCR-21, UC-23)",
+            description = "Replaces strategy, setup description, lessons learned, mistakes and the chart image; a"
+                    + " field left out is cleared. The execution facts are never changed here (BR-40): a body naming"
+                    + " one, or any other field, is refused. The client shows MSG14")
+    @ApiResponse(responseCode = "200", description = "The trade as GET /journal/{id} shows it, with its new review")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01: a field that is not part of the review; MSG15: a text over 4,000 characters or an"
+                    + " unknown strategy; MSG32: a chart image that is not a new upload of the caller, or not JPG,"
+                    + " PNG or WEBP within 5 MB")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such trade among the caller's")
+    @ApiResponse(responseCode = "503", description = "MSG43: the media storage cannot check the image")
+    @PutMapping("/{id}/review")
+    public JournalEntryDetailResponse review(
+            @AuthenticationPrincipal Jwt caller,
+            @PathVariable UUID id,
+            @Valid @RequestBody JournalReviewRequest request) {
+        return reviews.review(UUID.fromString(caller.getSubject()), id, request);
+    }
+
+    @Operation(summary = "A signed form to upload the chart image of one of the caller's trades (SCR-21)")
+    @ApiResponse(responseCode = "200", description = "The form fields, the accepted formats and the size limit")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such trade among the caller's")
+    @ApiResponse(responseCode = "503", description = "MSG43: the media storage is not available")
+    @PostMapping("/{id}/chart-image/upload-signature")
+    public ChartImageUploadResponse signChartImage(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
+        return reviews.signChartImage(UUID.fromString(caller.getSubject()), id);
     }
 }

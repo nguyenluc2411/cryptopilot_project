@@ -193,6 +193,33 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     int changeLevelsIfOpen(
             UUID id, long version, BigDecimal stopLoss, BigDecimal takeProfit, boolean widensStop, Instant now);
 
+    /**
+     * Replaces the review of one of the user's records: strategy, texts and chart image. Only these columns change:
+     * neither the execution facts (BR-40) nor the version, which the close and the level change of an open position
+     * compare and set, so a review never makes the matching engine's exit miss.
+     *
+     * @return 1 when the record is the user's, otherwise 0
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(
+            value = "update trading_journal set strategy_id = cast(:strategyId as uuid),"
+                    + " setup_description = cast(:setupDescription as text),"
+                    + " lessons_learned = cast(:lessonsLearned as text), mistakes = cast(:mistakes as text),"
+                    + " chart_image_url = cast(:chartImageUrl as varchar),"
+                    + " chart_image_public_id = cast(:chartImagePublicId as varchar), updated_at = :now"
+                    + " where journal_id = :id and user_id = :userId",
+            nativeQuery = true)
+    int review(
+            UUID id,
+            UUID userId,
+            UUID strategyId,
+            String setupDescription,
+            String lessonsLearned,
+            String mistakes,
+            String chartImageUrl,
+            String chartImagePublicId,
+            Instant now);
+
     /** The user's CLOSED SIMULATED records, the latest exit first (BR-70). */
     @Transactional(readOnly = true)
     @Query("select j from TradingJournal j where j.userId = :userId"

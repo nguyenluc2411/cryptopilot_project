@@ -177,6 +177,10 @@ public class TradingJournal extends BaseEntity {
     @Column(name = "chart_image_url", length = 500, insertable = false, updatable = false)
     private String chartImageUrl;
 
+    /** The media storage key of the chart image, so a replaced or removed one is deleted (V68); written by T-049. */
+    @Column(name = "chart_image_public_id", insertable = false, updatable = false)
+    private String chartImagePublicId;
+
     /** The settlement instants known to be missing, oldest first; {@code null} when none. */
     @JdbcTypeCode(SqlTypes.ARRAY)
     @Column(name = "missing_funding_times", insertable = false, updatable = false)
