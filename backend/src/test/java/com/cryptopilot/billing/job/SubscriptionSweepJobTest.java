@@ -49,4 +49,17 @@ class SubscriptionSweepJobTest {
         order.verify(lifecycle).expireEnded();
         order.verify(lifecycle).remindEnding();
     }
+
+    @Test
+    void NSF14_aRunThatChangesNothing_orOnlyReminds_stillRunsBothSteps() {
+        when(lifecycle.expireEnded()).thenReturn(0, 0);
+        when(lifecycle.remindEnding()).thenReturn(0, 3);
+        SubscriptionSweepJob job = job(true);
+
+        assertThatNoException().isThrownBy(job::run);
+        assertThatNoException().isThrownBy(job::run);
+
+        verify(lifecycle, org.mockito.Mockito.times(2)).expireEnded();
+        verify(lifecycle, org.mockito.Mockito.times(2)).remindEnding();
+    }
 }
