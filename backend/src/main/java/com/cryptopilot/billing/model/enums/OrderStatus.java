@@ -5,9 +5,10 @@ package com.cryptopilot.billing.model.enums;
  *
  * <p>An order is created PENDING and settled once (BR-53): PAID when the gateway confirms the full amount with a valid
  * signature, FAILED when it reports the payment failed or was cancelled, EXPIRED when nobody paid within
- * {@code ORDER_EXPIRY_MINUTES} (BR-54). A success that arrives after the order expired is still honoured (A-03).
+ * {@code ORDER_EXPIRY_MINUTES} (BR-54). The three are final (STM-06): a success that arrives after the order expired or failed is kept for an
+ * administrator and changes no status.
  *
- * <p>Rule: BR-53, BR-54; SRS v1.1 entity 35; TECHNICAL_DESIGN 7.11; A-03.
+ * <p>Rule: BR-53, BR-54; STM-06; SRS v1.1 entity 35; TECHNICAL_DESIGN 7.11.
  */
 public enum OrderStatus {
 

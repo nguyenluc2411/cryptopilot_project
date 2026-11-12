@@ -46,7 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
  * one order, asking SePay about an order (its query API is a mock), and recording how a flagged order was handled.
  * Each test rolls back, so the paid order's receipt is never sent.
  *
- * <p>Rule: UC-48; NSF-13; BR-53, BR-54, BR-57; D-146.
+ * <p>Rule: UC-48; NSF-13; BR-53, BR-54, BR-57; D-147.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -55,7 +55,9 @@ import org.springframework.transaction.annotation.Transactional;
         properties = {
             "cryptopilot.billing.sepay.merchant-id=MERCHANT_TEST",
             "cryptopilot.billing.sepay.secret-key=spsk_test_secret",
-            "cryptopilot.billing.sepay.ipn-secret-key=ipn-secret"
+            "cryptopilot.billing.sepay.ipn-secret-key=ipn-secret",
+            "cryptopilot.billing.sepay.checkout-url=https://pay.example.test/v1/checkout/init",
+            "cryptopilot.billing.sepay.api-url=https://api.sepay.example.test"
         })
 @Transactional
 class AdminOrderApiTest {
@@ -198,6 +200,20 @@ class AdminOrderApiTest {
         as(admin, post(ORDERS + "/" + code + "/reconcile"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.order.status").value("EXPIRED"));
+    }
+
+    /** DS-04b, NSF-13: the gateway says the payment was cancelled; reconciling fails the order. */
+    @Test
+    void DS04b_reconcilingACancelledPayment_failsTheOrder() throws Exception {
+        String code = order(trader, "PENDING", Instant.now().minus(Duration.ofMinutes(6)), false);
+        when(sepay.orderDetail(code)).thenReturn(Optional.of("""
+                {"data": {"order_invoice_number": "%s", "order_status": "CANCELLED", "order_amount": "99000.00"}}""".formatted(code)));
+
+        as(admin, post(ORDERS + "/" + code + "/reconcile"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.order.status").value("FAILED"))
+                .andExpect(jsonPath("$.subscription").doesNotExist());
+        assertThat(audits("ORDER_RECONCILED", code)).isEqualTo(1);
     }
 
     @Test

@@ -40,7 +40,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.PageRequest;
 
-/** Reconciliation decisions of NSF-13: only a confirmed payment settles, everything else expires when due. */
+/**
+ * Reconciliation decisions of NSF-13: a confirmed payment pays and a cancelled or failed one fails, through the
+ * settlement; an order still awaiting payment, or unknown to the gateway, expires when due.
+ */
 class OrderReconciliationServiceImplTest {
 
     private static final Instant NOW = Instant.parse("2026-11-08T10:00:00Z");
@@ -89,7 +92,10 @@ class OrderReconciliationServiceImplTest {
             return pending;
         });
         doAnswer(call -> {
-                    statuses.put(call.<PaymentResult>getArgument(0).orderCode(), OrderStatus.PAID);
+                    PaymentResult result = call.getArgument(0);
+                    if (result.paid() || statuses.get(result.orderCode()) == OrderStatus.PENDING) {
+                        statuses.put(result.orderCode(), result.paid() ? OrderStatus.PAID : OrderStatus.FAILED);
+                    }
                     return null;
                 })
                 .when(settlement)
@@ -112,9 +118,8 @@ class OrderReconciliationServiceImplTest {
     }
 
     @Test
-    void BR54_anUnpaidOrder_onlyExpires_whateverTheGatewaySays() {
-        for (GatewayLookup.State state :
-                List.of(GatewayLookup.State.AWAITING, GatewayLookup.State.CANCELLED, GatewayLookup.State.UNKNOWN)) {
+    void BR54_anOrderStillAwaitingOrUnknown_expiresOnlyWhenDue() {
+        for (GatewayLookup.State state : List.of(GatewayLookup.State.AWAITING, GatewayLookup.State.UNKNOWN)) {
             String code = "DUE-" + state;
             statuses.put(code, OrderStatus.PENDING);
             when(sepay.lookup(code)).thenReturn(GatewayLookup.of(state));
@@ -122,10 +127,48 @@ class OrderReconciliationServiceImplTest {
             assertThat(service.reconcile(code)).isEqualTo(OrderStatus.EXPIRED);
         }
         statuses.put("CP-OPEN", OrderStatus.PENDING);
-        when(sepay.lookup("CP-OPEN")).thenReturn(GatewayLookup.of(GatewayLookup.State.CANCELLED));
+        when(sepay.lookup("CP-OPEN")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
 
         assertThat(service.reconcile("CP-OPEN")).isEqualTo(OrderStatus.PENDING);
         verify(settlement, never()).settle(any());
+    }
+
+    /** DS-04b, NSF-13: a payment the gateway reports cancelled or failed fails the order, due or not. */
+    @Test
+    void DS04b_aCancelledPayment_failsTheOrderThroughTheSettlement() {
+        for (String code : List.of("DUE-CANCELLED", "CP-CANCELLED")) {
+            statuses.put(code, OrderStatus.PENDING);
+            when(sepay.lookup(code)).thenReturn(GatewayLookup.of(GatewayLookup.State.CANCELLED));
+
+            assertThat(service.reconcile(code)).isEqualTo(OrderStatus.FAILED);
+        }
+        verify(settlement, never()).expireIfDue(anyString());
+        verify(settlement)
+                .settle(org.mockito.ArgumentMatchers.argThat(r -> !r.paid()
+                        && r.orderCode().equals("CP-CANCELLED")
+                        && r.responseCode().equals(OrderReconciliationServiceImpl.CANCELLED)));
+    }
+
+    /** R8: a MoMo payment link cannot be cancelled, so while MoMo still takes payment the order stays PENDING. */
+    @Test
+    void D147_aMoMoOrderStillPayable_isNotReleased_andIsNotExpired() {
+        PaymentGateway momo = mock(PaymentGateway.class);
+        when(momo.code()).thenReturn(GatewayCode.MOMO);
+        when(momo.configured()).thenReturn(true);
+        when(momo.cancel(anyString())).thenReturn(false);
+        when(momo.lookup("CP-MOMO")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
+        installed.add(momo);
+        SubscriptionOrder open = order("CP-MOMO", OrderStatus.PENDING, NOW.plus(Duration.ofMinutes(10)));
+        when(open.getPaymentGateway()).thenReturn(GatewayCode.MOMO);
+        statuses.put("CP-MOMO", OrderStatus.PENDING);
+        UUID trader = UUID.randomUUID();
+        when(orders.findByUserIdAndOrderStatus(trader, OrderStatus.PENDING)).thenReturn(List.of(open));
+
+        service.releasePending(trader);
+
+        assertThat(statuses.get("CP-MOMO")).isEqualTo(OrderStatus.PENDING);
+        verify(settlement, never()).withdraw(anyString());
+        verify(settlement, never()).expireIfDue(anyString());
     }
 
     @Test
@@ -209,7 +252,7 @@ class OrderReconciliationServiceImplTest {
     }
 
     @Test
-    void D146_anUnpaidOrderPastItsWindow_isCancelledAtTheGatewayBeforeItExpires() {
+    void D147_anUnpaidOrderPastItsWindow_isCancelledAtTheGatewayBeforeItExpires() {
         statuses.put("DUE-1", OrderStatus.PENDING);
         when(sepay.lookup("DUE-1")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
 
@@ -219,7 +262,7 @@ class OrderReconciliationServiceImplTest {
     }
 
     @Test
-    void D146_aRefusedCancellation_isLookedUpAgain_andAPaymentFoundThenIsSettled() {
+    void D147_aRefusedCancellation_isLookedUpAgain_andAPaymentFoundThenIsSettled() {
         statuses.put("DUE-PAID", OrderStatus.PENDING);
         PaymentResult payment =
                 new PaymentResult(GatewayCode.SEPAY, "DUE-PAID", true, new BigDecimal("99000"), null, "CAPTURED", "{}");
@@ -232,26 +275,49 @@ class OrderReconciliationServiceImplTest {
         verify(settlement).settle(payment);
     }
 
+    /** BR-54: once its window has closed, an order the gateway cannot cancel expires, though it still shows waiting. */
     @Test
-    void D146_anOrderTheGatewayWillNotCancel_staysPendingADay_thenExpires() {
+    void BR54_anOrderTheGatewayCannotCancel_expiresWhenItsWindowCloses_thoughStillAwaiting() {
         statuses.put("DUE-CARD", OrderStatus.PENDING);
         when(sepay.lookup("DUE-CARD")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
         when(sepay.cancel("DUE-CARD")).thenReturn(false);
 
-        assertThat(service.reconcile("DUE-CARD")).isEqualTo(OrderStatus.PENDING);
+        assertThat(service.reconcile("DUE-CARD")).isEqualTo(OrderStatus.EXPIRED);
+        verify(sepay).cancel("DUE-CARD");
+    }
 
-        statuses.put("DUE-OLD", OrderStatus.PENDING);
-        when(sepay.lookup("DUE-OLD")).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
-        when(sepay.cancel("DUE-OLD")).thenReturn(false);
-        when(orders.findByOrderCode("DUE-OLD"))
-                .thenAnswer(
-                        call -> Optional.of(order("DUE-OLD", statuses.get("DUE-OLD"), NOW.minus(Duration.ofDays(2)))));
+    /**
+     * BR-54, D-147: a MoMo order still "pending" at MoMo blocks a new order at 14 minutes; at 15 minutes it expires and
+     * a new order may go ahead.
+     */
+    @Test
+    void BR54_aMoMoOrderStillPending_blocksANewOrderAt14Minutes_andExpiresAt15() {
+        PaymentGateway momo = mock(PaymentGateway.class);
+        when(momo.code()).thenReturn(GatewayCode.MOMO);
+        when(momo.configured()).thenReturn(true);
+        when(momo.cancel(anyString())).thenReturn(false);
+        when(momo.lookup(anyString())).thenReturn(GatewayLookup.of(GatewayLookup.State.AWAITING));
+        installed.add(momo);
+        UUID trader = UUID.randomUUID();
 
-        assertThat(service.reconcile("DUE-OLD")).isEqualTo(OrderStatus.EXPIRED);
+        SubscriptionOrder young = order("CP-MOMO-14", OrderStatus.PENDING, NOW.plus(Duration.ofMinutes(1)));
+        when(young.getPaymentGateway()).thenReturn(GatewayCode.MOMO);
+        statuses.put("CP-MOMO-14", OrderStatus.PENDING);
+        when(orders.findByUserIdAndOrderStatus(trader, OrderStatus.PENDING)).thenReturn(List.of(young));
+        service.releasePending(trader);
+        assertThat(statuses.get("CP-MOMO-14")).isEqualTo(OrderStatus.PENDING);
+
+        SubscriptionOrder due = order("DUE-MOMO-15", OrderStatus.PENDING, NOW);
+        when(due.getPaymentGateway()).thenReturn(GatewayCode.MOMO);
+        statuses.put("DUE-MOMO-15", OrderStatus.PENDING);
+        when(orders.findByUserIdAndOrderStatus(trader, OrderStatus.PENDING)).thenReturn(List.of(due));
+        service.releasePending(trader);
+        assertThat(statuses.get("DUE-MOMO-15")).isEqualTo(OrderStatus.EXPIRED);
+        verify(settlement, never()).withdraw(anyString());
     }
 
     @Test
-    void D146_releasingATradersPendingOrder_cancelsAndWithdrawsIt_beforeItsWindowCloses() {
+    void D147_releasingATradersPendingOrder_cancelsAndWithdrawsIt_beforeItsWindowCloses() {
         SubscriptionOrder open = order("CP-OPEN", OrderStatus.PENDING, NOW.plus(Duration.ofMinutes(10)));
         statuses.put("CP-OPEN", OrderStatus.PENDING);
         UUID trader = UUID.randomUUID();
@@ -265,7 +331,7 @@ class OrderReconciliationServiceImplTest {
     }
 
     @Test
-    void D146_aPendingOrderTheGatewayWillNotCancel_isNotReleased() {
+    void D147_aPendingOrderTheGatewayWillNotCancel_isNotReleased() {
         SubscriptionOrder open = order("CP-CARD", OrderStatus.PENDING, NOW.plus(Duration.ofMinutes(10)));
         statuses.put("CP-CARD", OrderStatus.PENDING);
         UUID trader = UUID.randomUUID();
@@ -280,7 +346,7 @@ class OrderReconciliationServiceImplTest {
     }
 
     @Test
-    void D146_releasingAnOrderOfAGatewayThisDeploymentCannotAsk_withdrawsIt() {
+    void D147_releasingAnOrderOfAGatewayThisDeploymentCannotAsk_withdrawsIt() {
         when(sepay.configured()).thenReturn(false);
         SubscriptionOrder open = order("CP-LOCAL", OrderStatus.PENDING, NOW.plus(Duration.ofMinutes(10)));
         statuses.put("CP-LOCAL", OrderStatus.PENDING);

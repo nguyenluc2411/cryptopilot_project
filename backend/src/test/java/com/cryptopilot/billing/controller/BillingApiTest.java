@@ -52,7 +52,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The Trader billing API end to end against the seeded packages, with a stand-in SePay gateway and no MoMo one.
  *
- * <p>Rule: BR-53…BR-56, BR-63 as amended by D-146; SRS 3.10; TECHNICAL_DESIGN 7.11.
+ * <p>Rule: BR-53…BR-56, BR-63; SRS 3.10; TECHNICAL_DESIGN 7.11.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -109,7 +109,7 @@ class BillingApiTest {
 
     /** SePay has a configured implementation here and MoMo none, so only SePay is open. */
     @Test
-    void D146_aGatewayIsOpen_onlyWhenSwitchedOnAndConfigured() throws Exception {
+    void D147_aGatewayIsOpen_onlyWhenSwitchedOnAndConfigured() throws Exception {
         mvc.perform(get(BILLING + "/gateways").header("Authorization", bearer(trader())))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2))
@@ -118,7 +118,7 @@ class BillingApiTest {
     }
 
     @Test
-    void D146_aGatewaySwitchedOff_isClosedAndRefusesNewOrders() throws Exception {
+    void D147_aGatewaySwitchedOff_isClosedAndRefusesNewOrders() throws Exception {
         doReturn(false).when(settings).flag("PAYMENT_SEPAY_ENABLED");
         String token = bearer(trader());
 
@@ -130,7 +130,7 @@ class BillingApiTest {
     }
 
     @Test
-    void D146_anOrderThroughMomoOrTheLegacyVnpay_isRefused() throws Exception {
+    void D147_anOrderThroughMomoOrTheLegacyVnpay_isRefused() throws Exception {
         String token = bearer(trader());
 
         for (String gateway : new String[] {"MOMO", "VNPAY"}) {
@@ -141,7 +141,7 @@ class BillingApiTest {
     }
 
     @Test
-    void D146_withoutASubscription_theQuoteIsANewPeriodFromNow() throws Exception {
+    void D147_withoutASubscription_theQuoteIsANewPeriodFromNow() throws Exception {
         mvc.perform(quote(bearer(trader()), "PRO_YEARLY"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.orderType").value("NEW"))
@@ -153,7 +153,7 @@ class BillingApiTest {
 
     /** PRO_MONTHLY with 20 of 30 days left is worth about 66.000, which buys 9 days of PREMIUM_MONTHLY. */
     @Test
-    void D146_anUpgradeQuote_showsTheValueCarriedOverAsDays() throws Exception {
+    void D147_anUpgradeQuote_showsTheValueCarriedOverAsDays() throws Exception {
         UUID trader = trader();
         subscribe(trader, "PRO_MONTHLY", Instant.now().minus(Duration.ofDays(10)), Duration.ofDays(30));
 
@@ -172,7 +172,7 @@ class BillingApiTest {
     }
 
     @Test
-    void D146_theSameTier_isQuotedAsARenewal() throws Exception {
+    void D147_theSameTier_isQuotedAsARenewal() throws Exception {
         UUID trader = trader();
         subscribe(trader, "PRO_MONTHLY", Instant.now().minus(Duration.ofDays(10)), Duration.ofDays(30));
 
@@ -183,7 +183,7 @@ class BillingApiTest {
     }
 
     @Test
-    void D146_aLowerTier_isRefusedWithThePlanHeldAndItsEnd() throws Exception {
+    void D147_aLowerTier_isRefusedWithThePlanHeldAndItsEnd() throws Exception {
         UUID trader = trader();
         subscribe(trader, "PREMIUM_MONTHLY", Instant.now().minus(Duration.ofDays(1)), Duration.ofDays(30));
         String token = bearer(trader);
@@ -251,19 +251,21 @@ class BillingApiTest {
         assertThat(((Number) row.get("payable_seconds")).longValue()).isEqualTo(15 * 60);
     }
 
+    /** The order is saved before the gateway is called; a gateway that does not answer leaves it PENDING to expire. */
     @Test
-    void D146_aGatewayThatDoesNotAnswer_leavesNoOrder() throws Exception {
+    void BR54_aGatewayThatDoesNotAnswer_leavesTheOrderPendingToExpire() throws Exception {
         UUID trader = trader();
         SEPAY_DOWN.set(true);
 
         mvc.perform(createOrder(bearer(trader), "PRO_MONTHLY", "SEPAY"))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("PAYMENT_GATEWAY_UNAVAILABLE"));
-        assertThat(sql.sql("select count(*) from subscription_order where user_id = ?")
+        entityManager.flush();
+        assertThat(sql.sql("select order_status from subscription_order where user_id = ?")
                         .param(trader)
-                        .query(Long.class)
-                        .single())
-                .isZero();
+                        .query(String.class)
+                        .list())
+                .containsExactly("PENDING");
     }
 
     /** SCR-32: the history shows what was paid or failed, newest first; an order never paid is left out. */
@@ -295,9 +297,9 @@ class BillingApiTest {
                 .andExpect(jsonPath("$.total").value(0));
     }
 
-    /** D-146: a second order withdraws the Trader's unpaid one, which stays readable by its code. */
+    /** D-147: a second order withdraws the Trader's unpaid one, which stays readable by its code. */
     @Test
-    void D146_aSecondOrder_withdrawsTheUnpaidOne() throws Exception {
+    void D147_aSecondOrder_withdrawsTheUnpaidOne() throws Exception {
         UUID trader = trader();
         String token = bearer(trader);
         String first = orderCode(mvc.perform(createOrder(token, "PRO_MONTHLY", "SEPAY"))
@@ -316,9 +318,9 @@ class BillingApiTest {
                 .andExpect(jsonPath("$.status").value("PENDING"));
     }
 
-    /** D-146: a PENDING order the gateway will not cancel (a card payment under way) blocks a second order. */
+    /** D-147: a PENDING order the gateway will not cancel (a card payment under way) blocks a second order. */
     @Test
-    void D146_anOrderTheGatewayWillNotCancel_blocksASecondOrder() throws Exception {
+    void D147_anOrderTheGatewayWillNotCancel_blocksASecondOrder() throws Exception {
         UUID trader = trader();
         String token = bearer(trader);
         String first = orderCode(mvc.perform(createOrder(token, "PRO_MONTHLY", "SEPAY"))

@@ -191,7 +191,7 @@ class MoMoGatewayTest {
     }
 
     @Test
-    void D147_withoutKeysOrAnIpnAddress_MoMoIsUnavailable_andCancellingStopsNothing() {
+    void D147_withoutKeysOrAnIpnAddress_MoMoIsUnavailable_andCancellingIsAlwaysRefused() {
         MoMoGateway unconfigured = new MoMoGateway(
                 new MoMoProperties("MOMO", "TESTACCESSKEY", "momo-test-secret", SANDBOX.endpoint(), ""),
                 new Recording(""),
@@ -200,7 +200,7 @@ class MoMoGatewayTest {
 
         assertThat(unconfigured.configured()).isFalse();
         assertThatExceptionOfType(GatewayUnavailableException.class).isThrownBy(() -> unconfigured.checkout(REQUEST));
-        assertThat(gateway(new Recording("")).cancel("CP1")).isTrue();
+        assertThat(gateway(new Recording("")).cancel("CP1")).isFalse();
         assertThat(gateway(new Recording("")).code()).isEqualTo(GatewayCode.MOMO);
     }
 

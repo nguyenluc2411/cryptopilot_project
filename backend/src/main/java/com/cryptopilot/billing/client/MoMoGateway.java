@@ -25,7 +25,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * The MoMo Payment Gateway (D-146), test environment only, its v2 protocol:
+ * The MoMo Payment Gateway (D-147), test environment only, its v2 protocol:
  *
  * <ul>
  *   <li>Checkout: {@code POST /v2/gateway/api/create} with {@code requestType=captureWallet}; {@code resultCode 0}
@@ -34,12 +34,12 @@ import tools.jackson.databind.json.JsonMapper;
  *       of {@code amount}, any other final code a failed payment. MoMo expects HTTP 204.
  *   <li>Query: {@code POST /v2/gateway/api/query}; {@code resultCode} 0 paid, 1000 and 9000 awaiting, 1005 expired or
  *       unknown, anything else failed or cancelled.
- *   <li>Cancel: MoMo has no cancellation of an unpaid order; its payment link expires on its own, and a payment that
- *       still arrives is honoured (A-03) or turned into days of a higher plan held. So cancelling only reports that
- *       nothing stops a new order.
+ *   <li>Cancel: MoMo has no cancellation of an unpaid order. So cancelling always reports a refusal: within its
+ *       15-minute window the order stays PENDING and a new order is refused (D-147); after the window it expires
+ *       whatever MoMo shows (BR-54), and a payment that still arrives is recorded as late.
  * </ul>
  *
- * <p>Rule: BR-53; TECHNICAL_DESIGN 7.11; D-146. Reference: MoMo sample code, github.com/momo-wallet/payment; result
+ * <p>Rule: BR-53; TECHNICAL_DESIGN 7.11; D-147. Reference: MoMo sample code, github.com/momo-wallet/payment; result
  * codes 0, 1000 and 1005 checked against the test environment (2026-11-08).
  */
 @Component
@@ -162,7 +162,7 @@ public class MoMoGateway implements PaymentGateway {
     @Override
     public boolean cancel(String orderCode) {
         requireConfigured();
-        return true;
+        return false;
     }
 
     /**

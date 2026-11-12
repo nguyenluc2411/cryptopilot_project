@@ -27,7 +27,7 @@ import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Settlement and activation against the database (BR-53, NSF-12, A-03, D-146). The clock is the system clock, so
+ * Settlement and activation against the database (BR-53, NSF-12, A-03, D-147). The clock is the system clock, so
  * periods are asserted within a minute of now.
  */
 @SpringBootTest
@@ -54,7 +54,7 @@ class PaymentSettlementServiceImplTest {
     private ApplicationEvents events;
 
     @Test
-    void NSF12_aConfirmedPayment_paysTheOrderAndOpensTheSubscription() {
+    void DS04a_aConfirmedPayment_paysTheOrderAndOpensAnActiveSubscriptionFor30Days() {
         UUID trader = trader();
         String order = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
 
@@ -99,18 +99,56 @@ class PaymentSettlementServiceImplTest {
         assertThat(orderRow(order).get("order_status")).isEqualTo("PAID");
     }
 
-    /** BR-53: another amount activates nothing. */
+    /** NSF-12, BR-53: another amount is refused, the order stays PENDING, and the refusal is audited. */
     @Test
-    void BR53_aPaymentOfAnotherAmount_failsTheOrderAndActivatesNothing() {
+    void NSF12_aPaymentOfAnotherAmount_isRefused_leavesThePendingOrder_andIsAudited() {
         UUID trader = trader();
         String order = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
 
         settlement.settle(paid(order, "1000"));
         entityManager.flush();
 
-        assertThat(orderRow(order).get("order_status")).isEqualTo("FAILED");
-        assertThat(orderRow(order).get("gateway_response_code")).isEqualTo("AMOUNT_MISMATCH");
+        assertThat(orderRow(order).get("order_status")).isEqualTo("PENDING");
+        assertThat(orderRow(order).get("gateway_response_code")).isNull();
         assertThat(subscriptions(trader)).isEmpty();
+        assertThat(audit("IPN_REJECTED", order)).singleElement().satisfies(values -> assertThat(values)
+                .contains("AMOUNT_MISMATCH")
+                .contains("\"reportedAmount\": \"1000\""));
+        assertThat(events.stream(SubscriptionOrderPaid.class)).isEmpty();
+    }
+
+    /** The full amount still pays the order after a refused report of another amount. */
+    @Test
+    void NSF12_afterARefusedAmount_theFullAmountStillPaysTheOrder() {
+        UUID trader = trader();
+        String order = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
+
+        settlement.settle(paid(order, "1000"));
+        settlement.settle(paid(order, "99000"));
+        entityManager.flush();
+
+        assertThat(orderRow(order).get("order_status")).isEqualTo("PAID");
+        assertThat(subscriptions(trader)).hasSize(1);
+    }
+
+    /** BR-56: the order keeps the price it was created at; a later price change does not reach it. */
+    @Test
+    void BR56_aPackagePriceEditedAfterTheOrder_leavesTheOrderAtItsOwnPrice() {
+        UUID trader = trader();
+        String order = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
+        sql.sql("update subscription_package set price_amount = 149000 where package_id = ?")
+                .param(PACKAGES.get("PRO_MONTHLY"))
+                .update();
+
+        settlement.settle(paid(order, "149000"));
+        entityManager.flush();
+        assertThat(orderRow(order).get("order_status")).isEqualTo("PENDING");
+
+        settlement.settle(paid(order, "99000"));
+        entityManager.flush();
+        assertThat(orderRow(order).get("order_status")).isEqualTo("PAID");
+        assertThat(orderRow(order).get("amount").toString()).isEqualTo("99000");
+        assertThat(active(trader).get("value_vnd").toString()).isEqualTo("99000");
     }
 
     @Test
@@ -125,9 +163,12 @@ class PaymentSettlementServiceImplTest {
         assertThat(subscriptions(trader)).isEmpty();
     }
 
-    /** A-03: the Trader was charged, so a payment after the order expired still activates it. */
+    /**
+     * A payment reported after the order expired: the order stays EXPIRED, nothing is activated, the gateway's data is
+     * kept, the order is flagged and the payment audited once (A-03 not approved).
+     */
     @Test
-    void A03_aPaymentAfterTheOrderExpired_isHonoured() {
+    void STM06_aPaymentAfterTheOrderExpired_staysExpired_isFlagged_andAuditedOnce() {
         UUID trader = trader();
         String order =
                 pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now().minus(Duration.ofHours(1)));
@@ -136,10 +177,18 @@ class PaymentSettlementServiceImplTest {
                 .update();
 
         settlement.settle(paid(order, "99000"));
+        settlement.settle(paid(order, "99000"));
         entityManager.flush();
 
-        assertThat(orderRow(order).get("order_status")).isEqualTo("PAID");
-        assertThat(subscriptions(trader)).hasSize(1);
+        Map<String, Object> row = orderRow(order);
+        assertThat(row.get("order_status")).isEqualTo("EXPIRED");
+        assertThat(row.get("manual_handling")).isEqualTo(true);
+        assertThat(row.get("paid_at")).isNull();
+        assertThat(row.get("gateway_transaction_no")).isEqualTo("TX-" + order);
+        assertThat(subscriptions(trader)).isEmpty();
+        assertThat(audit("LATE_PAYMENT", order)).singleElement().satisfies(values -> assertThat(values)
+                .contains("EXPIRED"));
+        assertThat(events.stream(SubscriptionOrderPaid.class)).isEmpty();
     }
 
     /** An expired order that the gateway reports as failed stays expired. */
@@ -159,9 +208,9 @@ class PaymentSettlementServiceImplTest {
         assertThat(orderRow(order).get("order_status")).isEqualTo("EXPIRED");
     }
 
-    /** D-146: PRO_MONTHLY with 20 of 30 days left, upgraded to PREMIUM_MONTHLY: +9 days, the old one REPLACED. */
+    /** D-147: PRO_MONTHLY with 20 of 30 days left, upgraded to PREMIUM_MONTHLY: +9 days, the old one REPLACED. */
     @Test
-    void D146_anUpgrade_replacesTheSubscriptionAndAddsTheBonusDays() {
+    void T27_anUpgrade_replacesTheActiveSubscription_andCarriesItsValueOverAsDays() {
         UUID trader = trader();
         UUID pro = subscribe(trader, "PRO_MONTHLY", Instant.now().minus(Duration.ofDays(10)), Duration.ofDays(30));
         String order = pendingOrder(trader, "PREMIUM_MONTHLY", "SEPAY", Instant.now());
@@ -178,9 +227,9 @@ class PaymentSettlementServiceImplTest {
                 .isBetween(new BigDecimal("65990"), new BigDecimal("66000"));
     }
 
-    /** D-146: a renewal adds the new period after the current end. */
+    /** D-147: a renewal adds the new period after the current end. */
     @Test
-    void D146_aRenewal_addsThePeriodAfterTheCurrentEnd() {
+    void D147_aRenewal_addsThePeriodAfterTheCurrentEnd() {
         UUID trader = trader();
         Instant start = Instant.now().minus(Duration.ofDays(10));
         UUID pro = subscribe(trader, "PRO_MONTHLY", start, Duration.ofDays(30));
@@ -199,10 +248,10 @@ class PaymentSettlementServiceImplTest {
 
     /**
      * The order was created on PRO; the Trader then reached PREMIUM through another order. The payment buys days of
-     * PREMIUM at the price paid for it: no subscription is opened, nothing is flagged (D-146).
+     * PREMIUM at the price paid for it: no subscription is opened, nothing is flagged (D-147).
      */
     @Test
-    void D146_aPaymentForALowerPlan_buysDaysOfThePlanHeld() {
+    void D147_aPaymentForALowerPlan_buysDaysOfThePlanHeld() {
         UUID trader = trader();
         String order = pendingOrder(trader, "PRO_YEARLY", "SEPAY", Instant.now());
         UUID premium =
@@ -237,9 +286,9 @@ class PaymentSettlementServiceImplTest {
         assertThat(events.stream(PlanDowngraded.class)).isEmpty();
     }
 
-    /** D-146: an order withdrawn for a newer one ends at once, and a payment that still arrives is honoured. */
+    /** D-147: an order withdrawn for a newer one ends at once; a payment that still arrives is kept, not activated. */
     @Test
-    void D146_aWithdrawnOrder_endsAtOnce_andStaysPayable() {
+    void D147_aWithdrawnOrder_endsAtOnce_andALatePaymentIsKeptForAnAdministrator() {
         UUID trader = trader();
         String order = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
 
@@ -251,8 +300,29 @@ class PaymentSettlementServiceImplTest {
 
         settlement.settle(paid(order, "99000"));
         entityManager.flush();
-        assertThat(orderRow(order).get("order_status")).isEqualTo("PAID");
-        assertThat(subscriptions(trader)).hasSize(1);
+        assertThat(orderRow(order).get("order_status")).isEqualTo("EXPIRED");
+        assertThat(orderRow(order).get("manual_handling")).isEqualTo(true);
+        assertThat(subscriptions(trader)).isEmpty();
+    }
+
+    /** STM-07 (T29): an EXPIRED subscription is final; buying again opens a new one and leaves the old one EXPIRED. */
+    @Test
+    void T29_anExpiredSubscription_isNeverActiveAgain_aNewPaymentOpensANewOne() {
+        UUID trader = trader();
+        UUID old = subscribe(trader, "PRO_MONTHLY", Instant.now().minus(Duration.ofDays(40)), Duration.ofDays(30));
+        sql.sql("update user_subscription set subscription_status = 'EXPIRED' where subscription_id = ?")
+                .param(old)
+                .update();
+        String order = pendingOrder(trader, "PRO_MONTHLY", "SEPAY", Instant.now());
+
+        settlement.settle(paid(order, "99000"));
+        entityManager.flush();
+
+        assertThat(status(old)).isEqualTo("EXPIRED");
+        Map<String, Object> current = active(trader);
+        assertThat(current.get("subscription_id")).isNotEqualTo(old);
+        assertThat(current.get("carried_from_id")).isNull();
+        assertThat(orderRow(order).get("order_type")).isEqualTo("NEW");
     }
 
     /** An ACTIVE row past its end (the expiry job has not run) is expired, and the purchase is a new period. */
@@ -271,7 +341,7 @@ class PaymentSettlementServiceImplTest {
     }
 
     @Test
-    void BR53_aReportAboutAnUnknownOrderOrFromAnotherGateway_changesNothing() {
+    void BR53_aReportAboutAnUnknownOrderOrFromAnotherGateway_changesNothing_andIsAudited() {
         UUID trader = trader();
         String order = pendingOrder(trader, "PRO_MONTHLY", "MOMO", Instant.now());
 
@@ -281,6 +351,22 @@ class PaymentSettlementServiceImplTest {
 
         assertThat(orderRow(order).get("order_status")).isEqualTo("PENDING");
         assertThat(subscriptions(trader)).isEmpty();
+        assertThat(audit("IPN_REJECTED", "CP000000000000NONE")).singleElement().satisfies(values -> assertThat(values)
+                .contains("UNKNOWN_ORDER"));
+        assertThat(audit("IPN_REJECTED", order)).singleElement().satisfies(values -> assertThat(values)
+                .contains("GATEWAY_MISMATCH"));
+    }
+
+    /** DS-04c: a callback refused for its signature is audited with the gateway and the reason. */
+    @Test
+    void DS04c_aRefusedSignature_isAuditedWithoutAnOrder() {
+        settlement.auditRejected(GatewayCode.MOMO, "BAD_SIGNATURE");
+        entityManager.flush();
+
+        assertThat(sql.sql("""
+                        select count(*) from audit_log
+                         where action_code = 'IPN_REJECTED' and entity_id is null and user_id is null
+                           and new_value ->> 'gateway' = 'MOMO' and new_value ->> 'reason' = 'BAD_SIGNATURE'""").query(Long.class).single()).isPositive();
     }
 
     /** BR-64: a lower plan bought after a higher one ran out, before the hourly run, is still a drop. */
@@ -399,6 +485,13 @@ class PaymentSettlementServiceImplTest {
                 .params(subscription, order, at, Timestamp.from(start.plus(period)), at, at)
                 .update();
         return subscription;
+    }
+
+    /** The new values of the audit entries of this action about this order code, as JSON text. */
+    private List<String> audit(String action, String orderCode) {
+        return sql.sql("""
+                        select new_value::text from audit_log
+                         where action_code = ? and new_value ->> 'orderCode' = ?""").params(action, orderCode).query(String.class).list();
     }
 
     private Map<String, Object> orderRow(String code) {

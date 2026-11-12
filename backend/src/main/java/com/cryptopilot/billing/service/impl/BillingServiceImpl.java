@@ -46,6 +46,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -61,6 +62,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * The Trader side of subscriptions and payment (SCR-30…32, SCR-07).
@@ -69,7 +71,9 @@ import org.springframework.web.util.UriComponentsBuilder;
  * subscription. Its type is decided from the ACTIVE subscription held: a lower tier is refused (D-147). Its amount is
  * the package price now (BR-56). The gateway must take new orders (not the legacy VNPAY), be switched on by an
  * administrator and be configured on this deployment; switching it off later does not touch orders already created.
- * The gateway is asked for its payment page inside the transaction, so an order it refuses is not kept.
+ * The order is saved and committed first; the gateway is then asked for its payment page outside any transaction,
+ * and what it answered is kept in a second one. An order whose page the gateway did not open stays PENDING and
+ * expires (BR-54).
  *
  * <p>Rule: BR-53…BR-56, BR-63; SRS 3.10; TECHNICAL_DESIGN 7.11.
  */
@@ -108,6 +112,7 @@ public class BillingServiceImpl implements BillingService {
     private final BillingProperties properties;
     private final OrderReconciliationService reconciliation;
     private final TransactionTemplate transactions;
+    private final JsonMapper json;
     private final Clock clock;
 
     @Override
@@ -164,10 +169,39 @@ public class BillingServiceImpl implements BillingService {
                     "the Trader's unpaid order could not be released: " + e.getMessage(),
                     e);
         }
-        return transactions.execute(status -> open(userId, request));
+        // 1: the order is saved PENDING and committed, so it exists before any gateway can report on it.
+        Opened opened = transactions.execute(status -> open(userId, request));
+        SubscriptionOrder order = opened.order();
+        // 2: the gateway is called outside any transaction; an error leaves the order PENDING to expire (BR-54).
+        Checkout checkout;
+        try {
+            checkout = opened.gateway()
+                    .checkout(new CheckoutRequest(
+                            order.getOrderCode(),
+                            order.getAmount(),
+                            "CryptoPilot " + opened.bought().getPackageCode() + " " + order.getOrderCode(),
+                            UriComponentsBuilder.fromUri(properties.returnUrl())
+                                    .queryParam("orderCode", order.getOrderCode())
+                                    .build()
+                                    .toUri(),
+                            order.getExpiresAt()));
+        } catch (GatewayUnavailableException e) {
+            throw new BusinessException(
+                    ErrorCode.PAYMENT_GATEWAY_UNAVAILABLE,
+                    opened.gateway().code() + " did not open a payment page for " + order.getOrderCode() + ": "
+                            + e.getMessage(),
+                    e);
+        }
+        // 3: what the gateway answered is kept on the order while it still awaits payment.
+        String answer = checkoutPayload(checkout);
+        transactions.executeWithoutResult(status ->
+                orders.lockByOrderCode(order.getOrderCode()).ifPresent(locked -> locked.recordCheckout(answer)));
+        return new CreateOrderResponse(
+                toResponse(order, opened.bought()),
+                new CheckoutResponse(checkout.method(), checkout.url().toString(), checkout.fields()));
     }
 
-    private CreateOrderResponse open(UUID userId, CreateOrderRequest request) {
+    private Opened open(UUID userId, CreateOrderRequest request) {
         userLock.lock(LOCK_SCOPE, userId);
         Optional<SubscriptionOrder> pending = orders.findByUserIdAndOrderStatus(userId, OrderStatus.PENDING).stream()
                 .findFirst();
@@ -184,26 +218,15 @@ public class BillingServiceImpl implements BillingService {
         Duration expiry = Duration.ofMinutes(settings.integer(ORDER_EXPIRY_MINUTES));
         SubscriptionOrder order =
                 orders.save(SubscriptionOrder.create(userId, bought, type, gateway.code(), freeCode(now), now, expiry));
-        Checkout checkout;
-        try {
-            checkout = gateway.checkout(new CheckoutRequest(
-                    order.getOrderCode(),
-                    order.getAmount(),
-                    "CryptoPilot " + bought.getPackageCode() + " " + order.getOrderCode(),
-                    UriComponentsBuilder.fromUri(properties.returnUrl())
-                            .queryParam("orderCode", order.getOrderCode())
-                            .build()
-                            .toUri(),
-                    order.getExpiresAt()));
-        } catch (GatewayUnavailableException e) {
-            throw new BusinessException(
-                    ErrorCode.PAYMENT_GATEWAY_UNAVAILABLE,
-                    gateway.code() + " did not open a payment page: " + e.getMessage(),
-                    e);
-        }
-        return new CreateOrderResponse(
-                toResponse(order, bought),
-                new CheckoutResponse(checkout.method(), checkout.url().toString(), checkout.fields()));
+        return new Opened(order, bought, gateway);
+    }
+
+    /** The checkout as JSON for the administrator (SCR-40): the method and the page, not the signed fields. */
+    private String checkoutPayload(Checkout checkout) {
+        Map<String, String> answer = new LinkedHashMap<>();
+        answer.put("checkoutMethod", String.valueOf(checkout.method()));
+        answer.put("checkoutUrl", checkout.url().toString());
+        return json.writeValueAsString(answer);
     }
 
     @Override
@@ -349,6 +372,9 @@ public class BillingServiceImpl implements BillingService {
                 e.aiPerformanceContext(),
                 e.videoPost());
     }
+
+    /** An order saved PENDING, with what the gateway call needs. */
+    private record Opened(SubscriptionOrder order, SubscriptionPackage bought, PaymentGateway gateway) {}
 
     /** The ACTIVE subscription and the package its order bought. */
     private record HeldPlan(UserSubscription row, SubscriptionPackage bought) {

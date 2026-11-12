@@ -48,6 +48,15 @@ public enum AuditAction {
     /** An administrator asked the gateway about a subscription order (UC-48, NSF-13): its status before and after. */
     ORDER_RECONCILED,
 
-    /** An administrator recorded how a flagged subscription order was handled, e.g. refunded (UC-48, D-146). */
-    ORDER_HANDLED
+    /** An administrator recorded how a flagged subscription order was handled, e.g. refunded (UC-48, D-147). */
+    ORDER_HANDLED,
+
+    /**
+     * A gateway callback was refused and changed nothing: bad signature, an amount other than the order's, or no such
+     * order (NSF-12, BR-53).
+     */
+    IPN_REJECTED,
+
+    /** A gateway reported a payment for an order that had already expired or failed; flagged for UC-48. */
+    LATE_PAYMENT
 }

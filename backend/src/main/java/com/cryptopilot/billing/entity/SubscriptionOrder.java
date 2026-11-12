@@ -23,12 +23,11 @@ import org.hibernate.type.SqlTypes;
  * A Trader's order for a paid package, paid through one gateway and settled once (BR-53).
  *
  * <p>The amount is the package's list price when the order is created and never changes afterwards (BR-56); there is
- * no credit, so the amount is also the list price. An order is created PENDING and leaves it once: PAID, FAILED or
- * EXPIRED. A success reported after the order expired is still honoured, since the Trader was charged (A-03). An order
- * paid after the Trader's subscription changed under it, so that it would now be a downgrade, stays PAID, changes no
- * subscription and is flagged for an administrator, who records how it was handled (SCR-40, UC-48).
+ * no credit, so the amount is also the list price. An order is created PENDING and leaves it once, for PAID, FAILED or
+ * EXPIRED (STM-06); the three are final. A payment reported for an order already EXPIRED or FAILED keeps that status,
+ * is stored and flagged for an administrator, who records how it was handled (SCR-40, UC-48); A-03 is not approved.
  *
- * <p>Rule: BR-53, BR-54, BR-56; SRS v1.1 entity 35; TECHNICAL_DESIGN 7.11; A-03; D-58, D-146.
+ * <p>Rule: BR-53, BR-54, BR-56; STM-06; SRS v1.1 entity 35; TECHNICAL_DESIGN 7.11; D-58, D-147.
  */
 @Getter
 @Entity
@@ -159,16 +158,13 @@ public class SubscriptionOrder extends BaseEntity {
     }
 
     /**
-     * Records the gateway's confirmation of the full amount. A PENDING order becomes PAID; so does an EXPIRED one,
-     * because the Trader was charged (A-03).
+     * Records the gateway's confirmation of the full amount: PENDING to PAID.
      *
-     * @throws IllegalStateException when the order is already PAID or FAILED (BR-53: settled once)
+     * @throws IllegalStateException when the order is not PENDING (BR-53: settled once; STM-06)
      */
     public void markPaid(String transactionNo, String responseCode, String payload, Instant now) {
         Objects.requireNonNull(now, "now must not be null");
-        if (orderStatus != OrderStatus.PENDING && orderStatus != OrderStatus.EXPIRED) {
-            throw new IllegalStateException("order " + orderCode + " is " + orderStatus + ", it cannot be paid");
-        }
+        requirePending("be paid");
         recordAnswer(responseCode, payload, now);
         this.gatewayTransactionNo = transactionNo;
         this.orderStatus = OrderStatus.PAID;
@@ -203,8 +199,7 @@ public class SubscriptionOrder extends BaseEntity {
 
     /**
      * Ends an unpaid order before its window closes, because the Trader started another one and the gateway
-     * confirmed nothing is payable any more (one PENDING order per Trader, D-146). Like an expired order it stays
-     * payable: a payment that still arrives is honoured (A-03).
+     * confirmed nothing is payable any more (one PENDING order per Trader, D-147).
      *
      * @throws IllegalStateException when the order is no longer PENDING
      */
@@ -225,6 +220,40 @@ public class SubscriptionOrder extends BaseEntity {
             throw new IllegalStateException("only a PAID order is flagged, " + orderCode + " is " + orderStatus);
         }
         this.manualHandling = true;
+    }
+
+    /**
+     * Records a payment reported for an order that is already EXPIRED or FAILED: the status stays, no subscription
+     * changes, the gateway's data is kept and the order waits for an administrator (UC-48) until A-03 is decided.
+     *
+     * @return {@code false} when such a payment was recorded already (a repeated report)
+     * @throws IllegalStateException when the order is PENDING or PAID
+     */
+    public boolean recordLatePayment(String transactionNo, String responseCode, String payload, Instant now) {
+        Objects.requireNonNull(now, "now must not be null");
+        if (orderStatus != OrderStatus.EXPIRED && orderStatus != OrderStatus.FAILED) {
+            throw new IllegalStateException("order " + orderCode + " is " + orderStatus + ", the payment is not late");
+        }
+        if (manualHandling) {
+            return false;
+        }
+        recordAnswer(responseCode, payload, now);
+        this.gatewayTransactionNo = transactionNo;
+        this.manualHandling = true;
+        return true;
+    }
+
+    /**
+     * Keeps what the gateway answered when it opened the payment page, while the order still awaits payment.
+     *
+     * @return whether it was kept: {@code false} once the order has left PENDING (an IPN came first)
+     */
+    public boolean recordCheckout(String payload) {
+        if (orderStatus != OrderStatus.PENDING || ipnReceivedAt != null) {
+            return false;
+        }
+        this.gatewayPayload = payload;
+        return true;
     }
 
     /**

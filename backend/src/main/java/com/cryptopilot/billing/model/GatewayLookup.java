@@ -5,8 +5,8 @@ import java.util.Objects;
 /**
  * What a gateway answers when asked about one order (NSF-13), in the billing module's terms.
  *
- * <p>Only {@link State#PAID} settles anything. A cancelled or unknown order is never failed from a lookup: the order
- * just expires when it is due, and stays payable (A-03), so a payment that still arrives later is honoured.
+ * <p>{@link State#PAID} pays the order and {@link State#CANCELLED} fails it, through the same settlement as an IPN
+ * (NSF-13). An unknown order just expires when it is due.
  *
  * @param state what the gateway knows of the order
  * @param payment the confirmed payment, present exactly when {@code state} is {@link State#PAID}
@@ -19,7 +19,7 @@ public record GatewayLookup(State state, PaymentResult payment) {
         PAID,
         /** Opened and not paid yet. */
         AWAITING,
-        /** Cancelled on the gateway's page. */
+        /** Cancelled on the gateway's page, or failed. */
         CANCELLED,
         /** The gateway has no such order: the Trader never reached its page. */
         UNKNOWN

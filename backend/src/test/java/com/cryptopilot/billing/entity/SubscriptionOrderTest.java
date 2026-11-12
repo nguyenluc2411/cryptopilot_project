@@ -45,7 +45,7 @@ class SubscriptionOrderTest {
     }
 
     @Test
-    void D146_aLegacyVnpayOrder_cannotBeCreated() {
+    void D147_aLegacyVnpayOrder_cannotBeCreated() {
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> SubscriptionOrder.create(
                         TRADER, PRO_MONTHLY, OrderType.NEW, GatewayCode.VNPAY, "CP1", NOW, EXPIRY))
@@ -99,15 +99,51 @@ class SubscriptionOrderTest {
         assertThat(order.getGatewayPayload()).isEqualTo("{\"resultCode\":0}");
     }
 
-    /** A-03: the Trader was charged, so a success after expiry is honoured. */
+    /** STM-06: EXPIRED is final; a success after expiry is kept for an administrator and pays nothing. */
     @Test
-    void A03_aSuccessAfterTheOrderExpired_isStillHonoured() {
+    void STM06_aSuccessAfterTheOrderExpired_staysExpired_andIsFlaggedOnce() {
         SubscriptionOrder order = order();
         order.expire(NOW.plus(EXPIRY));
+        Instant late = NOW.plus(Duration.ofMinutes(20));
 
-        order.markPaid("TX-1", "00", null, NOW.plus(Duration.ofMinutes(20)));
+        assertThatIllegalStateException().isThrownBy(() -> order.markPaid("TX-1", "00", null, late));
+        assertThat(order.recordLatePayment("TX-1", "00", "{\"resultCode\":0}", late))
+                .isTrue();
 
-        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.PAID);
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.EXPIRED);
+        assertThat(order.isManualHandling()).isTrue();
+        assertThat(order.getPaidAt()).isNull();
+        assertThat(order.getGatewayTransactionNo()).isEqualTo("TX-1");
+        assertThat(order.getIpnReceivedAt()).isEqualTo(late);
+        assertThat(order.recordLatePayment("TX-1", "00", null, late)).isFalse();
+    }
+
+    /** A late payment is only for an order that is EXPIRED or FAILED. */
+    @Test
+    void STM06_aLatePayment_isRefusedForAPendingOrPaidOrder() {
+        SubscriptionOrder pending = order();
+        SubscriptionOrder paid = order();
+        paid.markPaid("TX-1", "00", null, NOW);
+        SubscriptionOrder failed = order();
+        failed.markFailed("49", null, NOW);
+
+        assertThatIllegalStateException().isThrownBy(() -> pending.recordLatePayment("TX", "00", null, NOW));
+        assertThatIllegalStateException().isThrownBy(() -> paid.recordLatePayment("TX", "00", null, NOW));
+        assertThat(failed.recordLatePayment("TX", "00", null, NOW)).isTrue();
+        assertThat(failed.getOrderStatus()).isEqualTo(OrderStatus.FAILED);
+    }
+
+    /** The checkout answer is kept only while the order still awaits payment and no IPN came first. */
+    @Test
+    void D147_theCheckoutAnswer_isKeptOnlyOnAnOrderStillAwaitingItsIpn() {
+        SubscriptionOrder pending = order();
+        SubscriptionOrder paid = order();
+        paid.markPaid("TX-1", "00", "{\"ipn\":1}", NOW);
+
+        assertThat(pending.recordCheckout("{\"checkoutUrl\":\"x\"}")).isTrue();
+        assertThat(pending.getGatewayPayload()).contains("checkoutUrl");
+        assertThat(paid.recordCheckout("{\"checkoutUrl\":\"x\"}")).isFalse();
+        assertThat(paid.getGatewayPayload()).isEqualTo("{\"ipn\":1}");
     }
 
     /** BR-53: an order is settled once, so a repeated IPN cannot pay it again or fail it. */
@@ -183,7 +219,7 @@ class SubscriptionOrderTest {
     }
 
     @Test
-    void D146_aPendingOrder_isWithdrawnOnce_andThenStaysPayable() {
+    void D147_aPendingOrder_isWithdrawnOnce_andCannotBePaidAfterwards() {
         SubscriptionOrder order = order();
 
         order.withdraw(NOW);
@@ -191,8 +227,8 @@ class SubscriptionOrderTest {
         assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.EXPIRED);
         assertThat(order.getGatewayResponseCode()).isEqualTo(SubscriptionOrder.WITHDRAWN);
         assertThatIllegalStateException().isThrownBy(() -> order.withdraw(NOW));
-        order.markPaid("TX", "CAPTURED", "{}", NOW);
-        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.PAID);
+        assertThatIllegalStateException().isThrownBy(() -> order.markPaid("TX", "CAPTURED", "{}", NOW));
+        assertThat(order.getOrderStatus()).isEqualTo(OrderStatus.EXPIRED);
     }
 
     private static SubscriptionOrder order() {

@@ -5,6 +5,7 @@ import com.cryptopilot.billing.client.PaymentGateway;
 import com.cryptopilot.billing.config.ReconcileProperties;
 import com.cryptopilot.billing.entity.SubscriptionOrder;
 import com.cryptopilot.billing.model.GatewayLookup;
+import com.cryptopilot.billing.model.PaymentResult;
 import com.cryptopilot.billing.model.enums.OrderStatus;
 import com.cryptopilot.billing.repository.SubscriptionOrderRepository;
 import com.cryptopilot.billing.service.OrderReconciliationService;
@@ -13,7 +14,6 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -31,11 +31,14 @@ import org.springframework.stereotype.Service;
  * applied by the {@link PaymentSettlementService}, which locks the order, so a reconciliation and an IPN for the same
  * payment settle it once between them (BR-53).
  *
- * <p>Only a confirmed payment settles anything. An unpaid order is cancelled at its gateway, then expires when its
- * window has closed (or is withdrawn for a newer order); it is never failed here, so a payment that still arrives
- * later is honoured (A-03). A gateway this deployment cannot ask (not configured) lets its orders expire when due.
+ * <p>The answer goes through the same settlement as an IPN: a confirmed payment pays the order, a cancelled or failed
+ * one fails it (NSF-13). An order the gateway has not confirmed becomes EXPIRED once its window of
+ * {@code ORDER_EXPIRY_MINUTES} has closed, even while the gateway still shows it awaiting payment (BR-54); it is asked
+ * to cancel first, so the page cannot be paid afterwards, and a payment that still arrives is recorded as late. Before
+ * the window closes, an order its gateway cannot cancel (MoMo) stays PENDING and a new order is refused (D-147). A
+ * gateway this deployment cannot ask (not configured) lets its orders expire when due.
  *
- * <p>Rule: BR-53, BR-54; NSF-13; A-03; D-146.
+ * <p>Rule: BR-53, BR-54; NSF-13; STM-06; D-147.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -43,8 +46,8 @@ public class OrderReconciliationServiceImpl implements OrderReconciliationServic
 
     private static final Logger log = LoggerFactory.getLogger(OrderReconciliationServiceImpl.class);
 
-    /** How long past its window an order the gateway will not cancel is still left PENDING. */
-    static final Duration CANCEL_GRACE = Duration.ofDays(1);
+    /** The response code kept on an order its gateway reports cancelled or failed. */
+    static final String CANCELLED = "CANCELLED";
 
     private final SubscriptionOrderRepository orders;
     private final ObjectProvider<PaymentGateway> gateways;
@@ -120,12 +123,16 @@ public class OrderReconciliationServiceImpl implements OrderReconciliationServic
                 .filter(PaymentGateway::configured)
                 .findFirst();
         if (gateway.isEmpty()) {
-            close(code, withdraw);
+            close(order, withdraw, now);
             return;
         }
         GatewayLookup answer = gateway.get().lookup(code);
         if (answer.state() == GatewayLookup.State.PAID) {
             settlement.settle(answer.payment());
+            return;
+        }
+        if (answer.state() == GatewayLookup.State.CANCELLED) {
+            settlement.settle(failed(order));
             return;
         }
         if (!withdraw && now.isBefore(order.getExpiresAt())) {
@@ -137,20 +144,37 @@ public class OrderReconciliationServiceImpl implements OrderReconciliationServic
                 settlement.settle(again.payment());
                 return;
             }
-            if (again.state() == GatewayLookup.State.AWAITING
-                    && (withdraw || now.isBefore(order.getExpiresAt().plus(CANCEL_GRACE)))) {
-                log.warn("{} refused to cancel order {}, which still awaits payment", order.getPaymentGateway(), code);
+            if (again.state() == GatewayLookup.State.CANCELLED) {
+                settlement.settle(failed(order));
+                return;
+            }
+            if (again.state() == GatewayLookup.State.AWAITING && now.isBefore(order.getExpiresAt())) {
+                // Still inside its window and payable: it stays PENDING, so a new order is refused (D-147).
+                log.info(
+                        "{} cannot cancel order {}, payable until {}",
+                        order.getPaymentGateway(),
+                        code,
+                        order.getExpiresAt());
                 return;
             }
         }
-        close(code, withdraw);
+        close(order, withdraw, now);
     }
 
-    private void close(String orderCode, boolean withdraw) {
-        if (withdraw) {
-            settlement.withdraw(orderCode);
+    /** The gateway's answer that the payment was cancelled or failed, as the settlement reads it. */
+    private static PaymentResult failed(SubscriptionOrder order) {
+        return new PaymentResult(order.getPaymentGateway(), order.getOrderCode(), false, null, null, CANCELLED, null);
+    }
+
+    /**
+     * Ends an unpaid order: EXPIRED once its window has closed, whatever the gateway still shows (BR-54); withdrawn
+     * when a newer order needs the way cleared before then.
+     */
+    private void close(SubscriptionOrder order, boolean withdraw, Instant now) {
+        if (withdraw && now.isBefore(order.getExpiresAt())) {
+            settlement.withdraw(order.getOrderCode());
         } else {
-            settlement.expireIfDue(orderCode);
+            settlement.expireIfDue(order.getOrderCode());
         }
     }
 
