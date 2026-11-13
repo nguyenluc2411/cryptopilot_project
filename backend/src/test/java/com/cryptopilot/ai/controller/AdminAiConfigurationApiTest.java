@@ -45,10 +45,12 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 class AdminAiConfigurationApiTest {
 
     private static final String CONFIGURATIONS = "/api/v1/admin/ai-configurations";
-    /** The active version the migrations leave (V66); V62's first version stays in the table, inactive. */
-    private static final String SEEDED = "019b76da-a800-7002-8000-0000000a1002";
+    /** The active version the migrations leave (V70); V62's and V66's versions stay in the table, inactive. */
+    private static final String SEEDED = "019b76da-a800-7002-8000-0000000a1003";
 
     private static final String FIRST_VERSION = "019b76da-a800-7002-8000-0000000a1001";
+
+    private static final String SECOND_VERSION = "019b76da-a800-7002-8000-0000000a1002";
 
     @Autowired
     private MockMvc mvc;
@@ -77,8 +79,8 @@ class AdminAiConfigurationApiTest {
         sql.sql("update ai_configuration set is_active = true, updated_by = null where config_id = ?::uuid")
                 .param(SEEDED)
                 .update();
-        sql.sql("delete from ai_configuration where config_id not in (?::uuid, ?::uuid)")
-                .params(SEEDED, FIRST_VERSION)
+        sql.sql("delete from ai_configuration where config_id not in (?::uuid, ?::uuid, ?::uuid)")
+                .params(SEEDED, FIRST_VERSION, SECOND_VERSION)
                 .update();
         sql.sql("delete from audit_log where user_id = ?").param(admin).update();
         for (UUID account : accounts) {
@@ -159,7 +161,7 @@ class AdminAiConfigurationApiTest {
         assertThat(sql.sql("select count(*) from ai_configuration")
                         .query(Long.class)
                         .single())
-                .isEqualTo(2L);
+                .isEqualTo(3L);
     }
 
     @Test

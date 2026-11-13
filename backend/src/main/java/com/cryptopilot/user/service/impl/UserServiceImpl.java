@@ -6,6 +6,7 @@ import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.user.AuthorCard;
 import com.cryptopilot.user.LoginCredentials;
 import com.cryptopilot.user.PublicProfile;
+import com.cryptopilot.user.TradingProfile;
 import com.cryptopilot.user.UserApi;
 import com.cryptopilot.user.UserSummary;
 import com.cryptopilot.user.entity.UserAccount;
@@ -343,6 +344,13 @@ public class UserServiceImpl implements UserService {
     @Transactional(readOnly = true)
     public Optional<String> emailOf(UUID userId) {
         return accounts.findById(userId).map(UserAccount::getEmail);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<TradingProfile> tradingProfileOf(UUID userId) {
+        return profiles.findById(userId)
+                .map(profile -> new TradingProfile(profile.getTradingStyle(), profile.getRiskProfile()));
     }
 
     private static UserSummary summaryOf(UserAccount account) {

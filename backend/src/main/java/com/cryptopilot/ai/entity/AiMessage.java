@@ -18,7 +18,8 @@ import org.hibernate.type.SqlTypes;
 /**
  * One question or answer of an AI conversation (AI_MESSAGE). A question carries the context snapshot it was asked
  * with (T-074, BR-51); an answer carries the token usage of the call that produced it (NSF-16) and the question it
- * answers, so the history keeps each answer after its own question when two were pending at once.
+ * answers, so the history keeps each answer after its own question when two were pending at once, and the news
+ * articles it cited (T-074), so the conversation shows their links under it.
  *
  * <p>Rule: BR-50, BR-51; SRS 3.9.1, 3.9.2; TECHNICAL_DESIGN 7.14.
  */
@@ -48,6 +49,11 @@ public class AiMessage extends BaseEntity {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "context_snapshot", updatable = false)
     private String contextSnapshot;
+
+    /** The articles an answer cited, a JSON array; {@code null} on a question and on an answer that cites none. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "sources", updatable = false)
+    private String sources;
 
     @Column(name = "input_tokens", updatable = false)
     private Integer inputTokens;
@@ -93,10 +99,19 @@ public class AiMessage extends BaseEntity {
                 MessageStatus.PENDING);
     }
 
-    /** The assistant's answer to {@code questionId}, stored once it is complete. */
+    /** The assistant's answer to {@code questionId}, stored once it is complete, citing no article. */
     public static AiMessage answer(
             UUID conversationId, UUID questionId, String text, int inputTokens, int outputTokens) {
-        return new AiMessage(
+        return answer(conversationId, questionId, text, null, inputTokens, outputTokens);
+    }
+
+    /**
+     * The assistant's answer to {@code questionId} with the articles it cited, a JSON array, or {@code null} when it
+     * cites none (T-074).
+     */
+    public static AiMessage answer(
+            UUID conversationId, UUID questionId, String text, String sources, int inputTokens, int outputTokens) {
+        AiMessage answer = new AiMessage(
                 conversationId,
                 Objects.requireNonNull(questionId, "questionId must not be null"),
                 SenderRole.ASSISTANT,
@@ -105,5 +120,7 @@ public class AiMessage extends BaseEntity {
                 inputTokens,
                 outputTokens,
                 MessageStatus.COMPLETED);
+        answer.sources = sources;
+        return answer;
     }
 }

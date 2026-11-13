@@ -20,6 +20,12 @@ public class AiServiceException extends RuntimeException implements ExternalAnsw
     /** The provider limits the rate; more requests now would be refused too. */
     public static final String RATE_LIMITED = "LLM_RATE_LIMITED";
 
+    /** The provider is overloaded or down (HTTP 503 from it); the same request may pass a little later. */
+    public static final String LLM_UNAVAILABLE = "LLM_UNAVAILABLE";
+
+    /** The provider did not answer in time (HTTP 504 from the AI Service). */
+    public static final String LLM_TIMEOUT = "LLM_TIMEOUT";
+
     /** The answer was not what the contract says, so the service did not really answer. */
     public static final String BAD_ANSWER = "BAD_ANSWER";
 
@@ -70,8 +76,25 @@ public class AiServiceException extends RuntimeException implements ExternalAnsw
         return retryable;
     }
 
-    /** Whether more requests now are pointless: the service is missing, down, or the provider rate limits. */
+    /**
+     * Whether more requests now are pointless: the service is missing or down, or the provider rate limits, is
+     * overloaded or times out. None of these is the fault of the request, so a batch stops without counting it against
+     * the item (an overloaded provider used to spend every attempt of an article within three runs).
+     */
     public boolean stopsTheRun() {
-        return code.equals(NOT_CONFIGURED) || code.equals(UNREACHABLE) || code.equals(RATE_LIMITED);
+        return code.equals(NOT_CONFIGURED)
+                || code.equals(UNREACHABLE)
+                || code.equals(RATE_LIMITED)
+                || code.equals(LLM_UNAVAILABLE)
+                || code.equals(LLM_TIMEOUT);
+    }
+
+    /**
+     * Whether the request may be the cause although the run stops: the provider timed out, which one unusual request
+     * can cause as well as an outage. A batch counts the attempt against the item it stopped on, so one item that
+     * always times out leaves the queue after its attempts instead of stopping every run at it.
+     */
+    public boolean mayBeTheRequest() {
+        return code.equals(LLM_TIMEOUT);
     }
 }

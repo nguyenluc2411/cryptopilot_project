@@ -76,7 +76,8 @@ class SeedDataTest {
      * liquidation clearance fee (BR-36); V32 the entry deviation, setup score drop and slippage settings (BR-36, BR-69,
      * BR-70), V33 the two resend limits (BR-65), V34 the fee share threshold of HIGH_FEE_SHARE (BR-29, D-116); V11
      * seeds the five packages; V39 the Academy's 8 topics, 21 lessons and 64 glossary terms (T-114); V62 the first active
-     * AI Assistant configuration (T-073); V67 the switches of the two payment gateways (D-147).
+     * AI Assistant configuration (T-073), V66 and V70 a newer version each (D-146, T-074); V67 the switches of the two
+     * payment gateways (D-147).
      */
     private static final Map<String, Integer> SEEDED_ROW_COUNTS = Map.of(
             "system_setting", 22,
@@ -87,7 +88,7 @@ class SeedDataTest {
             "academy_topic", 8,
             "academy_article", 21,
             "academy_term", 64,
-            "ai_configuration", 2);
+            "ai_configuration", 3);
 
     /**
      * The settings V3 seeds and a later migration deletes: V10 the plan limits (BR-62, D-58), V13 the thresholds the
@@ -300,18 +301,19 @@ class SeedDataTest {
     }
 
     /**
-     * UC-50, BR-51, D-146: V66 adds the AI configuration whose prompt explains the scored side and the LOW_ROOM cap
-     * and activates it, so exactly one version is active and V62's version is kept inactive as history.
+     * UC-50, BR-51, D-146: V66 adds the AI configuration whose prompt explains the scored side and the LOW_ROOM cap;
+     * V70 copies it into the version that is active now, so exactly one version is active, it still explains them, and
+     * the earlier versions are kept inactive as history.
      */
     @Test
-    void D146_afterV66_exactlyOneAiConfigurationIsActive_andItExplainsTheScoredSideAndTheCap() {
+    void D146_afterV70_exactlyOneAiConfigurationIsActive_andItExplainsTheScoredSideAndTheCap() {
         List<Map<String, Object>> active = jdbc.sql(
                         "select config_id::text as id, system_prompt, model_name from ai_configuration where is_active")
                 .query()
                 .listOfRows();
 
         assertThat(active).hasSize(1);
-        assertThat(active.getFirst().get("id")).isEqualTo("019b76da-a800-7002-8000-0000000a1002");
+        assertThat(active.getFirst().get("id")).isEqualTo("019b76da-a800-7002-8000-0000000a1003");
         String prompt = (String) active.getFirst().get("system_prompt");
         assertThat(prompt).contains("scoredSide", "LOW_ROOM", "dominantSide", "không phải khuyến nghị giao dịch");
         assertThat(prompt.indexOf("8. Trong CONTEXT"))
@@ -321,6 +323,29 @@ class SeedDataTest {
         assertThat(active.getFirst().get("model_name")).isEqualTo("gemini-3.5-flash-lite");
         assertThat(jdbc.sql(
                                 "select is_active from ai_configuration where config_id = '019b76da-a800-7002-8000-0000000a1001'")
+                        .query(Boolean.class)
+                        .single())
+                .isFalse();
+    }
+
+    /**
+     * T-074, BR-51: V70's version adds rule 9 (read the news, cite it as [n], say how fresh it is, never as advice) and
+     * rule 10 (explain for the Trader's trading style and risk profile, no advice), both after rule 8 and before the
+     * answer format, and keeps V66's version inactive.
+     */
+    @Test
+    void T074_afterV70_theActivePromptReadsTheNewsAndTheTradingStyle_beforeTheAnswerFormat() {
+        String prompt = jdbc.sql("select system_prompt from ai_configuration where is_active")
+                .query(String.class)
+                .single();
+
+        assertThat(prompt).contains("checkedUpTo", "[1]", "không tự viết đường link", "tradingStyle", "riskProfile");
+        assertThat(prompt.indexOf("9. CONTEXT có thể có news"))
+                .isGreaterThan(prompt.indexOf("8. Trong CONTEXT"))
+                .isLessThan(prompt.indexOf("10. CONTEXT có thể có trader"));
+        assertThat(prompt.indexOf("10. CONTEXT có thể có trader")).isLessThan(prompt.indexOf("Cách trả lời:"));
+        assertThat(jdbc.sql(
+                                "select is_active from ai_configuration where config_id = '019b76da-a800-7002-8000-0000000a1002'")
                         .query(Boolean.class)
                         .single())
                 .isFalse();
