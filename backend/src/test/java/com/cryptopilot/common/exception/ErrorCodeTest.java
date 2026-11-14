@@ -114,7 +114,8 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.ORDER_NOT_AWAITING_HANDLING, "MSG43 409"),
             Map.entry(ErrorCode.ORDER_ALREADY_PENDING, "MSG43 409"),
             Map.entry(ErrorCode.MARKET_DATA_UNAVAILABLE, "MSG43 503"),
-            Map.entry(ErrorCode.TRADING_PAUSED, "MSG57 503"));
+            Map.entry(ErrorCode.TRADING_PAUSED, "MSG57 503"),
+            Map.entry(ErrorCode.CHART_DRAWING_LIMIT_REACHED, "MSG43 409"));
 
     @ParameterizedTest
     @EnumSource(ErrorCode.class)
