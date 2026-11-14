@@ -216,9 +216,24 @@ class EnumCheckConstraintTest {
             case "bigint" -> 1L;
             case "numeric" -> java.math.BigDecimal.ONE;
             case "timestamp with time zone" -> java.sql.Timestamp.valueOf("2026-09-20 00:00:00");
-            case "jsonb" -> "{}";
+            case "jsonb" -> emptyJson();
             default -> "x";
         };
+    }
+
+    /**
+     * An empty JSON object typed as {@code jsonb}: a plain string is sent as {@code varchar}, which PostgreSQL does not
+     * cast to {@code jsonb} on its own, so a required JSON column would refuse the row before the check is reached.
+     */
+    private static org.postgresql.util.PGobject emptyJson() {
+        org.postgresql.util.PGobject json = new org.postgresql.util.PGobject();
+        json.setType("jsonb");
+        try {
+            json.setValue("{}");
+        } catch (SQLException e) {
+            throw new IllegalStateException("cannot build a jsonb value", e);
+        }
+        return json;
     }
 
     private static String cloneOf(Connection connection, String table) {
