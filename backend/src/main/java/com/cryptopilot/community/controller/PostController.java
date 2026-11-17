@@ -10,6 +10,7 @@ import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.model.FeedFilter;
 import com.cryptopilot.community.model.enums.FeedTab;
 import com.cryptopilot.community.model.enums.OfficialCategory;
+import com.cryptopilot.community.service.CoinSentimentService;
 import com.cryptopilot.community.service.PostService;
 import com.cryptopilot.market.model.enums.MarketType;
 import io.swagger.v3.oas.annotations.Operation;
@@ -51,6 +52,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class PostController {
 
     private final PostService service;
+    private final CoinSentimentService sentiment;
 
     @Operation(summary = "One page of a feed tab (SCR-24)")
     @ApiResponse(responseCode = "200", description = "The cards of the page; announcements are in /posts/pinned")
@@ -112,7 +114,7 @@ public class PostController {
             description = "Per coin with any stance or vote: Bullish and Bearish stances plus votes, by symbol")
     @GetMapping("/coin-sentiment")
     public List<CoinSentimentResponse> coinSentiment() {
-        return service.coinSentiment();
+        return sentiment.current();
     }
 
     @Operation(

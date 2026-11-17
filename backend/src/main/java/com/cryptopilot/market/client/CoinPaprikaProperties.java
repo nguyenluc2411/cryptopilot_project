@@ -24,7 +24,8 @@ import org.springframework.validation.annotation.Validated;
  * @param baseUrl the API root, e.g. {@code https://api.coinpaprika.com/v1}
  * @param detailDelay the pause between two calls for a coin's logo, to stay well under the free rate limit
  * @param connectTimeout how long to wait for a connection
- * @param readTimeout how long to wait for an answer; the coin list is several megabytes
+ * @param readTimeout how long a small call (one coin, the global figures) may take, body included
+ * @param bodyTimeout how long a list call ({@code /coins}, {@code /tickers}, several megabytes) may take, body included
  * @param overrides CoinPaprika ids by Binance symbol, for a coin CoinPaprika lists under another ticker or whose ticker
  *     a larger coin also uses, e.g. {@code TON: toncoin-the-open-network} (CoinPaprika spells Toncoin {@code GRAM})
  */
@@ -38,7 +39,8 @@ public record CoinPaprikaProperties(
 
         @NotNull @DefaultValue("200ms") Duration detailDelay,
         @NotNull @DefaultValue("5s") Duration connectTimeout,
-        @NotNull @DefaultValue("60s") Duration readTimeout,
+        @NotNull @DefaultValue("15s") Duration readTimeout,
+        @NotNull @DefaultValue("120s") Duration bodyTimeout,
         @DefaultValue Map<String, String> overrides) {
 
     public CoinPaprikaProperties {

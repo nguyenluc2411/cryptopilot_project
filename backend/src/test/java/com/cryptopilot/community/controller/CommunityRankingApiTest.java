@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.community.model.AuthorStanding;
 import com.cryptopilot.community.repository.PostFeedRepository;
+import com.cryptopilot.community.service.CoinSentimentService;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -67,6 +68,9 @@ class CommunityRankingApiTest {
 
     @Autowired
     private PostFeedRepository feeds;
+
+    @Autowired
+    private CoinSentimentService sentiment;
 
     private final List<UUID> accounts = new ArrayList<>();
 
@@ -329,6 +333,8 @@ class CommunityRankingApiTest {
                 .andExpect(status().isOk());
         // A post with neither stance nor vote says nothing.
         taggedPost(alice, silent, now.minus(Duration.ofHours(1)));
+        // The endpoint serves the last computed answer; the job recomputes it, here the test does.
+        sentiment.refresh();
 
         mvc.perform(get(POSTS + "/coin-sentiment"))
                 .andExpect(status().isOk())

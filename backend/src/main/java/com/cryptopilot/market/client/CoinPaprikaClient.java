@@ -1,8 +1,6 @@
 package com.cryptopilot.market.client;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
@@ -11,12 +9,17 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.JsonParser;
@@ -32,10 +35,12 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>Four GETs: {@code /coins}, every coin with its ticker, name and rank in one answer of several megabytes, and
  * {@code /tickers}, the ranked coins with their supply, both read as a stream one coin at a time so neither is held
  * whole; {@code /coins/{id}}, one coin with its logo, which the list does not carry; and {@code /global}, the whole
- * market's cap. No retry here: the coins are described again after the next symbol synchronisation. Not final, so
- * the system log can watch it (UC-52).
+ * market's cap. Every call is bounded as a whole, the body included ({@code body-timeout} for the two lists,
+ * {@code read-timeout} for the others), so a server that stalls mid-body fails the call instead of holding the job.
+ * No retry here: the next scheduled run reads again. Not final, so the system log can watch it (UC-52).
  *
- * <p>Reference: CoinPaprika API v1, "List coins" and "Get coin by ID", api.coinpaprika.com.
+ * <p>Reference: CoinPaprika API v1, "List coins", "Get coin by ID" and "Tickers" (circulating supply), api.coinpaprika.com.
+ * Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf ("Timeouts", "Steady State").
  */
 public class CoinPaprikaClient implements AutoCloseable {
 
@@ -59,7 +64,7 @@ public class CoinPaprikaClient implements AutoCloseable {
      */
     public List<CoinPaprikaCoin> coins() {
         List<CoinPaprikaCoin> coins = new ArrayList<>();
-        stream("/coins", "coin list", node -> {
+        stream("/coins", "coin list", properties.bodyTimeout(), node -> {
             String id = text(node, "id");
             String symbol = text(node, "symbol");
             String name = text(node, "name");
@@ -78,13 +83,13 @@ public class CoinPaprikaClient implements AutoCloseable {
     /**
      * The ranked coins with their supply, the largest first; one without an id, a ticker or a rank is left out. The
      * circulating supply is CoinPaprika's own when it gives one, else its market cap over its price, which is how it
-     * computes the market cap.
+     * computes the market cap; never the total supply, which counts coins not in circulation.
      *
      * @throws CoinPaprikaException when the list could not be read
      */
     public List<CoinPaprikaTicker> tickers() {
         List<CoinPaprikaTicker> tickers = new ArrayList<>();
-        stream("/tickers", "ticker list", node -> {
+        stream("/tickers", "ticker list", properties.bodyTimeout(), node -> {
             String id = text(node, "id");
             String symbol = text(node, "symbol");
             int rank = node.path("rank").asInt(0);
@@ -102,8 +107,8 @@ public class CoinPaprikaClient implements AutoCloseable {
      * @throws CoinPaprikaException when it could not be read
      */
     public CoinPaprikaGlobal global() {
-        HttpResponse<InputStream> response = get("/global");
-        try (InputStream body = response.body()) {
+        byte[] body = get("/global", properties.readTimeout());
+        try {
             JsonNode node = json.readTree(body);
             BigDecimal cap = decimal(node, "market_cap_usd");
             if (cap == null) {
@@ -116,24 +121,23 @@ public class CoinPaprikaClient implements AutoCloseable {
                     decimal(node, "volume_24h_usd"),
                     decimal(node, "bitcoin_dominance_percentage"),
                     updated > 0 ? Instant.ofEpochSecond(updated) : null);
-        } catch (IOException | JacksonException e) {
+        } catch (JacksonException e) {
             throw new CoinPaprikaException("CoinPaprika's global figures could not be read: " + e.getMessage(), 0, e);
         }
     }
 
     /** Reads a JSON array one element at a time, never holding it whole. */
-    private void stream(String path, String what, Consumer<JsonNode> each) {
-        HttpResponse<InputStream> response = get(path);
+    private void stream(String path, String what, Duration deadline, Consumer<JsonNode> each) {
+        byte[] body = get(path, deadline);
         ObjectReader reader = json.readerFor(JsonNode.class).without(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
-        try (InputStream body = response.body();
-                JsonParser parser = reader.createParser(body)) {
+        try (JsonParser parser = reader.createParser(new ByteArrayInputStream(body))) {
             if (parser.nextToken() != JsonToken.START_ARRAY) {
                 throw new CoinPaprikaException("CoinPaprika answered something that is not a " + what, 0, null);
             }
             while (parser.nextToken() == JsonToken.START_OBJECT) {
                 each.accept(reader.readValue(parser));
             }
-        } catch (IOException | JacksonException e) {
+        } catch (JacksonException e) {
             throw new CoinPaprikaException("CoinPaprika's " + what + " could not be read: " + e.getMessage(), 0, e);
         }
     }
@@ -149,8 +153,7 @@ public class CoinPaprikaClient implements AutoCloseable {
         if (cap != null && price != null && cap.signum() > 0 && price.signum() > 0) {
             return cap.divide(price, 0, RoundingMode.HALF_UP);
         }
-        BigDecimal total = decimal(node, "total_supply");
-        return total != null && total.signum() > 0 ? total : null;
+        return null;
     }
 
     private static BigDecimal decimal(JsonNode node, String field) {
@@ -170,46 +173,43 @@ public class CoinPaprikaClient implements AutoCloseable {
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("id must not be blank");
         }
-        HttpResponse<InputStream> response = get("/coins/" + URLEncoder.encode(id.strip(), StandardCharsets.UTF_8));
-        try (InputStream body = response.body()) {
+        byte[] body = get("/coins/" + URLEncoder.encode(id.strip(), StandardCharsets.UTF_8), properties.readTimeout());
+        try {
             JsonNode node = json.readTree(body);
             String logo = node == null ? null : text(node, "logo");
             return logo != null && logo.startsWith("https://") ? Optional.of(logo) : Optional.empty();
-        } catch (IOException | JacksonException e) {
+        } catch (JacksonException e) {
             throw new CoinPaprikaException("CoinPaprika's coin " + id + " could not be read: " + e.getMessage(), 0, e);
         }
     }
 
-    private HttpResponse<InputStream> get(String path) {
+    /** One GET whose answer, body included, must arrive within {@code deadline}; a 200's body, or a refusal. */
+    private byte[] get(String path, Duration deadline) {
         String base = properties.baseUrl().toString().replaceAll("/+$", "");
         HttpRequest request = HttpRequest.newBuilder(URI.create(base + path))
                 .timeout(properties.readTimeout())
                 .header("Accept", "application/json")
                 .GET()
                 .build();
-        HttpResponse<InputStream> response;
+        CompletableFuture<HttpResponse<byte[]>> call = http.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> response;
         try {
-            response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        } catch (IOException e) {
-            throw new CoinPaprikaException("CoinPaprika did not answer: " + e.getMessage(), 0, e);
+            response = call.get(deadline.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            call.cancel(true);
+            throw new CoinPaprikaException("CoinPaprika did not finish " + path + " within " + deadline, 0, e);
+        } catch (ExecutionException e) {
+            throw new CoinPaprikaException("CoinPaprika did not answer: " + e.getCause(), 0, e.getCause());
         } catch (InterruptedException e) {
+            call.cancel(true);
             Thread.currentThread().interrupt();
             throw new CoinPaprikaException("interrupted while waiting for CoinPaprika", 0, e);
         }
         if (response.statusCode() != 200) {
-            discard(response);
             throw new CoinPaprikaException(
                     "CoinPaprika answered HTTP " + response.statusCode() + " for " + path, response.statusCode(), null);
         }
-        return response;
-    }
-
-    private static void discard(HttpResponse<InputStream> response) {
-        try (InputStream body = response.body()) {
-            body.transferTo(OutputStream.nullOutputStream());
-        } catch (IOException ignored) {
-            // The status is the answer; the body does not matter.
-        }
+        return response.body();
     }
 
     private static String text(JsonNode node, String field) {

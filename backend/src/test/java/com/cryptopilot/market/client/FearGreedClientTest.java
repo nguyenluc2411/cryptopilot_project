@@ -82,6 +82,36 @@ class FearGreedClientTest {
         }
     }
 
+    @Test
+    void aBodyThatStallsMidway_failsTheCallAtTheReadTimeout() {
+        server.createContext("/stalled/fng/", exchange -> {
+            exchange.sendResponseHeaders(200, 0);
+            OutputStream out = exchange.getResponseBody();
+            out.write("{\"data\": [".getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            try {
+                Thread.sleep(10_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            out.close();
+        });
+        try (FearGreedClient client = new FearGreedClient(
+                new FearGreedProperties(
+                        true,
+                        URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/stalled"),
+                        Duration.ofSeconds(2),
+                        Duration.ofMillis(500)),
+                JsonMapper.builder().build())) {
+            long started = System.nanoTime();
+
+            assertThatThrownBy(client::latest)
+                    .isInstanceOfSatisfying(FearGreedException.class, e -> assertThat(e.serviceAnswered())
+                            .isFalse());
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(4));
+        }
+    }
+
     private FearGreedClient client() {
         return new FearGreedClient(
                 new FearGreedProperties(

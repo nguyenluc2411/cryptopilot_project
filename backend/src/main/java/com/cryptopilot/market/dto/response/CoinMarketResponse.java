@@ -91,6 +91,7 @@ public record CoinMarketResponse(
      * @param rank its rank by market cap on CoinPaprika, or absent
      * @param spotSymbol its pair enabled on Spot, e.g. {@code BTCUSDT}, or absent
      * @param futuresSymbol its pair enabled on Futures, or absent
+     * @param quote the quote coin of the series the past prices and the small chart are read from, e.g. {@code USDT}
      * @param circulatingSupply the coins in circulation, from CoinPaprika, or absent
      * @param price1hAgo its price an hour ago, from the stored candles, or absent
      * @param price7dAgo its price seven days ago, or absent
@@ -103,6 +104,7 @@ public record CoinMarketResponse(
             Integer rank,
             String spotSymbol,
             String futuresSymbol,
+            String quote,
             BigDecimal circulatingSupply,
             BigDecimal price1hAgo,
             BigDecimal price7dAgo,

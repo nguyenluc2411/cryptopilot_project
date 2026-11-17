@@ -47,6 +47,7 @@ class MarketReferenceServiceImplTest {
                         Duration.ZERO,
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
                         Map.of("TON", "toncoin-the-open-network")),
                 coins,
                 store,

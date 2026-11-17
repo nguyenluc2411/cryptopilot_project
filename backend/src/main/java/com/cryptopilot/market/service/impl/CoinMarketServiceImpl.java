@@ -12,9 +12,11 @@ import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.entity.CryptoPair;
 import com.cryptopilot.market.model.MarketReferenceStore;
 import com.cryptopilot.market.model.MarketReferenceStore.Supply;
+import com.cryptopilot.market.model.enums.MarketInterval;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.CoinMarketRepository;
 import com.cryptopilot.market.repository.CoinMarketRepository.OpenInterestPoint;
+import com.cryptopilot.market.repository.CoinMarketRepository.Series;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.repository.CryptoPairRepository;
 import com.cryptopilot.market.service.CoinMarketService;
@@ -29,12 +31,16 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -45,33 +51,29 @@ import org.springframework.stereotype.Service;
  *
  * <p>The base coin of an ACTIVE pair enabled on Spot or Futures (BR-07); a coin that is only ever a quote, such as
  * USDT, has no price of its own here and is left out. Its series is its Spot pair's when it has one, else its Futures
- * pair's; with several, the one quoted in USDT, then the first in display order.
+ * pair's; with several, the one quoted in USDT, then the first in display order. The row names that quote, which the
+ * past prices and the small chart are in.
  *
- * <h2>What is computed here</h2>
+ * <h2>How it is served</h2>
  *
- * <ul>
- *   <li>The price an hour ago: the close of the 15-minute candle that closed at or before then.
- *   <li>The price seven days ago and the small chart: the hourly closes of the last seven days.
- *   <li>The altcoin season: of the listed coins other than Bitcoin and the stablecoins, the share whose daily close
- *       rose more than Bitcoin's over 90 days. Only meaningful from {@link #ALTCOIN_SEASON_MIN} altcoins on.
- *   <li>The open interest: the latest five-minute sample of every listed Futures pair, summed, once an hour over 24
- *       hours.
- * </ul>
- *
- * <p>The answer is shared: built at most once per {@link #TTL} and handed to every caller in between, because the
- * candles behind it change every fifteen minutes and the page is public.
+ * <p>A job rebuilds the list every minute ({@link #refresh()}) and requests read the last one built; only the very
+ * first request before any refresh builds it. A failed build keeps the previous list. One build reads a fixed number of
+ * statements whatever the number of coins.
  *
  * <p>Rule: SRS 3.3.1; UC-09; BR-07, BR-08.
+ *
+ * <p>Reference: Nottingham, M. (2010). RFC 5861, <i>HTTP Cache-Control Extensions for Stale Content</i> (serving the
+ * last good answer while a new one is made).
  */
 @Service
 public class CoinMarketServiceImpl implements CoinMarketService {
 
-    /** How long one answer is served. */
-    static final Duration TTL = Duration.ofSeconds(60);
+    private static final Logger log = LoggerFactory.getLogger(CoinMarketServiceImpl.class);
 
-    /** The coins that track a fiat currency, left out of the altcoin season. */
-    static final Set<String> STABLECOINS =
-            Set.of("USDT", "USDC", "FDUSD", "DAI", "TUSD", "USDE", "USDP", "PYUSD", "BUSD", "USD1");
+    /** Coins pegged to a currency, a metal or another coin, left out of the altcoin season. */
+    static final Set<String> PEGGED = Set.of(
+            "USDT", "USDC", "FDUSD", "DAI", "TUSD", "USDE", "USDP", "PYUSD", "BUSD", "USD1", "XUSD", "EUR", "AEUR",
+            "EURI", "WBTC", "WBETH", "PAXG");
 
     /** The period of the altcoin season, in days. */
     static final int ALTCOIN_SEASON_DAYS = 90;
@@ -89,7 +91,7 @@ public class CoinMarketServiceImpl implements CoinMarketService {
     private final MarketReferenceStore reference;
     private final Clock clock;
     private final ReentrantLock building = new ReentrantLock();
-    private volatile CoinMarketResponse cached;
+    private final AtomicReference<CoinMarketResponse> latest = new AtomicReference<>();
 
     public CoinMarketServiceImpl(
             CryptoPairRepository pairs,
@@ -106,37 +108,46 @@ public class CoinMarketServiceImpl implements CoinMarketService {
 
     @Override
     public CoinMarketResponse coins() {
-        CoinMarketResponse current = cached;
-        if (fresh(current)) {
+        CoinMarketResponse current = latest.get();
+        if (current != null) {
             return current;
         }
         building.lock();
         try {
-            current = cached;
-            if (fresh(current)) {
-                return current;
+            current = latest.get();
+            if (current == null) {
+                current = build(clock.instant());
+                latest.set(current);
             }
-            current = build(clock.instant());
-            cached = current;
             return current;
         } finally {
             building.unlock();
         }
     }
 
-    private boolean fresh(CoinMarketResponse answer) {
-        return answer != null && answer.asOf().plus(TTL).isAfter(clock.instant());
+    @Override
+    public void refresh() {
+        if (!building.tryLock()) {
+            return;
+        }
+        try {
+            latest.set(build(clock.instant()));
+        } catch (RuntimeException failure) {
+            log.warn("Coin list: rebuild failed, the previous list stays ({})", failure.toString());
+        } finally {
+            building.unlock();
+        }
     }
 
-    /** One listed coin and its pairs. */
-    private record Listed(Coin coin, CryptoPair spot, CryptoPair futures) {
+    /** One listed coin, its pairs and the quote of its series. */
+    private record Listed(Coin coin, CryptoPair spot, CryptoPair futures, String quote) {
 
-        CryptoPair series() {
+        CryptoPair pair() {
             return spot != null ? spot : futures;
         }
 
-        MarketType market() {
-            return spot != null ? MarketType.SPOT : MarketType.FUTURES;
+        Series series() {
+            return new Series(pair().getId(), spot != null ? MarketType.SPOT : MarketType.FUTURES);
         }
     }
 
@@ -144,35 +155,31 @@ public class CoinMarketServiceImpl implements CoinMarketService {
         List<CryptoPair> spot = pairs.findEnabledOnSpot();
         List<CryptoPair> futures = pairs.findEnabledOnFutures();
         Set<UUID> coinIds = new HashSet<>();
-        spot.forEach(pair -> {
-            coinIds.add(pair.getBaseCoinId());
-            coinIds.add(pair.getQuoteCoinId());
-        });
-        futures.forEach(pair -> {
-            coinIds.add(pair.getBaseCoinId());
-            coinIds.add(pair.getQuoteCoinId());
-        });
-        Map<UUID, Coin> byId = new HashMap<>();
-        coins.findAllByIdIn(coinIds).forEach(coin -> byId.put(coin.getId(), coin));
-        Map<UUID, Listed> listed = new LinkedHashMap<>();
         for (CryptoPair pair : spot) {
-            Coin base = byId.get(pair.getBaseCoinId());
-            if (base != null) {
-                listed.merge(
-                        base.getId(),
-                        new Listed(base, pair, null),
-                        (known, next) -> new Listed(base, preferred(known.spot(), pair, byId), known.futures()));
-            }
+            coinIds.add(pair.getBaseCoinId());
+            coinIds.add(pair.getQuoteCoinId());
         }
         for (CryptoPair pair : futures) {
-            Coin base = byId.get(pair.getBaseCoinId());
-            if (base != null) {
-                listed.merge(
-                        base.getId(),
-                        new Listed(base, null, pair),
-                        (known, next) -> new Listed(base, known.spot(), preferred(known.futures(), pair, byId)));
-            }
+            coinIds.add(pair.getBaseCoinId());
+            coinIds.add(pair.getQuoteCoinId());
         }
+        Map<UUID, Coin> byId = new HashMap<>();
+        coins.findAllByIdIn(coinIds).forEach(coin -> byId.put(coin.getId(), coin));
+        Map<UUID, Listed> listed = listed(spot, futures, byId);
+
+        List<Series> series = listed.values().stream().map(Listed::series).toList();
+        Map<Series, BigDecimal> hourAgo = figures.closesAt(
+                series,
+                MarketInterval.FIFTEEN_MINUTES,
+                now.minus(Duration.ofHours(1)),
+                now.minus(Duration.ofMinutes(90)));
+        Map<Series, BigDecimal> weekAgo = figures.closesAt(
+                series,
+                MarketInterval.ONE_HOUR,
+                now.minus(Duration.ofDays(7)),
+                now.minus(Duration.ofDays(7).plusHours(3)));
+        Map<Series, List<BigDecimal>> week =
+                figures.closesBetween(series, MarketInterval.ONE_HOUR, now.minus(Duration.ofDays(7)), now);
 
         Map<String, Supply> supplies = reference
                 .supplies()
@@ -180,7 +187,13 @@ public class CoinMarketServiceImpl implements CoinMarketService {
                 .orElse(Map.of());
         List<CoinRow> rows = new ArrayList<>();
         for (Listed coin : listed.values()) {
-            rows.add(row(coin, supplies.get(coin.coin().getSymbol()), now));
+            Series key = coin.series();
+            rows.add(row(
+                    coin,
+                    supplies.get(coin.coin().getSymbol()),
+                    hourAgo.get(key),
+                    weekAgo.get(key),
+                    week.getOrDefault(key, List.of())));
         }
         rows.sort(Comparator.comparing((CoinRow row) -> row.rank() == null ? Integer.MAX_VALUE : row.rank())
                 .thenComparing(CoinRow::symbol));
@@ -197,11 +210,31 @@ public class CoinMarketServiceImpl implements CoinMarketService {
                 List.copyOf(rows));
     }
 
+    private static Map<UUID, Listed> listed(List<CryptoPair> spot, List<CryptoPair> futures, Map<UUID, Coin> byId) {
+        Map<UUID, CryptoPair> spotOf = new LinkedHashMap<>();
+        Map<UUID, CryptoPair> futuresOf = new LinkedHashMap<>();
+        spot.forEach(pair -> spotOf.merge(pair.getBaseCoinId(), pair, (known, next) -> preferred(known, next, byId)));
+        futures.forEach(
+                pair -> futuresOf.merge(pair.getBaseCoinId(), pair, (known, next) -> preferred(known, next, byId)));
+        Map<UUID, Listed> listed = new LinkedHashMap<>();
+        Set<UUID> bases = new LinkedHashSet<>(spotOf.keySet());
+        bases.addAll(futuresOf.keySet());
+        for (UUID base : bases) {
+            Coin coin = byId.get(base);
+            if (coin == null) {
+                continue;
+            }
+            CryptoPair spotPair = spotOf.get(base);
+            CryptoPair futuresPair = futuresOf.get(base);
+            CryptoPair series = spotPair != null ? spotPair : futuresPair;
+            Coin quote = byId.get(series.getQuoteCoinId());
+            listed.put(base, new Listed(coin, spotPair, futuresPair, quote == null ? null : quote.getSymbol()));
+        }
+        return listed;
+    }
+
     /** Of two pairs of the same coin, the one quoted in USDT, else the first in display order. */
     private static CryptoPair preferred(CryptoPair known, CryptoPair next, Map<UUID, Coin> coins) {
-        if (known == null) {
-            return next;
-        }
         boolean knownUsdt = isUsdt(known, coins);
         boolean nextUsdt = isUsdt(next, coins);
         if (knownUsdt != nextUsdt) {
@@ -215,24 +248,8 @@ public class CoinMarketServiceImpl implements CoinMarketService {
         return quote != null && QUOTE.equals(quote.getSymbol());
     }
 
-    private CoinRow row(Listed listed, Supply supply, Instant now) {
-        CryptoPair series = listed.series();
-        MarketType market = listed.market();
-        BigDecimal hourAgo = figures.closeAt(
-                        series.getId(),
-                        market,
-                        "15m",
-                        now.minus(Duration.ofHours(1)),
-                        now.minus(Duration.ofMinutes(90)))
-                .orElse(null);
-        BigDecimal weekAgo = figures.closeAt(
-                        series.getId(),
-                        market,
-                        "1h",
-                        now.minus(Duration.ofDays(7)),
-                        now.minus(Duration.ofDays(7).plusHours(3)))
-                .orElse(null);
-        List<BigDecimal> sparkline = figures.closesSince(series.getId(), market, "1h", now.minus(Duration.ofDays(7)));
+    private static CoinRow row(
+            Listed listed, Supply supply, BigDecimal hourAgo, BigDecimal weekAgo, List<BigDecimal> week) {
         Coin coin = listed.coin();
         return new CoinRow(
                 coin.getSymbol(),
@@ -241,29 +258,39 @@ public class CoinMarketServiceImpl implements CoinMarketService {
                 supply == null ? null : supply.rank(),
                 listed.spot() == null ? null : listed.spot().getSymbol(),
                 listed.futures() == null ? null : listed.futures().getSymbol(),
+                listed.quote(),
                 supply == null ? null : supply.circulatingSupply(),
                 hourAgo,
                 weekAgo,
-                List.copyOf(sparkline));
+                week.stream().map(BigDecimal::stripTrailingZeros).toList());
     }
 
     private Optional<AltcoinSeason> altcoinSeason(Iterable<Listed> listed, Instant now) {
+        List<Listed> measured = new ArrayList<>();
+        listed.forEach(coin -> {
+            if (!PEGGED.contains(coin.coin().getSymbol())) {
+                measured.add(coin);
+            }
+        });
+        List<Series> series = measured.stream().map(Listed::series).toList();
         Instant from = now.minus(Duration.ofDays(ALTCOIN_SEASON_DAYS));
+        Map<Series, BigDecimal> then =
+                figures.closesAt(series, MarketInterval.ONE_DAY, from, from.minus(Duration.ofDays(2)));
+        Map<Series, BigDecimal> latestClose =
+                figures.closesAt(series, MarketInterval.ONE_DAY, now, now.minus(Duration.ofDays(2)));
         BigDecimal bitcoin = null;
         List<BigDecimal> altcoins = new ArrayList<>();
-        for (Listed coin : listed) {
-            String symbol = coin.coin().getSymbol();
-            if (STABLECOINS.contains(symbol)) {
+        for (Listed coin : measured) {
+            BigDecimal start = then.get(coin.series());
+            BigDecimal end = latestClose.get(coin.series());
+            if (start == null || end == null || start.signum() <= 0) {
                 continue;
             }
-            Optional<BigDecimal> change = dailyChange(coin, from, now);
-            if (change.isEmpty()) {
-                continue;
-            }
-            if ("BTC".equals(symbol)) {
-                bitcoin = change.get();
+            BigDecimal change = end.divide(start, PERCENT);
+            if ("BTC".equals(coin.coin().getSymbol())) {
+                bitcoin = change;
             } else {
-                altcoins.add(change.get());
+                altcoins.add(change);
             }
         }
         if (bitcoin == null || altcoins.size() < ALTCOIN_SEASON_MIN) {
@@ -275,18 +302,6 @@ public class CoinMarketServiceImpl implements CoinMarketService {
                 .count();
         int index = (int) Math.round(100.0 * beat / altcoins.size());
         return Optional.of(new AltcoinSeason(index, altcoins.size(), ALTCOIN_SEASON_DAYS));
-    }
-
-    /** The rise of a coin's daily close from {@code from} to {@code now}, as a ratio, if both closes are stored. */
-    private Optional<BigDecimal> dailyChange(Listed coin, Instant from, Instant now) {
-        UUID pair = coin.series().getId();
-        MarketType market = coin.market();
-        Optional<BigDecimal> then = figures.closeAt(pair, market, "1d", from, from.minus(Duration.ofDays(2)));
-        Optional<BigDecimal> latest = figures.closeAt(pair, market, "1d", now, now.minus(Duration.ofDays(2)));
-        if (then.isEmpty() || latest.isEmpty() || then.get().signum() <= 0) {
-            return Optional.empty();
-        }
-        return Optional.of(latest.get().divide(then.get(), PERCENT));
     }
 
     private Optional<OpenInterest> openInterest(List<CryptoPair> futures, Instant now) {

@@ -50,6 +50,10 @@ cryptopilot:
     sweep:
       # Runs in this profile: files no post carries are deleted from Cloudinary daily.
       enabled: true
+  community:
+    coin-sentiment:
+      # The leaning per coin of the market list is recomputed every minute (application.yml).
+      enabled: true
   notification:
     sweep:
       # NSF-17 runs in this profile: notifications older than 90 days are deleted daily.
@@ -64,6 +68,9 @@ cryptopilot:
       enabled: true
     fear-greed:
       # The Fear & Greed Index of the market list (application.yml).
+      enabled: true
+    coin-list:
+      # The market list of coins is rebuilt every minute (application.yml).
       enabled: true
     sync:
       # NSF-01 runs in this profile: at start-up and on the schedule of application.yml.

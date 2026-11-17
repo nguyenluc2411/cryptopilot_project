@@ -45,6 +45,7 @@ class CoinDescriptionServiceImplTest {
                         Duration.ZERO,
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
                         overrides),
                 mock(PlatformTransactionManager.class));
     }
@@ -133,6 +134,33 @@ class CoinDescriptionServiceImplTest {
 
         verify(coins, never()).save(any());
         verify(client, never()).logo(anyString());
+    }
+
+    @Test
+    void aCoinTriedWithNothingToAdd_isNotReadAgainInThisProcess() {
+        Coin rare = Coin.fromExchange("RARE");
+        Coin thousand = Coin.fromExchange("1000PEPE");
+        undescribed(rare, thousand);
+        listed(paprika("pepe-pepe", "PEPE", "Pepe", 50, true));
+
+        service.describeCoins();
+        // RARE has no match and 1000PEPE has its logo but keeps its own name: nothing more to gain from the list.
+        assertThat(service.describeCoins()).isZero();
+
+        verify(client, times(1)).coins();
+    }
+
+    @Test
+    void aCoinWhoseLogoCallsStopped_isReadAgainNextTime() {
+        Coin btc = Coin.fromExchange("BTC");
+        undescribed(btc);
+        when(client.coins()).thenReturn(List.of(paprika("btc-bitcoin", "BTC", "Bitcoin", 1, true)));
+        when(client.logo("btc-bitcoin")).thenThrow(new CoinPaprikaException("slow down", 429, null));
+
+        service.describeCoins();
+        service.describeCoins();
+
+        verify(client, times(2)).coins();
     }
 
     @Test

@@ -10,10 +10,13 @@ import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.service.CoinDescriptionService;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -61,6 +64,12 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
     private final CoinPaprikaProperties properties;
     private final TransactionTemplate readWrite;
 
+    /**
+     * Symbols already tried in this process with nothing more CoinPaprika can give (no match, or a match without a
+     * name or logo to add). While every undescribed coin is one of them, a run reads nothing.
+     */
+    private final Set<String> settled = ConcurrentHashMap.newKeySet();
+
     public CoinDescriptionServiceImpl(
             CoinRepository coins,
             CoinPaprikaClient client,
@@ -78,33 +87,39 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
     @Override
     public int describeCoins() {
         List<Coin> undescribed = coins.findUndescribed();
-        if (undescribed.isEmpty()) {
+        if (undescribed.isEmpty() || undescribed.stream().allMatch(coin -> settled.contains(coin.getSymbol()))) {
             return 0;
         }
         CoinPaprikaDirectory directory = new CoinPaprikaDirectory(client.coins(), properties.overrides());
         Logos logos = new Logos();
         Map<UUID, Description> planned = new HashMap<>();
+        Set<String> tried = new HashSet<>();
         for (Coin coin : undescribed) {
             Optional<CoinPaprikaCoin> same = directory.find(coin.getSymbol());
             Optional<CoinPaprikaCoin> logoOf =
                     same.isPresent() ? same : underlying(coin.getSymbol()).flatMap(directory::find);
             if (logoOf.isEmpty()) {
+                tried.add(coin.getSymbol());
                 continue;
             }
             String name = same.map(CoinPaprikaCoin::name).orElse(null);
             String logo = coin.getLogoUrl() == null ? logos.of(logoOf.get().id()) : null;
+            if (coin.getLogoUrl() != null || logos.answered(logoOf.get().id())) {
+                tried.add(coin.getSymbol());
+            }
             if (name != null || logo != null) {
                 planned.put(coin.getId(), new Description(name, logo));
             }
         }
         if (planned.isEmpty()) {
+            settled.addAll(tried);
             return 0;
         }
         Integer changed = readWrite.execute(status -> {
             int count = 0;
             for (Coin coin : coins.findAllByIdIn(planned.keySet())) {
                 Description description = planned.get(coin.getId());
-                if (coin.describe(description.name(), description.logo())) {
+                if (description != null && coin.describe(description.name(), description.logo())) {
                     coins.save(coin);
                     count++;
                 }
@@ -112,6 +127,7 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
             return count;
         });
         int result = changed == null ? 0 : changed;
+        settled.addAll(tried);
         log.info(
                 "Coin descriptions: {} of {} undescribed coins described from CoinPaprika", result, undescribed.size());
         return result;
@@ -157,6 +173,11 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
             }
             read.put(id, logo);
             return logo.orElse(null);
+        }
+
+        /** Whether CoinPaprika answered for this id in this run (a logo or none), rather than the calls stopping. */
+        boolean answered(String id) {
+            return read.containsKey(id);
         }
     }
 

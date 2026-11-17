@@ -10,6 +10,9 @@ import com.cryptopilot.market.dto.response.CoinMarketResponse;
  */
 public interface CoinMarketService {
 
-    /** The listed coins and the market figures; computed at most once a minute and shared by every caller. */
+    /** The latest built list; built once on the spot only before the first refresh. */
     CoinMarketResponse coins();
+
+    /** Builds the list again; a failure keeps the previous one. A refresh already running is not doubled. */
+    void refresh();
 }

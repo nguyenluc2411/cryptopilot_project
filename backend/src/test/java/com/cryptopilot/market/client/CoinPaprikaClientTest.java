@@ -77,10 +77,10 @@ class CoinPaprikaClientTest {
             List<CoinPaprikaTicker> tickers = client.tickers();
 
             assertThat(tickers).extracting(CoinPaprikaTicker::symbol).containsExactly("BTC", "ETH", "XT");
-            // Its own supply; else market cap over price; else the total supply.
+            // Its own supply; else market cap over price; never the total supply, which counts coins not circulating.
             assertThat(tickers.get(0).circulatingSupply()).isEqualByComparingTo("19900000");
             assertThat(tickers.get(1).circulatingSupply()).isEqualByComparingTo("122000000");
-            assertThat(tickers.get(2).circulatingSupply()).isEqualByComparingTo("500");
+            assertThat(tickers.get(2).circulatingSupply()).isNull();
         }
     }
 
@@ -157,6 +157,40 @@ class CoinPaprikaClientTest {
     }
 
     @Test
+    void aBodyThatStallsMidway_failsTheCallAtTheDeadline() {
+        server.createContext("/v1/stalled", exchange -> {
+            exchange.sendResponseHeaders(200, 0);
+            OutputStream out = exchange.getResponseBody();
+            out.write("[{\"id\": \"btc-bitcoin\"".getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            try {
+                Thread.sleep(10_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            out.close();
+        });
+        URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/stalled");
+        try (CoinPaprikaClient client = new CoinPaprikaClient(
+                new CoinPaprikaProperties(
+                        true,
+                        base,
+                        Duration.ZERO,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(5),
+                        Duration.ofMillis(500),
+                        Map.of()),
+                JsonMapper.builder().build())) {
+            long started = System.nanoTime();
+
+            assertThatThrownBy(client::tickers)
+                    .isInstanceOfSatisfying(CoinPaprikaException.class, e -> assertThat(e.status())
+                            .isZero());
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(4));
+        }
+    }
+
+    @Test
     void noAnswerIsAFailure() {
         server.stop(0);
         try (CoinPaprikaClient client = client()) {
@@ -174,16 +208,21 @@ class CoinPaprikaClientTest {
                 Duration.ZERO,
                 Duration.ofSeconds(1),
                 Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
                 Map.of(" ton ", " toncoin-the-open-network ", "X", " "));
 
         assertThat(properties.overrides()).isEqualTo(Map.of("TON", "toncoin-the-open-network"));
     }
 
     private CoinPaprikaClient client() {
+        return client(Duration.ofSeconds(2));
+    }
+
+    private CoinPaprikaClient client(Duration body) {
         URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/");
         return new CoinPaprikaClient(
                 new CoinPaprikaProperties(
-                        true, base, Duration.ZERO, Duration.ofSeconds(2), Duration.ofSeconds(2), Map.of()),
+                        true, base, Duration.ZERO, Duration.ofSeconds(2), Duration.ofSeconds(2), body, Map.of()),
                 JsonMapper.builder().build());
     }
 
