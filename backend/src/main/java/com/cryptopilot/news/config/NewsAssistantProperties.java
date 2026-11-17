@@ -1,5 +1,6 @@
 package com.cryptopilot.news.config;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -23,8 +24,23 @@ import org.springframework.validation.annotation.Validated;
 @Validated
 @ConfigurationProperties("cryptopilot.news.assistant")
 public record NewsAssistantProperties(
-        @Min(0) @Max(10) @DefaultValue("5") int coinArticles,
+        @Min(0) @Max(MAX_ARTICLES) @DefaultValue("5") int coinArticles,
         @NotNull @DefaultValue("72h") Duration coinWindow,
-        @Min(0) @Max(10) @DefaultValue("3") int marketArticles,
+        @Min(0) @Max(MAX_ARTICLES) @DefaultValue("3") int marketArticles,
         @NotNull @DefaultValue("24h") Duration marketWindow,
-        @Min(80) @Max(2000) @DefaultValue("400") int summaryChars) {}
+
+        @Min(80) @Max(MAX_SUMMARY_CHARS) @DefaultValue("400")
+        int summaryChars) {
+
+    /** The most articles one question carries, coin and market together (NSF-16, the AI Service's 20,000 chars). */
+    public static final int MAX_ARTICLES = 8;
+
+    /** The longest summary of one article that still keeps the worst case within the context limit. */
+    public static final int MAX_SUMMARY_CHARS = 600;
+
+    /** Whether the coin and market articles together stay within {@link #MAX_ARTICLES}. */
+    @AssertTrue(message = "coin-articles + market-articles must be at most 8")
+    public boolean isWithinTheContextBudget() {
+        return coinArticles + marketArticles <= MAX_ARTICLES;
+    }
+}

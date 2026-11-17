@@ -20,6 +20,8 @@ UPDATE news_article
  WHERE ai_summary IS NULL
    AND hidden_at IS NULL
    AND summary_attempts > 0
+   -- 7 days is the default max-age of the summary job; a migration cannot read the configuration.
+   AND collected_at >= now() - interval '7 days'
    AND (summary_error LIKE 'LLM\_UNAVAILABLE:%'
         OR summary_error LIKE 'LLM\_TIMEOUT:%'
         OR summary_error LIKE 'LLM\_RATE\_LIMITED:%'

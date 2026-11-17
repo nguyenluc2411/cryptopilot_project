@@ -34,8 +34,8 @@ public class NewsForAssistant implements AssistantNewsSource {
     static final int MAX_HEADLINE_CHARS = 200;
 
     /**
-     * The longest link sent. A longer one (tracking parameters) is left out with its article, so that eight articles
-     * always fit in the context the AI Service accepts (NSF-16, 20,000 characters with the market and the plan).
+     * The longest link sent. A longer one (tracking parameters) is left out with its article, so that the most articles
+     * {@link NewsAssistantProperties} allows fit in the AI Service's 20,000 characters (NSF-16; worst case 16,866).
      */
     static final int MAX_URL_CHARS = 500;
 
@@ -73,10 +73,10 @@ public class NewsForAssistant implements AssistantNewsSource {
         String summary =
                 article.aiSummary() != null && !article.aiSummary().isBlank() ? article.aiSummary() : article.excerpt();
         return new AssistantArticle(
-                cut(headline, MAX_HEADLINE_CHARS),
+                unfenced(cut(headline, MAX_HEADLINE_CHARS)),
                 article.sourceName(),
                 article.publishedAt(),
-                cut(summary, properties.summaryChars()),
+                unfenced(cut(summary, properties.summaryChars())),
                 article.sentiment() == null ? null : article.sentiment().name(),
                 article.originalUrl());
     }
@@ -93,6 +93,11 @@ public class NewsForAssistant implements AssistantNewsSource {
 
     private static String headline(FeedArticle article) {
         return article.aiTitle() != null && !article.aiTitle().isBlank() ? article.aiTitle() : article.title();
+    }
+
+    /** Outside text cannot spell the {@code <<<CONTEXT} / {@code CONTEXT>>>} fence of the prompt (OWASP LLM01). */
+    static String unfenced(String text) {
+        return text == null ? null : text.replace("<<<", "«").replace(">>>", "»");
     }
 
     /** {@code text} at most {@code max} characters, cut at the last space before it and marked with an ellipsis. */

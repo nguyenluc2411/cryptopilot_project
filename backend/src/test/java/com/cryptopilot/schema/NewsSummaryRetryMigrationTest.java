@@ -102,6 +102,21 @@ class NewsSummaryRetryMigrationTest {
         assertThat(row(hidden).get("version")).isEqualTo(0L);
     }
 
+    /** F4: an article older than the job's max-age (7 days) would never be retried, so V69 leaves it FAILED. */
+    @Test
+    void NSF11_V69_leavesAnArticleOlderThanTheMaxAgeAsItWas() {
+        UUID old = insertArticle(3, "LLM_UNAVAILABLE: Gemini failed (HTTP 503)", null, false, 10);
+        UUID recent = insertArticle(3, "LLM_UNAVAILABLE: Gemini failed (HTTP 503)", null, false, 6);
+
+        flyway("latest").migrate();
+
+        Map<String, Object> kept = row(old);
+        assertThat(kept.get("summary_attempts")).isEqualTo(3);
+        assertThat(kept.get("summary_error")).isEqualTo("LLM_UNAVAILABLE: Gemini failed (HTTP 503)");
+        assertThat(kept.get("version")).isEqualTo(0L);
+        assertThat(row(recent).get("summary_attempts")).isEqualTo(0);
+    }
+
     private Flyway flyway(String target) {
         return Flyway.configure()
                 .dataSource(url, container.getUsername(), container.getPassword())
@@ -130,13 +145,17 @@ class NewsSummaryRetryMigrationTest {
     }
 
     private UUID insertArticle(int attempts, String error, String summary, boolean hidden) {
+        return insertArticle(attempts, error, summary, hidden, 1);
+    }
+
+    private UUID insertArticle(int attempts, String error, String summary, boolean hidden, int collectedDaysAgo) {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
                         insert into news_article (article_id, source_id, title, original_url, url_hash, title_hash,
                                                   ai_summary, published_at, collected_at, created_at, updated_at,
                                                   summary_attempts, summary_error, summary_attempted_at, hidden_at,
                                                   hidden_by)
-                        values (?, ?, 'Title', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""")
+                        values (?, ?, 'Title', ?, ?, ?, ?, ?, now() - make_interval(days => ?), ?, ?, ?, ?, ?, ?, ?)""")
                 .params(
                         id,
                         source,
@@ -145,7 +164,7 @@ class NewsSummaryRetryMigrationTest {
                         id.toString(),
                         summary,
                         AT,
-                        AT,
+                        collectedDaysAgo,
                         AT,
                         AT,
                         attempts,
