@@ -245,6 +245,27 @@ cryptopilot:
       circuit-breaker:
         failure-threshold: 5
         open-duration: 30s
+    coinpaprika:
+      # Coin names and logos (coin.coin_name, coin.logo_url), which Binance does not send. Reference data only:
+      # prices, candles and pair rules stay Binance's (BR-09). After each symbol synchronisation: the coin list once
+      # (several MB, streamed), then one call per coin still without a logo. Free API, no key. Off here and on in the
+      # dev and prod profiles, so a test never calls it.
+      enabled: false
+      base-url: https://api.coinpaprika.com/v1
+      detail-delay: 200ms
+      connect-timeout: 5s
+      read-timeout: 60s
+      # Binance symbol -> CoinPaprika id where the ticker alone picks the wrong coin. CoinPaprika lists Toncoin as
+      # GRAM, so TON would match TonToken (checked 2026-11-17).
+      overrides:
+        TON: toncoin-the-open-network
+    fear-greed:
+      # The Crypto Fear & Greed Index of the market list, once an hour (published daily). Free, no key. Off here and
+      # on in the dev and prod profiles, so a test never calls it.
+      enabled: false
+      base-url: https://api.alternative.me
+      connect-timeout: 5s
+      read-timeout: 10s
     sync:
       # NSF-01: at start-up and daily at 00:05 UTC. Off here and on in the dev and prod profiles, so that a
       # test context, which runs without a profile, never schedules a call to the real exchange.

@@ -52,6 +52,10 @@ cryptopilot:
       enabled: false
     futures-metrics:
       enabled: false
+    coinpaprika:
+      enabled: false
+    fear-greed:
+      enabled: false
     demo:
       activate-seed-symbols: false
   trading:

@@ -59,6 +59,12 @@ cryptopilot:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
       enabled: true
   market:
+    coinpaprika:
+      # Coin names, logos and supplies and the whole market's cap (application.yml).
+      enabled: true
+    fear-greed:
+      # The Fear & Greed Index of the market list (application.yml).
+      enabled: true
     sync:
       # NSF-01 runs in this profile: at start-up and on the schedule of application.yml.
       enabled: true

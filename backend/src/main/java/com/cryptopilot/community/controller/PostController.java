@@ -4,6 +4,7 @@ import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.CoinDiscussionResponse;
+import com.cryptopilot.community.dto.response.CoinSentimentResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.model.FeedFilter;
@@ -102,6 +103,16 @@ public class PostController {
     @GetMapping("/trending-coins")
     public List<CoinDiscussionResponse> trendingCoins(@RequestParam(required = false) Integer limit) {
         return service.trendingCoins(limit);
+    }
+
+    @Operation(
+            summary = "How the community leans on each coin over the last 30 days, for the market list (D-125); public")
+    @ApiResponse(
+            responseCode = "200",
+            description = "Per coin with any stance or vote: Bullish and Bearish stances plus votes, by symbol")
+    @GetMapping("/coin-sentiment")
+    public List<CoinSentimentResponse> coinSentiment() {
+        return service.coinSentiment();
     }
 
     @Operation(

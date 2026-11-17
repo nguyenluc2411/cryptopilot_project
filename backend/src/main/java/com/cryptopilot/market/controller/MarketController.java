@@ -3,6 +3,7 @@ package com.cryptopilot.market.controller;
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.market.dto.response.CandlesResponse;
+import com.cryptopilot.market.dto.response.CoinMarketResponse;
 import com.cryptopilot.market.dto.response.DepthResponse;
 import com.cryptopilot.market.dto.response.FuturesMetricsResponse;
 import com.cryptopilot.market.dto.response.FuturesStatsResponse;
@@ -10,6 +11,7 @@ import com.cryptopilot.market.dto.response.MarketTradesResponse;
 import com.cryptopilot.market.dto.response.PairResponse;
 import com.cryptopilot.market.dto.response.SpotStatsResponse;
 import com.cryptopilot.market.service.CandleService;
+import com.cryptopilot.market.service.CoinMarketService;
 import com.cryptopilot.market.service.MarketStatsService;
 import com.cryptopilot.market.service.PairService;
 import com.cryptopilot.market.service.TradingDataService;
@@ -54,6 +56,19 @@ public class MarketController {
     private final CandleService candles;
     private final MarketStatsService stats;
     private final TradingDataService trading;
+    private final CoinMarketService coinMarket;
+
+    /** The listed coins with the figures the live tickers do not carry, and the whole market's figures. */
+    @Operation(
+            summary = "The market list of coins and the whole market's figures (SRS 3.3.1)",
+            description = "Every base coin of a listed pair with its supply, its price an hour and a week ago and its"
+                    + " hourly closes of the week; the whole market's cap, the Fear & Greed Index, the altcoin season"
+                    + " and the open interest of the listed Futures pairs. Computed at most once a minute.")
+    @ApiResponse(responseCode = "200", description = "The coins and the figures; a figure not known is absent")
+    @GetMapping("/coins")
+    public CoinMarketResponse coins() {
+        return coinMarket.coins();
+    }
 
     /** The pairs enabled on a market (BR-07), a page at a time, in display order. */
     @Operation(summary = "Pairs enabled on a market, a page at a time (BR-07)")

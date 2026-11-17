@@ -358,7 +358,7 @@ class SystemMonitorApiTest {
                 .andExpect(jsonPath("$.recentWindowMinutes").value(15))
                 .andExpect(jsonPath("$.staleAfterMinutes").value(17))
                 .andExpect(jsonPath("$.systemLogDropped").value(0))
-                .andExpect(jsonPath("$.services.length()").value(5))
+                .andExpect(jsonPath("$.services.length()").value(7))
                 .andExpect(jsonPath("$.services[?(@.source == 'APPLICATION')]").isEmpty())
                 .andExpect(jsonPath("$.services[?(@.source == 'MAIL')].status").value("DEGRADED"))
                 .andExpect(

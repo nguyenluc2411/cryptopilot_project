@@ -3,6 +3,7 @@ package com.cryptopilot.community.service;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.CoinDiscussionResponse;
+import com.cryptopilot.community.dto.response.CoinSentimentResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.model.FeedFilter;
@@ -42,6 +43,12 @@ public interface PostService {
      * first (D-125): at most {@code limit}, 1 to 20, 10 when {@code null}.
      */
     List<CoinDiscussionResponse> trendingCoins(Integer limit);
+
+    /**
+     * How the community leans on each coin over the last 30 days (D-125), for the Sentiment column of the market
+     * list: the authors' Bullish and Bearish stances plus the readers' votes on the posts tagged with it. Public.
+     */
+    List<CoinSentimentResponse> coinSentiment();
 
     /** A post the caller may see (BR-47); MSG41 otherwise. */
     PostDetailResponse detail(UUID caller, UUID postId);

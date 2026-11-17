@@ -9,6 +9,7 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.community.dto.request.PostRequest;
 import com.cryptopilot.community.dto.response.CoinDiscussionResponse;
+import com.cryptopilot.community.dto.response.CoinSentimentResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
 import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.entity.ForumPost;
@@ -29,6 +30,7 @@ import com.cryptopilot.market.MarketApi;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -73,6 +75,9 @@ public class PostServiceImpl implements PostService {
     static final int TRENDING_COINS_DEFAULT = 10;
 
     static final int TRENDING_COINS_MAX = 20;
+
+    /** How far back the Sentiment column of the market list reads (D-125): a month, as the community is small. */
+    static final Duration SENTIMENT_WINDOW = Duration.ofDays(30);
 
     private final ForumPostRepository posts;
     private final PostFeedRepository feeds;
@@ -160,6 +165,25 @@ public class PostServiceImpl implements PostService {
                         coin.postsLastWeek(),
                         coin.totalPosts(),
                         coin.lastPostAt()))
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CoinSentimentResponse> coinSentiment() {
+        List<PostFeedRepository.CoinSentiment> leaning =
+                feeds.coinSentiment(clock.instant().minus(SENTIMENT_WINDOW));
+        Map<UUID, CoinListing> coins = market
+                .coins(leaning.stream()
+                        .map(PostFeedRepository.CoinSentiment::coinId)
+                        .collect(Collectors.toSet()))
+                .stream()
+                .collect(Collectors.toMap(CoinListing::coinId, Function.identity()));
+        return leaning.stream()
+                .filter(coin -> coins.containsKey(coin.coinId()))
+                .map(coin ->
+                        new CoinSentimentResponse(coins.get(coin.coinId()).symbol(), coin.bullish(), coin.bearish()))
+                .sorted(Comparator.comparing(CoinSentimentResponse::symbol))
                 .toList();
     }
 

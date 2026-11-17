@@ -222,7 +222,9 @@ class ExternalCallMonitoringTest {
                         SystemEventSource.AI_SERVICE,
                         SystemEventSource.MEDIA_STORAGE,
                         SystemEventSource.NEWS_SOURCE,
-                        SystemEventSource.MAIL);
+                        SystemEventSource.MAIL,
+                        SystemEventSource.COINPAPRIKA,
+                        SystemEventSource.FEAR_GREED);
     }
 
     @SuppressWarnings("unchecked")
