@@ -56,6 +56,13 @@ class TokenSweepJobTest {
     }
 
     @Test
+    void BR65_aRun_alsoDeletesTheResendRecordsOutsideTheWindow() {
+        job(true).run();
+
+        verify(retention).removeExpiredResendAttempts();
+    }
+
+    @Test
     void NSF17_aFailingRun_isContained() {
         when(retention.removeExpiredRefreshTokens()).thenThrow(new IllegalStateException("database down"));
 

@@ -12,8 +12,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Runs the refresh-token part of NSF-17 daily: expired refresh tokens are deleted, used ones that have not expired
- * are kept for reuse detection. Orchestration only; the rule is in {@link TokenRetentionService}. One instance, no
- * distributed lock: the delete is idempotent.
+ * are kept for reuse detection; verification resend records older than BR-65's window go too (T-105). Orchestration
+ * only; the rule is in {@link TokenRetentionService}. One instance, no distributed lock: the delete is idempotent.
  *
  * <p>Rule: NSF-17; TECHNICAL_DESIGN 7.15.
  */
@@ -48,6 +48,8 @@ public class TokenSweepJob {
         try {
             int deleted = retention.removeExpiredRefreshTokens();
             log.info("NSF-17 deleted {} expired refresh tokens", deleted);
+            int resends = retention.removeExpiredResendAttempts();
+            log.info("NSF-17 deleted {} verification resend records older than 24 h", resends);
         } catch (RuntimeException failure) {
             log.error("NSF-17 refresh-token sweep failed; the next run retries", failure);
         }

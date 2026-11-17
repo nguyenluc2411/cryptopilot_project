@@ -81,43 +81,6 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
     Optional<UserToken> findByTokenHashAndTokenType(String tokenDigest, TokenType tokenType);
 
     /**
-     * The most recently issued token of this kind for this account, or empty if none was ever
-     * issued.
-     *
-     * <p>This is what a resend decides against: how long ago the last verification mail went out
-     * (UC-02). It returns the one row rather than the list, so the throttle cannot accidentally be
-     * written over an unbounded read, and it says nothing about how long the window is — the window
-     * is the caller's, measured against the injected clock.
-     *
-     * <p>Backed by {@code idx_user_token_user_type} on {@code (user_id, token_type)}: both
-     * predicates are equalities on its leading columns. The ordering is not in the index, so the
-     * few rows one account holds of one kind are sorted in memory; adding {@code created_at} to the
-     * index would pay for an insert on every sign-in to save a sort over a handful of rows.
-     *
-     * <p>Rule: SRS UC-02 (resend is throttled).
-     */
-    @Transactional(readOnly = true)
-    Optional<UserToken> findTopByUserIdAndTokenTypeOrderByCreatedAtDesc(UUID userId, TokenType tokenType);
-
-    /**
-     * How many tokens of this kind the account was issued since an instant.
-     *
-     * <p>SRS 3.2.2 caps verification resends at five a day, and this is what the cap is counted
-     * with. It answers a number, not rows: the caller wants to know how many, and handing back the
-     * tokens instead would be an unbounded read dressed up as a count.
-     *
-     * <p>Backed by {@code idx_user_token_user_type}; the instant is a filter on the few rows one
-     * account holds of one kind.
-     *
-     * <p>Rule: SRS 3.2.2 (five resends per day).
-     */
-    @Transactional(readOnly = true)
-    @Query("select count(t) from UserToken t"
-            + " where t.userId = :userId and t.tokenType = :tokenType and t.createdAt >= :since")
-    int countIssuedSince(
-            @Param("userId") UUID userId, @Param("tokenType") TokenType tokenType, @Param("since") Instant since);
-
-    /**
      * Stops every unused token of this kind for this account from working, and answers how many
      * were stopped.
      *
@@ -236,8 +199,8 @@ public interface UserTokenRepository extends Repository<UserToken, UUID> {
      * Deletes the refresh tokens whose own expiry lies before this instant, used or not, and answers how many.
      *
      * <p>A used refresh token is kept until it expires, so that a replay of it is still seen as reuse and ends its
-     * family; after that it can no longer be redeemed and the row is only weight. The other kinds are left alone
-     * because the resend cap counts them. The instant is the caller's clock, not the database's.
+     * family; after that it can no longer be redeemed and the row is only weight. The other kinds are left alone:
+     * they expire on their own. The instant is the caller's clock, not the database's.
      *
      * <p>Backed by {@code idx_user_token_expires_at}.
      *

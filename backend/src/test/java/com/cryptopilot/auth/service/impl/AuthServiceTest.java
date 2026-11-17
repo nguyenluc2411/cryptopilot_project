@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.cryptopilot.admin.SystemSettingApi;
+import com.cryptopilot.admin.service.SystemSettingService;
 import com.cryptopilot.auth.entity.UserToken;
 import com.cryptopilot.auth.event.VerificationTokenIssued;
 import com.cryptopilot.auth.model.enums.TokenType;
@@ -12,6 +13,7 @@ import com.cryptopilot.auth.repository.UserTokenRepository;
 import com.cryptopilot.auth.service.AuthService;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.RetryLaterException;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.time.Clock;
@@ -20,8 +22,13 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -95,6 +102,9 @@ class AuthServiceTest {
     @Autowired
     private SystemSettingApi settings;
 
+    @Autowired
+    private SystemSettingService settingService;
+
     @BeforeEach
     void resetTheClockAndTheMailbox() {
         clock.set(NOW);
@@ -103,6 +113,7 @@ class AuthServiceTest {
 
     @AfterEach
     void removeWhatTheTestWrote() {
+        sql.sql("delete from verification_resend_attempt").update();
         sql.sql("delete from user_account where email like :pattern")
                 .param("pattern", "%" + TEST_DOMAIN)
                 .update();
@@ -468,18 +479,45 @@ class AuthServiceTest {
                 .doesNotThrowAnyException();
     }
 
-    /** SRS 3.2.2: once per 60 seconds, asserted at the boundary and against the declared interval. */
+    /**
+     * D-57 (R107-1): the 60 s cooldown runs from the registration mail too, so a resend right after registering sends
+     * nothing; the registration mail is still not one of the five resends.
+     */
     @Test
-    void UC02_aResendWithinTheMinimumInterval_sendsNothing() {
-        registerAndTakeTheLink("throttle" + TEST_DOMAIN);
+    void BR65_aResendWithinTheIntervalAfterRegistering_isRefused_butTheRegistrationIsNotCounted() {
+        registerAndTakeTheLink("fresh" + TEST_DOMAIN);
 
         clock.advance(resendInterval().minusMillis(1));
-        authService.resendVerification("throttle" + TEST_DOMAIN);
-        assertThat(issuedLinks.all())
-                .as("one millisecond short of the interval, nothing is sent")
-                .isEmpty();
+        assertThat(retryAfterOf("fresh" + TEST_DOMAIN))
+                .as("1 ms before the interval after the registration mail, rounded up")
+                .isEqualTo(1L);
+        assertThat(issuedLinks.all()).as("a refused resend sends nothing").isEmpty();
 
         clock.advance(Duration.ofMillis(1));
+        for (int resend = 0; resend < resendCap(); resend++) {
+            authService.resendVerification("fresh" + TEST_DOMAIN);
+            clock.advance(resendInterval());
+        }
+        assertThat(issuedLinks.all())
+                .as("the registration mail plus the five resends BR-65 allows")
+                .hasSize(resendCap());
+    }
+
+    /** BR-65: one resend per 60 s; 59 s after the first the wait is 1 s, at 60 s the next is accepted. */
+    @Test
+    void BR65_aSecondResendWithinTheInterval_isRefusedWithTheSecondsLeft() {
+        registerAndTakeTheLink("throttle" + TEST_DOMAIN);
+        clock.advance(resendInterval()); // past the cooldown of the registration mail
+        authService.resendVerification("throttle" + TEST_DOMAIN);
+        issuedLinks.clear();
+
+        clock.advance(Duration.ofSeconds(59));
+        assertThat(retryAfterOf("throttle" + TEST_DOMAIN))
+                .as("59 s after the first resend")
+                .isEqualTo(1L);
+        assertThat(issuedLinks.all()).as("a refused resend sends nothing").isEmpty();
+
+        clock.advance(Duration.ofSeconds(1));
         authService.resendVerification("throttle" + TEST_DOMAIN);
         assertThat(issuedLinks.all()).as("at the interval, a link is sent").hasSize(1);
 
@@ -488,24 +526,32 @@ class AuthServiceTest {
                 .isEqualTo(Duration.ofSeconds(60));
     }
 
-    /** BR-65: at most five in any rolling 24 hours per address, counted over the tokens the account already holds. */
+    /** BR-65: five resends in any rolling 24 h; the sixth waits until the first leaves the window. */
     @Test
-    void UC02_aSixthLinkInOneDay_isNotSent() {
+    void BR65_theSixthResendIn24Hours_waitsUntilTheFirstLeavesTheWindow() {
         registerAndTakeTheLink("daily" + TEST_DOMAIN);
-        int resendsLeftAfterRegistration = resendCap() - 1;
-
-        for (int resend = 0; resend < resendsLeftAfterRegistration; resend++) {
-            clock.advance(resendInterval());
+        clock.advance(resendInterval()); // past the cooldown of the registration mail
+        Instant first = clock.instant();
+        for (int resend = 0; resend < resendCap(); resend++) {
             authService.resendVerification("daily" + TEST_DOMAIN);
+            clock.advance(resendInterval());
         }
-        assertThat(issuedLinks.all())
-                .as("the registration link plus four resends is the five the SRS allows")
-                .hasSize(resendsLeftAfterRegistration);
+        assertThat(issuedLinks.all()).as("the five BR-65 allows").hasSize(resendCap());
 
-        clock.advance(resendInterval());
+        Duration toWindowEnd = Duration.between(clock.instant(), first.plus(Duration.ofHours(24)));
+        assertThat(retryAfterOf("daily" + TEST_DOMAIN))
+                .as("the wait runs to the moment the first resend is 24 h old")
+                .isEqualTo(toWindowEnd.toSeconds());
+
+        clock.set(first.plus(Duration.ofHours(24)).minusMillis(1));
+        assertThat(retryAfterOf("daily" + TEST_DOMAIN))
+                .as("1 ms before, rounded up")
+                .isEqualTo(1L);
+
+        clock.set(first.plus(Duration.ofHours(24)));
+        issuedLinks.clear();
         authService.resendVerification("daily" + TEST_DOMAIN);
-
-        assertThat(issuedLinks.all()).as("the sixth is refused").hasSize(resendsLeftAfterRegistration);
+        assertThat(issuedLinks.all()).as("the first resend left the window").hasSize(1);
         assertThat(resendCap())
                 .as("BR-65 states the cap, seeded as RESEND_MAX_PER_24_HOURS")
                 .isEqualTo(5);
@@ -513,29 +559,137 @@ class AuthServiceTest {
 
     /**
      * BR-65: the window is any rolling 24 hours, not a calendar day, so midnight does not give back the five; the
-     * first link leaving the window does.
+     * first resend leaving the window does.
      */
     @Test
     void BR65_theCap_isCountedOverRolling24Hours_notACalendarDay() {
-        Instant first = clock.instant();
         registerAndTakeTheLink("rolling" + TEST_DOMAIN);
-        for (int resend = 1; resend < resendCap(); resend++) {
-            clock.advance(resendInterval());
+        clock.advance(resendInterval()); // past the cooldown of the registration mail
+        Instant first = clock.instant();
+        for (int resend = 0; resend < resendCap(); resend++) {
             authService.resendVerification("rolling" + TEST_DOMAIN);
+            clock.advance(resendInterval());
         }
         issuedLinks.clear();
 
         // 17:00 UTC is midnight at UTC+7, the boundary the cap was once counted from.
-        clock.advance(Duration.between(clock.instant(), first.plus(Duration.ofHours(8))));
-        authService.resendVerification("rolling" + TEST_DOMAIN);
-        assertThat(issuedLinks.all())
+        clock.set(first.plus(Duration.ofHours(8)));
+        assertThat(retryAfterOf("rolling" + TEST_DOMAIN))
                 .as("a new calendar day, still five in the last 24 hours")
-                .isEmpty();
+                .isEqualTo(Duration.ofHours(16).toSeconds());
 
-        clock.advance(Duration.between(
-                clock.instant(), first.plus(Duration.ofHours(24)).plusSeconds(1)));
+        clock.set(first.plus(Duration.ofHours(24)).plusSeconds(1));
         authService.resendVerification("rolling" + TEST_DOMAIN);
-        assertThat(issuedLinks.all()).as("the first link left the window").hasSize(1);
+        assertThat(issuedLinks.all()).as("the first resend left the window").hasSize(1);
+    }
+
+    /**
+     * A-36 (2): the limit is per submitted address, whatever the address holds. An unknown, a verified and an
+     * unverified address driven the same way get the same answers and the same waits.
+     */
+    @Test
+    void A36_theLimit_answersAlikeForUnknownVerifiedAndUnverifiedAddresses() {
+        VerificationTokenIssued verified = registerAndTakeTheLink("verified" + TEST_DOMAIN);
+        authService.verifyEmail(verified.token());
+        registerAndTakeTheLink("unverified" + TEST_DOMAIN);
+        // From the end of the registration cooldown: the register endpoint already tells (MSG04) that they exist.
+        clock.advance(resendInterval());
+        Instant start = clock.instant();
+
+        List<List<Long>> answers = new ArrayList<>();
+        for (String local : List.of("nobody", "verified", "unverified")) {
+            clock.set(start);
+            answers.add(answersOver(local + TEST_DOMAIN));
+        }
+
+        assertThat(answers.get(0)).as("an unknown address meets the limit too").contains(0L, 1L);
+        assertThat(answers.get(1)).as("verified like unknown").isEqualTo(answers.get(0));
+        assertThat(answers.get(2)).as("unverified like unknown").isEqualTo(answers.get(0));
+    }
+
+    /** BR-65: the counter key is the trimmed, lower-cased address, so a change of case shares one counter. */
+    @Test
+    void BR65_theAddressIsNormalised_beforeItIsCounted() {
+        authService.resendVerification(" Mixed.Case" + TEST_DOMAIN.toUpperCase(Locale.ROOT) + " ");
+
+        clock.advance(Duration.ofSeconds(30));
+        assertThat(retryAfterOf("mixed.case" + TEST_DOMAIN)).isEqualTo(30L);
+        assertThat(sql.sql("select address_hash from verification_resend_attempt")
+                        .query(String.class)
+                        .list())
+                .as("only the hash is stored")
+                .singleElement()
+                .isEqualTo(tokenFactory.digestOf("mixed.case" + TEST_DOMAIN));
+    }
+
+    /** BR-65: ten resends at once at the last free place: exactly one passes, the count never overshoots. */
+    @Test
+    void BR65_concurrentResendsAtTheLimit_admitExactlyOne() throws Exception {
+        String address = "race" + TEST_DOMAIN;
+        for (int resend = 1; resend < resendCap(); resend++) {
+            authService.resendVerification(address);
+            clock.advance(resendInterval());
+        }
+
+        int callers = 10;
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<Boolean>> outcomes = new ArrayList<>();
+        try (ExecutorService pool = Executors.newFixedThreadPool(callers)) {
+            for (int caller = 0; caller < callers; caller++) {
+                outcomes.add(pool.submit(() -> {
+                    go.await();
+                    try {
+                        authService.resendVerification(address);
+                        return true;
+                    } catch (RetryLaterException refused) {
+                        return false;
+                    }
+                }));
+            }
+            go.countDown();
+            int accepted = 0;
+            for (Future<Boolean> outcome : outcomes) {
+                accepted += outcome.get() ? 1 : 0;
+            }
+            assertThat(accepted).as("one place was left").isEqualTo(1);
+        }
+        assertThat(sql.sql("select count(*) from verification_resend_attempt")
+                        .query(Integer.class)
+                        .single())
+                .isEqualTo(resendCap());
+    }
+
+    /** BR-65 as a system setting: a cap lowered on SCR-43 applies to the next request. */
+    @Test
+    void BR65_aCapChangedByAnAdministrator_appliesToTheNextResend() {
+        registerAndTakeTheLink("admin" + TEST_DOMAIN);
+        UUID admin = idOf("admin" + TEST_DOMAIN);
+        sql.sql("update user_account set role = 'ADMIN' where user_id = :id")
+                .param("id", admin)
+                .update();
+        try {
+            settingService.update(admin, "RESEND_MAX_PER_24_HOURS", "2");
+            authService.resendVerification("capped" + TEST_DOMAIN);
+            clock.advance(resendInterval());
+            authService.resendVerification("capped" + TEST_DOMAIN);
+            clock.advance(resendInterval());
+
+            assertThat(retryAfterOf("capped" + TEST_DOMAIN))
+                    .as("the third is refused under a cap of two")
+                    .isEqualTo(Duration.ofHours(24)
+                            .minus(resendInterval().multipliedBy(2))
+                            .toSeconds());
+        } finally {
+            settingService.update(admin, "RESEND_MAX_PER_24_HOURS", "5");
+            sql.sql("update system_setting set updated_by = null, updated_at = timestamptz '2026-01-01 00:00:00+00'"
+                            + " where updated_by = :id")
+                    .param("id", admin)
+                    .update();
+            sql.sql("delete from audit_log where user_id = :id")
+                    .param("id", admin)
+                    .update();
+        }
+        assertThat(resendCap()).as("restored").isEqualTo(5);
     }
 
     /**
@@ -558,6 +712,40 @@ class AuthServiceTest {
     }
 
     // -------------------------------------------------------------------- helpers
+
+    /** The retryAfter of a refused resend; fails when the resend is accepted. */
+    private long retryAfterOf(String email) {
+        try {
+            authService.resendVerification(email);
+        } catch (RetryLaterException refused) {
+            assertThat(refused.errorCode()).isEqualTo(ErrorCode.VERIFICATION_RESEND_LIMITED);
+            assertThat(refused.errorCode().messageCode()).isEqualTo("MSG46");
+            return refused.retryAfterSeconds();
+        }
+        throw new AssertionError("the resend of " + email + " was accepted");
+    }
+
+    /** One fixed schedule of resends: 0 for accepted, else the retryAfter. */
+    private List<Long> answersOver(String email) {
+        List<Long> answers = new ArrayList<>();
+        for (Duration step : List.of(
+                Duration.ZERO,
+                Duration.ofSeconds(59),
+                Duration.ofSeconds(1),
+                Duration.ofMinutes(1),
+                Duration.ofMinutes(1),
+                Duration.ofMinutes(1),
+                Duration.ofMinutes(1))) {
+            clock.advance(step);
+            try {
+                authService.resendVerification(email);
+                answers.add(0L);
+            } catch (RetryLaterException refused) {
+                answers.add(refused.retryAfterSeconds());
+            }
+        }
+        return answers;
+    }
 
     /** Registers, and hands back the link with the mailbox emptied for the test's own assertions. */
     private VerificationTokenIssued registerAndTakeTheLink(String email) {

@@ -38,22 +38,13 @@ public interface AuthService {
     /**
      * Sends the verification link again (SRS UC-02, section 3.2.2).
      *
-     * <p>Answers the same whatever happens, and does so on purpose. An address nobody registered,
-     * an address that is already verified, and an address that has asked too often all produce the
-     * same response, so the endpoint cannot be used to discover which addresses hold accounts.
-     * Registration is allowed to reveal that, because MSG04 says so explicitly on the form; an
-     * endpoint that takes an address and nothing else is not.
+     * <p>BR-65 is counted per submitted address, whether or not an account holds it, so an unknown,
+     * a verified and an unverified address get the same answers, 202 or 429 (D-57, A-36 (2)). Only an
+     * unverified account is mailed a new link, which stops the previous unused ones. Timing still
+     * differs (A-29).
      *
-     * <p>SRS 3.2.2 caps this at once per 60 seconds and five a day, and requires a new link to
-     * invalidate the previous unused ones — otherwise every resend would leave another working link
-     * behind in a mailbox.
-     *
-     * <p>What is identical is the <em>answer</em>, not the time it takes to give it, and here there are
-     * three tiers rather than two: an unknown or already verified address returns after one query, a
-     * throttled one after the throttle check, and only the third writes and publishes. That leaks not
-     * just whether an address holds an unverified account but whether it has asked recently. {@link
-     * #login} equalises this kind of difference deliberately; this path does not. A-29, with the same
-     * fix and the same reason for not reaching for a constant delay.
+     * @throws com.cryptopilot.common.exception.RetryLaterException {@code VERIFICATION_RESEND_LIMITED}
+     *     (MSG46) with the seconds to wait
      */
     void resendVerification(String email);
 

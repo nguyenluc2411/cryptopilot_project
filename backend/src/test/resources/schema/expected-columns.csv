@@ -804,6 +804,10 @@ user_token,updated_at,timestamp with time zone,,,NO
 user_token,used_at,timestamp with time zone,,,YES
 user_token,user_id,uuid,,,NO
 user_token,version,bigint,64,0,NO
+verification_resend_attempt,address_hash,character varying,,,NO
+verification_resend_attempt,attempt_id,uuid,,,NO
+verification_resend_attempt,counts_toward_limit,boolean,,,NO
+verification_resend_attempt,requested_at,timestamp with time zone,,,NO
 wallet_balance,balance_id,uuid,,,NO
 wallet_balance,coin_id,uuid,,,NO
 wallet_balance,cost_basis_amount,numeric,28,8,YES

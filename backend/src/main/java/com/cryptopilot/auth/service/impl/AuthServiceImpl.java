@@ -9,10 +9,12 @@ import com.cryptopilot.auth.event.VerificationTokenIssued;
 import com.cryptopilot.auth.model.IssuedSession;
 import com.cryptopilot.auth.model.enums.TokenType;
 import com.cryptopilot.auth.repository.UserTokenRepository;
+import com.cryptopilot.auth.repository.VerificationResendRepository;
 import com.cryptopilot.auth.service.AuthService;
 import com.cryptopilot.auth.service.LiveSessions;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.RetryLaterException;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.user.LoginCredentials;
 import com.cryptopilot.user.UserApi;
@@ -153,6 +155,7 @@ public class AuthServiceImpl implements AuthService {
 
     private final UserApi users;
     private final UserTokenRepository tokens;
+    private final VerificationResendRepository resendAttempts;
     private final SecureTokenFactory tokenFactory;
     private final FamilyRevoker familyRevoker;
     private final LiveSessions liveSessions;
@@ -181,6 +184,7 @@ public class AuthServiceImpl implements AuthService {
     AuthServiceImpl(
             UserApi users,
             UserTokenRepository tokens,
+            VerificationResendRepository resendAttempts,
             SecureTokenFactory tokenFactory,
             FamilyRevoker familyRevoker,
             LiveSessions liveSessions,
@@ -192,6 +196,7 @@ public class AuthServiceImpl implements AuthService {
             Clock clock) {
         this.users = users;
         this.tokens = tokens;
+        this.resendAttempts = resendAttempts;
         this.tokenFactory = tokenFactory;
         this.familyRevoker = familyRevoker;
         this.liveSessions = liveSessions;
@@ -219,6 +224,9 @@ public class AuthServiceImpl implements AuthService {
         PasswordPolicy.requireCompliant(rawPassword);
         UserSummary account = users.registerTrader(email, passwordEncoder.encode(rawPassword), displayName);
         issueVerificationToken(account);
+        // The registration mail starts BR-65's cooldown but is not one of the five resends (R107-1).
+        resendAttempts.recordRegistration(
+                UuidV7.next(), tokenFactory.digestOf(VerificationResendLimit.normalised(email)), clock.instant());
         log.info("Registered account {}", account.userId());
     }
 
@@ -249,35 +257,50 @@ public class AuthServiceImpl implements AuthService {
     /**
      * Sends the verification link again (SRS UC-02, section 3.2.2).
      *
-     * <p>Answers the same whatever happens, and does so on purpose. An address nobody registered,
-     * an address that is already verified, and an address that has asked too often all produce the
-     * same response, so the endpoint cannot be used to discover which addresses hold accounts.
-     * Registration is allowed to reveal that, because MSG04 says so explicitly on the form; an
-     * endpoint that takes an address and nothing else is not.
+     * <p>BR-65 is counted per submitted address, whether or not an account holds it (D-57, A-36 (2)):
+     * every accepted request is recorded under the hash of the normalised address before the account is
+     * looked up, so an unknown, a verified and an unverified address meet the same limit and the 429
+     * says nothing about which one it was. Only an unverified account gets a new link, which stops the
+     * previous unused ones.
      *
-     * <p>SRS 3.2.2 caps this at once per 60 seconds and five a day, and requires a new link to
-     * invalidate the previous unused ones — otherwise every resend would leave another working link
-     * behind in a mailbox.
+     * <p>Count and record run under a transaction-scoped lock on the address, so two concurrent
+     * requests cannot both pass the last free place. A refused request records nothing, which keeps
+     * {@code retryAfter} exact.
      *
-     * <p>What is identical is the <em>answer</em>, not the time it takes to give it, and here there are
-     * three tiers rather than two: an unknown or already verified address returns after one query, a
-     * throttled one after the throttle check, and only the third writes and publishes. That leaks not
-     * just whether an address holds an unverified account but whether it has asked recently. {@link
-     * #login} equalises this kind of difference deliberately; this path does not. A-29, with the same
-     * fix and the same reason for not reaching for a constant delay.
+     * <p>The registration mail also starts the cooldown (D-57), so for 60 s after registering an address
+     * answers 429; registering already tells that the address is taken (MSG04). Timing still differs (A-29).
+     *
+     * @throws RetryLaterException {@code VERIFICATION_RESEND_LIMITED} (MSG46) with the seconds to wait
      */
     @Transactional
     public void resendVerification(String email) {
-        Optional<UserSummary> found = users.findByEmail(email);
+        Instant now = clock.instant();
+        String addressHash = tokenFactory.digestOf(VerificationResendLimit.normalised(email));
+        resendAttempts.lock(addressHash);
+        Duration interval = Duration.ofSeconds(settings.integer(RESEND_MIN_INTERVAL_SECONDS));
+        Duration byTheLimit = VerificationResendLimit.waitBeforeNext(
+                resendAttempts.requestedAfter(addressHash, now.minus(RESEND_WINDOW)),
+                now,
+                interval,
+                settings.integer(RESEND_MAX_PER_24_HOURS),
+                RESEND_WINDOW);
+        Duration byTheCooldown = VerificationResendLimit.waitAfterLastSend(
+                resendAttempts.lastSentAt(addressHash).orElse(null), now, interval);
+        Duration wait = byTheLimit.compareTo(byTheCooldown) >= 0 ? byTheLimit : byTheCooldown;
+        if (!wait.isZero()) {
+            throw new RetryLaterException(
+                    ErrorCode.VERIFICATION_RESEND_LIMITED,
+                    "the verification resend limit of this address is reached",
+                    VerificationResendLimit.secondsRoundedUp(wait));
+        }
+        resendAttempts.record(UuidV7.next(), addressHash, now);
+
+        Optional<UserSummary> found = users.findByEmail(email.strip());
         if (found.isEmpty() || found.get().emailVerified()) {
             return;
         }
         UserSummary account = found.get();
-        if (isThrottled(account)) {
-            log.info("Resend refused for account {}: within the limits of SRS 3.2.2", account.userId());
-            return;
-        }
-        tokens.invalidateUnused(account.userId(), TokenType.EMAIL_VERIFICATION, clock.instant());
+        tokens.invalidateUnused(account.userId(), TokenType.EMAIL_VERIFICATION, now);
         issueVerificationToken(account);
     }
 
@@ -569,23 +592,6 @@ public class AuthServiceImpl implements AuthService {
     private static BusinessException sessionExpired(String reason) {
         log.info("Session refused: {}", reason);
         return new BusinessException(ErrorCode.SESSION_EXPIRED, SESSION_OVER_DETAIL);
-    }
-
-    private boolean isThrottled(UserSummary account) {
-        Instant now = clock.instant();
-        Optional<Instant> lastIssued = tokens.findTopByUserIdAndTokenTypeOrderByCreatedAtDesc(
-                        account.userId(), TokenType.EMAIL_VERIFICATION)
-                .map(UserToken::getCreatedAt);
-        if (lastIssued.isPresent()
-                && lastIssued
-                        .get()
-                        .plusSeconds(settings.integer(RESEND_MIN_INTERVAL_SECONDS))
-                        .isAfter(now)) {
-            return true;
-        }
-        int issuedInWindow =
-                tokens.countIssuedSince(account.userId(), TokenType.EMAIL_VERIFICATION, now.minus(RESEND_WINDOW));
-        return issuedInWindow >= settings.integer(RESEND_MAX_PER_24_HOURS);
     }
 
     /**

@@ -19,7 +19,7 @@ class ErrorCodeTest {
     /**
      * Every constant with the SRS 5.3 message and the status reviewed for it. A constant added without a row here
      * fails, so no message id reaches a client unless someone checked it exists in SRS 5.3; ids no constant uses yet
-     * (MSG46, MSG47, MSG49 among them) are not listed.
+     * (MSG47, MSG49 among them) are not listed.
      */
     private static final Map<ErrorCode, String> REVIEWED = Map.ofEntries(
             Map.entry(ErrorCode.VALIDATION_FAILED, "MSG01 400"),
@@ -43,6 +43,7 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.PLAN_LIMIT_REACHED, "MSG27 409"),
             Map.entry(ErrorCode.AI_DAILY_QUOTA_EXHAUSTED, "MSG30 429"),
             Map.entry(ErrorCode.RATE_LIMITED, "MSG50 429"),
+            Map.entry(ErrorCode.VERIFICATION_RESEND_LIMITED, "MSG46 429"),
             Map.entry(ErrorCode.RISK_PROFILE_CONFIRMATION_REQUIRED, "MSG48 400"),
             Map.entry(ErrorCode.TRADING_BLOCKING_WARNING, "MSG18 409"),
             Map.entry(ErrorCode.ENTRY_DEVIATION_CONFIRMATION_REQUIRED, "MSG51 400"),

@@ -11,7 +11,6 @@ import com.cryptopilot.user.entity.UserAccount;
 import jakarta.persistence.EntityManager;
 import java.lang.reflect.Method;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.UUID;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
@@ -29,9 +28,8 @@ import org.springframework.transaction.annotation.Transactional;
  * The four operations the token repository offers, against the schema Flyway migrated.
  *
  * <p>Two of them carry a rule. Looking a token up together with its kind is what stops a password
- * reset link from verifying an address; asking for the most recently issued token of a kind is
- * what a resend throttle decides against. The other two are the plain ones, and the test that
- * matters for them is the miss rather than the hit.
+ * reset link from verifying an address. The resend limit is counted per address in its own table
+ * since T-105, not over these tokens. The plain lookups are tested on the miss as well as the hit.
  *
  * <p>What is proved here is the persistence half of BR-01 and BR-04: a token can be found by the
  * digest of the value presented, and only as the kind it was issued as. That a link is valid for 24
@@ -144,69 +142,6 @@ class UserTokenRepositoryTest {
     }
 
     // ------------------------------------------------------------------------------------------
-    // The latest token of a kind, for the resend throttle (UC-02)
-    // ------------------------------------------------------------------------------------------
-
-    /**
-     * The row a resend decides against: the last verification mail this account was sent. The
-     * ordering is the whole method, so the fixture issues three tokens whose instants differ and
-     * the newest has to come back.
-     *
-     * <p>How long the window is does not appear here and does not appear in the repository. It is
-     * not in the SRS either, which is why it is an open question rather than a number somebody
-     * chose.
-     */
-    @Test
-    void theLatestTokenOfAKind_isTheOneAResendIsThrottledAgainst() {
-        UUID account = persistedAccount("throttle@cryptopilot.invalid");
-        persistedTokenCreatedAt(account, TokenType.EMAIL_VERIFICATION, digest('1'), ISSUED.minusSeconds(600));
-        persistedTokenCreatedAt(account, TokenType.EMAIL_VERIFICATION, digest('3'), ISSUED.minusSeconds(60));
-        persistedTokenCreatedAt(account, TokenType.EMAIL_VERIFICATION, digest('2'), ISSUED.minusSeconds(300));
-        em.clear();
-
-        assertThat(tokens.findTopByUserIdAndTokenTypeOrderByCreatedAtDesc(account, TokenType.EMAIL_VERIFICATION))
-                .get()
-                .extracting(UserToken::getTokenHash)
-                .isEqualTo(digest('3'));
-    }
-
-    /** The kind is part of the question: a reset link is not a verification mail. */
-    @Test
-    void theLatestTokenOfAKind_ignoresTheOtherKinds() {
-        UUID account = persistedAccount("throttle.kinds@cryptopilot.invalid");
-        persistedTokenCreatedAt(account, TokenType.EMAIL_VERIFICATION, digest('1'), ISSUED.minusSeconds(600));
-        persistedTokenCreatedAt(account, TokenType.PASSWORD_RESET, digest('2'), ISSUED);
-        em.clear();
-
-        assertThat(tokens.findTopByUserIdAndTokenTypeOrderByCreatedAtDesc(account, TokenType.EMAIL_VERIFICATION))
-                .get()
-                .extracting(UserToken::getTokenHash)
-                .isEqualTo(digest('1'));
-    }
-
-    /** The account is part of the question too: another account's mail throttles nobody. */
-    @Test
-    void theLatestTokenOfAKind_ignoresOtherAccounts() {
-        UUID mine = persistedAccount("mine@cryptopilot.invalid");
-        UUID theirs = persistedAccount("theirs@cryptopilot.invalid");
-        persistedTokenCreatedAt(theirs, TokenType.EMAIL_VERIFICATION, digest('2'), ISSUED);
-        em.clear();
-
-        assertThat(tokens.findTopByUserIdAndTokenTypeOrderByCreatedAtDesc(mine, TokenType.EMAIL_VERIFICATION))
-                .isEmpty();
-    }
-
-    /** An account that was never sent one: empty, so a first resend is not throttled by a null. */
-    @Test
-    void anAccountThatWasNeverSentAToken_hasNoLatestOne() {
-        UUID account = persistedAccount("never@cryptopilot.invalid");
-        em.clear();
-
-        assertThat(tokens.findTopByUserIdAndTokenTypeOrderByCreatedAtDesc(account, TokenType.EMAIL_VERIFICATION))
-                .isEmpty();
-    }
-
-    // ------------------------------------------------------------------------------------------
     // Cost, uniqueness and shape
     // ------------------------------------------------------------------------------------------
 
@@ -232,13 +167,6 @@ class UserTokenRepositoryTest {
         tokens.findByTokenHashAndTokenType(digest('e'), TokenType.EMAIL_VERIFICATION);
         assertThat(statistics.getPrepareStatementCount())
                 .as("findByTokenHashAndTokenType: no account is fetched behind the token")
-                .isEqualTo(1L);
-
-        em.clear();
-        statistics.clear();
-        tokens.findTopByUserIdAndTokenTypeOrderByCreatedAtDesc(account, TokenType.EMAIL_VERIFICATION);
-        assertThat(statistics.getPrepareStatementCount())
-                .as("findTopByUserIdAndTokenTypeOrderByCreatedAtDesc")
                 .isEqualTo(1L);
     }
 
@@ -293,8 +221,6 @@ class UserTokenRepositoryTest {
                 .containsExactlyInAnyOrder(
                         "findByTokenHash",
                         "findByTokenHashAndTokenType",
-                        "findTopByUserIdAndTokenTypeOrderByCreatedAtDesc",
-                        "countIssuedSince",
                         "countUnusedInSession",
                         "deleteExpiredRefreshTokens",
                         "invalidateUnused",
@@ -400,8 +326,8 @@ class UserTokenRepositoryTest {
 
     /**
      * RFC 9700 4.14: a used refresh token stays stored until its own expiry, so that a replay of it is still
-     * recognised as reuse; once expired it is deleted. Only refresh tokens are swept: the other kinds are counted
-     * by the resend cap.
+     * recognised as reuse; once expired it is deleted. Only refresh tokens are swept: the other kinds expire
+     * on their own and are left alone.
      */
     @Test
     void TD715_expiredRefreshTokens_areDeletedAndUnexpiredOnesKept() {
@@ -496,18 +422,6 @@ class UserTokenRepositoryTest {
                         : UserToken.issue(account, type, tokenDigest, expiresAt));
         em.flush();
         return token;
-    }
-
-    /**
-     * A token whose creation instant is forced, because the audit listener stamps every row in one
-     * test with the same clock reading and the ordering under test needs them to differ.
-     */
-    private void persistedTokenCreatedAt(UUID account, TokenType type, String tokenDigest, Instant createdAt) {
-        UserToken token = persistedToken(account, type, tokenDigest, EXPIRES);
-        jdbc.sql("update user_token set created_at = ? where token_id = ?")
-                .param(createdAt.atOffset(ZoneOffset.UTC))
-                .param(token.getId())
-                .update();
     }
 
     private String planFor(String sql) {
