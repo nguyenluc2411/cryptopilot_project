@@ -93,13 +93,14 @@ class NewsApiTest {
     }
 
     @Test
-    void UC34_theFeed_isForTradersOnly() throws Exception {
+    void UC34_theFeed_isForTradersAndAdmins() throws Exception {
         mvc.perform(get(NEWS)).andExpect(status().isUnauthorized());
         UUID admin = account(UserRole.ADMIN);
-        as(admin, NEWS).andExpect(status().isForbidden());
+        // Q-86: an Admin reads the feed and an article as SRS 3.1.3 states.
+        as(admin, NEWS).andExpect(status().isOk());
         as(trader, SENTIMENT_SUMMARY).andExpect(status().isForbidden());
         mvc.perform(get(NEWS + "/" + UUID.randomUUID())).andExpect(status().isUnauthorized());
-        as(admin, NEWS + "/" + UUID.randomUUID()).andExpect(status().isForbidden());
+        as(admin, NEWS + "/" + UUID.randomUUID()).andExpect(status().isNotFound());
     }
 
     @Test

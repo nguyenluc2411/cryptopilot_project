@@ -62,8 +62,8 @@ import org.springframework.security.web.SecurityFilterChain;
  * <tr><td>SCR-08…15 Dashboard, Market, Watchlist, Alerts, Notifications</td><td>{@code /analysis/**}, {@code /watchlist/**}, {@code /alerts/**}, {@code /notifications/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-16…19 Trading Plans and Position</td><td>{@code /plans/**}</td><td>TRADER</td></tr>
  * <tr><td>SCR-20…23 Journal and Performance</td><td>{@code /journal/**}, {@code /strategies}</td><td>TRADER</td></tr>
- * <tr><td>SCR-24…27 Community</td><td>{@code /posts/**}, {@code /comments/**}, {@code /media/**}</td><td>TRADER</td></tr>
- * <tr><td>SCR-28 News Feed</td><td>{@code /news/**}</td><td>TRADER</td></tr>
+ * <tr><td>SCR-24…27 Community</td><td>{@code /posts/**}, {@code /comments/**}, {@code /media/**}</td><td>TRADER; GET {@code /comments/*} also ADMIN</td></tr>
+ * <tr><td>SCR-28 News Feed</td><td>{@code /news/**}</td><td>TRADER; GET {@code /news}, {@code /news/*} also ADMIN</td></tr>
  * <tr><td>SCR-29 AI Assistant</td><td>{@code /ai/**}</td><td>TRADER + entitlement</td></tr>
  * <tr><td>SCR-30…32 Subscription and Payment</td><td>{@code /billing/packages}, {@code /billing/gateways}, {@code /billing/orders/**}, {@code /billing/subscription}</td><td>TRADER</td></tr>
  * <tr><td>SCR-33…44 Administration console</td><td>{@code /admin/**}</td><td>ADMIN</td></tr>
@@ -75,8 +75,8 @@ import org.springframework.security.web.SecurityFilterChain;
  * administrators use only the administration console, and the matrix leaves every Trader row blank
  * for them. So an administrator's token is refused at {@code /plans}, {@code /journal} and the rest -
  * not because an administrator is untrusted, but because an account that both moderates the community
- * and trades in it is a conflict the SRS chose to avoid. The one row they share is the Security tab,
- * since an administrator must be able to change their own password.
+ * and trades in it is a conflict the SRS chose to avoid. They share the Security tab, since an administrator
+ * must be able to change their own password, and the community reads of {@link #SHARED_COMMUNITY_READS}.
  *
  * <p><b>The payment callbacks are not in the Trader area.</b> The IPN of each gateway
  * ({@code /billing/ipn/sepay}, {@code /billing/ipn/momo}, {@link #PAYMENT_CALLBACKS}) is open: it arrives
@@ -219,6 +219,13 @@ public class SecurityConfig {
     static final String SHARED_PASSWORD_CHANGE = "/api/v1/me/password";
 
     /**
+     * The community reads SRS 3.1.3 grants to both roles (row "Query Community Data", Q-86): the news feed, an
+     * article and a comment. GET only, so writing in the community stays in {@link #TRADER_AREA}; declared before it
+     * for the same first-match reason as {@link #SHARED_PASSWORD_CHANGE}.
+     */
+    static final String[] SHARED_COMMUNITY_READS = {"/api/v1/news", "/api/v1/news/*", "/api/v1/comments/*"};
+
+    /**
      * Everything SRS 3.1.3 grants to a Trader and to nobody else. The order of the entries carries no
      * meaning; the order relative to {@link #SHARED_PASSWORD_CHANGE} does.
      */
@@ -283,6 +290,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, PAYMENT_CALLBACKS)
                         .permitAll()
                         .requestMatchers(SHARED_PASSWORD_CHANGE)
+                        .hasAnyRole(UserRole.TRADER.name(), UserRole.ADMIN.name())
+                        .requestMatchers(HttpMethod.GET, SHARED_COMMUNITY_READS)
                         .hasAnyRole(UserRole.TRADER.name(), UserRole.ADMIN.name())
                         .requestMatchers(TRADER_AREA)
                         .hasRole(UserRole.TRADER.name())
