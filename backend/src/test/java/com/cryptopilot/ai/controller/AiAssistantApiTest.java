@@ -307,6 +307,11 @@ class AiAssistantApiTest {
                 .excursions("95", "125")
                 .review("my secret setup", "my lesson", "my mistake", null)
                 .insert(sql);
+        Timestamp profiled = Timestamp.from(Instant.now());
+        sql.sql("""
+                        insert into user_profile (user_id, display_name, default_capital, trading_style, risk_profile,
+                                                  created_at, updated_at)
+                        values (?, 'Swing Trader', 73519.24, 'SWING', 'BALANCED', ?, ?)""").params(premium, profiled, profiled).update();
         when(client.chat(any())).thenReturn(new AiChatAnswer("ok", "gemini-test", 1, 1));
         UUID conversation = start(premium, "MY_TRADING");
 
@@ -323,7 +328,18 @@ class AiAssistantApiTest {
                 .query(String.class)
                 .single();
         JsonNode root = JsonMapper.builder().build().readTree(snapshot);
-        assertThat(root.path("version").asInt()).isEqualTo(3);
+        assertThat(root.path("version").asInt()).isEqualTo(4);
+        assertThat(root.path("builtAt").isString())
+                .as("instants are ISO-8601 text, which the cited sources of an answer rely on (T-074)")
+                .isTrue();
+        assertThat(root.path("trader").path("tradingStyle").asString()).isEqualTo("SWING");
+        assertThat(root.path("trader").path("riskProfile").asString()).isEqualTo("BALANCED");
+        assertThat(snapshot)
+                .as("the profile's capital and name stay out (BR-51)")
+                .doesNotContain("73519", "Swing Trader");
+        assertThat(root.path("news").isMissingNode() || root.path("news").isNull())
+                .as("no pair, so no news")
+                .isTrue();
         JsonNode summary = root.path("performance").path("summary");
         assertThat(root.path("performance").path("available").asBoolean()).isTrue();
         assertThat(summary.path("trades").asInt()).isEqualTo(1);

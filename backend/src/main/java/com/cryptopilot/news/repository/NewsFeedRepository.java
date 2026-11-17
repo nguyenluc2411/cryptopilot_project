@@ -83,6 +83,64 @@ public class NewsFeedRepository {
                 .optional();
     }
 
+    /**
+     * The shown articles tagged with {@code coinId} published at or after {@code since}, at most {@code limit}: those
+     * whose headline names the coin first (the primary tag), then by publication, newest first. For the AI Assistant
+     * (T-074), which reads a few articles about the coin asked about.
+     */
+    public List<FeedArticle> latestAboutCoin(UUID coinId, Instant since, int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        return sql.sql("""
+                        select a.article_id, a.title, a.ai_title, s.source_name, a.original_url, a.excerpt,
+                               a.ai_summary, a.sentiment_label, a.published_at, a.image_url, null as ai_body
+                          from news_article a
+                          join news_source s on s.source_id = a.source_id
+                          join news_article_coin c on c.article_id = a.article_id and c.coin_id = :coin
+                         where a.published_at >= :since and a.hidden_at is null
+                         order by c.is_primary desc, a.published_at desc, a.article_id desc
+                         limit :limit""")
+                .param("coin", coinId)
+                .param("since", Timestamp.from(since))
+                .param("limit", limit)
+                .query((row, index) -> article(row))
+                .list();
+    }
+
+    /**
+     * The shown articles tagged with no coin published at or after {@code since}, newest first, at most {@code limit}:
+     * news about the market in general (a hack of an exchange, a rate decision) that bears on every coin.
+     */
+    public List<FeedArticle> latestAboutMarket(Instant since, int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        return sql.sql("""
+                        select a.article_id, a.title, a.ai_title, s.source_name, a.original_url, a.excerpt,
+                               a.ai_summary, a.sentiment_label, a.published_at, a.image_url, null as ai_body
+                          from news_article a
+                          join news_source s on s.source_id = a.source_id
+                         where a.published_at >= :since and a.hidden_at is null
+                           and not exists (select 1 from news_article_coin c where c.article_id = a.article_id)
+                         order by a.published_at desc, a.article_id desc
+                         limit :limit""")
+                .param("since", Timestamp.from(since))
+                .param("limit", limit)
+                .query((row, index) -> article(row))
+                .list();
+    }
+
+    /** When an active source was last read, or empty when none has been read yet. */
+    public Optional<Instant> lastCrawledAt() {
+        return sql.sql("""
+                        select max(last_crawled_at) from news_source
+                         where is_active having max(last_crawled_at) is not null""")
+                .query((row, index) -> row.getTimestamp(1))
+                .optional()
+                .map(Timestamp::toInstant);
+    }
+
     /** The coins each of these articles is tagged with, the primary one first; an article without tags is left out. */
     public Map<UUID, List<CoinTag>> coinTags(Collection<UUID> articleIds) {
         Map<UUID, List<CoinTag>> result = new HashMap<>();

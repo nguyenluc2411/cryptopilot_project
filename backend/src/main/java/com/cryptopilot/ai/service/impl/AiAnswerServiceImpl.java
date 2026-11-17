@@ -1,6 +1,7 @@
 package com.cryptopilot.ai.service.impl;
 
 import com.cryptopilot.ai.calculator.AnswerGuard;
+import com.cryptopilot.ai.calculator.AnswerSources;
 import com.cryptopilot.ai.client.AiServiceClient;
 import com.cryptopilot.ai.config.AiAssistantProperties;
 import com.cryptopilot.ai.dto.response.AiAnswerPush;
@@ -10,6 +11,7 @@ import com.cryptopilot.ai.entity.AiConversation;
 import com.cryptopilot.ai.entity.AiMessage;
 import com.cryptopilot.ai.model.AiChatAnswer;
 import com.cryptopilot.ai.model.AiChatRequest;
+import com.cryptopilot.ai.model.AnswerSource;
 import com.cryptopilot.ai.model.ChatTurn;
 import com.cryptopilot.ai.model.PendingQuestion;
 import com.cryptopilot.ai.model.enums.MessageStatus;
@@ -196,6 +198,10 @@ public class AiAnswerServiceImpl implements AiAnswerService {
 
     private void complete(PendingQuestion pending, AiChatAnswer answer) {
         String text = AnswerGuard.withDisclaimer(answer.text(), pending.disclaimer());
+        List<AnswerSource> cited = AnswerSources.cited(
+                answer.text(),
+                pending.request() == null ? null : pending.request().context());
+        String sources = cited.isEmpty() ? null : json.writeValueAsString(cited);
         readWrite.executeWithoutResult(status -> {
             Instant now = clock.instant();
             if (messages.decide(pending.questionId(), MessageStatus.COMPLETED.name(), now) == 0) {
@@ -203,7 +209,12 @@ public class AiAnswerServiceImpl implements AiAnswerService {
                 return;
             }
             AiMessage stored = messages.save(AiMessage.answer(
-                    pending.conversationId(), pending.questionId(), text, answer.inputTokens(), answer.outputTokens()));
+                    pending.conversationId(),
+                    pending.questionId(),
+                    text,
+                    sources,
+                    answer.inputTokens(),
+                    answer.outputTokens()));
             MessageResponse body = AiMessages.of(stored);
             pushAfterCommit(
                     pending.userId(),
