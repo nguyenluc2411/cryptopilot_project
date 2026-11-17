@@ -17,13 +17,13 @@ class AiModelTest {
 
     @Test
     void T074_aSnapshotCarriesNothing_onlyWhenEveryPartIsMissing() {
-        assertThat(new ContextSnapshot(1, AT, null, null, null).carriesNothing())
+        assertThat(new ContextSnapshot(1, AT, null, null, null, null, null).carriesNothing())
                 .isTrue();
-        assertThat(new ContextSnapshot(1, AT, mock(PairAnalysis.class), null, null).carriesNothing())
+        assertThat(new ContextSnapshot(1, AT, mock(PairAnalysis.class), null, null, null, null).carriesNothing())
                 .isFalse();
-        assertThat(new ContextSnapshot(1, AT, null, mock(PlanContext.class), null).carriesNothing())
+        assertThat(new ContextSnapshot(1, AT, null, mock(PlanContext.class), null, null, null).carriesNothing())
                 .isFalse();
-        assertThat(new ContextSnapshot(1, AT, null, null, mock(PerformanceContext.class)).carriesNothing())
+        assertThat(new ContextSnapshot(1, AT, null, null, mock(PerformanceContext.class), null, null).carriesNothing())
                 .isFalse();
     }
 

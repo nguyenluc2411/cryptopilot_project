@@ -71,6 +71,7 @@ ai_message,message_status,character varying,,,NO
 ai_message,output_tokens,integer,32,0,YES
 ai_message,question_id,uuid,,,YES
 ai_message,sender_role,character varying,,,NO
+ai_message,sources,jsonb,,,YES
 ai_message,updated_at,timestamp with time zone,,,NO
 ai_message,version,bigint,64,0,NO
 alert,alert_id,uuid,,,NO

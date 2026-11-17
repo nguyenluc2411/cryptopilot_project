@@ -37,5 +37,22 @@ class AiServiceExceptionTest {
                 .isTrue();
         assertThat(failure(AiServiceException.BAD_ANSWER, false, 200).stopsTheRun())
                 .isFalse();
+        assertThat(failure("LLM_REJECTED", false, 502).stopsTheRun()).isFalse();
+    }
+
+    @Test
+    void NSF11_anOverloadedOrSlowProvider_stopsTheRun_andOnlyATimeoutMayBeTheRequest() {
+        assertThat(failure(AiServiceException.LLM_UNAVAILABLE, true, 503).stopsTheRun())
+                .isTrue();
+        assertThat(failure(AiServiceException.LLM_TIMEOUT, true, 504).stopsTheRun())
+                .isTrue();
+        assertThat(failure(AiServiceException.LLM_TIMEOUT, true, 504).mayBeTheRequest())
+                .isTrue();
+        assertThat(failure(AiServiceException.LLM_UNAVAILABLE, true, 503).mayBeTheRequest())
+                .isFalse();
+        assertThat(failure(AiServiceException.RATE_LIMITED, true, 429).mayBeTheRequest())
+                .isFalse();
+        assertThat(failure(AiServiceException.UNREACHABLE, true, 0).mayBeTheRequest())
+                .isFalse();
     }
 }

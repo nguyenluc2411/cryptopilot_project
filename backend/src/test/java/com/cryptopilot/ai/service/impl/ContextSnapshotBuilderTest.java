@@ -10,9 +10,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.ai.AssistantArticle;
+import com.cryptopilot.ai.AssistantNews;
+import com.cryptopilot.ai.AssistantNewsSource;
 import com.cryptopilot.ai.model.AiContextSelection;
 import com.cryptopilot.ai.model.ContextSnapshot;
+import com.cryptopilot.ai.model.NewsContext;
 import com.cryptopilot.ai.model.PerformanceContext;
+import com.cryptopilot.ai.model.TraderContext;
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
@@ -27,13 +32,20 @@ import com.cryptopilot.market.model.enums.DominantSide;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.ScoredSide;
 import com.cryptopilot.market.model.enums.SetupStyle;
+import com.cryptopilot.news.config.NewsAssistantProperties;
 import com.cryptopilot.trading.PlanContext;
 import com.cryptopilot.trading.TradingPlanApi;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.MarginMode;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.model.enums.WarningSeverity;
 import com.cryptopilot.trading.model.enums.WarningType;
+import com.cryptopilot.user.TradingProfile;
+import com.cryptopilot.user.UserApi;
+import com.cryptopilot.user.model.enums.RiskProfile;
+import com.cryptopilot.user.model.enums.TradingStyle;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -41,7 +53,9 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.StreamWriteFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -56,9 +70,16 @@ class ContextSnapshotBuilderTest {
     private final TradingPlanApi plans = mock(TradingPlanApi.class);
     private final JournalApi journal = mock(JournalApi.class);
     private final EntitlementApi entitlements = mock(EntitlementApi.class);
+    private final AssistantNewsSource news = mock(AssistantNewsSource.class);
+    private final UserApi users = mock(UserApi.class);
     private final JsonMapper json = JsonMapper.builder().build();
-    private final ContextSnapshotBuilder builder =
-            new ContextSnapshotBuilder(market, plans, journal, entitlements, json, Clock.fixed(NOW, ZoneOffset.UTC));
+    private final ContextSnapshotBuilder builder = new ContextSnapshotBuilder(
+            market, plans, journal, news, users, entitlements, json, Clock.fixed(NOW, ZoneOffset.UTC));
+
+    @BeforeEach
+    void noNewsByDefault() {
+        when(news.recentNews(any())).thenReturn(AssistantNews.NONE);
+    }
 
     @Test
     void BR51_thePairsAnalysis_isReadAsTheTraderSeesIt_onTheChosenSeries() {
@@ -82,7 +103,7 @@ class ContextSnapshotBuilderTest {
         JsonNode root = json.readTree(builder.toJson(
                 builder.build(USER, new AiContextSelection(PAIR, MarketType.FUTURES, "1h", null, false))));
 
-        assertThat(root.path("version").asInt()).isEqualTo(3);
+        assertThat(root.path("version").asInt()).isEqualTo(ContextSnapshot.VERSION);
         assertThat(root.path("market").path("scoredSide").asString()).isEqualTo("SHORT");
         assertThat(root.path("market").path("capReason").asString()).isEqualTo("LOW_ROOM");
         assertThat(root.path("market").path("dominantSide").asString()).isEqualTo("NEUTRAL");
@@ -117,7 +138,7 @@ class ContextSnapshotBuilderTest {
         assertThat(snapshot.carriesNothing()).isTrue();
         assertThat(builder.toJson(snapshot)).isNull();
         assertThat(builder.toJson(null)).isNull();
-        verifyNoInteractions(market, plans, journal, entitlements);
+        verifyNoInteractions(market, plans, journal, entitlements, news, users);
     }
 
     @Test
@@ -251,6 +272,191 @@ class ContextSnapshotBuilderTest {
         } else if (node.isArray()) {
             node.forEach(child -> collect(child, names));
         }
+    }
+
+    /** Version 4 (T-074): a question about a pair reads the news about its coin and the market, numbered to cite. */
+    @Test
+    void T074_aPairQuestion_carriesTheCoinNewsThenTheMarketNews_numberedFromOne_withTheTimeOfTheLastRead() {
+        Instant crawled = NOW.minusSeconds(420);
+        AssistantArticle coin = new AssistantArticle(
+                "ETF Bitcoin bị rút ròng",
+                "CoinDesk",
+                NOW.minusSeconds(3600),
+                "Quỹ ETF bị rút 635 triệu USD.",
+                "BEARISH",
+                "https://coindesk.example/etf");
+        AssistantArticle marketWide = new AssistantArticle(
+                "Sàn bị hack 6,3 tỷ USD",
+                "Cointelegraph",
+                NOW.minusSeconds(7200),
+                null,
+                null,
+                "https://ct.example/hack");
+        when(news.recentNews(PAIR)).thenReturn(new AssistantNews("BTC", crawled, List.of(coin), List.of(marketWide)));
+        when(market.pairAnalysis(PAIR, MarketType.SPOT, null, USER)).thenReturn(Optional.of(analysis()));
+
+        ContextSnapshot snapshot = builder.build(USER, new AiContextSelection(PAIR, null, null, null, false));
+
+        assertThat(snapshot.version()).isEqualTo(4);
+        assertThat(snapshot.news().coin()).isEqualTo("BTC");
+        assertThat(snapshot.news().checkedUpTo()).isEqualTo(crawled);
+        assertThat(snapshot.news().articles())
+                .containsExactly(
+                        new NewsContext.NewsItem(
+                                1,
+                                NewsContext.About.COIN,
+                                "ETF Bitcoin bị rút ròng",
+                                "CoinDesk",
+                                coin.publishedAt(),
+                                "Quỹ ETF bị rút 635 triệu USD.",
+                                "BEARISH",
+                                "https://coindesk.example/etf"),
+                        new NewsContext.NewsItem(
+                                2,
+                                NewsContext.About.MARKET,
+                                "Sàn bị hack 6,3 tỷ USD",
+                                "Cointelegraph",
+                                marketWide.publishedAt(),
+                                null,
+                                null,
+                                "https://ct.example/hack"));
+        JsonNode root = json.readTree(builder.toJson(snapshot));
+        assertThat(root.path("news").path("articles").get(0).path("ref").asInt())
+                .isEqualTo(1);
+        assertThat(root.path("news").path("articles").get(1).path("url").asString())
+                .isEqualTo("https://ct.example/hack");
+    }
+
+    @Test
+    void T074_aPlanQuestion_readsTheNewsOfThePlansPair_andAPairWithoutNews_saysWhenTheOutletsWereRead() {
+        when(plans.planContext(USER, PLAN)).thenReturn(plan());
+        when(market.pairAnalysis(PAIR, MarketType.FUTURES, "1h", USER)).thenReturn(Optional.of(analysis()));
+        when(news.recentNews(PAIR)).thenReturn(new AssistantNews("BTC", NOW, List.of(), List.of()));
+
+        ContextSnapshot snapshot = builder.build(USER, new AiContextSelection(null, null, null, PLAN, false));
+
+        verify(news).recentNews(PAIR);
+        assertThat(snapshot.news().articles()).isEmpty();
+        assertThat(snapshot.news().checkedUpTo()).isEqualTo(NOW);
+    }
+
+    @Test
+    void T074_aQuestionWithAnythingChosen_carriesTheTradersStyle_butNoNewsWithoutAPair() {
+        when(journal.performanceDigest(USER)).thenReturn(digest());
+        when(users.tradingProfileOf(USER))
+                .thenReturn(Optional.of(new TradingProfile(TradingStyle.SWING, RiskProfile.BALANCED)));
+
+        ContextSnapshot snapshot = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        assertThat(snapshot.trader()).isEqualTo(new TraderContext("SWING", "BALANCED"));
+        assertThat(snapshot.news()).isNull();
+        verifyNoInteractions(news);
+    }
+
+    @Test
+    void T074_aStyleTheProfileHasNotSet_isSentAsNull_andNoProfileSendsNoTrader() {
+        when(market.pairAnalysis(PAIR, MarketType.SPOT, null, USER)).thenReturn(Optional.of(analysis()));
+        when(users.tradingProfileOf(USER)).thenReturn(Optional.of(new TradingProfile(null, RiskProfile.CONSERVATIVE)));
+
+        assertThat(builder.build(USER, new AiContextSelection(PAIR, null, null, null, false))
+                        .trader())
+                .isEqualTo(new TraderContext(null, "CONSERVATIVE"));
+
+        when(users.tradingProfileOf(USER)).thenReturn(Optional.empty());
+        assertThat(builder.build(USER, new AiContextSelection(PAIR, null, null, null, false))
+                        .trader())
+                .isNull();
+    }
+
+    /** NSF-16 (F1): the largest context the news limits allow still fits the AI Service's 20,000 characters. */
+    @Test
+    void NSF16_theWorstCaseContextAtTheConfiguredLimits_isWithin20000Characters() {
+        int atTheLimits = worstCaseContextLength(
+                NewsAssistantProperties.MAX_ARTICLES, 0, NewsAssistantProperties.MAX_SUMMARY_CHARS);
+        int atTheDefaults = worstCaseContextLength(5, 3, 400);
+
+        // Measured: 16,866 at the limits, 15,272 at the defaults.
+        assertThat(atTheLimits).as("worst case at the limits").isLessThanOrEqualTo(20_000);
+        assertThat(atTheDefaults).as("worst case at the defaults").isLessThanOrEqualTo(atTheLimits);
+    }
+
+    /**
+     * The context as the application writes it (decimals as strings) with every part at its largest: the market with
+     * every indicator, a plan with every warning, PREMIUM performance, the trader, and the articles at their longest
+     * (headline 200 and link 500, as {@code NewsForAssistant} cuts them; outlet 100, the column's length).
+     */
+    private int worstCaseContextLength(int coinArticles, int marketArticles, int summaryChars) {
+        JsonMapper app = JsonMapper.builder()
+                .enable(StreamWriteFeature.WRITE_BIGDECIMAL_AS_PLAIN)
+                .withConfigOverride(
+                        BigDecimal.class,
+                        override -> override.setFormat(JsonFormat.Value.forShape(JsonFormat.Shape.STRING)))
+                .build();
+        ContextSnapshotBuilder worst = new ContextSnapshotBuilder(
+                market, plans, journal, news, users, entitlements, app, Clock.fixed(NOW, ZoneOffset.UTC));
+        BigDecimal wide = new BigDecimal("123456789.123456789012");
+        PairAnalysis full = new PairAnalysis(
+                "1000SATSUSDT",
+                MarketType.FUTURES,
+                "1h",
+                NOW,
+                wide,
+                new PairAnalysis.Indicators(wide, wide, wide, wide, wide, wide, wide, wide, wide, wide, wide, wide),
+                wide,
+                wide,
+                true,
+                new PairAnalysis.Components(wide, wide, wide, wide, wide),
+                100,
+                SetupStyle.DAY_TRADING,
+                DominantSide.NEUTRAL,
+                ScoredSide.SHORT,
+                CapReason.LOW_ROOM,
+                wide,
+                wide);
+        List<PlanContext.Warning> warnings = java.util.Arrays.stream(WarningType.values())
+                .map(type -> new PlanContext.Warning(type, type.severity(), "x".repeat(200)))
+                .toList();
+        PlanContext plan = new PlanContext(
+                PAIR,
+                MarketType.FUTURES,
+                Direction.LONG,
+                EntryType.LIMIT,
+                wide,
+                wide,
+                wide,
+                wide,
+                125,
+                MarginMode.ISOLATED,
+                "1h",
+                PlanStatus.DRAFT,
+                wide,
+                "DAY_TRADING v1",
+                wide,
+                wide,
+                wide,
+                wide,
+                warnings);
+        AssistantArticle longest = new AssistantArticle(
+                "h".repeat(200),
+                "o".repeat(100),
+                NOW,
+                "s".repeat(summaryChars),
+                "NEUTRAL",
+                "https://e.example/" + "u".repeat(500 - 18));
+        when(plans.planContext(USER, PLAN)).thenReturn(plan);
+        when(market.pairAnalysis(PAIR, MarketType.FUTURES, "1h", USER)).thenReturn(Optional.of(full));
+        when(journal.performanceDigest(USER)).thenReturn(digest());
+        when(users.tradingProfileOf(USER))
+                .thenReturn(Optional.of(new TradingProfile(TradingStyle.POSITION, RiskProfile.CONSERVATIVE)));
+        when(news.recentNews(PAIR))
+                .thenReturn(new AssistantNews(
+                        "1000SATS",
+                        NOW,
+                        java.util.Collections.nCopies(coinArticles, longest),
+                        java.util.Collections.nCopies(marketArticles, longest)));
+
+        String context = worst.toJson(worst.build(USER, new AiContextSelection(null, null, null, PLAN, true)));
+        return context.length();
     }
 
     private static PairAnalysis analysis() {

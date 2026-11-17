@@ -4,22 +4,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ProblemDetails;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
@@ -27,6 +34,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
  * Every row of the authorization matrix of SRS section 3.1.3, driven as a real request through the
@@ -80,6 +88,9 @@ class AuthorizationMatrixTest {
     private static final String ADMIN_USERS = "/api/v1/admin/users";
     private static final String PUBLIC_MARKET = "/api/v1/market/pairs";
     private static final String ANALYSIS = "/api/v1/analysis/spot/BTCUSDT";
+    private static final String AI_ASK = "/api/v1/ai/conversations/00000000-0000-0000-0000-000000000001/messages";
+    private static final String ADMIN_ACADEMY = "/api/v1/admin/academy/articles";
+    private static final String ACADEMY_PROGRESS = "/api/v1/me/academy/progress";
 
     @Autowired
     private MockMvc mvc;
@@ -152,8 +163,6 @@ class AuthorizationMatrixTest {
         @ValueSource(
                 strings = {
                     PROFILE,
-                    "/api/v1/me/notification-preferences",
-                    "/api/v1/me/devices",
                     "/api/v1/watchlist",
                     "/api/v1/alerts",
                     "/api/v1/notifications",
@@ -164,8 +173,6 @@ class AuthorizationMatrixTest {
                     "/api/v1/journal/00000000-0000-0000-0000-000000000000",
                     "/api/v1/journal/performance/summary",
                     "/api/v1/posts",
-                    "/api/v1/comments/1",
-                    "/api/v1/media/upload-signature",
                     "/api/v1/news",
                     "/api/v1/ai/conversations",
                     "/api/v1/billing/packages",
@@ -175,6 +182,16 @@ class AuthorizationMatrixTest {
                 })
         void SRS313_theTraderArea_admitsATrader(String path) throws Exception {
             assertAdmitted(mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, bearer(UserRole.TRADER))));
+        }
+
+        // Paths with no GET handler, sent with their real method; the empty body stops at validation.
+        @ParameterizedTest(name = "{0} {1} admits a Trader")
+        @MethodSource("com.cryptopilot.auth.config.AuthorizationMatrixTest#traderWrites")
+        void SRS313_theTraderArea_admitsATraderWrite(HttpMethod method, String path) throws Exception {
+            assertAdmitted(mvc.perform(request(method, path)
+                    .header(HttpHeaders.AUTHORIZATION, bearer(UserRole.TRADER))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{}")));
         }
 
         @ParameterizedTest(name = "{0} challenges a Guest")
@@ -203,6 +220,7 @@ class AuthorizationMatrixTest {
             assertUnauthenticated(mvc.perform(get(path)));
         }
 
+        // Q-86: /news and /comments/1 are read by an Admin too, see the row 20 cases.
         @ParameterizedTest(name = "{0} refuses an Admin")
         @ValueSource(
                 strings = {
@@ -220,8 +238,6 @@ class AuthorizationMatrixTest {
                     "/api/v1/journal/performance/by-strategy",
                     "/api/v1/journal/performance/by-market",
                     "/api/v1/journal/performance/equity-curve",
-                    "/api/v1/comments/1",
-                    "/api/v1/news",
                     "/api/v1/ai/conversations",
                     "/api/v1/billing/packages"
                 })
@@ -364,6 +380,98 @@ class AuthorizationMatrixTest {
         @ValueSource(strings = {ADMIN_USERS, "/api/v1/admin/system-events", "/api/v1/admin/system-health"})
         void SRS313_theAdministrationConsole_challengesAGuest(String path) throws Exception {
             assertUnauthenticated(mvc.perform(get(path)));
+        }
+    }
+
+    /** The caller column of the matrix; GUEST sends no token. */
+    enum Caller {
+        GUEST,
+        TRADER,
+        ADMIN
+    }
+
+    /** What the chain must answer: let through, 401, or 403. */
+    enum Outcome {
+        ADMIT,
+        CHALLENGE,
+        REFUSE
+    }
+
+    /** Trader-area paths that have only write handlers, with the method each one serves. */
+    static Stream<Arguments> traderWrites() {
+        return Stream.of(
+                Arguments.of(HttpMethod.PUT, "/api/v1/me/notification-preferences"),
+                Arguments.of(HttpMethod.POST, "/api/v1/me/devices"),
+                Arguments.of(HttpMethod.PUT, "/api/v1/comments/00000000-0000-0000-0000-000000000001"),
+                Arguments.of(HttpMethod.POST, "/api/v1/media/upload-signature"));
+    }
+
+    /** The cases of the T-015 gap check, one line per (row, endpoint, caller), the row number of the gap table first. */
+    static Stream<Arguments> gapRows() {
+        Stream<Arguments> publicAuth = Arrays.stream(SecurityConfig.PUBLIC_AUTH_ENDPOINTS)
+                .map(path -> Arguments.of(2, HttpMethod.POST, path, Caller.GUEST, Outcome.ADMIT));
+        Stream<Arguments> rest = Stream.of(
+                Arguments.of(3, HttpMethod.GET, PROFILE, Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(7, HttpMethod.GET, "/api/v1/paper/futures/account", Caller.TRADER, Outcome.ADMIT),
+                Arguments.of(7, HttpMethod.GET, "/api/v1/paper/futures/account", Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(7, HttpMethod.GET, "/api/v1/paper/futures/account", Caller.ADMIN, Outcome.REFUSE),
+                Arguments.of(7, HttpMethod.GET, "/api/v1/paper/futures/positionRisk", Caller.TRADER, Outcome.ADMIT),
+                Arguments.of(7, HttpMethod.POST, "/api/v1/paper/futures/order", Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(7, HttpMethod.POST, "/api/v1/paper/futures/order", Caller.ADMIN, Outcome.REFUSE),
+                Arguments.of(10, HttpMethod.POST, "/api/v1/media/upload-signature", Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(10, HttpMethod.POST, "/api/v1/media/upload-signature", Caller.ADMIN, Outcome.REFUSE),
+                Arguments.of(10, HttpMethod.GET, "/api/v1/community/influencers", Caller.GUEST, Outcome.ADMIT),
+                Arguments.of(13, HttpMethod.POST, AI_ASK, Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(13, HttpMethod.POST, AI_ASK, Caller.ADMIN, Outcome.REFUSE),
+                Arguments.of(14, HttpMethod.GET, "/api/v1/billing/orders/CP-0", Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(14, HttpMethod.GET, "/api/v1/billing/orders/CP-0", Caller.ADMIN, Outcome.REFUSE),
+                Arguments.of(14, HttpMethod.POST, "/api/v1/billing/orders", Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(14, HttpMethod.POST, "/api/v1/billing/orders", Caller.ADMIN, Outcome.REFUSE),
+                Arguments.of(14, HttpMethod.GET, "/api/v1/billing/subscription", Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(14, HttpMethod.GET, "/api/v1/billing/subscription", Caller.ADMIN, Outcome.REFUSE),
+                Arguments.of(15, HttpMethod.GET, "/api/v1/admin/pairs", Caller.TRADER, Outcome.REFUSE),
+                Arguments.of(15, HttpMethod.GET, "/api/v1/admin/leverage-brackets", Caller.TRADER, Outcome.REFUSE),
+                Arguments.of(15, HttpMethod.GET, "/api/v1/admin/packages", Caller.TRADER, Outcome.REFUSE),
+                Arguments.of(15, HttpMethod.GET, "/api/v1/admin/orders", Caller.TRADER, Outcome.REFUSE),
+                Arguments.of(15, HttpMethod.GET, "/api/v1/admin/news-sources", Caller.TRADER, Outcome.REFUSE),
+                Arguments.of(15, HttpMethod.GET, "/api/v1/admin/news-articles", Caller.TRADER, Outcome.REFUSE),
+                Arguments.of(15, HttpMethod.GET, ADMIN_ACADEMY, Caller.TRADER, Outcome.REFUSE),
+                Arguments.of(15, HttpMethod.GET, "/api/v1/admin/ai-configurations", Caller.TRADER, Outcome.REFUSE),
+                Arguments.of(16, HttpMethod.GET, "/api/v1/admin/audit-log", Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(16, HttpMethod.GET, "/api/v1/admin/ai-configurations", Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(17, HttpMethod.GET, "/api/v1/admin/news-articles", Caller.ADMIN, Outcome.ADMIT),
+                Arguments.of(17, HttpMethod.GET, ADMIN_ACADEMY, Caller.ADMIN, Outcome.ADMIT),
+                Arguments.of(17, HttpMethod.GET, "/api/v1/admin/audit-log/export", Caller.ADMIN, Outcome.ADMIT),
+                Arguments.of(18, HttpMethod.GET, "/api/v1/admin/announcements", Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(19, HttpMethod.GET, ACADEMY_PROGRESS, Caller.TRADER, Outcome.ADMIT),
+                Arguments.of(19, HttpMethod.GET, ACADEMY_PROGRESS, Caller.GUEST, Outcome.CHALLENGE),
+                Arguments.of(19, HttpMethod.GET, ACADEMY_PROGRESS, Caller.ADMIN, Outcome.REFUSE),
+                // Q-86: Admin reads news and comments as SRS 3.1.3 states; community writes stay refused.
+                Arguments.of(20, HttpMethod.GET, "/api/v1/news", Caller.ADMIN, Outcome.ADMIT),
+                Arguments.of(
+                        20,
+                        HttpMethod.GET,
+                        "/api/v1/posts/00000000-0000-0000-0000-000000000001/comments",
+                        Caller.ADMIN,
+                        Outcome.ADMIT),
+                Arguments.of(20, HttpMethod.POST, "/api/v1/posts", Caller.ADMIN, Outcome.REFUSE));
+        return Stream.concat(publicAuth, rest);
+    }
+
+    /** Every gap row of T-015 (rows 2, 3, 7, 10, 13 to 20 of the gap table), driven through the real chain. */
+    @ParameterizedTest(name = "row {0}: {1} {2} as {3} -> {4}")
+    @MethodSource("gapRows")
+    void SRS313_matrixRow_answersAsTheMatrixSays(
+            int row, HttpMethod method, String path, Caller caller, Outcome outcome) throws Exception {
+        MockHttpServletRequestBuilder call = request(method, path);
+        if (caller != Caller.GUEST) {
+            call.header(HttpHeaders.AUTHORIZATION, bearer(UserRole.valueOf(caller.name())));
+        }
+        ResultActions performed = mvc.perform(call);
+        switch (outcome) {
+            case ADMIT -> assertAdmitted(performed);
+            case CHALLENGE -> assertUnauthenticated(performed);
+            case REFUSE -> assertForbidden(performed);
         }
     }
 
@@ -524,7 +632,8 @@ class AuthorizationMatrixTest {
         int status = performed.andReturn().getResponse().getStatus();
         assertThat(status)
                 .as("the filter chain admitted the request; what answers it is the business of the task that builds it")
-                .isNotIn(401, 403)
+                // 405: no handler for this method at the path, so the case would prove nothing.
+                .isNotIn(401, 403, 405)
                 .isLessThan(500);
     }
 

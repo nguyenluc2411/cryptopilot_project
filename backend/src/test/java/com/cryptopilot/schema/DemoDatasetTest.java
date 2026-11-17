@@ -192,6 +192,40 @@ class DemoDatasetTest {
         assertThat(count("user_subscription")).isEqualTo(4);
     }
 
+    @Test
+    void NSF10_reapplyingTheNewsSources_movesAnOldSixtyMinuteSeedTo15_andLeavesAnyOtherIntervalAlone()
+            throws Exception {
+        String first = "019b76da-a800-7e0e-8000-000000000001";
+        String second = "019b76da-a800-7e0e-8000-000000000002";
+        try {
+            setInterval(first, 60);
+            setInterval(second, 45);
+
+            applyDemoScript("db/demo/R__demo_news_sources.sql");
+
+            assertThat(intervalOf(first))
+                    .as("the interval the file used to seed")
+                    .isEqualTo(15);
+            assertThat(intervalOf(second)).as("an interval somebody chose").isEqualTo(45);
+        } finally {
+            setInterval(first, 15);
+            setInterval(second, 15);
+        }
+    }
+
+    private void setInterval(String sourceId, int minutes) {
+        demoJdbc.sql("update news_source set crawl_interval_minutes = ? where source_id = ?::uuid")
+                .params(minutes, sourceId)
+                .update();
+    }
+
+    private int intervalOf(String sourceId) {
+        return demoJdbc.sql("select crawl_interval_minutes from news_source where source_id = ?::uuid")
+                .param(sourceId)
+                .query(Integer.class)
+                .single();
+    }
+
     /**
      * The WF-01 accounts (DEMO-01): verified Traders with the password of the environment, the profile each scenario
      * needs (BR-66) and, on a day of the defence, the tier of their subscription (BR-62); FREE has none, and the paid

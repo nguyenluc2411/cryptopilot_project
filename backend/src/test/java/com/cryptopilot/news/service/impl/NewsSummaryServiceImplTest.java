@@ -305,6 +305,35 @@ class NewsSummaryServiceImplTest {
     }
 
     @Test
+    void NSF11_anOverloadedProvider_endsTheRun_withoutCountingAnAttempt() {
+        NewsArticle first = article("One", "a");
+        NewsArticle second = article("Two", "b");
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(first, second));
+        when(ai.summarize(any()))
+                .thenThrow(
+                        new AiServiceException(AiServiceException.LLM_UNAVAILABLE, true, "Gemini failed (HTTP 503)"));
+
+        assertThat(service(properties(30)).summarizeDue()).isEqualTo(new SummaryRun(2, 0, 1));
+        verify(ai, times(1)).summarize(any());
+        verify(articles, never()).recordFailedAttempt(any(), any(), any());
+    }
+
+    @Test
+    void NSF11_aTimeout_endsTheRun_andCountsAnAttemptAgainstThatArticleOnly() {
+        NewsArticle slow = article("One", "a");
+        NewsArticle next = article("Two", "b");
+        when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(slow, next));
+        when(ai.summarize(any()))
+                .thenThrow(
+                        new AiServiceException(AiServiceException.LLM_TIMEOUT, true, "Gemini did not answer in time"));
+
+        assertThat(service(properties(30)).summarizeDue()).isEqualTo(new SummaryRun(2, 0, 1));
+        verify(ai, times(1)).summarize(any());
+        verify(articles).recordFailedAttempt(slow.getId(), "LLM_TIMEOUT: Gemini did not answer in time", NOW);
+        verify(articles, never()).recordFailedAttempt(eq(next.getId()), any(), any());
+    }
+
+    @Test
     void D119_aFailureIsRecordedWithinTheLengthOfItsColumn() {
         NewsArticle article = article("Bitcoin", "x");
         when(articles.findUnsummarized(any(), anyInt(), anyInt())).thenReturn(List.of(article));
