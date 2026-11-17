@@ -264,8 +264,9 @@ cryptopilot:
       # Each whole call, body included: a small one (one coin, the global figures), and a list (several MB).
       read-timeout: 15s
       body-timeout: 120s
-      # A coin CoinPaprika had nothing more for (no match, nothing to add) is tried again after this long.
-      retry-unmatched-after: 24h
+      # A coin CoinPaprika had nothing more for (no match, nothing to add) is tried again after this long. Under the
+      # daily sync cycle, so a sync that ends a little earlier than the day before still retries it.
+      retry-unmatched-after: 23h
       # Binance symbol -> CoinPaprika id where the ticker alone picks the wrong coin. CoinPaprika lists Toncoin as
       # GRAM, so TON would match TonToken (checked 2026-11-17).
       overrides:
