@@ -3,6 +3,7 @@ package com.cryptopilot.auth.repository;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -31,11 +32,11 @@ public class VerificationResendRepository {
                 .single();
     }
 
-    /** The accepted resends of the address after {@code since} (exclusive), oldest first. */
+    /** The accepted resends of the address after {@code since} (exclusive), oldest first; the registration mail not. */
     public List<Instant> requestedAfter(String addressHash, Instant since) {
         return sql.sql("""
                         select requested_at from verification_resend_attempt
-                         where address_hash = :hash and requested_at > :since
+                         where address_hash = :hash and requested_at > :since and counts_toward_limit
                          order by requested_at""")
                 .param("hash", addressHash)
                 .param("since", Timestamp.from(since))
@@ -43,14 +44,33 @@ public class VerificationResendRepository {
                 .list();
     }
 
+    /** When the address was last sent a verification mail, the registration mail included, if within the sweep. */
+    public Optional<Instant> lastSentAt(String addressHash) {
+        return sql.sql("select max(requested_at) from verification_resend_attempt where address_hash = :hash")
+                .param("hash", addressHash)
+                .query((row, index) -> Optional.ofNullable(row.getTimestamp(1)).map(Timestamp::toInstant))
+                .single();
+    }
+
     /** Records one accepted resend. */
     public void record(UUID attemptId, String addressHash, Instant requestedAt) {
+        insert(attemptId, addressHash, requestedAt, true);
+    }
+
+    /** Records the registration mail: it starts the cooldown but is not one of BR-65's five resends. */
+    public void recordRegistration(UUID attemptId, String addressHash, Instant requestedAt) {
+        insert(attemptId, addressHash, requestedAt, false);
+    }
+
+    private void insert(UUID attemptId, String addressHash, Instant requestedAt, boolean countsTowardLimit) {
         sql.sql("""
-                        insert into verification_resend_attempt (attempt_id, address_hash, requested_at)
-                        values (:id, :hash, :at)""")
+                        insert into verification_resend_attempt (attempt_id, address_hash, requested_at,
+                                                                 counts_toward_limit)
+                        values (:id, :hash, :at, :counts)""")
                 .param("id", attemptId)
                 .param("hash", addressHash)
                 .param("at", Timestamp.from(requestedAt))
+                .param("counts", countsTowardLimit)
                 .update();
     }
 

@@ -479,10 +479,35 @@ class AuthServiceTest {
                 .doesNotThrowAnyException();
     }
 
+    /**
+     * D-57 (R107-1): the 60 s cooldown runs from the registration mail too, so a resend right after registering sends
+     * nothing; the registration mail is still not one of the five resends.
+     */
+    @Test
+    void BR65_aResendWithinTheIntervalAfterRegistering_isRefused_butTheRegistrationIsNotCounted() {
+        registerAndTakeTheLink("fresh" + TEST_DOMAIN);
+
+        clock.advance(resendInterval().minusMillis(1));
+        assertThat(retryAfterOf("fresh" + TEST_DOMAIN))
+                .as("1 ms before the interval after the registration mail, rounded up")
+                .isEqualTo(1L);
+        assertThat(issuedLinks.all()).as("a refused resend sends nothing").isEmpty();
+
+        clock.advance(Duration.ofMillis(1));
+        for (int resend = 0; resend < resendCap(); resend++) {
+            authService.resendVerification("fresh" + TEST_DOMAIN);
+            clock.advance(resendInterval());
+        }
+        assertThat(issuedLinks.all())
+                .as("the registration mail plus the five resends BR-65 allows")
+                .hasSize(resendCap());
+    }
+
     /** BR-65: one resend per 60 s; 59 s after the first the wait is 1 s, at 60 s the next is accepted. */
     @Test
     void BR65_aSecondResendWithinTheInterval_isRefusedWithTheSecondsLeft() {
         registerAndTakeTheLink("throttle" + TEST_DOMAIN);
+        clock.advance(resendInterval()); // past the cooldown of the registration mail
         authService.resendVerification("throttle" + TEST_DOMAIN);
         issuedLinks.clear();
 
@@ -504,8 +529,9 @@ class AuthServiceTest {
     /** BR-65: five resends in any rolling 24 h; the sixth waits until the first leaves the window. */
     @Test
     void BR65_theSixthResendIn24Hours_waitsUntilTheFirstLeavesTheWindow() {
-        Instant first = clock.instant();
         registerAndTakeTheLink("daily" + TEST_DOMAIN);
+        clock.advance(resendInterval()); // past the cooldown of the registration mail
+        Instant first = clock.instant();
         for (int resend = 0; resend < resendCap(); resend++) {
             authService.resendVerification("daily" + TEST_DOMAIN);
             clock.advance(resendInterval());
@@ -537,8 +563,9 @@ class AuthServiceTest {
      */
     @Test
     void BR65_theCap_isCountedOverRolling24Hours_notACalendarDay() {
-        Instant first = clock.instant();
         registerAndTakeTheLink("rolling" + TEST_DOMAIN);
+        clock.advance(resendInterval()); // past the cooldown of the registration mail
+        Instant first = clock.instant();
         for (int resend = 0; resend < resendCap(); resend++) {
             authService.resendVerification("rolling" + TEST_DOMAIN);
             clock.advance(resendInterval());
@@ -565,6 +592,8 @@ class AuthServiceTest {
         VerificationTokenIssued verified = registerAndTakeTheLink("verified" + TEST_DOMAIN);
         authService.verifyEmail(verified.token());
         registerAndTakeTheLink("unverified" + TEST_DOMAIN);
+        // From the end of the registration cooldown: the register endpoint already tells (MSG04) that they exist.
+        clock.advance(resendInterval());
         Instant start = clock.instant();
 
         List<List<Long>> answers = new ArrayList<>();

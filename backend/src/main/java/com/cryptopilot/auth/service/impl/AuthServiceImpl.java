@@ -224,6 +224,9 @@ public class AuthServiceImpl implements AuthService {
         PasswordPolicy.requireCompliant(rawPassword);
         UserSummary account = users.registerTrader(email, passwordEncoder.encode(rawPassword), displayName);
         issueVerificationToken(account);
+        // The registration mail starts BR-65's cooldown but is not one of the five resends (R107-1).
+        resendAttempts.recordRegistration(
+                UuidV7.next(), tokenFactory.digestOf(VerificationResendLimit.normalised(email)), clock.instant());
         log.info("Registered account {}", account.userId());
     }
 
@@ -264,7 +267,8 @@ public class AuthServiceImpl implements AuthService {
      * requests cannot both pass the last free place. A refused request records nothing, which keeps
      * {@code retryAfter} exact.
      *
-     * <p>The time taken still differs between the three cases (A-29).
+     * <p>The registration mail also starts the cooldown (D-57), so for 60 s after registering an address
+     * answers 429; registering already tells that the address is taken (MSG04). Timing still differs (A-29).
      *
      * @throws RetryLaterException {@code VERIFICATION_RESEND_LIMITED} (MSG46) with the seconds to wait
      */
@@ -273,12 +277,16 @@ public class AuthServiceImpl implements AuthService {
         Instant now = clock.instant();
         String addressHash = tokenFactory.digestOf(VerificationResendLimit.normalised(email));
         resendAttempts.lock(addressHash);
-        Duration wait = VerificationResendLimit.waitBeforeNext(
+        Duration interval = Duration.ofSeconds(settings.integer(RESEND_MIN_INTERVAL_SECONDS));
+        Duration byTheLimit = VerificationResendLimit.waitBeforeNext(
                 resendAttempts.requestedAfter(addressHash, now.minus(RESEND_WINDOW)),
                 now,
-                Duration.ofSeconds(settings.integer(RESEND_MIN_INTERVAL_SECONDS)),
+                interval,
                 settings.integer(RESEND_MAX_PER_24_HOURS),
                 RESEND_WINDOW);
+        Duration byTheCooldown = VerificationResendLimit.waitAfterLastSend(
+                resendAttempts.lastSentAt(addressHash).orElse(null), now, interval);
+        Duration wait = byTheLimit.compareTo(byTheCooldown) >= 0 ? byTheLimit : byTheCooldown;
         if (!wait.isZero()) {
             throw new RetryLaterException(
                     ErrorCode.VERIFICATION_RESEND_LIMITED,

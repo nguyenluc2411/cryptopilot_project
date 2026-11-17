@@ -41,6 +41,15 @@ final class VerificationResendLimit {
         return next.isAfter(now) ? Duration.between(now, next) : Duration.ZERO;
     }
 
+    /** The wait the cooldown alone imposes after the last mail sent, the registration mail included (D-57). */
+    static Duration waitAfterLastSend(Instant lastSent, Instant now, Duration interval) {
+        if (lastSent == null) {
+            return Duration.ZERO;
+        }
+        Instant next = lastSent.plus(interval);
+        return next.isAfter(now) ? Duration.between(now, next) : Duration.ZERO;
+    }
+
     /** Whole seconds, rounded up, so a client that waits this long is never refused again for the same reason. */
     static long secondsRoundedUp(Duration wait) {
         long seconds = wait.getSeconds();

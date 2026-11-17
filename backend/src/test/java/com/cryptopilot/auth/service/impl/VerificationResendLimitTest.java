@@ -20,6 +20,16 @@ class VerificationResendLimitTest {
     }
 
     @Test
+    void BR65_theCooldownAfterTheLastMail_endsExactlyAt60Seconds() {
+        assertThat(VerificationResendLimit.waitAfterLastSend(null, T0, INTERVAL))
+                .isZero();
+        assertThat(VerificationResendLimit.waitAfterLastSend(T0, T0.plusSeconds(59), INTERVAL))
+                .isEqualTo(Duration.ofSeconds(1));
+        assertThat(VerificationResendLimit.waitAfterLastSend(T0, T0.plus(INTERVAL), INTERVAL))
+                .isZero();
+    }
+
+    @Test
     void BR65_theInterval_endsExactlyAt60Seconds() {
         List<Instant> one = List.of(T0);
 
