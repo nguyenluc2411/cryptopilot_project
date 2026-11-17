@@ -26,6 +26,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
@@ -162,8 +163,6 @@ class AuthorizationMatrixTest {
         @ValueSource(
                 strings = {
                     PROFILE,
-                    "/api/v1/me/notification-preferences",
-                    "/api/v1/me/devices",
                     "/api/v1/watchlist",
                     "/api/v1/alerts",
                     "/api/v1/notifications",
@@ -174,8 +173,6 @@ class AuthorizationMatrixTest {
                     "/api/v1/journal/00000000-0000-0000-0000-000000000000",
                     "/api/v1/journal/performance/summary",
                     "/api/v1/posts",
-                    "/api/v1/comments/1",
-                    "/api/v1/media/upload-signature",
                     "/api/v1/news",
                     "/api/v1/ai/conversations",
                     "/api/v1/billing/packages",
@@ -185,6 +182,16 @@ class AuthorizationMatrixTest {
                 })
         void SRS313_theTraderArea_admitsATrader(String path) throws Exception {
             assertAdmitted(mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, bearer(UserRole.TRADER))));
+        }
+
+        // Paths with no GET handler, sent with their real method; the empty body stops at validation.
+        @ParameterizedTest(name = "{0} {1} admits a Trader")
+        @MethodSource("com.cryptopilot.auth.config.AuthorizationMatrixTest#traderWrites")
+        void SRS313_theTraderArea_admitsATraderWrite(HttpMethod method, String path) throws Exception {
+            assertAdmitted(mvc.perform(request(method, path)
+                    .header(HttpHeaders.AUTHORIZATION, bearer(UserRole.TRADER))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{}")));
         }
 
         @ParameterizedTest(name = "{0} challenges a Guest")
@@ -390,6 +397,15 @@ class AuthorizationMatrixTest {
         REFUSE
     }
 
+    /** Trader-area paths that have only write handlers, with the method each one serves. */
+    static Stream<Arguments> traderWrites() {
+        return Stream.of(
+                Arguments.of(HttpMethod.PUT, "/api/v1/me/notification-preferences"),
+                Arguments.of(HttpMethod.POST, "/api/v1/me/devices"),
+                Arguments.of(HttpMethod.PUT, "/api/v1/comments/00000000-0000-0000-0000-000000000001"),
+                Arguments.of(HttpMethod.POST, "/api/v1/media/upload-signature"));
+    }
+
     /** The cases of the T-015 gap check, one line per (row, endpoint, caller), the row number of the gap table first. */
     static Stream<Arguments> gapRows() {
         Stream<Arguments> publicAuth = Arrays.stream(SecurityConfig.PUBLIC_AUTH_ENDPOINTS)
@@ -432,7 +448,12 @@ class AuthorizationMatrixTest {
                 Arguments.of(19, HttpMethod.GET, ACADEMY_PROGRESS, Caller.ADMIN, Outcome.REFUSE),
                 // Q-86: Admin reads news and comments as SRS 3.1.3 states; community writes stay refused.
                 Arguments.of(20, HttpMethod.GET, "/api/v1/news", Caller.ADMIN, Outcome.ADMIT),
-                Arguments.of(20, HttpMethod.GET, "/api/v1/comments/1", Caller.ADMIN, Outcome.ADMIT),
+                Arguments.of(
+                        20,
+                        HttpMethod.GET,
+                        "/api/v1/posts/00000000-0000-0000-0000-000000000001/comments",
+                        Caller.ADMIN,
+                        Outcome.ADMIT),
                 Arguments.of(20, HttpMethod.POST, "/api/v1/posts", Caller.ADMIN, Outcome.REFUSE));
         return Stream.concat(publicAuth, rest);
     }
@@ -611,7 +632,8 @@ class AuthorizationMatrixTest {
         int status = performed.andReturn().getResponse().getStatus();
         assertThat(status)
                 .as("the filter chain admitted the request; what answers it is the business of the task that builds it")
-                .isNotIn(401, 403)
+                // 405: no handler for this method at the path, so the case would prove nothing.
+                .isNotIn(401, 403, 405)
                 .isLessThan(500);
     }
 

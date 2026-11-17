@@ -219,11 +219,11 @@ public class SecurityConfig {
     static final String SHARED_PASSWORD_CHANGE = "/api/v1/me/password";
 
     /**
-     * The community reads SRS 3.1.3 grants to both roles (row "Query Community Data", Q-86): the news feed, an
-     * article and a comment. GET only, so writing in the community stays in {@link #TRADER_AREA}; declared before it
-     * for the same first-match reason as {@link #SHARED_PASSWORD_CHANGE}.
+     * The community reads SRS 3.1.3 grants to both roles (row "Query Community Data", Q-86): the news feed and an
+     * article; comments are read through the public posts routes. GET only, so writing in the community stays in
+     * {@link #TRADER_AREA}; declared before it for the same first-match reason as {@link #SHARED_PASSWORD_CHANGE}.
      */
-    static final String[] SHARED_COMMUNITY_READS = {"/api/v1/news", "/api/v1/news/*", "/api/v1/comments/*"};
+    static final String[] SHARED_COMMUNITY_READS = {"/api/v1/news", "/api/v1/news/*"};
 
     /**
      * Everything SRS 3.1.3 grants to a Trader and to nobody else. The order of the entries carries no
