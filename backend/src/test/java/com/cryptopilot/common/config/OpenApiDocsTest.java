@@ -498,6 +498,19 @@ class OpenApiDocsTest {
         assertThat(missing).isEmpty();
     }
 
+    /** BR-65, T-105: the resend documents its own 429, MSG46 with retryAfter and the Retry-After header. */
+    @Test
+    void BR65_theResend_documentsMsg46WithRetryAfter() throws Exception {
+        String body = mvc.perform(get("/v3/api-docs")).andReturn().getResponse().getContentAsString();
+        String resend = "$.paths['/api/v1/auth/resend-verification'].post.responses['429']";
+
+        assertThat((String) JsonPath.read(body, resend + ".description")).contains("MSG46", "retryAfter");
+        assertThat((String) JsonPath.read(body, resend + ".headers['Retry-After'].schema.type"))
+                .isEqualTo("integer");
+        assertThat((String) JsonPath.read(body, "$.components.schemas.RateLimitedProblem.properties.retryAfter.type"))
+                .isEqualTo("integer");
+    }
+
     /** Swagger UI is reachable for reading where the document is. */
     @Test
     void TD8_swaggerUi_isReachable() throws Exception {

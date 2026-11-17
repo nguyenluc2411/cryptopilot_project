@@ -14,4 +14,11 @@ public interface TokenRetentionService {
      * @return how many tokens were deleted
      */
     int removeExpiredRefreshTokens();
+
+    /**
+     * Deletes the verification resend records that have left BR-65's 24 hour window (T-105).
+     *
+     * @return how many records were deleted
+     */
+    int removeExpiredResendAttempts();
 }

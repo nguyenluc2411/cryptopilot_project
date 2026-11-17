@@ -24,6 +24,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
@@ -94,6 +95,7 @@ class AuthControllerTest {
 
     @AfterEach
     void removeWhatTheTestWrote() {
+        sql.sql("delete from verification_resend_attempt").update();
         sql.sql("delete from user_account where email like :pattern")
                 .param("pattern", "%" + TEST_DOMAIN)
                 .update();
@@ -253,6 +255,29 @@ class AuthControllerTest {
         assertThat(forAnAccountThatExists)
                 .as("an endpoint that answers differently is an endpoint that tests addresses")
                 .isEqualTo(forAnAddressNobodyHas);
+    }
+
+    /**
+     * BR-65, D-57: over the limit the resend answers 429 with MSG46, retryAfter in the body and the same seconds in
+     * Retry-After (RFC 9110 10.2.3); an unknown address is refused exactly like a known one.
+     */
+    @Test
+    void UC02_aResendOverTheLimit_answers429WithMsg46AndRetryAfter() throws Exception {
+        resendResponseFor("limited" + TEST_DOMAIN);
+        clock.advance(java.time.Duration.ofSeconds(45));
+
+        MvcResult refused = mvc.perform(post(RESEND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\": \"limited" + TEST_DOMAIN + "\"}"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("VERIFICATION_RESEND_LIMITED"))
+                .andExpect(jsonPath("$.messageCode").value("MSG46"))
+                .andExpect(jsonPath("$.retryAfter").value(15))
+                .andExpect(jsonPath("$.messageArgs[0]").value("15"))
+                .andReturn();
+
+        assertThat(refused.getResponse().getHeader(HttpHeaders.RETRY_AFTER)).isEqualTo("15");
+        assertThat(refused.getResponse().getContentAsString()).doesNotContain("limited" + TEST_DOMAIN);
     }
 
     // ------------------------------------------------------------------- UC-03 and UC-05

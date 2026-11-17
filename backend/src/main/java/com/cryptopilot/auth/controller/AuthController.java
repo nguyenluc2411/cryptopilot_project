@@ -97,11 +97,16 @@ public class AuthController {
      * <p>202 and the same body whatever the address turns out to be. An endpoint that takes an
      * address and answers differently depending on whether an account holds it is a way to test
      * addresses, so this one accepts the request and says only that it was accepted — whether a
-     * mail follows depends on things the caller is not told.
+     * mail follows depends on things the caller is not told. Over BR-65's limit for the address it
+     * answers 429 with MSG46, the same for every address (T-105).
      */
     @Operation(summary = "Send the verification link again (UC-02)")
     @ApiResponse(responseCode = "202", description = "Accepted; the same answer whatever the address holds")
     @ApiResponse(responseCode = "400", description = "MSG01: a parameter or the body is invalid")
+    @ApiResponse(
+            responseCode = "429",
+            description = "MSG46: the resend limit of this address is reached (BR-65); retryAfter in the body and"
+                    + " the Retry-After header give the seconds to wait")
     @PostMapping("/resend-verification")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public MessageResponse resendVerification(@Valid @RequestBody ResendVerificationRequest request) {

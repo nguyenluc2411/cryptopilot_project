@@ -223,6 +223,12 @@ public enum ErrorCode {
     RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "MSG50"),
 
     /**
+     * A verification resend over BR-65's limit for this address (T-105). MSG46 takes the wait; the body also carries
+     * {@code retryAfter} in seconds and the response the {@code Retry-After} header (D-57).
+     */
+    VERIFICATION_RESEND_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "MSG46"),
+
+    /**
      * The Trader switches to the AGGRESSIVE risk profile without confirming MSG48's warning (BR-66, SRS 3.2.5). The
      * client shows MSG48 and sends the choice again, confirmed.
      *
