@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -34,6 +35,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -74,11 +76,19 @@ class PaperAccountApiTest {
     @Autowired
     private PaperAccountService service;
 
+    @Autowired
+    private StringRedisTemplate redis;
+
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
 
     @BeforeEach
     void noteTheCoinsAlreadyStored() {
+        // The wallet values assume no cached price; another test class may leave one in the shared Redis.
+        Set<String> prices = redis.keys("px:*");
+        if (prices != null && !prices.isEmpty()) {
+            redis.delete(prices);
+        }
         preStoredCoins.addAll(sql.sql("select symbol from coin where symbol in ('USDT', 'BTC', 'ETH', 'BNB')")
                 .query(String.class)
                 .list());
