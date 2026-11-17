@@ -1,6 +1,7 @@
 package com.cryptopilot.market.service.impl;
 
 import com.cryptopilot.market.client.CoinPaprikaGlobal;
+import com.cryptopilot.market.config.CoinListProperties;
 import com.cryptopilot.market.dto.response.CoinMarketResponse;
 import com.cryptopilot.market.dto.response.CoinMarketResponse.AltcoinSeason;
 import com.cryptopilot.market.dto.response.CoinMarketResponse.CoinRow;
@@ -50,20 +51,24 @@ import org.springframework.stereotype.Service;
  * <h2>What a coin is</h2>
  *
  * <p>The base coin of an ACTIVE pair enabled on Spot or Futures (BR-07); a coin that is only ever a quote, such as
- * USDT, has no price of its own here and is left out. Its series is its Spot pair's when it has one, else its Futures
- * pair's; with several, the one quoted in USDT, then the first in display order. The row names that quote, which the
- * past prices and the small chart are in.
+ * USDT, has no price of its own here and is left out. Its series is picked by tier: Spot in USDT, Futures in USDT, Spot
+ * in any quote, then Futures in any quote, the first in display order within a tier. The row's Spot and Futures symbols
+ * are each market's pair in USDT, else its first. The row names the quote of the series, which the past prices and the
+ * small chart are in.
  *
  * <h2>How it is served</h2>
  *
- * <p>A job rebuilds the list every minute ({@link #refresh()}) and requests read the last one built; only the very
- * first request before any refresh builds it. A failed build keeps the previous list. One build reads a fixed number of
- * statements whatever the number of coins.
+ * <p>With the job on, it rebuilds the list every {@code refresh-interval} ({@link #refresh()}) and requests read the
+ * last one built; only a request before any build builds it. With the job off, a request rebuilds a list older than
+ * {@code refresh-interval}, one at a time, the others reading the current list meanwhile. A failed rebuild keeps the
+ * previous list. One build reads a fixed number of statements whatever the number of coins.
  *
  * <p>Rule: SRS 3.3.1; UC-09; BR-07, BR-08.
  *
  * <p>Reference: Nottingham, M. (2010). RFC 5861, <i>HTTP Cache-Control Extensions for Stale Content</i> (serving the
- * last good answer while a new one is made).
+ * last good answer while a new one is made, and its age deciding when it is made). Harris, L. (2003). <i>Trading and
+ * Exchanges: Market Microstructure for Practitioners</i>. Oxford University Press (the most liquid market's prices as
+ * the reference).
  */
 @Service
 public class CoinMarketServiceImpl implements CoinMarketService {
@@ -89,6 +94,7 @@ public class CoinMarketServiceImpl implements CoinMarketService {
     private final CoinRepository coins;
     private final CoinMarketRepository figures;
     private final MarketReferenceStore reference;
+    private final CoinListProperties properties;
     private final Clock clock;
     private final ReentrantLock building = new ReentrantLock();
     private final AtomicReference<CoinMarketResponse> latest = new AtomicReference<>();
@@ -98,31 +104,54 @@ public class CoinMarketServiceImpl implements CoinMarketService {
             CoinRepository coins,
             CoinMarketRepository figures,
             MarketReferenceStore reference,
+            CoinListProperties properties,
             Clock clock) {
         this.pairs = pairs;
         this.coins = coins;
         this.figures = figures;
         this.reference = reference;
+        this.properties = properties;
         this.clock = clock;
     }
 
     @Override
     public CoinMarketResponse coins() {
         CoinMarketResponse current = latest.get();
-        if (current != null) {
+        if (current != null && !stale(current)) {
             return current;
         }
-        building.lock();
-        try {
-            current = latest.get();
-            if (current == null) {
-                current = build(clock.instant());
-                latest.set(current);
+        if (current != null) {
+            // Stale and no job: one request rebuilds, the others read the current list meanwhile.
+            if (!building.tryLock()) {
+                return current;
             }
-            return current;
+        } else {
+            building.lock();
+        }
+        try {
+            CoinMarketResponse known = latest.get();
+            if (known != null && !stale(known)) {
+                return known;
+            }
+            try {
+                CoinMarketResponse built = build(clock.instant());
+                latest.set(built);
+                return built;
+            } catch (RuntimeException failure) {
+                if (known == null) {
+                    throw failure;
+                }
+                log.warn("Coin list: rebuild failed, the previous list stays ({})", failure.toString());
+                return known;
+            }
         } finally {
             building.unlock();
         }
+    }
+
+    /** Whether a request must rebuild this list: only without the job, once it is older than the interval. */
+    private boolean stale(CoinMarketResponse list) {
+        return !properties.enabled() && clock.instant().isAfter(list.asOf().plus(properties.refreshInterval()));
     }
 
     @Override
@@ -139,17 +168,8 @@ public class CoinMarketServiceImpl implements CoinMarketService {
         }
     }
 
-    /** One listed coin, its pairs and the quote of its series. */
-    private record Listed(Coin coin, CryptoPair spot, CryptoPair futures, String quote) {
-
-        CryptoPair pair() {
-            return spot != null ? spot : futures;
-        }
-
-        Series series() {
-            return new Series(pair().getId(), spot != null ? MarketType.SPOT : MarketType.FUTURES);
-        }
-    }
+    /** One listed coin, its pairs, its series and the quote of its series. */
+    private record Listed(Coin coin, CryptoPair spot, CryptoPair futures, Series series, String quote) {}
 
     CoinMarketResponse build(Instant now) {
         List<CryptoPair> spot = pairs.findEnabledOnSpot();
@@ -226,11 +246,28 @@ public class CoinMarketServiceImpl implements CoinMarketService {
             }
             CryptoPair spotPair = spotOf.get(base);
             CryptoPair futuresPair = futuresOf.get(base);
-            CryptoPair series = spotPair != null ? spotPair : futuresPair;
-            Coin quote = byId.get(series.getQuoteCoinId());
-            listed.put(base, new Listed(coin, spotPair, futuresPair, quote == null ? null : quote.getSymbol()));
+            Series series = series(spotPair, futuresPair, byId);
+            CryptoPair seriesPair = series.market() == MarketType.SPOT ? spotPair : futuresPair;
+            Coin quote = byId.get(seriesPair.getQuoteCoinId());
+            listed.put(base, new Listed(coin, spotPair, futuresPair, series, quote == null ? null : quote.getSymbol()));
         }
         return listed;
+    }
+
+    /**
+     * The series of a coin: Spot in USDT, Futures in USDT, Spot in any quote, then Futures in any quote. Each pair given
+     * is already the preferred one of its market, so a USDT pair is there whenever its market has one.
+     */
+    private static Series series(CryptoPair spot, CryptoPair futures, Map<UUID, Coin> coins) {
+        if (spot != null && isUsdt(spot, coins)) {
+            return new Series(spot.getId(), MarketType.SPOT);
+        }
+        if (futures != null && isUsdt(futures, coins)) {
+            return new Series(futures.getId(), MarketType.FUTURES);
+        }
+        return spot != null
+                ? new Series(spot.getId(), MarketType.SPOT)
+                : new Series(futures.getId(), MarketType.FUTURES);
     }
 
     /** Of two pairs of the same coin, the one quoted in USDT, else the first in display order. */

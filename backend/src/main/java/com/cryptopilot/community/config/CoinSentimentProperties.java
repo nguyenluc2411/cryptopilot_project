@@ -10,8 +10,8 @@ import org.springframework.validation.annotation.Validated;
  * How the community's leaning per coin is recomputed, under {@code cryptopilot.community.coin-sentiment}.
  *
  * @param enabled whether the recompute is scheduled; off without a profile and in {@code calibration}, so a test
- *     context schedules nothing (the first request then computes it once)
- * @param refreshInterval how often it is recomputed
+ *     context schedules nothing (a request then computes it when there is none or it is older than the interval)
+ * @param refreshInterval how often it is recomputed, by the job or, with the job off, by a request
  */
 @Validated
 @ConfigurationProperties("cryptopilot.community.coin-sentiment")

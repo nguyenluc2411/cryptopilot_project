@@ -11,7 +11,10 @@ import java.util.List;
  */
 public interface CoinSentimentService {
 
-    /** The last computed leaning per coin; computed on the spot only before the first refresh. */
+    /**
+     * The last computed leaning per coin; computed on the spot before any computation, and, with the job off, once it
+     * is older than the refresh interval.
+     */
     List<CoinSentimentResponse> current();
 
     /** Computes it again; a failure keeps the previous answer. A refresh already running is not doubled. */

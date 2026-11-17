@@ -8,7 +8,9 @@ import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.model.CoinPaprikaDirectory;
 import com.cryptopilot.market.repository.CoinRepository;
 import com.cryptopilot.market.service.CoinDescriptionService;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -17,6 +19,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -40,7 +43,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <p>The list once per run, then one coin at a time for the logo, which the list lacks: only for a coin still without
  * a logo, each id at most once, with a pause between two calls. A coin is described once, so after the first run only
- * newly listed coins cost a call.
+ * newly listed coins cost a call, and a coin CoinPaprika had nothing more for is tried again only after
+ * {@code retry-unmatched-after}, since CoinPaprika may list it later.
  *
  * <h2>What a failure does</h2>
  *
@@ -51,6 +55,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * letter badge.
  *
  * <p>Rule: SRS 3.1.5; BR-09.
+ *
+ * <p>Reference: Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf ("Steady State": what is
+ * remembered expires, so the set stays bounded and a coin listed later is found).
  */
 public class CoinDescriptionServiceImpl implements CoinDescriptionService {
 
@@ -63,22 +70,26 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
     private final CoinPaprikaClient client;
     private final CoinPaprikaProperties properties;
     private final TransactionTemplate readWrite;
+    private final Clock clock;
 
     /**
-     * Symbols already tried in this process with nothing more CoinPaprika can give (no match, or a match without a
-     * name or logo to add). While every undescribed coin is one of them, a run reads nothing.
+     * Symbols tried in this process with nothing more CoinPaprika could give (no match, or a match without a name or
+     * logo to add), and when. While every undescribed coin is one settled within {@code retry-unmatched-after}, a run
+     * reads nothing.
      */
-    private final Set<String> settled = ConcurrentHashMap.newKeySet();
+    private final ConcurrentMap<String, Instant> settled = new ConcurrentHashMap<>();
 
     public CoinDescriptionServiceImpl(
             CoinRepository coins,
             CoinPaprikaClient client,
             CoinPaprikaProperties properties,
-            PlatformTransactionManager transactions) {
+            PlatformTransactionManager transactions,
+            Clock clock) {
         this.coins = coins;
         this.client = client;
         this.properties = properties;
         this.readWrite = new TransactionTemplate(transactions);
+        this.clock = clock;
     }
 
     /** What one coin is to become. */
@@ -86,8 +97,11 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
 
     @Override
     public int describeCoins() {
+        Instant now = clock.instant();
+        Instant expired = now.minus(properties.retryUnmatchedAfter());
+        settled.values().removeIf(at -> at.isBefore(expired));
         List<Coin> undescribed = coins.findUndescribed();
-        if (undescribed.isEmpty() || undescribed.stream().allMatch(coin -> settled.contains(coin.getSymbol()))) {
+        if (undescribed.isEmpty() || undescribed.stream().allMatch(coin -> settled.containsKey(coin.getSymbol()))) {
             return 0;
         }
         CoinPaprikaDirectory directory = new CoinPaprikaDirectory(client.coins(), properties.overrides());
@@ -112,7 +126,7 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
             }
         }
         if (planned.isEmpty()) {
-            settled.addAll(tried);
+            settle(tried, now);
             return 0;
         }
         Integer changed = readWrite.execute(status -> {
@@ -127,10 +141,14 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
             return count;
         });
         int result = changed == null ? 0 : changed;
-        settled.addAll(tried);
+        settle(tried, now);
         log.info(
                 "Coin descriptions: {} of {} undescribed coins described from CoinPaprika", result, undescribed.size());
         return result;
+    }
+
+    private void settle(Set<String> symbols, Instant at) {
+        symbols.forEach(symbol -> settled.put(symbol, at));
     }
 
     /** {@code PEPE} for {@code 1000PEPE}, or empty for a symbol that is a coin itself. */

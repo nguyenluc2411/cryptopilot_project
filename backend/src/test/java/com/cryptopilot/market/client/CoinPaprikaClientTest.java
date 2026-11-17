@@ -179,6 +179,7 @@ class CoinPaprikaClientTest {
                         Duration.ofSeconds(2),
                         Duration.ofSeconds(5),
                         Duration.ofMillis(500),
+                        Duration.ofHours(24),
                         Map.of()),
                 JsonMapper.builder().build())) {
             long started = System.nanoTime();
@@ -209,6 +210,7 @@ class CoinPaprikaClientTest {
                 Duration.ofSeconds(1),
                 Duration.ofSeconds(1),
                 Duration.ofSeconds(1),
+                Duration.ofHours(24),
                 Map.of(" ton ", " toncoin-the-open-network ", "X", " "));
 
         assertThat(properties.overrides()).isEqualTo(Map.of("TON", "toncoin-the-open-network"));
@@ -222,7 +224,14 @@ class CoinPaprikaClientTest {
         URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/");
         return new CoinPaprikaClient(
                 new CoinPaprikaProperties(
-                        true, base, Duration.ZERO, Duration.ofSeconds(2), Duration.ofSeconds(2), body, Map.of()),
+                        true,
+                        base,
+                        Duration.ZERO,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(2),
+                        body,
+                        Duration.ofHours(24),
+                        Map.of()),
                 JsonMapper.builder().build());
     }
 

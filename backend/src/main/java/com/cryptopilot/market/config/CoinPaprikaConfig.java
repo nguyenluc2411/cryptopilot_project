@@ -41,8 +41,9 @@ public class CoinPaprikaConfig {
             CoinRepository coins,
             CoinPaprikaClient client,
             CoinPaprikaProperties properties,
-            PlatformTransactionManager transactions) {
-        return new CoinDescriptionServiceImpl(coins, client, properties, transactions);
+            PlatformTransactionManager transactions,
+            Clock clock) {
+        return new CoinDescriptionServiceImpl(coins, client, properties, transactions, clock);
     }
 
     @Bean

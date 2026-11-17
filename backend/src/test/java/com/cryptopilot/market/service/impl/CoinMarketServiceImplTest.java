@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.client.CoinPaprikaGlobal;
 import com.cryptopilot.market.client.FearGreedReading;
+import com.cryptopilot.market.config.CoinListProperties;
 import com.cryptopilot.market.dto.response.CoinMarketResponse;
 import com.cryptopilot.market.dto.response.CoinMarketResponse.CoinRow;
 import com.cryptopilot.market.entity.Coin;
@@ -42,8 +43,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * The market list of coins: a coin is the base of a listed pair, its series the Spot pair's in USDT; its figures come
- * from batched reads of a fixed count; the list is rebuilt in the background and a failed rebuild keeps the last one.
+ * The market list of coins: a coin is the base of a listed pair, its series picked by tier (Spot USDT, Futures USDT,
+ * Spot, Futures); its figures come from batched reads of a fixed count; the list is rebuilt in the background, or by a
+ * request once it is older than the interval when the job is off; a failed rebuild keeps the last one.
  *
  * <p>Rule: SRS 3.3.1.
  */
@@ -56,7 +58,7 @@ class CoinMarketServiceImplTest {
     private final CoinMarketRepository figures = mock(CoinMarketRepository.class);
     private final MarketReferenceStore reference = new MarketReferenceStore();
     private final MutableClock clock = new MutableClock(NOW);
-    private final CoinMarketServiceImpl service = new CoinMarketServiceImpl(pairs, coins, figures, reference, clock);
+    private final CoinMarketServiceImpl service = service(true);
 
     private final Map<String, Coin> bySymbol = new HashMap<>();
 
@@ -243,6 +245,107 @@ class CoinMarketServiceImplTest {
         assertThat(answer.openInterest().valueUsd()).isEqualByComparingTo("1100");
         assertThat(answer.openInterest().change24hPercent()).isEqualByComparingTo("10.00");
         assertThat(answer.openInterest().lastDay()).hasSize(2);
+    }
+
+    @Test
+    void withTheJobOff_aRequestRebuildsAListOlderThanTheInterval_andNotBefore() {
+        CoinMarketServiceImpl off = service(false);
+        CryptoPair btc = pair("BTC", "USDT");
+        when(pairs.findEnabledOnSpot()).thenReturn(List.of(btc));
+        when(pairs.findEnabledOnFutures()).thenReturn(List.of());
+
+        CoinMarketResponse first = off.coins();
+        clock.advance(Duration.ofSeconds(60));
+        assertThat(off.coins()).isSameAs(first);
+        verify(pairs, times(1)).findEnabledOnSpot();
+
+        clock.advance(Duration.ofSeconds(1));
+        CoinMarketResponse second = off.coins();
+        assertThat(second).isNotSameAs(first);
+        assertThat(second.asOf()).isEqualTo(NOW.plusSeconds(61));
+        assertThat(off.coins()).isSameAs(second);
+        verify(pairs, times(2)).findEnabledOnSpot();
+    }
+
+    @Test
+    void withTheJobOff_aFailedRebuildOnARequest_answersThePreviousList() {
+        CoinMarketServiceImpl off = service(false);
+        CryptoPair btc = pair("BTC", "USDT");
+        when(pairs.findEnabledOnSpot()).thenReturn(List.of(btc));
+        when(pairs.findEnabledOnFutures()).thenReturn(List.of());
+        CoinMarketResponse built = off.coins();
+
+        clock.advance(Duration.ofMinutes(5));
+        doThrow(new IllegalStateException("database down")).when(pairs).findEnabledOnSpot();
+
+        assertThat(off.coins()).isSameAs(built);
+        // The failure is not remembered: the next request tries again.
+        CryptoPair eth = pair("ETH", "USDT");
+        doReturn(List.of(eth)).when(pairs).findEnabledOnSpot();
+        assertThat(off.coins().coins()).extracting(CoinRow::symbol).containsExactly("ETH");
+    }
+
+    @Test
+    void withTheJobOn_requestsNeverRebuild_howeverOldTheList() {
+        CryptoPair btc = pair("BTC", "USDT");
+        when(pairs.findEnabledOnSpot()).thenReturn(List.of(btc));
+        when(pairs.findEnabledOnFutures()).thenReturn(List.of());
+
+        CoinMarketResponse first = service.coins();
+        clock.advance(Duration.ofDays(1));
+
+        assertThat(service.coins()).isSameAs(first);
+        verify(pairs, times(1)).findEnabledOnSpot();
+    }
+
+    @Test
+    void theSeries_isSpotInUsdt_thenFuturesInUsdt_thenSpot_thenFutures_andTheSymbolsStay() {
+        // BTC: Spot in FDUSD and USDT, Futures in USDT -> Spot USDT.
+        CryptoPair btcSpotFdusd = pair("BTC", "FDUSD");
+        CryptoPair btcSpotUsdt = pair("BTC", "USDT");
+        CryptoPair btcFuturesUsdt = pair("BTC", "USDT");
+        // ETH: Spot in FDUSD only, Futures in USDT -> Futures USDT.
+        CryptoPair ethSpotFdusd = pair("ETH", "FDUSD");
+        CryptoPair ethFuturesUsdt = pair("ETH", "USDT");
+        // SOL: Spot in FDUSD then EUR, Futures in USDC -> the first Spot (FDUSD).
+        CryptoPair solSpotFdusd = pair("SOL", "FDUSD");
+        CryptoPair solSpotEur = pair("SOL", "EUR");
+        CryptoPair solFuturesUsdc = pair("SOL", "USDC");
+        // XRP: Futures in USDC only -> Futures USDC.
+        CryptoPair xrpFuturesUsdc = pair("XRP", "USDC");
+        when(pairs.findEnabledOnSpot())
+                .thenReturn(List.of(btcSpotFdusd, btcSpotUsdt, ethSpotFdusd, solSpotFdusd, solSpotEur));
+        when(pairs.findEnabledOnFutures())
+                .thenReturn(List.of(btcFuturesUsdt, ethFuturesUsdt, solFuturesUsdc, xrpFuturesUsdc));
+        Map<Series, List<BigDecimal>> week = Map.of(
+                new Series(btcSpotUsdt.getId(), MarketType.SPOT), List.of(BigDecimal.ONE),
+                new Series(ethFuturesUsdt.getId(), MarketType.FUTURES), List.of(BigDecimal.TWO),
+                new Series(solSpotFdusd.getId(), MarketType.SPOT), List.of(BigDecimal.valueOf(3)),
+                new Series(xrpFuturesUsdc.getId(), MarketType.FUTURES), List.of(BigDecimal.valueOf(4)));
+        when(figures.closesBetween(anyCollection(), eq(MarketInterval.ONE_HOUR), any(), any()))
+                .thenReturn(week);
+
+        Map<String, CoinRow> rows = new HashMap<>();
+        service.coins().coins().forEach(row -> rows.put(row.symbol(), row));
+
+        assertThat(rows.get("BTC").quote()).isEqualTo("USDT");
+        assertThat(rows.get("BTC").sparkline7d()).containsExactly(BigDecimal.ONE);
+        assertThat(rows.get("BTC").spotSymbol()).isEqualTo("BTCUSDT");
+        assertThat(rows.get("ETH").quote()).isEqualTo("USDT");
+        assertThat(rows.get("ETH").sparkline7d()).containsExactly(BigDecimal.TWO);
+        assertThat(rows.get("ETH").spotSymbol()).isEqualTo("ETHFDUSD");
+        assertThat(rows.get("ETH").futuresSymbol()).isEqualTo("ETHUSDT");
+        assertThat(rows.get("SOL").quote()).isEqualTo("FDUSD");
+        assertThat(rows.get("SOL").sparkline7d()).containsExactly(BigDecimal.valueOf(3));
+        assertThat(rows.get("SOL").futuresSymbol()).isEqualTo("SOLUSDC");
+        assertThat(rows.get("XRP").quote()).isEqualTo("USDC");
+        assertThat(rows.get("XRP").sparkline7d()).containsExactly(BigDecimal.valueOf(4));
+        assertThat(rows.get("XRP").spotSymbol()).isNull();
+    }
+
+    private CoinMarketServiceImpl service(boolean jobEnabled) {
+        return new CoinMarketServiceImpl(
+                pairs, coins, figures, reference, new CoinListProperties(jobEnabled, Duration.ofSeconds(60)), clock);
     }
 
     private CryptoPair pair(String base, String quote) {

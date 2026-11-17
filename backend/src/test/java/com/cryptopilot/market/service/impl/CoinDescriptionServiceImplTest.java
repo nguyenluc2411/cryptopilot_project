@@ -17,7 +17,11 @@ import com.cryptopilot.market.client.CoinPaprikaProperties;
 import com.cryptopilot.market.entity.Coin;
 import com.cryptopilot.market.repository.CoinRepository;
 import java.net.URI;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -26,7 +30,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * Matching by ticker, best rank first, or by the configured id; one logo call per coin still without a logo; a failure
- * that writes nothing or keeps what was read.
+ * that writes nothing or keeps what was read; a coin with nothing more to add is tried again only after a day.
  *
  * <p>Rule: SRS 3.1.5.
  */
@@ -34,6 +38,7 @@ class CoinDescriptionServiceImplTest {
 
     private final CoinRepository coins = mock(CoinRepository.class);
     private final CoinPaprikaClient client = mock(CoinPaprikaClient.class);
+    private final MutableClock clock = new MutableClock(Instant.parse("2026-11-17T06:00:00Z"));
 
     private CoinDescriptionServiceImpl service(Map<String, String> overrides) {
         return new CoinDescriptionServiceImpl(
@@ -46,8 +51,10 @@ class CoinDescriptionServiceImplTest {
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1),
+                        Duration.ofHours(24),
                         overrides),
-                mock(PlatformTransactionManager.class));
+                mock(PlatformTransactionManager.class),
+                clock);
     }
 
     private final CoinDescriptionServiceImpl service = service(Map.of());
@@ -151,6 +158,25 @@ class CoinDescriptionServiceImplTest {
     }
 
     @Test
+    void aSettledCoin_isTriedAgainAfterTheRetryDelay_andNotBefore() {
+        Coin rare = Coin.fromExchange("RARE");
+        undescribed(rare);
+        listed(paprika("pepe-pepe", "PEPE", "Pepe", 50, true));
+
+        service.describeCoins();
+        clock.advance(Duration.ofHours(24));
+        service.describeCoins();
+        verify(client, times(1)).coins();
+
+        clock.advance(Duration.ofSeconds(1));
+        listed(paprika("rare-rare", "RARE", "Rare", 900, true));
+        assertThat(service.describeCoins()).isEqualTo(1);
+
+        verify(client, times(2)).coins();
+        assertThat(rare.getCoinName()).isEqualTo("Rare");
+    }
+
+    @Test
     void aCoinWhoseLogoCallsStopped_isReadAgainNextTime() {
         Coin btc = Coin.fromExchange("BTC");
         undescribed(btc);
@@ -204,6 +230,34 @@ class CoinDescriptionServiceImplTest {
         assertThat(CoinDescriptionServiceImpl.underlying("1MBABYDOGE")).contains("BABYDOGE");
         assertThat(CoinDescriptionServiceImpl.underlying("1INCH")).isEmpty();
         assertThat(CoinDescriptionServiceImpl.underlying("BTC")).isEmpty();
+    }
+
+    /** A clock a test moves. */
+    private static final class MutableClock extends Clock {
+        private Instant now;
+
+        MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        void advance(Duration by) {
+            now = now.plus(by);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 
     private void undescribed(Coin... list) {

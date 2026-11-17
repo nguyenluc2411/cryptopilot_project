@@ -33,8 +33,8 @@ import tools.jackson.databind.json.JsonMapper;
  * Reads CoinPaprika for the names and logos of the coins Binance lists without them.
  *
  * <p>Four GETs: {@code /coins}, every coin with its ticker, name and rank in one answer of several megabytes, and
- * {@code /tickers}, the ranked coins with their supply, both read as a stream one coin at a time so neither is held
- * whole; {@code /coins/{id}}, one coin with its logo, which the list does not carry; and {@code /global}, the whole
+ * {@code /tickers}, the ranked coins with their supply, both received whole (several megabytes in memory) and then
+ * parsed one coin at a time; {@code /coins/{id}}, one coin with its logo, which the list does not carry; and {@code /global}, the whole
  * market's cap. Every call is bounded as a whole, the body included ({@code body-timeout} for the two lists,
  * {@code read-timeout} for the others), so a server that stalls mid-body fails the call instead of holding the job.
  * No retry here: the next scheduled run reads again. Not final, so the system log can watch it (UC-52).
@@ -64,7 +64,7 @@ public class CoinPaprikaClient implements AutoCloseable {
      */
     public List<CoinPaprikaCoin> coins() {
         List<CoinPaprikaCoin> coins = new ArrayList<>();
-        stream("/coins", "coin list", properties.bodyTimeout(), node -> {
+        eachElement("/coins", "coin list", properties.bodyTimeout(), node -> {
             String id = text(node, "id");
             String symbol = text(node, "symbol");
             String name = text(node, "name");
@@ -89,7 +89,7 @@ public class CoinPaprikaClient implements AutoCloseable {
      */
     public List<CoinPaprikaTicker> tickers() {
         List<CoinPaprikaTicker> tickers = new ArrayList<>();
-        stream("/tickers", "ticker list", properties.bodyTimeout(), node -> {
+        eachElement("/tickers", "ticker list", properties.bodyTimeout(), node -> {
             String id = text(node, "id");
             String symbol = text(node, "symbol");
             int rank = node.path("rank").asInt(0);
@@ -126,8 +126,11 @@ public class CoinPaprikaClient implements AutoCloseable {
         }
     }
 
-    /** Reads a JSON array one element at a time, never holding it whole. */
-    private void stream(String path, String what, Duration deadline, Consumer<JsonNode> each) {
+    /**
+     * Gets a JSON array and hands it to {@code each} one element at a time. The body is held in memory whole (several
+     * MB), so the call, body included, is bounded by one {@code deadline}; only the parsed tree is never built whole.
+     */
+    private void eachElement(String path, String what, Duration deadline, Consumer<JsonNode> each) {
         byte[] body = get(path, deadline);
         ObjectReader reader = json.readerFor(JsonNode.class).without(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
         try (JsonParser parser = reader.createParser(new ByteArrayInputStream(body))) {

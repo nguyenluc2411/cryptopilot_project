@@ -109,6 +109,22 @@ class CoinMarketRepositoryTest {
     }
 
     @Test
+    void aSeriesGivenTwice_isAnsweredOnce() {
+        Instant from = NOW.minus(Duration.ofHours(3));
+        candle(spot, MarketType.SPOT, "1h", from, Duration.ofHours(1), "2");
+        candle(spot, MarketType.SPOT, "1h", from.plus(Duration.ofHours(1)), Duration.ofHours(1), "3");
+        Series series = new Series(spot, MarketType.SPOT);
+
+        Map<Series, List<BigDecimal>> week =
+                figures.closesBetween(List.of(series, series), MarketInterval.ONE_HOUR, from, NOW);
+        Map<Series, BigDecimal> close = figures.closesAt(
+                List.of(series, series), MarketInterval.ONE_HOUR, NOW, from.minus(Duration.ofHours(1)));
+
+        assertThat(week.get(series)).hasSize(2);
+        assertThat(close.get(series)).isEqualByComparingTo("3");
+    }
+
+    @Test
     void theOpenInterest_isSummedOnWholeHours() {
         Instant hour = Instant.parse("2026-11-17T05:00:00Z");
         openInterest(futures, hour.minusSeconds(120), "1000");

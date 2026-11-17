@@ -10,7 +10,10 @@ import com.cryptopilot.market.dto.response.CoinMarketResponse;
  */
 public interface CoinMarketService {
 
-    /** The latest built list; built once on the spot only before the first refresh. */
+    /**
+     * The latest built list; built on the spot before any build, and, with the job off, once it is older than the
+     * refresh interval.
+     */
     CoinMarketResponse coins();
 
     /** Builds the list again; a failure keeps the previous one. A refresh already running is not doubled. */
