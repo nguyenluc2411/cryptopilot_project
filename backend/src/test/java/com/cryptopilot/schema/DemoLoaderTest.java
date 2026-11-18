@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -39,6 +40,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
@@ -89,6 +91,9 @@ class DemoLoaderTest {
     private PriceCacheService prices;
 
     @Autowired
+    private StringRedisTemplate redis;
+
+    @Autowired
     private PairAdminService pairAdmin;
 
     @Autowired
@@ -131,6 +136,12 @@ class DemoLoaderTest {
                                futures_tick_size = 0.1, futures_step_size = 0.001, futures_min_notional = 100""").update();
         price(btc, "BTCUSDT", BTC_PRICE);
         price(eth, "ETHUSDT", ETH_PRICE);
+    }
+
+    /** The cached prices live in the Redis every test shares; another test must not find them. */
+    @AfterEach
+    void forgetCachedPrices() {
+        redis.delete(List.of("px:SPOT:BTCUSDT", "px:SPOT:ETHUSDT"));
     }
 
     @Test

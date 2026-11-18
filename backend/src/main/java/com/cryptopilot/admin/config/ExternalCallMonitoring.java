@@ -50,7 +50,9 @@ public class ExternalCallMonitoring implements BeanPostProcessor, SmartInitializ
             "com.cryptopilot.ai.client.AiServiceClient", SystemEventSource.AI_SERVICE,
             "com.cryptopilot.community.client.CloudinaryClient", SystemEventSource.MEDIA_STORAGE,
             "com.cryptopilot.news.client.RssClient", SystemEventSource.NEWS_SOURCE,
-            "com.cryptopilot.notification.client.SmtpEmailSender", SystemEventSource.MAIL);
+            "com.cryptopilot.notification.client.SmtpEmailSender", SystemEventSource.MAIL,
+            "com.cryptopilot.market.client.CoinPaprikaClient", SystemEventSource.COINPAPRIKA,
+            "com.cryptopilot.market.client.FearGreedClient", SystemEventSource.FEAR_GREED);
 
     /**
      * Public methods of the clients that answer without calling the service: closing, the request weight Binance

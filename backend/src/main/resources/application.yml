@@ -107,6 +107,13 @@ cryptopilot:
     stale-after: 5m
     # Anything older is deleted, delivered or not: the longest link an event carries lives 24 hours (BR-01).
     retention: 24h
+  community:
+    coin-sentiment:
+      # D-125: the leaning per coin of the market list is recomputed in the background and requests read the last
+      # answer. Off here and in calibration, on in the dev and prod profiles; without the job a request recomputes
+      # an answer older than refresh-interval.
+      enabled: false
+      refresh-interval: 60s
   media:
     cloudinary:
       # T-061 (D-98): the account post images and videos are stored in. The browser uploads straight to Cloudinary
@@ -245,6 +252,38 @@ cryptopilot:
       circuit-breaker:
         failure-threshold: 5
         open-duration: 30s
+    coinpaprika:
+      # Coin names and logos (coin.coin_name, coin.logo_url), which Binance does not send. Reference data only:
+      # prices, candles and pair rules stay Binance's (BR-09). After each symbol synchronisation: the coin list once
+      # (several MB, held in memory), then one call per coin still without a logo. Free API, no key. Off here and on
+      # in the dev and prod profiles, so a test never calls it.
+      enabled: false
+      base-url: https://api.coinpaprika.com/v1
+      detail-delay: 200ms
+      connect-timeout: 5s
+      # Each whole call, body included: a small one (one coin, the global figures), and a list (several MB).
+      read-timeout: 15s
+      body-timeout: 120s
+      # A coin CoinPaprika had nothing more for (no match, nothing to add) is tried again after this long. Under the
+      # daily sync cycle, so a sync that ends a little earlier than the day before still retries it.
+      retry-unmatched-after: 23h
+      # Binance symbol -> CoinPaprika id where the ticker alone picks the wrong coin. CoinPaprika lists Toncoin as
+      # GRAM, so TON would match TonToken (checked 2026-11-17).
+      overrides:
+        TON: toncoin-the-open-network
+    coin-list:
+      # SCR-09: the market list of coins is rebuilt in the background and requests read the last one built. Off here
+      # and in calibration, on in the dev and prod profiles; without the job a request rebuilds a list older than
+      # refresh-interval.
+      enabled: false
+      refresh-interval: 60s
+    fear-greed:
+      # The Crypto Fear & Greed Index of the market list, once an hour (published daily). Free, no key. Off here and
+      # on in the dev and prod profiles, so a test never calls it.
+      enabled: false
+      base-url: https://api.alternative.me
+      connect-timeout: 5s
+      read-timeout: 10s
     sync:
       # NSF-01: at start-up and daily at 00:05 UTC. Off here and on in the dev and prod profiles, so that a
       # test context, which runs without a profile, never schedules a call to the real exchange.
@@ -619,6 +658,12 @@ server:
   # The client address is resolved once, by ClientAddressFilter, from cryptopilot.web.trusted-proxies. The container
   # must not apply its own forwarded-header handling on top (R-11).
   forward-headers-strategy: none
+  # JSON answers over 2 KB are gzipped when the client accepts it (the market list of coins carries a week of hourly
+  # closes per coin).
+  compression:
+    enabled: true
+    mime-types: application/json
+    min-response-size: 2KB
 
 management:
   endpoints:

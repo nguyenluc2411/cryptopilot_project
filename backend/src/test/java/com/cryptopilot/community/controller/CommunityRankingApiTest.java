@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.community.model.AuthorStanding;
 import com.cryptopilot.community.repository.PostFeedRepository;
+import com.cryptopilot.community.service.CoinSentimentService;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -67,6 +68,9 @@ class CommunityRankingApiTest {
 
     @Autowired
     private PostFeedRepository feeds;
+
+    @Autowired
+    private CoinSentimentService sentiment;
 
     private final List<UUID> accounts = new ArrayList<>();
 
@@ -308,6 +312,45 @@ class CommunityRankingApiTest {
                 "$.id");
     }
 
+    @Test
+    void D125_coinSentiment_isPublic_andCountsTheMonthsStancesAndVotes() throws Exception {
+        UUID alice = account(UserRole.TRADER, "Alice");
+        UUID bob = account(UserRole.TRADER, "Bob");
+        UUID carol = account(UserRole.TRADER, "Carol");
+        Instant now = Instant.now();
+        String suffix = Long.toString(System.nanoTime() % 1_000_000, 36).toUpperCase(Locale.ROOT);
+        UUID leaning = coin("SA" + suffix);
+        UUID silent = coin("SB" + suffix);
+        // A Bullish stance voted Bullish by Bob and Bearish by Carol; a Bearish stance; an old Bullish one.
+        UUID up = taggedPost(alice, leaning, now.minus(Duration.ofHours(2)));
+        stance(up, "BULLISH");
+        UUID down = taggedPost(alice, leaning, now.minus(Duration.ofDays(2)));
+        stance(down, "BEARISH");
+        UUID old = taggedPost(alice, leaning, now.minus(Duration.ofDays(31)));
+        stance(old, "BULLISH");
+        as(bob, put(POSTS + "/" + up + "/vote"), "{\"sentiment\": \"BULLISH\"}").andExpect(status().isOk());
+        as(carol, put(POSTS + "/" + up + "/vote"), "{\"sentiment\": \"BEARISH\"}")
+                .andExpect(status().isOk());
+        // A post with neither stance nor vote says nothing.
+        taggedPost(alice, silent, now.minus(Duration.ofHours(1)));
+        // The endpoint serves the last computed answer; the job recomputes it, here the test does.
+        sentiment.refresh();
+
+        mvc.perform(get(POSTS + "/coin-sentiment"))
+                .andExpect(status().isOk())
+                .andExpect(
+                        jsonPath("$[?(@.symbol == 'SA" + suffix + "')].bullish").value(2))
+                .andExpect(
+                        jsonPath("$[?(@.symbol == 'SA" + suffix + "')].bearish").value(2))
+                .andExpect(jsonPath("$[?(@.symbol == 'SB" + suffix + "')]").isEmpty());
+    }
+
+    private void stance(UUID post, String sentiment) {
+        sql.sql("update forum_post set sentiment = ? where post_id = ?")
+                .params(sentiment, post)
+                .update();
+    }
+
     private UUID coin(String symbol) {
         UUID id = UUID.randomUUID();
         Timestamp now = Timestamp.from(Instant.now());
@@ -318,7 +361,7 @@ class CommunityRankingApiTest {
         return id;
     }
 
-    private void taggedPost(UUID author, UUID coin, Instant at) {
+    private UUID taggedPost(UUID author, UUID coin, Instant at) {
         UUID id = UUID.randomUUID();
         String insert = """
                 insert into forum_post (post_id, author_id, title, content, post_type, post_status, is_official,
@@ -330,6 +373,7 @@ class CommunityRankingApiTest {
         sql.sql("insert into post_coin (post_id, coin_id) values (?, ?)")
                 .params(id, coin)
                 .update();
+        return id;
     }
 
     private ResultActions as(UUID user, MockHttpServletRequestBuilder request) throws Exception {

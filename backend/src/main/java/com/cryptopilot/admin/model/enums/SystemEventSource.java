@@ -20,7 +20,11 @@ public enum SystemEventSource {
     /** The RSS feeds and pages of the news sources (NSF-10): many independent sites, one row. */
     NEWS_SOURCE(true, true),
     /** The SMTP server that sends the mail. */
-    MAIL(true, false);
+    MAIL(true, false),
+    /** CoinPaprika, where the coin names and logos come from (reference data only, never prices). */
+    COINPAPRIKA(true, false),
+    /** Alternative.me, where the Crypto Fear & Greed Index of the market list comes from. */
+    FEAR_GREED(true, false);
 
     private final boolean external;
     private final boolean manyEndpoints;

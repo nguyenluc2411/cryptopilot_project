@@ -71,6 +71,14 @@ public interface CoinRepository extends Repository<Coin, UUID> {
             nativeQuery = true)
     int insertIfAbsent(UUID coinId, String symbol, Instant now);
 
+    /**
+     * The coins still without a logo or still named after their symbol, which CoinPaprika may describe. Bounded by the
+     * coins Binance lists, a few hundred at most.
+     */
+    @Transactional(readOnly = true)
+    @Query("select c from Coin c where c.logoUrl is null or c.coinName = c.symbol order by c.symbol")
+    List<Coin> findUndescribed();
+
     /** Writes a coin. Not transactional here; the unit of work is the calling service's. */
     Coin save(Coin coin);
 

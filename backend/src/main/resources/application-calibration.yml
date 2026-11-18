@@ -33,6 +33,9 @@ cryptopilot:
   media:
     sweep:
       enabled: false
+  community:
+    coin-sentiment:
+      enabled: false
   notification:
     sweep:
       enabled: false
@@ -51,6 +54,12 @@ cryptopilot:
     hub:
       enabled: false
     futures-metrics:
+      enabled: false
+    coinpaprika:
+      enabled: false
+    fear-greed:
+      enabled: false
+    coin-list:
       enabled: false
     demo:
       activate-seed-symbols: false

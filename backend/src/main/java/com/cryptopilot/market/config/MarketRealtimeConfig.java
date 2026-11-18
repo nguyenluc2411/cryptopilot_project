@@ -9,5 +9,5 @@ import org.springframework.context.annotation.Configuration;
  * <p>Rule: NSF-03; TECHNICAL_DESIGN 5.6 and 9.
  */
 @Configuration
-@EnableConfigurationProperties({PriceCacheProperties.class, MarketHubProperties.class})
+@EnableConfigurationProperties({PriceCacheProperties.class, MarketHubProperties.class, CoinListProperties.class})
 public class MarketRealtimeConfig {}

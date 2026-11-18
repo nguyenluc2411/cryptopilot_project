@@ -16,7 +16,8 @@ import lombok.Getter;
  * one row.
  *
  * <p>The symbol is stored as the exchange spells it, upper case. The name defaults to the symbol when a
- * coin first arrives from the exchange, which sends no names; an administrator can change it later.
+ * coin first arrives from the exchange, which sends no names; CoinPaprika fills in the name and the logo later
+ * ({@link #describe}), and never overwrites one already set.
  *
  * <p>Rule: BR-07; SRS 3.1.5; TECHNICAL_DESIGN 6.
  *
@@ -35,6 +36,9 @@ public class Coin extends BaseEntity {
     /** Longest name the column holds ({@code varchar(100)}). */
     static final int NAME_LENGTH = 100;
 
+    /** Longest logo address the column holds ({@code varchar(500)}). */
+    static final int LOGO_URL_LENGTH = 500;
+
     /** The asset as the exchange spells it, e.g. {@code BTC}. */
     @Column(name = "symbol", nullable = false, length = SYMBOL_LENGTH, updatable = false)
     private String symbol;
@@ -44,7 +48,7 @@ public class Coin extends BaseEntity {
     private String coinName;
 
     /** Where the logo image is, or {@code null}. */
-    @Column(name = "logo_url", length = 500)
+    @Column(name = "logo_url", length = LOGO_URL_LENGTH)
     private String logoUrl;
 
     /** For JPA only. */
@@ -61,5 +65,31 @@ public class Coin extends BaseEntity {
      */
     public static Coin fromExchange(String symbol) {
         return new Coin(symbol, symbol);
+    }
+
+    /**
+     * Fills in what is still missing from a directory's description, and never overwrites: a name is taken only while
+     * the coin is still named after its symbol, a logo only while it has none. A value too long for its column, blank,
+     * or a logo that is not an https address is ignored.
+     *
+     * @return whether anything changed
+     */
+    public boolean describe(String name, String logo) {
+        boolean changed = false;
+        if (coinName.equals(symbol) && name != null) {
+            String candidate = name.strip();
+            if (!candidate.isEmpty() && candidate.length() <= NAME_LENGTH && !candidate.equals(coinName)) {
+                coinName = candidate;
+                changed = true;
+            }
+        }
+        if (logoUrl == null && logo != null) {
+            String candidate = logo.strip();
+            if (candidate.startsWith("https://") && candidate.length() <= LOGO_URL_LENGTH) {
+                logoUrl = candidate;
+                changed = true;
+            }
+        }
+        return changed;
     }
 }

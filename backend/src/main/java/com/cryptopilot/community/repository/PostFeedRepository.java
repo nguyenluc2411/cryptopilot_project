@@ -377,6 +377,48 @@ public class PostFeedRepository {
     public record TrendingCoin(
             UUID coinId, long postsLastDay, long postsLastWeek, long totalPosts, Instant lastPostAt) {}
 
+    /**
+     * How the community leans on one coin.
+     *
+     * @param coinId the coin
+     * @param bullish Bullish stances of authors and Bullish votes of readers
+     * @param bearish the same, Bearish
+     */
+    public record CoinSentiment(UUID coinId, long bullish, long bearish) {}
+
+    /**
+     * How the community leans on each coin (D-125): over the published posts tagged with it since {@code since}, the
+     * authors' stances plus the readers' votes on those posts. A coin with neither is left out.
+     */
+    public List<CoinSentiment> coinSentiment(Instant since) {
+        return sql.sql("""
+                        with recent as (
+                            select p.post_id, p.sentiment
+                              from forum_post p
+                             where p.post_status = 'PUBLISHED' and p.created_at >= :since),
+                        votes as (
+                            select e.post_id,
+                                   count(*) filter (where e.action_type = 'BULLISH') as bullish,
+                                   count(*) filter (where e.action_type = 'BEARISH') as bearish
+                              from engagement e
+                              join recent r on r.post_id = e.post_id
+                             where e.action_type in ('BULLISH', 'BEARISH')
+                             group by e.post_id)
+                        select c.coin_id,
+                               count(*) filter (where r.sentiment = 'BULLISH') + coalesce(sum(v.bullish), 0) as bullish,
+                               count(*) filter (where r.sentiment = 'BEARISH') + coalesce(sum(v.bearish), 0) as bearish
+                          from recent r
+                          join post_coin c on c.post_id = r.post_id
+                          left join votes v on v.post_id = r.post_id
+                         group by c.coin_id
+                        having count(*) filter (where r.sentiment is not null) + coalesce(sum(v.bullish + v.bearish), 0) > 0
+                         order by c.coin_id""")
+                .param("since", Timestamp.from(since))
+                .query((row, index) -> new CoinSentiment(
+                        row.getObject("coin_id", UUID.class), row.getLong("bullish"), row.getLong("bearish")))
+                .list();
+    }
+
     /** A member's published posts and the likes they received (D-99). */
     public MemberActivity memberActivity(UUID memberId) {
         return sql.sql("""
