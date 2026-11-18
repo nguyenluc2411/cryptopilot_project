@@ -33,6 +33,15 @@ class MemberCommentExcerptTest {
     }
 
     @Test
+    void anEmojiAcrossTheLimit_isLeftOutWhole_neverCutInHalf() {
+        String text = "y".repeat(MemberServiceImpl.EXCERPT_LENGTH - 1) + "😀" + "z".repeat(50);
+
+        String excerpt = MemberServiceImpl.excerpt(text);
+
+        assertThat(excerpt).isEqualTo("y".repeat(MemberServiceImpl.EXCERPT_LENGTH - 1) + "…");
+    }
+
+    @Test
     void aLongTextWithoutABreakNearTheLimit_isCutAtTheLimit() {
         String text = "short " + "y".repeat(300);
 

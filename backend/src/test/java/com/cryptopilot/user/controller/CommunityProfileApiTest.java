@@ -2,6 +2,7 @@ package com.cryptopilot.user.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -178,15 +179,17 @@ class CommunityProfileApiTest {
         assertThat(row.get("banner_url")).isNull();
     }
 
-    /** Swapping avatar and banner keeps both files: each old key is still named by the other field. */
+    /** Swapping avatar and banner keeps both files and their addresses, without asking the storage again. */
     @Test
     void D99_swappingAvatarAndBanner_deletesNothing() throws Exception {
         String first = stored("png", 1000);
         String second = stored("png", 1000);
         save(body(null, null, first, second)).andExpect(status().isOk());
+        clearInvocations(images);
 
         save(body(null, null, second, first)).andExpect(status().isOk());
 
+        verify(images, never()).describe(any());
         verify(images, never()).destroy(any());
         Map<String, Object> row = sql.sql("select avatar_url, avatar_public_id, banner_url, banner_public_id"
                         + " from user_profile where user_id = ?")

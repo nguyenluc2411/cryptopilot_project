@@ -27,7 +27,7 @@ import org.springframework.stereotype.Repository;
 public class MemberPageRepository {
 
     /** Stands for a Guest in the block filters: no account has this key. */
-    private static final UUID NOBODY = new UUID(0L, 0L);
+    public static final UUID NOBODY = new UUID(0L, 0L);
 
     /** The reactions a member page lists: a like, or a Bullish or Bearish vote on a post (D-125). */
     private static final String REACTIONS = "('LIKE', 'BULLISH', 'BEARISH')";

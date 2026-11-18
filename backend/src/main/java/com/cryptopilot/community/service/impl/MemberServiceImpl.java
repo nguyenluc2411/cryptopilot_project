@@ -61,9 +61,6 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class MemberServiceImpl implements MemberService {
 
-    /** Stands for a Guest in the lists that leave out members in a block with the viewer: no account has this key. */
-    private static final UUID NOBODY = new UUID(0L, 0L);
-
     /** Most members a mention search answers. */
     static final int SEARCH_LIMIT = 10;
 
@@ -185,14 +182,23 @@ public class MemberServiceImpl implements MemberService {
         return assembler.page(pages.reactions(memberId, caller, request), request, caller);
     }
 
-    // The start of a post's text, cut at a word where one ends close enough, so a row never ends mid-word.
+    /**
+     * The start of a post's text, cut at a word where one ends close enough, never between the two halves of a
+     * surrogate pair.
+     *
+     * <p>Reference: The Unicode Standard, ch. 3, D91 (UTF-16).
+     */
     static String excerpt(String text) {
         String flat = text == null ? "" : text.strip().replaceAll("\\s+", " ");
         if (flat.length() <= EXCERPT_LENGTH) {
             return flat;
         }
-        int cut = flat.lastIndexOf(' ', EXCERPT_LENGTH);
-        return flat.substring(0, cut > EXCERPT_LENGTH / 2 ? cut : EXCERPT_LENGTH) + "…";
+        int space = flat.lastIndexOf(' ', EXCERPT_LENGTH);
+        int cut = space > EXCERPT_LENGTH / 2 ? space : EXCERPT_LENGTH;
+        if (Character.isHighSurrogate(flat.charAt(cut - 1))) {
+            cut--;
+        }
+        return flat.substring(0, cut) + "…";
     }
 
     @Override
@@ -372,7 +378,7 @@ public class MemberServiceImpl implements MemberService {
     }
 
     private static UUID viewer(UUID caller) {
-        return caller == null ? NOBODY : caller;
+        return caller == null ? MemberPageRepository.NOBODY : caller;
     }
 
     private PublicProfile member(UUID memberId) {

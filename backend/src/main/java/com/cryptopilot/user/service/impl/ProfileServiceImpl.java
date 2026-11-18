@@ -20,6 +20,7 @@ import com.cryptopilot.user.repository.UserAccountRepository;
 import com.cryptopilot.user.repository.UserProfileRepository;
 import com.cryptopilot.user.service.ProfileService;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -113,7 +114,6 @@ public class ProfileServiceImpl implements ProfileService {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public ProfileImageUploadResponse signProfileImage(UUID userId) {
         ProfileImageUploadTicket ticket = images.sign(userId);
         return new ProfileImageUploadResponse(
@@ -139,8 +139,11 @@ public class ProfileServiceImpl implements ProfileService {
             throw invalidImage(BANNER, "key " + bannerKey + " is already the avatar");
         }
         // Both images are checked before anything changes, so a refused banner leaves a new avatar unsaved too.
-        String avatarUrl = imageUrl(userId, AVATAR, avatarKey, oldAvatar, profile.getAvatarUrl());
-        String bannerUrl = imageUrl(userId, BANNER, bannerKey, oldBanner, profile.getBannerUrl());
+        Map<String, String> current = new HashMap<>();
+        current.put(oldAvatar, profile.getAvatarUrl());
+        current.put(oldBanner, profile.getBannerUrl());
+        String avatarUrl = imageUrl(userId, AVATAR, avatarKey, current);
+        String bannerUrl = imageUrl(userId, BANNER, bannerKey, current);
         profile.describe(blankToNull(request.bio()), blankToNull(request.websiteUrl()));
         profile.changeAvatar(avatarUrl, avatarKey);
         profile.changeBanner(bannerUrl, bannerKey);
@@ -151,16 +154,16 @@ public class ProfileServiceImpl implements ProfileService {
     }
 
     /**
-     * Where the image a key names is served from: the stored address for the key the profile already has, nothing
-     * for no key, and for a new key the address the storage itself reads back, once it is known to be the caller's
-     * image within the limits.
+     * Where the image a key names is served from: the stored address for a key the profile already has as avatar or
+     * banner, nothing for no key, and for a new key the address the storage itself reads back, once it is known to be
+     * the caller's image within the limits.
      */
-    private String imageUrl(UUID userId, String field, String key, String currentKey, String currentUrl) {
+    private String imageUrl(UUID userId, String field, String key, Map<String, String> current) {
         if (key == null) {
             return null;
         }
-        if (key.equals(currentKey)) {
-            return currentUrl;
+        if (current.containsKey(key)) {
+            return current.get(key);
         }
         if (!images.issuedTo(userId, key)) {
             throw invalidImage(field, "key " + key + " was not signed for the caller");
