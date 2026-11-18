@@ -1,18 +1,34 @@
 package com.cryptopilot.user.service.impl;
 
+import com.cryptopilot.admin.SystemSettingApi;
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
+import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.user.client.CloudinaryProfileImageStorage;
+import com.cryptopilot.user.client.ProfileImageStorage;
+import com.cryptopilot.user.client.ProfileImageStorageException;
+import com.cryptopilot.user.client.ProfileImageUploadTicket;
+import com.cryptopilot.user.client.StoredProfileImage;
+import com.cryptopilot.user.dto.request.CommunityProfileRequest;
 import com.cryptopilot.user.dto.request.UpdateProfileRequest;
+import com.cryptopilot.user.dto.response.ProfileImageUploadResponse;
 import com.cryptopilot.user.dto.response.ProfileResponse;
 import com.cryptopilot.user.entity.UserAccount;
 import com.cryptopilot.user.entity.UserProfile;
 import com.cryptopilot.user.repository.UserAccountRepository;
 import com.cryptopilot.user.repository.UserProfileRepository;
 import com.cryptopilot.user.service.ProfileService;
+import java.util.Map;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * The Profile and Notifications tabs of SCR-07: reading the profile of the signed-in account and
@@ -30,7 +46,11 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>The account is read for its address, which SCR-07 shows beside the profile. Two reads by key,
  * rather than an association (D-21).
  *
- * <p>Rule: SRS UC-06, UC-08, sections 3.2.5 and 4.2.4.
+ * <p>The Edit dialog of the member page (D-99) is saved here too, on the same row: the introduction, the link and
+ * the two images. An image is accepted from what the media storage reads back, never from what the client says
+ * (OWASP File Upload Cheat Sheet), as the chart images of the journal are.
+ *
+ * <p>Rule: SRS UC-06, UC-08, sections 3.2.5 and 4.2.4; D-99.
  *
  * <p>Reference: Fowler, M. (2002). <i>Patterns of Enterprise Application Architecture</i>.
  * Addison-Wesley ("Service Layer").
@@ -39,8 +59,22 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class ProfileServiceImpl implements ProfileService {
 
+    /** The setting that bounds an uploaded image, the one post and chart images use (BR-44). */
+    static final String MAX_IMAGE_SIZE_MB = "MAX_IMAGE_SIZE_MB";
+
+    private static final long MEGABYTE = 1024L * 1024L;
+
+    /** The fields an image error is reported on. */
+    static final String AVATAR = "avatarPublicId";
+
+    static final String BANNER = "bannerPublicId";
+
+    private static final Logger log = LoggerFactory.getLogger(ProfileServiceImpl.class);
+
     private final UserAccountRepository accounts;
     private final UserProfileRepository profiles;
+    private final ProfileImageStorage images;
+    private final SystemSettingApi settings;
 
     /**
      * The profile of the signed-in account.
@@ -75,6 +109,97 @@ public class ProfileServiceImpl implements ProfileService {
         profiles.save(profile);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public ProfileImageUploadResponse signProfileImage(UUID userId) {
+        ProfileImageUploadTicket ticket = images.sign(userId);
+        return new ProfileImageUploadResponse(
+                ticket.uploadUrl(),
+                ticket.apiKey(),
+                ticket.timestamp(),
+                ticket.signature(),
+                ticket.publicId(),
+                ticket.allowedFormats(),
+                maxBytes());
+    }
+
+    @Override
+    @Transactional
+    public void updateCommunityProfile(UUID userId, CommunityProfileRequest request) {
+        UserProfile profile = profileRowOf(userId);
+        String avatarKey = blankToNull(request.avatarPublicId());
+        String bannerKey = blankToNull(request.bannerPublicId());
+        String oldAvatar = profile.getAvatarPublicId();
+        String oldBanner = profile.getBannerPublicId();
+        // Both images are checked before anything changes, so a refused banner leaves a new avatar unsaved too.
+        String avatarUrl = imageUrl(userId, AVATAR, avatarKey, oldAvatar, profile.getAvatarUrl());
+        String bannerUrl = imageUrl(userId, BANNER, bannerKey, oldBanner, profile.getBannerUrl());
+        profile.describe(blankToNull(request.bio()), blankToNull(request.websiteUrl()));
+        profile.changeAvatar(avatarUrl, avatarKey);
+        profile.changeBanner(bannerUrl, bannerKey);
+        profiles.save(profile);
+        destroyAfterCommitUnless(oldAvatar, avatarKey);
+        destroyAfterCommitUnless(oldBanner, bannerKey);
+    }
+
+    /**
+     * Where the image a key names is served from: the stored address for the key the profile already has, nothing
+     * for no key, and for a new key the address the storage itself reads back, once it is known to be the caller's
+     * image within the limits.
+     */
+    private String imageUrl(UUID userId, String field, String key, String currentKey, String currentUrl) {
+        if (key == null) {
+            return null;
+        }
+        if (key.equals(currentKey)) {
+            return currentUrl;
+        }
+        if (!images.issuedTo(userId, key)) {
+            throw invalidImage(field, "key " + key + " was not signed for the caller");
+        }
+        StoredProfileImage stored;
+        try {
+            stored = images.describe(key).orElseThrow(() -> invalidImage(field, "nothing is stored under " + key));
+        } catch (ProfileImageStorageException unavailable) {
+            throw new BusinessException(ErrorCode.MEDIA_STORAGE_UNAVAILABLE, unavailable.getMessage());
+        }
+        if (!CloudinaryProfileImageStorage.FORMATS.contains(stored.format()) || stored.bytes() > maxBytes()) {
+            throw invalidImage(field, "image " + key + " is " + stored.format() + " of " + stored.bytes() + " bytes");
+        }
+        return stored.url();
+    }
+
+    private long maxBytes() {
+        return MEGABYTE * settings.integer(MAX_IMAGE_SIZE_MB);
+    }
+
+    private static FieldValidationException invalidImage(String field, String detail) {
+        return new FieldValidationException(ErrorCode.MEDIA_INVALID, detail, Map.of(field, "MSG32"));
+    }
+
+    // A replaced image is deleted from the storage only once the save is committed: a save rolled back still points
+    // at it. A delete that fails is logged and the file is left, which costs storage and nothing else.
+    private void destroyAfterCommitUnless(String oldKey, String newKey) {
+        if (oldKey == null || oldKey.equals(newKey)) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    images.destroy(oldKey);
+                } catch (RuntimeException failed) {
+                    log.warn(
+                            "D-99 profile image {} no longer used could not be deleted: {}", oldKey, failed.toString());
+                }
+            }
+        });
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.strip();
+    }
+
     private UserAccount accountOf(UUID userId) {
         return accounts.findById(userId).orElseThrow(() -> new ResourceNotFoundException("UserAccount", userId));
     }
@@ -93,6 +218,11 @@ public class ProfileServiceImpl implements ProfileService {
                 profile.getTradingStyle(),
                 profile.getRiskProfile(),
                 profile.isNotifyEmail(),
-                profile.isNotifyPush());
+                profile.isNotifyPush(),
+                profile.getBio(),
+                profile.getWebsiteUrl(),
+                profile.getBannerUrl(),
+                profile.getAvatarPublicId(),
+                profile.getBannerPublicId());
     }
 }

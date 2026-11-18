@@ -11,7 +11,10 @@ import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.community.dto.response.AuthorResponse;
 import com.cryptopilot.community.dto.response.EngagementResponse;
 import com.cryptopilot.community.dto.response.InfluencerResponse;
+import com.cryptopilot.community.dto.response.MemberCommentResponse;
 import com.cryptopilot.community.dto.response.MemberProfileResponse;
+import com.cryptopilot.community.dto.response.PostSummaryResponse;
+import com.cryptopilot.community.dto.response.TokenMentionResponse;
 import com.cryptopilot.community.entity.UserRelation;
 import com.cryptopilot.community.event.UserFollowed;
 import com.cryptopilot.community.model.AuthorStanding;
@@ -20,9 +23,12 @@ import com.cryptopilot.community.model.enums.InfluencerRank;
 import com.cryptopilot.community.model.enums.RelationType;
 import com.cryptopilot.community.repository.ForumCommentRepository;
 import com.cryptopilot.community.repository.ForumPostRepository;
+import com.cryptopilot.community.repository.MemberPageRepository;
 import com.cryptopilot.community.repository.PostFeedRepository;
 import com.cryptopilot.community.repository.UserRelationRepository;
 import com.cryptopilot.community.service.MemberService;
+import com.cryptopilot.market.CoinListing;
+import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.user.AuthorCard;
 import com.cryptopilot.user.PublicProfile;
 import com.cryptopilot.user.UserApi;
@@ -39,6 +45,7 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -65,6 +72,14 @@ public class MemberServiceImpl implements MemberService {
 
     static final int INFLUENCERS_MAX = 20;
 
+    /** How many coins Token Mentions lists, and at most (D-99). */
+    static final int MENTIONS_DEFAULT = 10;
+
+    static final int MENTIONS_MAX = 20;
+
+    /** The longest start of a post's text a comment row shows. */
+    static final int EXCERPT_LENGTH = 160;
+
     /** Longest name prefix a mention search takes, the length of a display name. */
     static final int SEARCH_MAX_LENGTH = 50;
 
@@ -80,6 +95,9 @@ public class MemberServiceImpl implements MemberService {
     private final PostFeedRepository feeds;
     private final ForumPostRepository posts;
     private final ForumCommentRepository comments;
+    private final MemberPageRepository pages;
+    private final PostAssembler assembler;
+    private final MarketApi market;
     private final ApplicationEventPublisher events;
     private final Clock clock;
 
@@ -88,6 +106,8 @@ public class MemberServiceImpl implements MemberService {
     public MemberProfileResponse profile(UUID caller, UUID memberId) {
         PublicProfile member = visibleMember(caller, memberId);
         MemberActivity activity = feeds.memberActivity(memberId);
+        AuthorStanding standing =
+                feeds.standings(Set.of(memberId), caller, clock.instant()).getOrDefault(memberId, AuthorStanding.NONE);
         return new MemberProfileResponse(
                 member.userId(),
                 member.displayName(),
@@ -101,7 +121,78 @@ public class MemberServiceImpl implements MemberService {
                         && relations.existsBySourceUserIdAndTargetUserIdAndType(caller, memberId, RelationType.FOLLOW),
                 caller != null
                         && relations.existsBySourceUserIdAndTargetUserIdAndType(caller, memberId, RelationType.BLOCK),
-                memberId.equals(caller));
+                memberId.equals(caller),
+                member.bio(),
+                member.websiteUrl(),
+                member.bannerUrl(),
+                standing.influence(),
+                standing.depth());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<TokenMentionResponse> tokenMentions(UUID caller, UUID memberId, Integer limit) {
+        visibleMember(caller, memberId);
+        int size = limit == null ? MENTIONS_DEFAULT : Math.clamp(limit, 1, MENTIONS_MAX);
+        List<MemberPageRepository.TokenMention> mentions = pages.tokenMentions(memberId, size);
+        Map<UUID, CoinListing> coins = market
+                .coins(mentions.stream()
+                        .map(MemberPageRepository.TokenMention::coinId)
+                        .collect(Collectors.toSet()))
+                .stream()
+                .collect(Collectors.toMap(CoinListing::coinId, Function.identity()));
+        return mentions.stream()
+                .filter(mention -> coins.containsKey(mention.coinId()))
+                .map(mention -> new TokenMentionResponse(
+                        coins.get(mention.coinId()).symbol(),
+                        coins.get(mention.coinId()).name(),
+                        mention.posts(),
+                        Math.round(mention.posts() * 10_000.0 / mention.allMentions()) / 100.0,
+                        mention.bullishPosts(),
+                        mention.bearishPosts(),
+                        mention.lastPostAt()))
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<MemberCommentResponse> comments(UUID caller, UUID memberId, Integer page, Integer pageSize) {
+        visibleMember(caller, memberId);
+        PageRequest request = Paging.of(page, pageSize);
+        MemberPageRepository.Rows<MemberPageRepository.MemberComment> rows = pages.comments(memberId, caller, request);
+        return new PageResponse<>(
+                rows.items().stream()
+                        .map(row -> new MemberCommentResponse(
+                                row.commentId(),
+                                row.postId(),
+                                row.reply(),
+                                row.content(),
+                                row.likes(),
+                                row.createdAt(),
+                                row.postTitle(),
+                                excerpt(row.postContent())))
+                        .toList(),
+                request.getPageNumber() + 1,
+                request.getPageSize(),
+                rows.total());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<PostSummaryResponse> reactions(UUID caller, UUID memberId, Integer page, Integer pageSize) {
+        visibleMember(caller, memberId);
+        PageRequest request = Paging.of(page, pageSize);
+        return assembler.page(pages.reactions(memberId, caller, request), request, caller);
+    }
+
+    // The start of a post's text, cut at a word where one ends close enough, so a row never ends mid-word.
+    static String excerpt(String text) {
+        String flat = text == null ? "" : text.strip().replaceAll("\\s+", " ");
+        if (flat.length() <= EXCERPT_LENGTH) {
+            return flat;
+        }
+        int cut = flat.lastIndexOf(' ', EXCERPT_LENGTH);
+        return flat.substring(0, cut > EXCERPT_LENGTH / 2 ? cut : EXCERPT_LENGTH) + "…";
     }
 
     @Override
