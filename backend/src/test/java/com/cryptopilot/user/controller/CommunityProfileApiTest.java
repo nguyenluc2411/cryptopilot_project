@@ -160,6 +160,45 @@ class CommunityProfileApiTest {
         assertThat(row.get("website_url")).isNull();
     }
 
+    /** One stored file cannot be both images: MSG32 on the banner, before the storage is asked, and nothing saved. */
+    @Test
+    void D99_theSameKeyForAvatarAndBanner_isRefused_beforeTheStorageIsAsked() throws Exception {
+        String key = "cryptopilot/profiles/" + trader + "/" + UUID.randomUUID();
+
+        save(body("Not saved", null, key, key))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.messageCode").value("MSG32"))
+                .andExpect(jsonPath("$.errors.bannerPublicId").value("MSG32"));
+
+        verify(images, never()).issuedTo(any(), any());
+        verify(images, never()).describe(any());
+        Map<String, Object> row = row();
+        assertThat(row.get("bio")).isNull();
+        assertThat(row.get("avatar_url")).isNull();
+        assertThat(row.get("banner_url")).isNull();
+    }
+
+    /** Swapping avatar and banner keeps both files: each old key is still named by the other field. */
+    @Test
+    void D99_swappingAvatarAndBanner_deletesNothing() throws Exception {
+        String first = stored("png", 1000);
+        String second = stored("png", 1000);
+        save(body(null, null, first, second)).andExpect(status().isOk());
+
+        save(body(null, null, second, first)).andExpect(status().isOk());
+
+        verify(images, never()).destroy(any());
+        Map<String, Object> row = sql.sql("select avatar_url, avatar_public_id, banner_url, banner_public_id"
+                        + " from user_profile where user_id = ?")
+                .param(trader)
+                .query()
+                .singleRow();
+        assertThat(row.get("avatar_public_id")).isEqualTo(second);
+        assertThat(row.get("avatar_url")).isEqualTo(urlOf(second));
+        assertThat(row.get("banner_public_id")).isEqualTo(first);
+        assertThat(row.get("banner_url")).isEqualTo(urlOf(first));
+    }
+
     /** A delete the storage fails is only logged: the save stands. */
     @Test
     void D99_aFailedDeleteOfAReplacedImage_doesNotUndoTheSave() throws Exception {

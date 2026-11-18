@@ -19,7 +19,10 @@ import com.cryptopilot.user.entity.UserProfile;
 import com.cryptopilot.user.repository.UserAccountRepository;
 import com.cryptopilot.user.repository.UserProfileRepository;
 import com.cryptopilot.user.service.ProfileService;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -131,6 +134,10 @@ public class ProfileServiceImpl implements ProfileService {
         String bannerKey = blankToNull(request.bannerPublicId());
         String oldAvatar = profile.getAvatarPublicId();
         String oldBanner = profile.getBannerPublicId();
+        // One stored file cannot be both images: removing either would delete the other.
+        if (avatarKey != null && avatarKey.equals(bannerKey)) {
+            throw invalidImage(BANNER, "key " + bannerKey + " is already the avatar");
+        }
         // Both images are checked before anything changes, so a refused banner leaves a new avatar unsaved too.
         String avatarUrl = imageUrl(userId, AVATAR, avatarKey, oldAvatar, profile.getAvatarUrl());
         String bannerUrl = imageUrl(userId, BANNER, bannerKey, oldBanner, profile.getBannerUrl());
@@ -138,8 +145,9 @@ public class ProfileServiceImpl implements ProfileService {
         profile.changeAvatar(avatarUrl, avatarKey);
         profile.changeBanner(bannerUrl, bannerKey);
         profiles.save(profile);
-        destroyAfterCommitUnless(oldAvatar, avatarKey);
-        destroyAfterCommitUnless(oldBanner, bannerKey);
+        Set<String> kept = new HashSet<>(Arrays.asList(avatarKey, bannerKey));
+        destroyAfterCommitUnlessKept(oldAvatar, kept);
+        destroyAfterCommitUnlessKept(oldBanner, kept);
     }
 
     /**
@@ -177,10 +185,13 @@ public class ProfileServiceImpl implements ProfileService {
         return new FieldValidationException(ErrorCode.MEDIA_INVALID, detail, Map.of(field, "MSG32"));
     }
 
-    // A replaced image is deleted from the storage only once the save is committed: a save rolled back still points
-    // at it. A delete that fails is logged and the file is left, which costs storage and nothing else.
-    private void destroyAfterCommitUnless(String oldKey, String newKey) {
-        if (oldKey == null || oldKey.equals(newKey)) {
+    /**
+     * Deletes an image the profile no longer uses once the save is committed, unless either new key still names it (a
+     * swap of avatar and banner); a failed delete is only logged. The storage is told only what the server checked
+     * (OWASP File Upload Cheat Sheet).
+     */
+    private void destroyAfterCommitUnlessKept(String oldKey, Set<String> kept) {
+        if (oldKey == null || kept.contains(oldKey)) {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
