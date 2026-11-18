@@ -2,6 +2,7 @@ package com.cryptopilot.common.config;
 
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ProblemDetails;
+import com.cryptopilot.common.exception.RetryLaterException;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
@@ -141,6 +142,9 @@ public class OpenApiConfig {
                         new ArraySchema()
                                 .items(new StringSchema())
                                 .description("The seconds to wait, the same as Retry-After"))
+                .addProperty(
+                        RetryLaterException.RETRY_AFTER,
+                        new IntegerSchema().description("MSG46 only: the seconds to wait, the same as Retry-After"))
                 .addProperty(ProblemDetails.TRACE_ID, new StringSchema());
     }
 }

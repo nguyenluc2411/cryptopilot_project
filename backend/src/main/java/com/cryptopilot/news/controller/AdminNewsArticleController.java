@@ -85,7 +85,8 @@ public class AdminNewsArticleController {
     @ApiResponse(responseCode = "404", description = "MSG41: no such article")
     @ApiResponse(
             responseCode = "503",
-            description = "NEWS_SUMMARY_UNAVAILABLE, MSG31: the AI Service is not configured, down or rate limited")
+            description = "NEWS_SUMMARY_UNAVAILABLE, MSG31: the AI Service is not configured, down, rate limited,"
+                    + " overloaded or timed out")
     @PostMapping("/{id}/summarize")
     public AdminNewsArticleResponse summarize(@PathVariable UUID id) {
         return service.summarize(id);

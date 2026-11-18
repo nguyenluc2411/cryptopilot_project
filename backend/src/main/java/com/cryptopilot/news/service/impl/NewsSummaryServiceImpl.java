@@ -120,8 +120,12 @@ public class NewsSummaryServiceImpl implements NewsSummaryService {
             } catch (AiServiceException e) {
                 failed++;
                 if (e.stopsTheRun()) {
-                    // Not the article's fault: the attempt is not counted against it.
+                    // Not the article's fault, so the attempt is not counted, unless a timeout may be the article's:
+                    // then it is counted against this one article only, which leaves the queue after its attempts.
                     log.warn("NSF-11 stops this run: {} ({}); the next run tries again", e.getMessage(), e.code());
+                    if (e.mayBeTheRequest()) {
+                        recordFailure(article, e.code() + ": " + e.getMessage());
+                    }
                     break;
                 }
                 log.warn("NSF-11 article {} not summarized: {} ({})", article.getId(), e.getMessage(), e.code());

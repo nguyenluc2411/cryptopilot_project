@@ -116,6 +116,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         if (exception instanceof FieldValidationException invalid) {
             body.setProperty(ERRORS, invalid.errors());
         }
+        if (exception instanceof RetryLaterException later) {
+            // RFC 9110 10.2.3: the header carries the same seconds as the body.
+            return ResponseEntity.status(errorCode.status())
+                    .header(HttpHeaders.RETRY_AFTER, Long.toString(later.retryAfterSeconds()))
+                    .body(body);
+        }
         return ResponseEntity.status(errorCode.status()).body(body);
     }
 

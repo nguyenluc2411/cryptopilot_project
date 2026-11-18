@@ -128,7 +128,8 @@ class BaselineSchemaTest {
                         + " (V21, where the paper matching engine stopped) are technical tables, not"
                         + " business entities; legacy_paper_account and legacy_paper_transfer keep the rows V47"
                         + " folded into the Trader and the ledger, untouched, until a later migration drops them;"
-                        + " system_event (V59, the system log of UC-52) is operational state too")
+                        + " system_event (V59, the system log of UC-52) is operational state too;"
+                        + " verification_resend_attempt (V71, BR-65's resend counter) is a short-lived counter")
                 .contains(
                         "event_publication",
                         "flyway_schema_history",
@@ -138,8 +139,9 @@ class BaselineSchemaTest {
                         "order_matching_watermark",
                         "legacy_paper_account",
                         "legacy_paper_transfer",
-                        "system_event")
-                .hasSize(BUSINESS_TABLES.size() + 9);
+                        "system_event",
+                        "verification_resend_attempt")
+                .hasSize(BUSINESS_TABLES.size() + 10);
     }
 
     @Test

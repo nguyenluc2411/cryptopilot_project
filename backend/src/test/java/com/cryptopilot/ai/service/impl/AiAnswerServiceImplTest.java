@@ -184,6 +184,36 @@ class AiAnswerServiceImplTest {
         ArgumentCaptor<AiAnswerPush> push = ArgumentCaptor.forClass(AiAnswerPush.class);
         verify(broker).convertAndSendToUser(eq(userId.toString()), eq(AiAnswerServiceImpl.QUEUE), push.capture());
         assertThat(push.getValue().status()).isEqualTo(MessageStatus.COMPLETED);
+        assertThat(stored.getValue().getSources()).isNull();
+        assertThat(push.getValue().answer().sources()).isEmpty();
+    }
+
+    @Test
+    void T074_anAnswerCitingTheContextsNews_isStoredWithTheCitedArticles_andPushedWithThem() {
+        AiMessage question = question("""
+                {"version":4,"news":{"coin":"BTC","articles":[
+                  {"ref":1,"about":"COIN","headline":"ETF Bitcoin bị rút ròng","outlet":"CoinDesk",
+                   "publishedAt":"2026-11-07T09:00:00Z","url":"https://coindesk.example/etf"},
+                  {"ref":2,"about":"MARKET","headline":"Sàn bị hack","outlet":"Cointelegraph",
+                   "publishedAt":"2026-11-07T08:00:00Z","url":"https://ct.example/hack"}]}}""");
+        activeConfiguration();
+        when(client.chat(any())).thenReturn(new AiChatAnswer("Dòng tiền ETF đang rút ra [1].", "gemini-test", 10, 5));
+        when(messages.decide(eq(question.getId()), eq("COMPLETED"), any())).thenReturn(1);
+        when(messages.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service(0, 2000).answer(question.getId());
+
+        ArgumentCaptor<AiMessage> stored = ArgumentCaptor.forClass(AiMessage.class);
+        verify(messages).save(stored.capture());
+        assertThat(stored.getValue().getSources())
+                .contains("\"ref\":1", "https://coindesk.example/etf")
+                .doesNotContain("https://ct.example/hack");
+        ArgumentCaptor<AiAnswerPush> push = ArgumentCaptor.forClass(AiAnswerPush.class);
+        verify(broker).convertAndSendToUser(eq(userId.toString()), eq(AiAnswerServiceImpl.QUEUE), push.capture());
+        assertThat(push.getValue().answer().sources()).singleElement().satisfies(source -> {
+            assertThat(source.url()).isEqualTo("https://coindesk.example/etf");
+            assertThat(source.publishedAt()).isEqualTo(Instant.parse("2026-11-07T09:00:00Z"));
+        });
     }
 
     @Test

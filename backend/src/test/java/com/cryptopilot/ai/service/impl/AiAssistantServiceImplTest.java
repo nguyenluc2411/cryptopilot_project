@@ -65,7 +65,7 @@ class AiAssistantServiceImplTest {
                 .thenReturn(Optional.of(conversation));
         when(conversations.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(messages.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-        when(snapshots.build(any(), any())).thenReturn(new ContextSnapshot(1, NOW, null, null, null));
+        when(snapshots.build(any(), any())).thenReturn(new ContextSnapshot(1, NOW, null, null, null, null, null));
         when(entitlements.getLimit(userId, Feature.AI_CHAT_DAILY)).thenReturn(100);
         return conversation;
     }

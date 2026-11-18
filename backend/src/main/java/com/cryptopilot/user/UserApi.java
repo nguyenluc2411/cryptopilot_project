@@ -246,4 +246,10 @@ public interface UserApi {
      * as the receipt of a payment (T-069). Empty when there is no such account.
      */
     Optional<String> emailOf(UUID userId);
+
+    /**
+     * The trading style and risk profile the Trader's profile records, for the AI Assistant to explain things the way
+     * they trade (T-074). Empty when there is no such profile.
+     */
+    Optional<TradingProfile> tradingProfileOf(UUID userId);
 }
