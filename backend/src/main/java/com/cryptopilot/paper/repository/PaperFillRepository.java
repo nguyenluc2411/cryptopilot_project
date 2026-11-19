@@ -5,6 +5,7 @@ import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -51,6 +52,13 @@ public interface PaperFillRepository extends Repository<PaperFill, UUID> {
             + " from PaperFill f where f.positionId = :positionId"
             + " and coalesce(f.sourceTime, f.tradedAt) < :at")
     BigDecimal sizeBefore(UUID positionId, OrderSide openingSide, Instant at);
+
+    /**
+     * When a Futures position opened on the exchange: the earliest of its fills, a replayed one counting at the time of
+     * the price it took (D-158). Empty for a position with no fill.
+     */
+    @Query("select min(coalesce(f.sourceTime, f.tradedAt)) from PaperFill f where f.positionId = :positionId")
+    Optional<Instant> firstFillAt(UUID positionId);
 
     /** Writes a fill. Not transactional here; the unit of work is the calling service's. */
     PaperFill save(PaperFill fill);

@@ -266,6 +266,47 @@ class TradingPauseTimedWorkTest {
     }
 
     /**
+     * TR-24 under I5: the replay opens a position now on a candle from before the funding time. It was open at the
+     * funding time on the exchange, so it owes it, though it is dated when applied, after the funding time.
+     */
+    @Test
+    void D158_aPositionTheReplayOpenedOnACandleBeforeTheFundingTime_owesIt() throws Exception {
+        Instant fundingTime = Instant.now().minus(Duration.ofHours(1));
+        UUID trader = replayOpenedLong(fundingTime.minus(Duration.ofMinutes(30)), fundingTime);
+
+        assertThat(funding.run()).isEqualTo(1);
+        assertThat(funding.run()).isZero();
+        assertThat(fundingFees(trader)).isOne();
+    }
+
+    /** The same position opened by the replay on a candle after the funding time was not open then, and owes nothing. */
+    @Test
+    void D158_aPositionTheReplayOpenedOnACandleAfterTheFundingTime_owesNothing() throws Exception {
+        Instant fundingTime = Instant.now().minus(Duration.ofHours(1));
+        UUID trader = replayOpenedLong(fundingTime.plus(Duration.ofMinutes(30)), fundingTime);
+
+        assertThat(funding.run()).isZero();
+        assertThat(fundingFees(trader)).isZero();
+    }
+
+    /**
+     * A long of 1 at 100 the replay applied now on a candle of {@code candleTime}: the position and its fill are dated
+     * now, the fill keeps the candle's time; and a settlement at {@code fundingTime}.
+     */
+    private UUID replayOpenedLong(Instant candleTime, Instant fundingTime) throws Exception {
+        UUID trader = trader();
+        place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "MARKET", "quantity": "1"}""".formatted(symbol)).andExpect(status().isOk());
+        sql.sql("update order_fill set fill_source = 'REPLAY', source_time = ? where user_id = ?")
+                .params(Timestamp.from(candleTime), trader)
+                .update();
+        sql.sql("""
+                        insert into funding_rate_history (pair_id, funding_time, funding_rate, mark_price)
+                        values (?, ?, 0.0001, 100)""").params(pair, Timestamp.from(fundingTime)).update();
+        return trader;
+    }
+
+    /**
      * D-158 E2b: a replayed mark from before a position was opened never liquidates it, though the position is open
      * now; the replay only reaches back to marks the position lived through.
      */
