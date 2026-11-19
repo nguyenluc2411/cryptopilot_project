@@ -5,6 +5,7 @@ import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
@@ -122,6 +123,16 @@ public interface UserAccountRepository extends Repository<UserAccount, UUID> {
     @Query("select a.id from UserAccount a where a.role = com.cryptopilot.user.model.enums.Role.ADMIN"
             + " and a.accountStatus = com.cryptopilot.user.model.enums.AccountStatus.ACTIVE order by a.id")
     List<UUID> findIdsOfActiveAdministrators();
+
+    /**
+     * One page of the keys of the ACTIVE Trader accounts after {@code after}, in key order, at most {@code limit}: a
+     * bounded read, walked page by page by whoever must reach every Trader (D-158).
+     */
+    @Transactional(readOnly = true)
+    @Query("select a.id from UserAccount a where a.role = com.cryptopilot.user.model.enums.Role.TRADER"
+            + " and a.accountStatus = com.cryptopilot.user.model.enums.AccountStatus.ACTIVE and a.id > :after"
+            + " order by a.id")
+    List<UUID> findIdsOfActiveTradersAfter(@Param("after") UUID after, Limit limit);
 
     /**
      * Writes an account, inserting it when it is new and updating it otherwise.

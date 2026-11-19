@@ -3,10 +3,13 @@ package com.cryptopilot.notification.service.impl;
 import com.cryptopilot.market.event.MarketFallbackUnavailable;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketRecoveryOverdue;
+import com.cryptopilot.market.event.MarketTradingResumed;
 import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.notification.client.EmailSender;
 import com.cryptopilot.notification.model.NewNotification;
 import com.cryptopilot.notification.model.enums.NotificationType;
+import com.cryptopilot.notification.repository.NotificationRepository;
 import com.cryptopilot.notification.service.MarketNotificationService;
 import com.cryptopilot.paper.event.PaperIncidentNotice;
 import com.cryptopilot.trading.event.PlanIncidentNotice;
@@ -14,6 +17,9 @@ import com.cryptopilot.user.UserApi;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -24,17 +30,27 @@ import org.springframework.transaction.annotation.Transactional;
  * Trader only, so paper trading and plans on the same market write it once; the reopening notices are keyed apart, as
  * they say different things. Times are given in UTC, as the client localises the notice's own time.
  *
+ * <p>A Trader the incident affects is mailed each notice the first time it is written, when their account takes
+ * notification mail; a mail that fails rolls the notice back, so the redelivered event writes and mails it again. Every
+ * other active Trader gets one general notice in the bell, and no mail.
+ *
  * <p>Rule: NSF-03; NSF-15; D-158.
  */
 @Service
 @RequiredArgsConstructor
 public class MarketNotificationServiceImpl implements MarketNotificationService {
 
+    /** How many Traders a general notice is written for per read of their keys. */
+    static final int TRADERS_PAGE = 500;
+
     private static final DateTimeFormatter TIME =
             DateTimeFormatter.ofPattern("HH:mm 'UTC'").withZone(ZoneOffset.UTC);
 
     private final NotificationWriter writer;
     private final UserApi users;
+    private final MarketMails mails;
+    private final EmailSender sender;
+    private final NotificationRepository notifications;
 
     @Override
     @Transactional
@@ -66,14 +82,16 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
         if (notice.market() == MarketType.FUTURES) {
             content.append(" Funding due in that period is settled at the exchange's rates.");
         }
-        writer.write(new NewNotification(
-                notice.userId(),
-                NotificationType.MARKET,
-                name(notice.market()) + " trading resumed",
-                content.toString(),
-                null,
-                null,
-                "MARKET_RESUMED:" + notice.incidentId() + ":" + notice.userId() + ":PAPER"));
+        writeAndMail(
+                notice.market(),
+                new NewNotification(
+                        notice.userId(),
+                        NotificationType.MARKET,
+                        name(notice.market()) + " trading resumed",
+                        content.toString(),
+                        null,
+                        null,
+                        "MARKET_RESUMED:" + notice.incidentId() + ":" + notice.userId() + ":PAPER"));
     }
 
     @Override
@@ -83,17 +101,19 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
             paused(notice.userId(), notice.market(), notice.incidentId(), notice.lastLiveAt(), notice.message());
             return;
         }
-        writer.write(new NewNotification(
-                notice.userId(),
-                NotificationType.MARKET,
-                "Plans on " + name(notice.market()) + " watched again",
-                "Your plans on " + name(notice.market()) + " are watched again after a pause from "
-                        + TIME.format(notice.lastLiveAt()) + " to " + TIME.format(notice.resumedAt())
-                        + ". An entry or exit reached meanwhile was applied at the exchange's prices and told"
-                        + " separately.",
-                null,
-                null,
-                "MARKET_RESUMED:" + notice.incidentId() + ":" + notice.userId() + ":PLANS"));
+        writeAndMail(
+                notice.market(),
+                new NewNotification(
+                        notice.userId(),
+                        NotificationType.MARKET,
+                        "Plans on " + name(notice.market()) + " watched again",
+                        "Your plans on " + name(notice.market()) + " are watched again after a pause from "
+                                + TIME.format(notice.lastLiveAt()) + " to " + TIME.format(notice.resumedAt())
+                                + ". An entry or exit reached meanwhile was applied at the exchange's prices and told"
+                                + " separately.",
+                        null,
+                        null,
+                        "MARKET_RESUMED:" + notice.incidentId() + ":" + notice.userId() + ":PLANS"));
     }
 
     @Override
@@ -113,6 +133,71 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
                     null,
                     "MARKET_PAUSED_ADMIN:" + announced.incidentId() + ":" + admin));
         }
+    }
+
+    @Override
+    @Transactional
+    public int broadcastPause(MarketPauseAnnounced announced) {
+        String content = announced.message() != null
+                ? name(announced.market()) + " trading is under maintenance: " + announced.message()
+                : "Exchange data for " + name(announced.market()) + " has been unavailable since "
+                        + TIME.format(announced.lastLiveAt()) + ", so " + name(announced.market())
+                        + " trading is paused until the data is back and caught up.";
+        return broadcast(
+                "MARKET_PAUSED:" + announced.incidentId() + ":",
+                "MARKET_PAUSED_ALL:" + announced.incidentId() + ":",
+                name(announced.market()) + " trading paused",
+                content);
+    }
+
+    @Override
+    @Transactional
+    public int broadcastResume(MarketTradingResumed resumed) {
+        return broadcast(
+                "MARKET_RESUMED:" + resumed.incidentId() + ":",
+                "MARKET_RESUMED_ALL:" + resumed.incidentId() + ":",
+                name(resumed.market()) + " trading resumed",
+                name(resumed.market()) + " trading reopened after a pause from " + TIME.format(resumed.lastLiveAt())
+                        + " to " + TIME.format(resumed.resumedAt()) + ".");
+    }
+
+    /**
+     * Writes the general notice to every active Trader without a notice of their own under {@code ownPrefix}; how many
+     * were written.
+     */
+    private int broadcast(String ownPrefix, String keyPrefix, String title, String content) {
+        Set<String> told = new HashSet<>();
+        for (String key : notifications.sourceKeysStartingWith(ownPrefix)) {
+            String rest = key.substring(ownPrefix.length());
+            int end = rest.indexOf(':');
+            told.add(end < 0 ? rest : rest.substring(0, end));
+        }
+        int written = 0;
+        UUID after = null;
+        List<UUID> page;
+        do {
+            page = users.activeTraders(after, TRADERS_PAGE);
+            for (UUID trader : page) {
+                if (told.contains(trader.toString())) {
+                    continue;
+                }
+                if (writer.write(new NewNotification(
+                        trader, NotificationType.MARKET, title, content, null, null, keyPrefix + trader))) {
+                    written++;
+                }
+            }
+            after = page.isEmpty() ? after : page.getLast();
+        } while (page.size() == TRADERS_PAGE);
+        return written;
+    }
+
+    /** Writes a notice of a Trader the incident affects, and mails it the first time, if the account takes mail. */
+    private void writeAndMail(MarketType market, NewNotification notice) {
+        if (!writer.write(notice)) {
+            return;
+        }
+        users.notificationMailAddress(notice.recipientId())
+                .ifPresent(address -> sender.send(mails.notice(address, market, notice.title(), notice.content())));
     }
 
     @Override
@@ -162,14 +247,16 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
                 : "Exchange data for " + name(market) + " has been unavailable since " + TIME.format(lastLiveAt)
                         + ". Your orders, positions and plans are kept: nothing is filled, liquidated or charged"
                         + " funding until the data is back, then the period is applied as the exchange traded.";
-        writer.write(new NewNotification(
-                userId,
-                NotificationType.MARKET,
-                name(market) + " trading paused",
-                content,
-                null,
-                null,
-                "MARKET_PAUSED:" + incidentId + ":" + userId));
+        writeAndMail(
+                market,
+                new NewNotification(
+                        userId,
+                        NotificationType.MARKET,
+                        name(market) + " trading paused",
+                        content,
+                        null,
+                        null,
+                        "MARKET_PAUSED:" + incidentId + ":" + userId));
     }
 
     private static String reason(IncidentReason reason) {

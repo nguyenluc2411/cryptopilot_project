@@ -10,10 +10,15 @@ import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
+import com.cryptopilot.market.event.MarketPauseAnnounced;
+import com.cryptopilot.market.event.MarketTradingResumed;
+import com.cryptopilot.market.model.enums.IncidentReason;
+import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
+import com.cryptopilot.notification.service.MarketNotificationService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import java.math.BigDecimal;
@@ -73,6 +78,9 @@ class MarketIncidentNoticeApiTest {
 
     @Autowired
     private MarketHealthService health;
+
+    @Autowired
+    private MarketNotificationService broadcasts;
 
     private final List<UUID> accounts = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
@@ -195,6 +203,35 @@ class MarketIncidentNoticeApiTest {
                         .query(Long.class)
                         .single())
                 .isEqualTo(2);
+
+        // N2, N3: the general notices, written later, reach the bystander alone, in the bell.
+        Map<String, Object> incident = sql.sql(
+                        "select market_incident_id, last_live_at, resumed_at from market_incident"
+                                + " where market_type = 'FUTURES' order by paused_at desc limit 1")
+                .query()
+                .singleRow();
+        UUID id = (UUID) incident.get("market_incident_id");
+        Instant lastLive = ((java.sql.Timestamp) incident.get("last_live_at")).toInstant();
+        Instant reopened = ((java.sql.Timestamp) incident.get("resumed_at")).toInstant();
+        broadcasts.broadcastPause(new MarketPauseAnnounced(
+                MarketType.FUTURES,
+                id,
+                MarketHealthState.MAINTENANCE,
+                IncidentReason.MAINTENANCE,
+                lastLive,
+                "Back at 22:00."));
+        broadcasts.broadcastResume(new MarketTradingResumed(MarketType.FUTURES, id, lastLive, reopened, true));
+        assertThat(sql.sql("select source_key from notification where user_id = ? order by source_key")
+                        .param(bystander)
+                        .query(String.class)
+                        .list())
+                .containsExactly(
+                        "MARKET_PAUSED_ALL:" + id + ":" + bystander, "MARKET_RESUMED_ALL:" + id + ":" + bystander);
+        assertThat(sql.sql("select count(*) from notification where user_id = ? and source_key like '%ALL:%'")
+                        .param(waiting)
+                        .query(Long.class)
+                        .single())
+                .isZero();
     }
 
     private Map<String, Object> awaitNotice(UUID user, String title) {

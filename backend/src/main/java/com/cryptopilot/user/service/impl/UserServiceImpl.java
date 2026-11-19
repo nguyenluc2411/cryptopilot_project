@@ -30,6 +30,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -269,6 +270,15 @@ public class UserServiceImpl implements UserService {
     public List<UUID> activeAdministrators() {
         return accounts.findIdsOfActiveAdministrators();
     }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UUID> activeTraders(UUID after, int limit) {
+        return accounts.findIdsOfActiveTradersAfter(after == null ? FIRST_KEY : after, Limit.of(limit));
+    }
+
+    /** The lowest key, as the database orders them: where the first page of {@link #activeTraders} starts. */
+    private static final UUID FIRST_KEY = new UUID(0L, 0L);
 
     @Override
     @Transactional(readOnly = true)

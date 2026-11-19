@@ -22,6 +22,11 @@ import org.springframework.transaction.annotation.Transactional;
  */
 public interface NotificationRepository extends Repository<Notification, UUID> {
 
+    /** The source keys that start with {@code prefix}, e.g. every notice of one market incident. */
+    @Transactional(readOnly = true)
+    @Query(value = "select source_key from notification where source_key like :prefix || '%'", nativeQuery = true)
+    List<String> sourceKeysStartingWith(@Param("prefix") String prefix);
+
     /**
      * Writes a notification unless one was already written for {@code sourceKey}, or the recipient's account no
      * longer exists; 1 when a row was added.

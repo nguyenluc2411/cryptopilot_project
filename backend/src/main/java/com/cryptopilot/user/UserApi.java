@@ -219,6 +219,13 @@ public interface UserApi {
      */
     List<UUID> activeAdministrators();
 
+    /**
+     * One page of the keys of the ACTIVE Trader accounts after {@code after} (null for the first), in key order, at most
+     * {@code limit}: who is told of an event every Trader should hear of, such as a market's trading paused (D-158),
+     * walked page by page. Locked and banned accounts are left out.
+     */
+    List<UUID> activeTraders(UUID after, int limit);
+
     /** Whether the account is an administrator's; {@code false} when there is no such account. */
     boolean isAdministrator(UUID userId);
 

@@ -3,6 +3,7 @@ package com.cryptopilot.notification.service;
 import com.cryptopilot.market.event.MarketFallbackUnavailable;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketRecoveryOverdue;
+import com.cryptopilot.market.event.MarketTradingResumed;
 import com.cryptopilot.paper.event.PaperIncidentNotice;
 import com.cryptopilot.trading.event.PlanIncidentNotice;
 
@@ -23,6 +24,18 @@ public interface MarketNotificationService {
 
     /** Tells every active administrator that trading on a market is paused. */
     void pauseAnnounced(MarketPauseAnnounced announced);
+
+    /**
+     * Tells every active Trader not told of an announced pause by their own notice that trading on the market is
+     * paused, in the bell only; how many were told.
+     */
+    int broadcastPause(MarketPauseAnnounced announced);
+
+    /**
+     * Tells every active Trader not told of a reopening by their own notice that trading on the market reopened, in
+     * the bell only; how many were told.
+     */
+    int broadcastResume(MarketTradingResumed resumed);
 
     /** Tells every active administrator that a market's recovery needs them. */
     void recoveryOverdue(MarketRecoveryOverdue overdue);

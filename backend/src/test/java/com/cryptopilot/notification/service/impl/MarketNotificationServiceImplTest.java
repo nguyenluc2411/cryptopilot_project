@@ -1,7 +1,9 @@
 package com.cryptopilot.notification.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -9,16 +11,23 @@ import static org.mockito.Mockito.when;
 import com.cryptopilot.market.event.MarketFallbackUnavailable;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketRecoveryOverdue;
+import com.cryptopilot.market.event.MarketTradingResumed;
 import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.notification.client.EmailMessage;
+import com.cryptopilot.notification.client.EmailSender;
+import com.cryptopilot.notification.config.MailDeliveryProperties;
 import com.cryptopilot.notification.model.NewNotification;
 import com.cryptopilot.notification.model.enums.NotificationType;
+import com.cryptopilot.notification.repository.NotificationRepository;
 import com.cryptopilot.paper.event.PaperIncidentNotice;
 import com.cryptopilot.trading.event.PlanIncidentNotice;
 import com.cryptopilot.user.UserApi;
+import java.net.URI;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -38,7 +47,115 @@ class MarketNotificationServiceImplTest {
 
     private final NotificationWriter writer = mock(NotificationWriter.class);
     private final UserApi users = mock(UserApi.class);
-    private final MarketNotificationServiceImpl service = new MarketNotificationServiceImpl(writer, users);
+    private final EmailSender sender = mock(EmailSender.class);
+    private final NotificationRepository notifications = mock(NotificationRepository.class);
+    private final MarketNotificationServiceImpl service = new MarketNotificationServiceImpl(
+            writer,
+            users,
+            new MarketMails(new MailDeliveryProperties("no-reply@cryptopilot.test", URI.create("https://app.test"))),
+            sender,
+            notifications);
+
+    /** N1, N6: a Trader the incident affects is mailed each notice once, when it is first written. */
+    @Test
+    void D158_anAffectedTrader_isMailedEachNotice_onlyWhenItIsFirstWritten() {
+        when(writer.write(any())).thenReturn(true, false, true);
+        when(users.notificationMailAddress(TRADER)).thenReturn(Optional.of("trader@example.test"));
+
+        service.paperIncident(paper(PaperIncidentNotice.Kind.PAUSED, 0, 0, null));
+        service.planIncident(new PlanIncidentNotice(TRADER, MarketType.FUTURES, INCIDENT, false, LIVE, null, null));
+        service.paperIncident(paper(PaperIncidentNotice.Kind.RESUMED, 2, 0, null));
+
+        ArgumentCaptor<EmailMessage> mailed = ArgumentCaptor.forClass(EmailMessage.class);
+        verify(sender, times(2)).send(mailed.capture());
+        assertThat(mailed.getAllValues())
+                .extracting(EmailMessage::subject)
+                .containsExactly("CryptoPilot: Futures trading paused", "CryptoPilot: Futures trading resumed");
+        assertThat(mailed.getValue().to()).isEqualTo("trader@example.test");
+        assertThat(mailed.getValue().text())
+                .contains("2 fills of your orders")
+                .contains("https://app.test/trade/futures");
+        assertThat(mailed.getValue().html()).contains("Open the trading screen");
+    }
+
+    /** N4: a Trader whose account takes no notification mail still gets the notice in the bell. */
+    @Test
+    void D158_aTraderWithoutNotificationMail_getsTheNoticeOnly() {
+        when(writer.write(any())).thenReturn(true);
+        when(users.notificationMailAddress(TRADER)).thenReturn(Optional.empty());
+
+        service.planIncident(new PlanIncidentNotice(TRADER, MarketType.SPOT, INCIDENT, true, LIVE, RESUMED, null));
+
+        written(1);
+        verify(sender, never()).send(any());
+    }
+
+    /**
+     * N2, N3: every other active Trader gets one general notice in the bell, and no mail; one told by a notice of their
+     * own is left out.
+     */
+    @Test
+    void D158_everyOtherTrader_getsOneGeneralNoticeInTheBell_andNoMail() {
+        UUID other = UUID.randomUUID();
+        when(users.activeTraders(null, MarketNotificationServiceImpl.TRADERS_PAGE))
+                .thenReturn(List.of(TRADER, other));
+        when(notifications.sourceKeysStartingWith("MARKET_PAUSED:" + INCIDENT + ":"))
+                .thenReturn(List.of("MARKET_PAUSED:" + INCIDENT + ":" + TRADER));
+        when(notifications.sourceKeysStartingWith("MARKET_RESUMED:" + INCIDENT + ":"))
+                .thenReturn(List.of("MARKET_RESUMED:" + INCIDENT + ":" + TRADER + ":PLANS"));
+        when(writer.write(any())).thenReturn(true);
+
+        assertThat(service.broadcastPause(new MarketPauseAnnounced(
+                        MarketType.SPOT, INCIDENT, MarketHealthState.PAUSED, IncidentReason.STREAM_LOST, LIVE, null)))
+                .isOne();
+        assertThat(service.broadcastResume(new MarketTradingResumed(MarketType.SPOT, INCIDENT, LIVE, RESUMED, true)))
+                .isOne();
+
+        List<NewNotification> written = written(2);
+        assertThat(written).extracting(NewNotification::recipientId).containsOnly(other);
+        assertThat(written)
+                .extracting(NewNotification::sourceKey)
+                .containsExactly(
+                        "MARKET_PAUSED_ALL:" + INCIDENT + ":" + other, "MARKET_RESUMED_ALL:" + INCIDENT + ":" + other);
+        assertThat(written.getFirst().content()).contains("Spot trading is paused");
+        assertThat(written.getLast().content()).contains("from 07:32 UTC to 07:49 UTC");
+        verify(sender, never()).send(any());
+    }
+
+    /** The Traders are read page by page until a page is not full. */
+    @Test
+    void D158_theGeneralNotice_walksTheTradersPageByPage() {
+        List<UUID> full = java.util.stream.Stream.generate(UUID::randomUUID)
+                .limit(MarketNotificationServiceImpl.TRADERS_PAGE)
+                .toList();
+        UUID last = UUID.randomUUID();
+        when(users.activeTraders(null, MarketNotificationServiceImpl.TRADERS_PAGE))
+                .thenReturn(full);
+        when(users.activeTraders(full.getLast(), MarketNotificationServiceImpl.TRADERS_PAGE))
+                .thenReturn(List.of(last));
+        when(writer.write(any())).thenReturn(true);
+
+        assertThat(service.broadcastResume(new MarketTradingResumed(MarketType.SPOT, INCIDENT, LIVE, RESUMED, true)))
+                .isEqualTo(MarketNotificationServiceImpl.TRADERS_PAGE + 1);
+    }
+
+    @Test
+    void D158_theGeneralNoticeOfMaintenance_quotesTheMessage() {
+        when(users.activeTraders(null, MarketNotificationServiceImpl.TRADERS_PAGE))
+                .thenReturn(List.of(TRADER));
+        when(writer.write(any())).thenReturn(false);
+
+        assertThat(service.broadcastPause(new MarketPauseAnnounced(
+                        MarketType.FUTURES,
+                        INCIDENT,
+                        MarketHealthState.MAINTENANCE,
+                        IncidentReason.MAINTENANCE,
+                        LIVE,
+                        "Back at 22:00.")))
+                .as("already written")
+                .isZero();
+        assertThat(written(1).getFirst().content()).isEqualTo("Futures trading is under maintenance: Back at 22:00.");
+    }
 
     @Test
     void D158_thePauseNotice_isOnePerTraderAndIncident_whicheverModuleAsks() {

@@ -32,6 +32,9 @@ cryptopilot:
       # The leaning per coin of the market list is recomputed every minute (application.yml).
       enabled: true
   notification:
+    market-broadcast:
+      # D-158 runs in this profile: every other Trader hears of a market incident in the bell.
+      enabled: true
     mail:
       # From the environment only, no default: a production mail must come from a real sender and link to the real site.
       from: ${SMTP_FROM}

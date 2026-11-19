@@ -55,6 +55,9 @@ cryptopilot:
       # The leaning per coin of the market list is recomputed every minute (application.yml).
       enabled: true
   notification:
+    market-broadcast:
+      # D-158 runs in this profile: every other Trader hears of a market incident in the bell.
+      enabled: true
     sweep:
       # NSF-17 runs in this profile: notifications older than 90 days are deleted daily.
       enabled: true
