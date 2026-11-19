@@ -316,10 +316,15 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             oldestOnMark.merge(
                     new BookKey(order.market(), order.pairId()), order.placedAt(), (a, b) -> a.isBefore(b) ? a : b);
         }
-        // A position's level has no time of its own: without a mark watermark only the minute running now is caught up.
+        // A position's level has no time of its own: its marks are caught up from after the pair's mark watermark, so
+        // a mark missed while the application was down still liquidates (D-158 E2b); a replayed mark from before the
+        // position opened liquidates nothing (FuturesLiquidation). Without a watermark, the minute running now.
         for (LiquidationLevel level : matching.liquidationLevels()) {
             liquidations.track(level);
-            oldestOnMark.putIfAbsent(new BookKey(MarketType.FUTURES, level.pairId()), clock.instant());
+            Instant since = matching.markWatermark(level.pairId())
+                    .map(watermark -> watermark.plus(MINUTE))
+                    .orElse(clock.instant());
+            oldestOnMark.merge(new BookKey(MarketType.FUTURES, level.pairId()), since, (a, b) -> a.isBefore(b) ? a : b);
         }
         matching.crossAccounts().forEach(this::trackCross);
         if (properties.replay().enabled()) {

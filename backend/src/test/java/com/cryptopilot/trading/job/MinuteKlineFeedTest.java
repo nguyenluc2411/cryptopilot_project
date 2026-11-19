@@ -340,6 +340,32 @@ class MinuteKlineFeedTest {
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(2));
     }
 
+    /**
+     * D-158 E7: minutes the exchange never served, as when it halted, are skipped: the replay goes on from the next
+     * candle it serves, and the pair goes live.
+     */
+    @Test
+    void D158_minutesTheExchangeNeverServed_areSkipped_andThePairGoesLive() {
+        serveClosed(4, 4);
+        feed = feed(replay(true, 3, 1440));
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", false, 30));
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+
+        feed.onMinuteKline(update(minute(5), "1", "2", false, 5));
+        awaitIdle();
+        feed.onMinuteKline(update(minute(5), "1", "2", true, 60));
+
+        assertThat(submitted)
+                .extracting(PriceRange::from, PriceRange::closed)
+                .containsExactly(
+                        tuple(minute(1), false),
+                        tuple(minute(1), true),
+                        tuple(minute(4), true),
+                        tuple(minute(5), false),
+                        tuple(minute(5), true));
+    }
+
     /** R1: a minute whose closed update never comes is replayed once the next minute's updates show it is missing. */
     @Test
     void R1_aMinuteWhoseClosedUpdateNeverCame_isReplayedFromTheExchange() {

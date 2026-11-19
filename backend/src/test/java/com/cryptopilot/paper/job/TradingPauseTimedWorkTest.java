@@ -263,6 +263,24 @@ class TradingPauseTimedWorkTest {
         assertThat(fundingFeesOfOwner(position)).isOne();
     }
 
+    /**
+     * D-158 E2b: a replayed mark from before a position was opened never liquidates it, though the position is open
+     * now; the replay only reaches back to marks the position lived through.
+     */
+    @Test
+    void D158_aReplayedMarkFromBeforeAPositionOpened_doesNotLiquidateIt() throws Exception {
+        UUID position = isolatedLongOpenedBefore(Instant.now().minus(Duration.ofHours(1)));
+
+        assertThat(replayLiquidation(position, Instant.now().minus(Duration.ofHours(3))))
+                .isFalse();
+
+        assertThat(sql.sql("select position_status from futures_position where position_id = ?")
+                        .param(position)
+                        .query(String.class)
+                        .single())
+                .isEqualTo("OPEN");
+    }
+
     /** An isolated 10x long of 1 at 100, opened two hours ago, and a settlement at {@code fundingTime}. */
     private UUID isolatedLongOpenedBefore(Instant fundingTime) throws Exception {
         UUID trader = trader();

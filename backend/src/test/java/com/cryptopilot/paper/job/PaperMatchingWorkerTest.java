@@ -363,6 +363,47 @@ class PaperMatchingWorkerTest {
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_5);
     }
 
+    /**
+     * D-158 E7: minutes the exchange never served, as when it halted, are no hole to wait on: the replay goes on from
+     * the next candle it serves, and fills there.
+     */
+    @Test
+    void D158_minutesTheExchangeNeverServed_areSkipped_andTheReplayGoesOnFromTheNext() {
+        Instant minute4 = MINUTE_0.plusSeconds(240);
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2))
+                .thenReturn(MinuteKlineBatch.of(List.of(kline(minute4, "99", "110", true))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        RestingOrder order = buy("100");
+        worker.onRested(new PaperOrderRested(order));
+
+        worker.onMinuteKline(kline(MINUTE_1, "101", "110", true));
+        worker.onMinuteKline(kline(MINUTE_5, "101", "110", true));
+
+        verify(matching, timeout(WAIT)).fill(eq(order), eq(minute4), eq(FillSource.REPLAY), any());
+        verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, minute4);
+        verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_5);
+    }
+
+    /**
+     * D-158 E2b: at start, a pair watched only for an isolated position's liquidation replays its marks from after its
+     * mark watermark, so a mark the stream missed while the application was down still liquidates.
+     */
+    @Test
+    void D158_atStart_aPairWithOnlyALiquidationLevel_replaysItsMarksFromAfterItsWatermark() {
+        LiquidationLevel level = new LiquidationLevel(
+                UUID.randomUUID(), UUID.randomUUID(), PAIR, PositionDirection.LONG, new BigDecimal("95"));
+        when(matching.liquidationLevels()).thenReturn(List.of(level));
+        when(matching.markWatermark(PAIR)).thenReturn(Optional.of(MINUTE_0));
+        when(matching.liquidate(any(), any(), any(), any())).thenReturn(true);
+        when(market.closedMarkPriceKlines(PAIR, MINUTE_1))
+                .thenReturn(MinuteKlineBatch.of(List.of(markKline(MINUTE_1, "100", "100.5", "94", "96"))));
+
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+
+        verify(market, timeout(WAIT)).closedMarkPriceKlines(PAIR, MINUTE_1);
+        verify(matching, timeout(WAIT)).liquidate(eq(level), eq(new BigDecimal("94")), any(), any());
+    }
+
     @Test
     void TR02_aPairWithoutOrders_movesNoWatermark() {
         worker = started(properties(true, false, Duration.ofMinutes(10)));
