@@ -3,6 +3,7 @@ package com.cryptopilot.market.service.impl;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
+import com.cryptopilot.market.event.MarketHealthChanged;
 import com.cryptopilot.market.event.MarketRecoveryStarted;
 import com.cryptopilot.market.event.MarketTradingPaused;
 import com.cryptopilot.market.event.MarketTradingResumed;
@@ -127,6 +128,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             statuses.put(market, new Status(MarketHealthState.MAINTENANCE, current.incidentId(), current.since()));
         }
         log.warn("D-158 {} under maintenance", market);
+        changed(market, current.state(), MarketHealthState.MAINTENANCE);
     }
 
     @Override
@@ -142,6 +144,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             resume(market, current);
         }
         log.info("D-158 {} maintenance ended", market);
+        changed(market, MarketHealthState.MAINTENANCE, statuses.get(market).state());
     }
 
     @Override
@@ -168,6 +171,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         } else {
             statuses.put(market, new Status(to, current.incidentId(), current.since()));
         }
+        changed(market, from, to);
         return to;
     }
 
@@ -195,6 +199,12 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         statuses.put(market, Status.LIVE);
         events.publishEvent(new MarketTradingResumed(market, current.incidentId(), current.since(), now));
         log.info("D-158 {} trading resumed; incident {} closed", market, current.incidentId());
+    }
+
+    private void changed(MarketType market, MarketHealthState from, MarketHealthState to) {
+        if (from != to) {
+            events.publishEvent(new MarketHealthChanged(market, from, to));
+        }
     }
 
     /** A market's state, its open incident if any, and since when it has not been live. */

@@ -1,0 +1,214 @@
+package com.cryptopilot.market.controller;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.service.MarketHealthService;
+import com.cryptopilot.support.TestcontainersConfig;
+import com.cryptopilot.user.model.enums.UserRole;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+
+/**
+ * K8 (D-158): the markets' data health, public on {@code GET /api/v1/market/status}, and the administration console's
+ * maintenance switch and incidents: maintenance closes a market with the administrator's message and is audited as a
+ * system setting; ending it reopens the market, which the status names for a while; only an administrator may switch
+ * it.
+ *
+ * <p>The health monitor is off here: ending maintenance reopens the market at once.
+ *
+ * <p>Rule: NSF-03; BR-57; D-50; D-158.
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+@Import(TestcontainersConfig.class)
+class MarketStatusApiTest {
+
+    private static final String STATUS = "/api/v1/market/status";
+    private static final String ADMIN = "/api/v1/admin/market";
+
+    @Autowired
+    private MockMvc mvc;
+
+    @Autowired
+    private JdbcClient sql;
+
+    @Autowired
+    private JwtEncoder jwtEncoder;
+
+    @Autowired
+    private MarketHealthService health;
+
+    private final List<UUID> accounts = new ArrayList<>();
+
+    @BeforeEach
+    @AfterEach
+    void liveAndClean() {
+        health.endMaintenance(MarketType.SPOT);
+        health.endMaintenance(MarketType.FUTURES);
+        sql.sql("delete from market_incident").update();
+        for (UUID account : accounts) {
+            sql.sql("delete from audit_log where user_id = ?").param(account).update();
+            sql.sql("delete from user_account where user_id = ?").param(account).update();
+        }
+        accounts.clear();
+    }
+
+    @Test
+    void D158_theStatus_isPublic_andBothMarketsAreLive() throws Exception {
+        mvc.perform(get(STATUS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.markets.length()").value(2))
+                .andExpect(jsonPath("$.markets[0].market").value("SPOT"))
+                .andExpect(jsonPath("$.markets[0].state").value("LIVE"))
+                .andExpect(jsonPath("$.markets[0].tradingOpen").value(true))
+                .andExpect(jsonPath("$.markets[1].market").value("FUTURES"))
+                .andExpect(jsonPath("$.markets[1].tradingOpen").value(true))
+                .andExpect(jsonPath("$.markets[1].incidentId").value(nullValue()));
+    }
+
+    /**
+     * Maintenance closes the market with the message, the status says so to anyone, and the change is audited; ending
+     * it reopens the market, the status names when, and the incident is listed.
+     */
+    @Test
+    void D158_maintenance_closesAMarket_isAudited_andEndingItReopensIt() throws Exception {
+        UUID admin = account(UserRole.ADMIN);
+
+        as(admin, post(ADMIN + "/maintenance"), """
+                        {"market": "FUTURES", "on": true, "message": "Bảo trì hệ thống đến 22:00"}""")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.markets[1].state").value("MAINTENANCE"))
+                .andExpect(jsonPath("$.markets[1].tradingOpen").value(false))
+                .andExpect(jsonPath("$.markets[1].reason").value("MAINTENANCE"))
+                .andExpect(jsonPath("$.markets[1].message").value("Bảo trì hệ thống đến 22:00"))
+                .andExpect(jsonPath("$.markets[1].since").isNotEmpty())
+                .andExpect(jsonPath("$.markets[1].incidentId").isNotEmpty())
+                .andExpect(jsonPath("$.markets[0].tradingOpen").value(true));
+        mvc.perform(get(STATUS)).andExpect(jsonPath("$.markets[1].state").value("MAINTENANCE"));
+        assertThat(audited(admin, "true")).isOne();
+
+        as(admin, post(ADMIN + "/maintenance"), """
+                        {"market": "FUTURES", "on": false}""")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.markets[1].state").value("LIVE"))
+                .andExpect(jsonPath("$.markets[1].tradingOpen").value(true))
+                .andExpect(jsonPath("$.markets[1].resumedAt").isNotEmpty())
+                .andExpect(jsonPath("$.markets[1].pausedAt").isNotEmpty())
+                .andExpect(jsonPath("$.markets[1].incidentId").isNotEmpty());
+        assertThat(audited(admin, "false")).isOne();
+
+        as(admin, get(ADMIN + "/incidents").param("market", "FUTURES"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].kind").value("MAINTENANCE"))
+                .andExpect(jsonPath("$[0].createdBy").value(admin.toString()))
+                .andExpect(jsonPath("$[0].resumedAt").isNotEmpty());
+        as(admin, get(ADMIN + "/incidents").param("market", "SPOT"), null)
+                .andExpect(jsonPath("$.length()").value(0));
+        as(admin, get(ADMIN + "/incidents").param("market", "SPOT").param("limit", "0"), null)
+                .andExpect(status().isBadRequest());
+    }
+
+    /** Switching maintenance twice the same way records one change. */
+    @Test
+    void D158_maintenanceAlreadyOn_isNotAuditedAgain() throws Exception {
+        UUID admin = account(UserRole.ADMIN);
+
+        as(admin, post(ADMIN + "/maintenance"), """
+                        {"market": "SPOT", "on": true}""").andExpect(status().isOk());
+        as(admin, post(ADMIN + "/maintenance"), """
+                        {"market": "SPOT", "on": true, "message": "  "}""").andExpect(status().isOk());
+
+        assertThat(audited(admin, "true")).isOne();
+    }
+
+    @Test
+    void D158_onlyAnAdministrator_switchesMaintenance() throws Exception {
+        UUID trader = account(UserRole.TRADER);
+
+        as(trader, post(ADMIN + "/maintenance"), """
+                        {"market": "SPOT", "on": true}""").andExpect(status().isForbidden());
+        mvc.perform(post(ADMIN + "/maintenance")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"market\": \"SPOT\", \"on\": true}"))
+                .andExpect(status().isUnauthorized());
+        as(account(UserRole.ADMIN), post(ADMIN + "/maintenance"), "{\"on\": true}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.market").value("MSG01"));
+
+        mvc.perform(get(STATUS)).andExpect(jsonPath("$.markets[0].state").value("LIVE"));
+    }
+
+    private long audited(UUID admin, String on) {
+        return sql.sql("""
+                        select count(*) from audit_log
+                         where user_id = ? and action_code = 'CONFIGURATION_CHANGED' and entity_type = 'SYSTEM_SETTING'
+                           and new_value ->> 'key' like 'market.maintenance.%' and new_value ->> 'on' = ?""").params(admin, on).query(Long.class).single();
+    }
+
+    private ResultActions as(UUID account, MockHttpServletRequestBuilder request, String body) throws Exception {
+        String role = sql.sql("select role from user_account where user_id = ?")
+                .param(account)
+                .query(String.class)
+                .single();
+        request.header(HttpHeaders.AUTHORIZATION, bearer(account, UserRole.valueOf(role)));
+        if (body != null) {
+            request.contentType(MediaType.APPLICATION_JSON).content(body);
+        }
+        return mvc.perform(request);
+    }
+
+    private UUID account(UserRole role) {
+        UUID id = UUID.randomUUID();
+        Timestamp now = Timestamp.from(Instant.now());
+        sql.sql("""
+                        insert into user_account (user_id, email, password_hash, role, account_status, created_at,
+                                                  updated_at)
+                        values (?, ?, 'x', ?, 'ACTIVE', ?, ?)""").params(id, id + "@status.invalid", role.name(), now, now).update();
+        accounts.add(id);
+        return id;
+    }
+
+    private String bearer(UUID userId, UserRole role) {
+        Instant now = Instant.now();
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer(JwtConfig.ISSUER)
+                .subject(userId.toString())
+                .issuedAt(now)
+                .expiresAt(now.plusSeconds(900))
+                .claim(JwtConfig.ROLE_CLAIM, role.name())
+                .build();
+        return "Bearer "
+                + jwtEncoder
+                        .encode(JwtEncoderParameters.from(
+                                JwsHeader.with(JwtConfig.ALGORITHM).build(), claims))
+                        .getTokenValue();
+    }
+}

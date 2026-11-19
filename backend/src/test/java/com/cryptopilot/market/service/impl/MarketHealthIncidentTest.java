@@ -7,6 +7,7 @@ import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.MarketRecoveryCheck;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
+import com.cryptopilot.market.event.MarketHealthChanged;
 import com.cryptopilot.market.event.MarketRecoveryStarted;
 import com.cryptopilot.market.event.MarketTradingPaused;
 import com.cryptopilot.market.event.MarketTradingResumed;
@@ -32,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -175,7 +177,7 @@ class MarketHealthIncidentTest {
         MutableTestClock clock = new MutableTestClock(START);
         List<Object> published = new ArrayList<>();
         MarketHealthServiceImpl health =
-                new MarketHealthServiceImpl(properties(true), incidents, published::add, clock);
+                new MarketHealthServiceImpl(properties(true), incidents, publishedOutside(published), clock);
         Instant lastLive = START.minusSeconds(30);
 
         assertThat(health.evaluate(MarketType.FUTURES, silentSince(lastLive), IncidentReason.STREAM_LOST))
@@ -249,7 +251,7 @@ class MarketHealthIncidentTest {
         MutableTestClock clock = new MutableTestClock(START);
         List<Object> published = new ArrayList<>();
         MarketHealthServiceImpl health =
-                new MarketHealthServiceImpl(properties(true), incidents, published::add, clock);
+                new MarketHealthServiceImpl(properties(true), incidents, publishedOutside(published), clock);
 
         health.startMaintenance(MarketType.FUTURES, "maintenance", null);
         assertThat(health.evaluate(MarketType.FUTURES, flowingFor(clock, 600), IncidentReason.STREAM_LOST))
@@ -263,6 +265,15 @@ class MarketHealthIncidentTest {
         assertThat(published)
                 .extracting(event -> event.getClass().getSimpleName())
                 .containsExactly("MarketTradingPaused", "MarketRecoveryStarted");
+    }
+
+    /** Records what the service publishes to other modules; the module's own state changes are left out. */
+    private static ApplicationEventPublisher publishedOutside(List<Object> published) {
+        return event -> {
+            if (!(event instanceof MarketHealthChanged)) {
+                published.add(event);
+            }
+        };
     }
 
     private static HealthSignals silentSince(Instant lastLive) {
