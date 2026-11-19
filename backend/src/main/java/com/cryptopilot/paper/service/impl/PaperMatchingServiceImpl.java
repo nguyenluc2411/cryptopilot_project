@@ -189,10 +189,16 @@ public class PaperMatchingServiceImpl implements PaperMatchingService {
     @Override
     @Transactional
     public boolean liquidate(LiquidationLevel level, BigDecimal mark, Instant at) {
+        return liquidate(level, mark, at, null);
+    }
+
+    @Override
+    @Transactional
+    public boolean liquidate(LiquidationLevel level, BigDecimal mark, Instant at, Instant markTime) {
         PaperAccount account = accounts.findByUserId(level.userId())
                 .orElseThrow(() -> new IllegalStateException("account " + level.userId() + " is not stored"));
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, account.userId());
-        return liquidation.liquidate(account, level.positionId(), mark, at);
+        return liquidation.liquidate(account, level.positionId(), mark, at, markTime);
     }
 
     @Override

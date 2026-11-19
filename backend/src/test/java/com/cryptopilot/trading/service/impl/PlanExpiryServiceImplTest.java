@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -25,6 +26,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Limit;
@@ -45,8 +47,26 @@ class PlanExpiryServiceImplTest {
     private final ReplayLockService replays = mock(ReplayLockService.class);
     private final MarketApi market = mock(MarketApi.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    private final MarketHealth health = mock(MarketHealth.class);
     private final PlanExpiryServiceImpl expiry =
-            new PlanExpiryServiceImpl(plans, replays, market, events, Clock.fixed(NOW, ZoneOffset.UTC));
+            new PlanExpiryServiceImpl(plans, replays, market, health, events, Clock.fixed(NOW, ZoneOffset.UTC));
+
+    @BeforeEach
+    void marketsOpen() {
+        when(health.tradingOpen(any())).thenReturn(true);
+    }
+
+    /** D-158 (I5): a due plan of a paused market waits; the replay after the pause may still fill it in time. */
+    @Test
+    void D158_aDuePlanOfAPausedMarket_isLeftForALaterRun() {
+        TradingPlan due = plan(PAIR);
+        when(plans.findExpiring(STORED_NOW, Limit.of(10))).thenReturn(List.of(due));
+        when(health.tradingOpen(MarketType.FUTURES)).thenReturn(false);
+
+        assertThat(expiry.expireDue(10)).isZero();
+        verify(plans, never()).expireIfActive(any(), any());
+        verifyNoInteractions(events);
+    }
 
     @Test
     void NSF09_aDuePlan_isExpired_andAnnounced() {

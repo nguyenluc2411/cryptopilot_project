@@ -264,6 +264,7 @@ class FuturesSettlement {
      *
      * @param order the stored system MARKET order, reduce-only, of the position's size
      * @param feeRate the liquidation clearance fee rate (D-97)
+     * @param markTime the time of the mark a replay liquidates on, kept on the fill; {@code null} for a live mark
      */
     @Transactional(propagation = Propagation.MANDATORY)
     void liquidate(
@@ -272,7 +273,8 @@ class FuturesSettlement {
             FuturesPosition position,
             BigDecimal mark,
             BigDecimal feeRate,
-            Instant at) {
+            Instant at,
+            Instant markTime) {
         CoinListing usdt = margins.usdt();
         BigDecimal quantity = position.getQuantity();
         BigDecimal realized = FuturesMarginMath.applyFill(
@@ -281,11 +283,13 @@ class FuturesSettlement {
         BigDecimal wallet = position.getIsolatedWalletAmount();
         BigDecimal fee = FuturesMarginMath.liquidationFee(
                 quantity.multiply(mark), feeRate, wallet.add(realized).max(BigDecimal.ZERO));
+        FillSource source = markTime == null ? FillSource.LIVE : FillSource.REPLAY;
         PaperFill fill = fills.save(PaperFill.futures(
-                order,
-                execution(mark, quantity, Liquidity.TAKER, FillSource.LIVE, at, usdt, BigDecimal.ZERO),
-                position.getId(),
-                realized));
+                        order,
+                        execution(mark, quantity, Liquidity.TAKER, source, at, usdt, BigDecimal.ZERO),
+                        position.getId(),
+                        realized)
+                .takenFrom(markTime));
         feed.futuresFill(account, order, fill);
         Ref byFill = Ref.to(LedgerRefType.FILL, fill.getId());
         if (realized.signum() != 0) {

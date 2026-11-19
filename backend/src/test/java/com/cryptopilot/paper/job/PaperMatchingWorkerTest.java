@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.doThrow;
@@ -58,6 +59,7 @@ import java.util.concurrent.ThreadFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -772,14 +774,14 @@ class PaperMatchingWorkerTest {
         LiquidationLevel short_ =
                 new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.SHORT, new BigDecimal("120"));
         when(matching.liquidationLevels()).thenReturn(List.of(reached, short_));
-        when(matching.liquidate(any(), any(), any())).thenReturn(false);
+        when(matching.liquidate(any(), any(), any(), any())).thenReturn(false);
         worker = started(properties(true, false, Duration.ofMinutes(10)));
 
         worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("94"), MINUTE_1));
 
-        verify(matching, timeout(WAIT)).liquidate(reached, new BigDecimal("94"), MINUTE_1);
+        verify(matching, timeout(WAIT)).liquidate(reached, new BigDecimal("94"), MINUTE_1, null);
         verify(matching, timeout(WAIT)).liquidationLevels(trader, PAIR);
-        verify(matching, never()).liquidate(eq(short_), any(), any());
+        verify(matching, never()).liquidate(eq(short_), any(), any(), any());
     }
 
     /** TR-21: a trailing stop on the mark follows the peak and triggers on the pull-back of its callback. */
@@ -892,9 +894,37 @@ class PaperMatchingWorkerTest {
 
         verify(matching, timeout(WAIT)).markCatchingUp(PAIR, true);
         verify(market, timeout(WAIT).atLeastOnce()).closedMarkPriceKlines(PAIR, MINUTE_1);
-        verify(matching, after(200).never()).liquidate(any(), any(), any());
+        verify(matching, after(200).never()).liquidate(any(), any(), any(), any());
         // The candle of that minute is not out yet: asked for again only when a live mark comes.
         verify(market, atMost(1)).closedMarkPriceKlines(PAIR, MINUTE_1);
+    }
+
+    /**
+     * D-158 (TR-24): a replayed mark that reaches a liquidation level liquidates now, on the state of now, and hands the
+     * liquidation the time of the mark it took, so that the funding reads the position closed from then.
+     */
+    @Test
+    void D158_aReplayedMark_liquidatesNow_withTheTimeOfTheMarkItTook() {
+        UUID trader = UUID.randomUUID();
+        LiquidationLevel level =
+                new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("95"));
+        when(matching.liquidationLevels(trader, PAIR)).thenReturn(List.of(level));
+        when(matching.liquidate(any(), any(), any(), any())).thenReturn(true);
+        when(market.closedMarkPriceKlines(PAIR, MINUTE_1))
+                .thenReturn(MinuteKlineBatch.of(List.of(markKline(MINUTE_1, "100", "100.5", "94", "96"))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        worker.onAccountChanged(new FuturesAccountChanged(trader, PAIR));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1.minusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1));
+        verify(matching, timeout(WAIT)).advanceMarkWatermark(PAIR, MINUTE_0);
+
+        // The stream was lost: the next mark comes late, and the minute it missed is replayed from its candle.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("96"), MINUTE_1.plusSeconds(50)));
+
+        ArgumentCaptor<Instant> markTime = ArgumentCaptor.forClass(Instant.class);
+        verify(matching, timeout(WAIT))
+                .liquidate(eq(level), eq(new BigDecimal("94")), eq(clock.instant()), markTime.capture());
+        assertThat(markTime.getValue()).isAfterOrEqualTo(MINUTE_1).isBefore(MINUTE_2);
     }
 
     /** TR-42: a mark candle runs open, the extreme nearer the open, the other extreme, close. */
@@ -982,7 +1012,7 @@ class PaperMatchingWorkerTest {
         verify(matching, timeout(WAIT).times(2)).marginCall(any(), any(), any(), any());
 
         worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("93"), MINUTE_2.plus(Duration.ofMinutes(40))));
-        verify(matching, timeout(WAIT)).liquidate(eq(level), any(), any());
+        verify(matching, timeout(WAIT)).liquidate(eq(level), any(), any(), isNull());
         verify(matching, after(200).times(2)).marginCall(any(), any(), any(), any());
     }
 

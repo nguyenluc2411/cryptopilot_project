@@ -118,7 +118,7 @@ class FuturesLiquidation {
      * @return whether it was liquidated
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    boolean liquidate(PaperAccount account, UUID positionId, BigDecimal mark, Instant at) {
+    boolean liquidate(PaperAccount account, UUID positionId, BigDecimal mark, Instant at, Instant markTime) {
         Optional<FuturesPosition> found = positions.findById(positionId);
         if (found.isEmpty() || !found.get().isOpen() || found.get().getMarginType() != MarginType.ISOLATED) {
             return false;
@@ -145,7 +145,7 @@ class FuturesLiquidation {
                 position.getPositionSide(),
                 position.getQuantity(),
                 true));
-        settlement.liquidate(account, order, position, mark, settings.decimal(CLEARANCE_FEE), at);
+        settlement.liquidate(account, order, position, mark, settings.decimal(CLEARANCE_FEE), at, markTime);
         events.publishEvent(new FuturesRiskNotice(
                 account.userId(),
                 FuturesRiskNotice.Kind.LIQUIDATION,

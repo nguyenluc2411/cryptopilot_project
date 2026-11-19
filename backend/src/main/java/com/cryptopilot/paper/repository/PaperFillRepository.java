@@ -44,10 +44,12 @@ public interface PaperFillRepository extends Repository<PaperFill, UUID> {
 
     /**
      * The size of a Futures position at an instant: what its fills before it opened, less what they closed (plan 9.4,
-     * the quantity a funding settlement is charged on). Every fill of a position on its opening side opened it.
+     * the quantity a funding settlement is charged on). Every fill of a position on its opening side opened it. A fill a
+     * replay applied counts at the time of the price it took, not when it was applied (D-158).
      */
     @Query("select coalesce(sum(case when f.side = :openingSide then f.fillQuantity else -f.fillQuantity end), 0)"
-            + " from PaperFill f where f.positionId = :positionId and f.tradedAt < :at")
+            + " from PaperFill f where f.positionId = :positionId"
+            + " and coalesce(f.sourceTime, f.tradedAt) < :at")
     BigDecimal sizeBefore(UUID positionId, OrderSide openingSide, Instant at);
 
     /** Writes a fill. Not transactional here; the unit of work is the calling service's. */

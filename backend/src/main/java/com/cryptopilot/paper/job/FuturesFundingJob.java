@@ -1,5 +1,7 @@
 package com.cryptopilot.paper.job;
 
+import com.cryptopilot.market.MarketHealth;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperFundingProperties;
 import com.cryptopilot.paper.service.impl.FuturesFunding;
 import java.time.Clock;
@@ -24,13 +26,19 @@ public class FuturesFundingJob {
     private static final Logger log = LoggerFactory.getLogger(FuturesFundingJob.class);
 
     private final FuturesFunding funding;
+    private final MarketHealth health;
     private final TaskScheduler scheduler;
     private final PaperFundingProperties properties;
     private final Clock clock;
 
     public FuturesFundingJob(
-            FuturesFunding funding, TaskScheduler scheduler, PaperFundingProperties properties, Clock clock) {
+            FuturesFunding funding,
+            MarketHealth health,
+            TaskScheduler scheduler,
+            PaperFundingProperties properties,
+            Clock clock) {
         this.funding = funding;
+        this.health = health;
         this.scheduler = scheduler;
         this.properties = properties;
         this.clock = clock;
@@ -48,11 +56,15 @@ public class FuturesFundingJob {
     }
 
     /**
-     * One run.
+     * One run; none while Futures trading is paused (D-158, I5): the replay that follows may show a position closed
+     * before a funding time, so the settlements wait for it, and the next run reaches back to them.
      *
      * @return how many fees it wrote
      */
     public int run() {
+        if (!health.tradingOpen(MarketType.FUTURES)) {
+            return 0;
+        }
         Instant now = clock.instant();
         int written = 0;
         try {

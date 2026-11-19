@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -13,6 +14,9 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
+import com.cryptopilot.paper.model.LiquidationLevel;
+import com.cryptopilot.paper.model.enums.PositionDirection;
+import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -46,9 +50,8 @@ import org.springframework.test.web.servlet.ResultActions;
  * and no GTD order expires, since the replay that follows may show the position liquidated before the funding time or
  * the order filled before its date; once the market is open again, both run as before, once.
  *
- * <p>The ordering against the replay itself (a position the replay liquidates before the funding time owes nothing of
- * it; a GTD order is not expired while its pair still owes candles before its date) needs the recovery of K6 and is
- * added with K7.
+ * <p>Against the replay itself: a position the replay liquidates on a mark before the funding time owes nothing of it,
+ * though the liquidation is dated when applied, after the funding time; one liquidated on a later mark still owes it.
  *
  * <p>Rule: TR-24, TR-44; NSF-03; D-158.
  */
@@ -84,6 +87,9 @@ class TradingPauseTimedWorkTest {
     @Autowired
     private FuturesGoodTillJob goodTill;
 
+    @Autowired
+    private PaperMatchingService matching;
+
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
     private UUID pair;
@@ -117,7 +123,16 @@ class TradingPauseTimedWorkTest {
     @AfterEach
     void reopenAndRemoveRows() {
         health.endMaintenance(MarketType.FUTURES);
+        // The liquidation notices (TR-43) are written after the commit: wait for them before the Traders go.
+        await().atMost(Duration.ofSeconds(10))
+                .until(() -> sql.sql("select count(*) from event_publication"
+                                        + " where listener_id like '%FuturesNotificationListener%'"
+                                        + " and completion_date is null")
+                                .query(Long.class)
+                                .single()
+                        == 0);
         for (UUID trader : traders) {
+            sql.sql("delete from notification where user_id = ?").param(trader).update();
             for (String table : List.of(
                     "futures_margin_adjustment",
                     "order_fill",
@@ -212,6 +227,91 @@ class TradingPauseTimedWorkTest {
 
         goodTill.run();
         assertThat(statusOf(order)).isEqualTo("EXPIRED");
+    }
+
+    /**
+     * TR-24 under I5: the replay liquidates, now, a position on a mark from before the funding time. It was not open at
+     * the funding time on the exchange, so it owes nothing of it, though its close is dated after.
+     */
+    @Test
+    void D158_aPositionTheReplayLiquidatedOnAMarkBeforeTheFundingTime_owesNothingOfIt() throws Exception {
+        Instant fundingTime = Instant.now().minus(Duration.ofHours(1));
+        UUID position = isolatedLongOpenedBefore(fundingTime);
+
+        assertThat(replayLiquidation(position, fundingTime.minus(Duration.ofMinutes(30))))
+                .isTrue();
+
+        assertThat(funding.run()).isZero();
+        assertThat(fundingFeesOfOwner(position)).isZero();
+        assertThat(sql.sql("select fill_source from order_fill where position_id = ? order by traded_at desc limit 1")
+                        .param(position)
+                        .query(String.class)
+                        .single())
+                .isEqualTo("REPLAY");
+    }
+
+    /** The same position liquidated on a mark after the funding time was open then, and pays it. */
+    @Test
+    void D158_aPositionTheReplayLiquidatedOnAMarkAfterTheFundingTime_stillOwesIt() throws Exception {
+        Instant fundingTime = Instant.now().minus(Duration.ofHours(1));
+        UUID position = isolatedLongOpenedBefore(fundingTime);
+
+        assertThat(replayLiquidation(position, fundingTime.plus(Duration.ofMinutes(30))))
+                .isTrue();
+
+        assertThat(funding.run()).isEqualTo(1);
+        assertThat(fundingFeesOfOwner(position)).isOne();
+    }
+
+    /** An isolated 10x long of 1 at 100, opened two hours ago, and a settlement at {@code fundingTime}. */
+    private UUID isolatedLongOpenedBefore(Instant fundingTime) throws Exception {
+        UUID trader = trader();
+        mvc.perform(post(FUTURES + "/leverage")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(trader))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"symbol\": \"%s\", \"leverage\": 10}".formatted(symbol)))
+                .andExpect(status().isOk());
+        mvc.perform(post(FUTURES + "/marginType")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(trader))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"symbol\": \"%s\", \"marginType\": \"ISOLATED\"}".formatted(symbol)))
+                .andExpect(status().isOk());
+        place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "MARKET", "quantity": "1"}""".formatted(symbol)).andExpect(status().isOk());
+        Timestamp opened = Timestamp.from(Instant.now().minus(Duration.ofHours(2)));
+        sql.sql("update futures_position set opened_at = ? where user_id = ?")
+                .params(opened, trader)
+                .update();
+        sql.sql("update order_fill set traded_at = ? where user_id = ?")
+                .params(opened, trader)
+                .update();
+        sql.sql("""
+                        insert into funding_rate_history (pair_id, funding_time, funding_rate, mark_price)
+                        values (?, ?, 0.0001, 100)""").params(pair, Timestamp.from(fundingTime)).update();
+        return sql.sql("select position_id from futures_position where user_id = ? and position_status = 'OPEN'")
+                .param(trader)
+                .query(UUID.class)
+                .single();
+    }
+
+    /** What the engine does for a replayed mark of 1 at {@code markTime}: it liquidates now, on that mark. */
+    private boolean replayLiquidation(UUID position, Instant markTime) {
+        UUID trader = sql.sql("select user_id from futures_position where position_id = ?")
+                .param(position)
+                .query(UUID.class)
+                .single();
+        return matching.liquidate(
+                new LiquidationLevel(position, trader, pair, PositionDirection.LONG, BigDecimal.ONE),
+                BigDecimal.ONE,
+                Instant.now(),
+                markTime);
+    }
+
+    private long fundingFeesOfOwner(UUID position) {
+        return sql.sql("""
+                        select count(*) from wallet_ledger_entry e
+                         where e.entry_type = 'FUNDING_FEE'
+                           and e.user_id = (select user_id from futures_position where position_id = ?)""").param(position).query(Long.class).single();
     }
 
     private long fundingFees(UUID trader) {

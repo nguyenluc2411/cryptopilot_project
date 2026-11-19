@@ -839,7 +839,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         Instant at = source == FillSource.REPLAY ? clock.instant() : mark.eventTime();
         for (LiquidationLevel level : liquidations.reached(key.pairId(), mark.price())) {
             try {
-                if (!matching.liquidate(level, mark.price(), at)) {
+                Instant markTime = source == FillSource.REPLAY ? mark.eventTime() : null;
+                if (!matching.liquidate(level, mark.price(), at, markTime)) {
                     refreshLevels(level.userId(), level.pairId());
                 }
             } catch (RuntimeException failure) {

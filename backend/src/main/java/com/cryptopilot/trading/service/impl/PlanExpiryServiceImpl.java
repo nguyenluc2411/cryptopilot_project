@@ -1,6 +1,7 @@
 package com.cryptopilot.trading.service.impl;
 
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanExpired;
@@ -39,6 +40,7 @@ public class PlanExpiryServiceImpl implements PlanExpiryService {
     private final TradingPlanRepository plans;
     private final ReplayLockService replays;
     private final MarketApi market;
+    private final MarketHealth health;
     private final ApplicationEventPublisher events;
     private final Clock clock;
 
@@ -49,6 +51,10 @@ public class PlanExpiryServiceImpl implements PlanExpiryService {
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         int expired = 0;
         for (TradingPlan plan : plans.findExpiring(now, Limit.of(batchSize))) {
+            if (!health.tradingOpen(plan.getMarket())) {
+                // D-158 (I5): the replay after the pause may still fill or invalidate it before its expiry.
+                continue;
+            }
             if (replays.isReplaying(plan.getMarket(), plan.getPairId())) {
                 log.info(
                         "NSF-09 plan {} not expired yet: its pair {} {} is replaying (D-79)",
