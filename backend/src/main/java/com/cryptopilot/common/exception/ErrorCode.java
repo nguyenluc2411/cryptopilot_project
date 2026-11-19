@@ -614,7 +614,15 @@ public enum ErrorCode {
      * way: one PENDING order per Trader (D-147). Borrows MSG43 (A-38); messageArgs is the order code. 409: finish or
      * wait out that order first.
      */
-    ORDER_ALREADY_PENDING(HttpStatus.CONFLICT, "MSG43");
+    ORDER_ALREADY_PENDING(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * Trading on the market is paused because its exchange data is lost, being caught up on, or under maintenance
+     * (D-158): nothing that changes an order, a position or a wallet of that market is taken until it is open again.
+     * The body names the market, its state and since when. 503: the same request succeeds once trading reopens. A new
+     * message id, MSG57, until the SRS gives it a text.
+     */
+    TRADING_PAUSED(HttpStatus.SERVICE_UNAVAILABLE, "MSG57");
 
     private final HttpStatus status;
     private final String messageCode;
