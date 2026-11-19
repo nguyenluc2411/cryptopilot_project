@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The drawings a Trader keeps on the chart of each pair. Every method acts on the caller's own drawings only; another
+ * The drawings a Trader keeps in each layout of a pair's chart. Every method acts on the caller's own drawings only; another
  * Trader's drawing answers as if it did not exist. Implemented by
  * {@link com.cryptopilot.drawing.service.impl.ChartDrawingServiceImpl}.
  *
@@ -15,17 +15,17 @@ import java.util.UUID;
  */
 public interface ChartDrawingService {
 
-    /** The caller's drawings on the pair, oldest first; empty for a pair the caller never drew on. */
-    List<ChartDrawingResponse> list(UUID userId, UUID pairId);
+    /** The caller's drawings in the layout, oldest first; empty for a layout that is not the caller's. */
+    List<ChartDrawingResponse> list(UUID userId, UUID layoutId);
 
     /**
-     * Adds a drawing to the pair's chart.
+     * Adds a drawing to one of the caller's layouts.
      *
-     * @throws com.cryptopilot.common.exception.ResourceNotFoundException MSG41 when the pair is unknown or not listed
+     * @throws com.cryptopilot.common.exception.ResourceNotFoundException MSG41 when the layout is not the caller's
      * @throws com.cryptopilot.common.exception.FieldValidationException MSG01 when the anchors or the text do not fit
      *     the type
-     * @throws com.cryptopilot.common.exception.BusinessException MSG43 when the pair already holds the maximum number
-     *     of the caller's drawings
+     * @throws com.cryptopilot.common.exception.BusinessException MSG43 when the layout already holds the maximum number
+     *     of drawings
      */
     ChartDrawingResponse create(UUID userId, CreateChartDrawingRequest request);
 
@@ -38,6 +38,6 @@ public interface ChartDrawingService {
     /** Removes one of the caller's drawings; MSG41 when there is no such drawing. */
     void delete(UUID userId, UUID drawingId);
 
-    /** Removes every drawing of the caller on the pair and answers how many were removed. */
-    int deleteAll(UUID userId, UUID pairId);
+    /** Removes every drawing of the caller in the layout and answers how many were removed. */
+    int deleteAll(UUID userId, UUID layoutId);
 }

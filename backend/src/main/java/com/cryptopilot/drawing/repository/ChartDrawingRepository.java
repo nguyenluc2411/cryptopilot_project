@@ -1,6 +1,7 @@
 package com.cryptopilot.drawing.repository;
 
 import com.cryptopilot.drawing.entity.ChartDrawing;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,24 +22,32 @@ public interface ChartDrawingRepository extends Repository<ChartDrawing, UUID> {
     @Transactional(readOnly = true)
     Optional<ChartDrawing> findByIdAndUserId(UUID drawingId, UUID userId);
 
-    /** The Trader's drawings on one pair, oldest first, which is the order they are painted in. */
+    /** The Trader's drawings in one layout, oldest first, which is the order they are painted in. */
     @Transactional(readOnly = true)
-    List<ChartDrawing> findByUserIdAndPairIdOrderByCreatedAtAscIdAsc(UUID userId, UUID pairId);
+    List<ChartDrawing> findByUserIdAndLayoutIdOrderByCreatedAtAscIdAsc(UUID userId, UUID layoutId);
 
-    /** How many drawings the Trader has on one pair: what the per-pair limit counts. */
+    /** How many drawings one layout holds: what the per-layout limit counts. */
     @Transactional(readOnly = true)
-    long countByUserIdAndPairId(UUID userId, UUID pairId);
+    long countByLayoutId(UUID layoutId);
+
+    /** Drawings per layout as {@code [layoutId, count]} rows; a layout without drawings is left out. */
+    @Transactional(readOnly = true)
+    @Query("select d.layoutId, count(d) from ChartDrawing d where d.layoutId in :layoutIds group by d.layoutId")
+    List<Object[]> countByLayout(@Param("layoutIds") Collection<UUID> layoutIds);
 
     /** Writes a drawing. Not transactional here; the unit of work is the calling service's. */
     ChartDrawing save(ChartDrawing drawing);
+
+    /** Writes several drawings. Not transactional here; the unit of work is the calling service's. */
+    List<ChartDrawing> saveAll(Iterable<ChartDrawing> drawings);
 
     /** Sends pending statements, so a stale version answers where the caller can read it. */
     void flush();
 
     void delete(ChartDrawing drawing);
 
-    /** Removes every drawing of the Trader on one pair and answers how many there were. */
+    /** Removes every drawing of the Trader in one layout and answers how many there were. */
     @Modifying
-    @Query("delete from ChartDrawing d where d.userId = :userId and d.pairId = :pairId")
-    int deleteByOwnerAndPair(@Param("userId") UUID userId, @Param("pairId") UUID pairId);
+    @Query("delete from ChartDrawing d where d.userId = :userId and d.layoutId = :layoutId")
+    int deleteByOwnerAndLayout(@Param("userId") UUID userId, @Param("layoutId") UUID layoutId);
 }

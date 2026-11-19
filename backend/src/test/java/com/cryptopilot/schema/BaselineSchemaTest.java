@@ -32,7 +32,7 @@ class BaselineSchemaTest {
     /**
      * The business tables of the logical model, in the order the model lists them: 39, the 6 of paper trading
      * after them (V21, TR-02; owned by the Trader since V47, D-117), the history of a position's level changes
-     * (V37, TP-E), the 4 of the Academy (V38, T-114), and the Trader's chart drawings (V76, T-119) last.
+     * (V37, TP-E), the 4 of the Academy (V38, T-114), and the Trader's chart layouts and drawings (V76, T-119) last.
      */
     private static final List<String> BUSINESS_TABLES = List.of(
             "user_account",
@@ -90,6 +90,7 @@ class BaselineSchemaTest {
             "futures_symbol_config",
             "futures_position",
             "futures_margin_adjustment",
+            "chart_layout",
             "chart_drawing");
 
     @Autowired
@@ -117,7 +118,7 @@ class BaselineSchemaTest {
     @Test
     void schema_holdsTheFiftyBusinessTables() {
         assertThat(tableNames()).containsAll(BUSINESS_TABLES);
-        assertThat(BUSINESS_TABLES).hasSize(56);
+        assertThat(BUSINESS_TABLES).hasSize(57);
     }
 
     @Test

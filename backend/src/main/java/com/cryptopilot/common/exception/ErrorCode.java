@@ -646,10 +646,16 @@ public enum ErrorCode {
     TRADING_PAUSED(HttpStatus.SERVICE_UNAVAILABLE, "MSG57"),
 
     /**
-     * The Trader already keeps the most drawings allowed on the chart of this pair (D-149). Borrows MSG43 (A-38);
-     * messageArgs is the maximum. 409: the same request succeeds once a drawing of the pair is removed.
+     * The chart layout already holds the most drawings allowed (D-149). Borrows MSG43 (A-38); messageArgs is the
+     * maximum. 409: the same request succeeds once a drawing of the layout is removed.
      */
-    CHART_DRAWING_LIMIT_REACHED(HttpStatus.CONFLICT, "MSG43");
+    CHART_DRAWING_LIMIT_REACHED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The Trader already keeps the most chart layouts allowed on this pair (D-149). Borrows MSG43 (A-38); messageArgs
+     * is the maximum. 409: the same request succeeds once a layout of the pair is removed.
+     */
+    CHART_LAYOUT_LIMIT_REACHED(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

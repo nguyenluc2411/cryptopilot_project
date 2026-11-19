@@ -13,7 +13,7 @@ import java.util.UUID;
  * <p>Rule: D-149 (5); T-119.
  *
  * @param id the drawing
- * @param pairId the pair it is drawn on
+ * @param layoutId the layout it belongs to
  * @param type the tool
  * @param points the anchors
  * @param style how it looks
@@ -26,7 +26,7 @@ import java.util.UUID;
  */
 public record ChartDrawingResponse(
         UUID id,
-        UUID pairId,
+        UUID layoutId,
         DrawingType type,
         List<ChartPoint> points,
         DrawingStyle style,

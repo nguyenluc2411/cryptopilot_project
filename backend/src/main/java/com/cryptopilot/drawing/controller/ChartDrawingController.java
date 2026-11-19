@@ -30,7 +30,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The drawings a Trader keeps on the chart of each pair, Trader only. The caller is always the owner: the service
+ * The drawings a Trader keeps in each layout of a pair's chart, Trader only. The caller is always the owner: the service
  * never loads another Trader's drawing. The chart saves each change as it happens; there is no save button.
  *
  * <p>Rule: D-149; T-119.
@@ -46,25 +46,25 @@ public class ChartDrawingController {
 
     private final ChartDrawingService drawings;
 
-    @Operation(summary = "The caller's drawings on a pair, oldest first")
-    @ApiResponse(responseCode = "200", description = "Every drawing; empty when the caller never drew on the pair")
-    @ApiResponse(responseCode = "400", description = "MSG01: `pairId` is missing or not a UUID")
+    @Operation(summary = "The caller's drawings in a layout, oldest first")
+    @ApiResponse(responseCode = "200", description = "Every drawing; empty when the layout is not the caller's")
+    @ApiResponse(responseCode = "400", description = "MSG01: `layoutId` is missing or not a UUID")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @GetMapping
     public List<ChartDrawingResponse> list(
             @AuthenticationPrincipal Jwt caller,
-            @Parameter(description = "The pair whose chart is shown") @RequestParam UUID pairId) {
-        return drawings.list(callerOf(caller), pairId);
+            @Parameter(description = "The layout shown on the chart") @RequestParam UUID layoutId) {
+        return drawings.list(callerOf(caller), layoutId);
     }
 
-    @Operation(summary = "Add a drawing to a pair's chart")
+    @Operation(summary = "Add a drawing to one of the caller's layouts")
     @ApiResponse(responseCode = "201", description = "The new drawing")
     @ApiResponse(
             responseCode = "400",
             description = "MSG01/MSG15: `errors` names each rejected field, including anchors that do not fit the type")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
-    @ApiResponse(responseCode = "404", description = "MSG41: the pair is unknown or not listed on any market")
-    @ApiResponse(responseCode = "409", description = "MSG43: the pair already holds the most drawings allowed")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such layout of the caller")
+    @ApiResponse(responseCode = "409", description = "MSG43: the layout already holds the most drawings allowed")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ChartDrawingResponse create(
@@ -96,16 +96,16 @@ public class ChartDrawingController {
         drawings.delete(callerOf(caller), id);
     }
 
-    @Operation(summary = "Remove every drawing of the caller on a pair (the client confirms first)")
+    @Operation(summary = "Remove every drawing of the caller in a layout (the client confirms first)")
     @ApiResponse(responseCode = "204", description = "Removed, or there was nothing to remove")
-    @ApiResponse(responseCode = "400", description = "MSG01: `pairId` is missing or not a UUID")
+    @ApiResponse(responseCode = "400", description = "MSG01: `layoutId` is missing or not a UUID")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @DeleteMapping
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteAll(
             @AuthenticationPrincipal Jwt caller,
-            @Parameter(description = "The pair whose drawings are removed") @RequestParam UUID pairId) {
-        drawings.deleteAll(callerOf(caller), pairId);
+            @Parameter(description = "The layout whose drawings are removed") @RequestParam UUID layoutId) {
+        drawings.deleteAll(callerOf(caller), layoutId);
     }
 
     private static UUID callerOf(Jwt caller) {

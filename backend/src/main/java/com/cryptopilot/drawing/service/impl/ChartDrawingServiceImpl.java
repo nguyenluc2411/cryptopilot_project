@@ -13,8 +13,8 @@ import com.cryptopilot.drawing.entity.ChartDrawing;
 import com.cryptopilot.drawing.model.ChartPoint;
 import com.cryptopilot.drawing.model.DrawingStyle;
 import com.cryptopilot.drawing.repository.ChartDrawingRepository;
+import com.cryptopilot.drawing.repository.ChartLayoutRepository;
 import com.cryptopilot.drawing.service.ChartDrawingService;
-import com.cryptopilot.market.MarketApi;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
@@ -32,8 +32,9 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>Ownership is part of every query: a drawing is looked up by its key <em>and</em> the caller, so another Trader's
  * drawing is "not found" (MSG41) rather than "forbidden", which would confirm that the key exists.
  *
- * <p>A create counts the caller's drawings on the pair and inserts the new one under the caller's lock of this module,
- * so two concurrent creates at {@code max − 1} cannot both pass {@link #MAX_PER_PAIR} (D-63). An update carries the
+ * <p>A drawing goes into one of the caller's layouts. A create counts the layout's drawings and inserts the new one
+ * under the caller's lock of this module, so two concurrent creates at {@code max − 1} cannot both pass
+ * {@link #MAX_PER_LAYOUT} (D-63). An update carries the
  * version the chart last read and is refused with 409 when the drawing changed since, so a drag in one tab does not
  * silently undo a change made in another.
  *
@@ -47,23 +48,23 @@ import tools.jackson.databind.json.JsonMapper;
 @RequiredArgsConstructor
 public class ChartDrawingServiceImpl implements ChartDrawingService {
 
-    /** The most drawings one Trader keeps on one pair (D-149). */
-    static final int MAX_PER_PAIR = 200;
+    /** The most drawings one layout holds (D-149). */
+    static final int MAX_PER_LAYOUT = 200;
 
-    /** The scope of the per-user lock creates take, apart from the other modules' writes. */
+    /** The scope of the per-user lock the creates of this module take, apart from the other modules' writes. */
     static final String LOCK_SCOPE = "chart-drawing";
 
     private static final TypeReference<List<ChartPoint>> POINTS = new TypeReference<>() {};
 
     private final ChartDrawingRepository drawings;
-    private final MarketApi market;
+    private final ChartLayoutRepository layouts;
     private final UserLock lock;
     private final JsonMapper json;
 
     @Override
     @Transactional(readOnly = true)
-    public List<ChartDrawingResponse> list(UUID userId, UUID pairId) {
-        return drawings.findByUserIdAndPairIdOrderByCreatedAtAscIdAsc(userId, pairId).stream()
+    public List<ChartDrawingResponse> list(UUID userId, UUID layoutId) {
+        return drawings.findByUserIdAndLayoutIdOrderByCreatedAtAscIdAsc(userId, layoutId).stream()
                 .map(this::toResponse)
                 .toList();
     }
@@ -71,24 +72,22 @@ public class ChartDrawingServiceImpl implements ChartDrawingService {
     @Override
     @Transactional
     public ChartDrawingResponse create(UUID userId, CreateChartDrawingRequest request) {
-        boolean listed = market.pairListings(List.of(request.pairId())).stream()
-                .anyMatch(pair -> pair.pairId().equals(request.pairId()) && pair.listed());
-        if (!listed) {
-            throw new ResourceNotFoundException("CryptoPair", request.pairId());
+        if (layouts.findByIdAndUserId(request.layoutId(), userId).isEmpty()) {
+            throw new ResourceNotFoundException("ChartLayout", request.layoutId());
         }
         List<ChartPoint> points = points(request.points());
         DrawingRules.check(request.type(), points, request.text());
         lock.lock(LOCK_SCOPE, userId);
-        long held = drawings.countByUserIdAndPairId(userId, request.pairId());
-        if (held >= MAX_PER_PAIR) {
+        long held = drawings.countByLayoutId(request.layoutId());
+        if (held >= MAX_PER_LAYOUT) {
             throw new BusinessException(
                     ErrorCode.CHART_DRAWING_LIMIT_REACHED,
-                    "the Trader already has " + held + " drawings on pair " + request.pairId(),
-                    MAX_PER_PAIR);
+                    "layout " + request.layoutId() + " already holds " + held + " drawings",
+                    MAX_PER_LAYOUT);
         }
         ChartDrawing drawing = ChartDrawing.draw(
                 userId,
-                request.pairId(),
+                request.layoutId(),
                 request.type(),
                 json.writeValueAsString(points),
                 json.writeValueAsString(style(request.style())),
@@ -127,8 +126,8 @@ public class ChartDrawingServiceImpl implements ChartDrawingService {
 
     @Override
     @Transactional
-    public int deleteAll(UUID userId, UUID pairId) {
-        return drawings.deleteByOwnerAndPair(userId, pairId);
+    public int deleteAll(UUID userId, UUID layoutId) {
+        return drawings.deleteByOwnerAndLayout(userId, layoutId);
     }
 
     private ChartDrawing owned(UUID userId, UUID drawingId) {
@@ -166,7 +165,7 @@ public class ChartDrawingServiceImpl implements ChartDrawingService {
     private ChartDrawingResponse toResponse(ChartDrawing drawing) {
         return new ChartDrawingResponse(
                 drawing.getId(),
-                drawing.getPairId(),
+                drawing.getLayoutId(),
                 drawing.getDrawingType(),
                 json.readValue(drawing.getPoints(), POINTS),
                 json.readValue(drawing.getStyle(), DrawingStyle.class),

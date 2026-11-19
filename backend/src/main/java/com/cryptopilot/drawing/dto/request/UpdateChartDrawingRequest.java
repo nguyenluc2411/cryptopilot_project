@@ -1,5 +1,6 @@
 package com.cryptopilot.drawing.dto.request;
 
+import com.cryptopilot.drawing.model.enums.DrawingType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
@@ -23,7 +24,7 @@ public record UpdateChartDrawingRequest(
         @NotNull(message = "MSG01") @PositiveOrZero(message = "MSG01")
         Long version,
 
-        @NotNull(message = "MSG01") @Size(min = 1, max = 3, message = "MSG01")
+        @NotNull(message = "MSG01") @Size(min = 1, max = DrawingType.MAX_ANCHORS, message = "MSG01")
         List<@NotNull(message = "MSG01") @Valid ChartPointRequest> points,
 
         @NotNull(message = "MSG01") @Valid DrawingStyleRequest style,

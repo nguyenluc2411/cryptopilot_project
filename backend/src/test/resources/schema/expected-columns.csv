@@ -118,12 +118,20 @@ chart_drawing,drawing_type,character varying,,,NO
 chart_drawing,is_hidden,boolean,,,NO
 chart_drawing,is_locked,boolean,,,NO
 chart_drawing,label_text,character varying,,,YES
-chart_drawing,pair_id,uuid,,,NO
+chart_drawing,layout_id,uuid,,,NO
 chart_drawing,points,jsonb,,,NO
 chart_drawing,style,jsonb,,,NO
 chart_drawing,updated_at,timestamp with time zone,,,NO
 chart_drawing,user_id,uuid,,,NO
 chart_drawing,version,bigint,64,0,NO
+chart_layout,created_at,timestamp with time zone,,,NO
+chart_layout,layout_id,uuid,,,NO
+chart_layout,layout_name,character varying,,,YES
+chart_layout,pair_id,uuid,,,NO
+chart_layout,seq_no,integer,32,0,NO
+chart_layout,updated_at,timestamp with time zone,,,NO
+chart_layout,user_id,uuid,,,NO
+chart_layout,version,bigint,64,0,NO
 coin,coin_id,uuid,,,NO
 coin,coin_name,character varying,,,NO
 coin,created_at,timestamp with time zone,,,NO

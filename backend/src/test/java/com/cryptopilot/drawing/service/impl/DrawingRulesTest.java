@@ -55,6 +55,26 @@ class DrawingRulesTest {
                         DrawingType.SHORT_POSITION,
                         DrawingType.PARALLEL_CHANNEL,
                         DrawingType.FIB_EXTENSION);
+        assertThat(Arrays.stream(DrawingType.values()).filter(type -> type.anchors() == 4))
+                .containsExactlyInAnyOrder(
+                        DrawingType.ABCD_PATTERN,
+                        DrawingType.TRIANGLE_PATTERN,
+                        DrawingType.ELLIOTT_CORRECTION_WAVE,
+                        DrawingType.ELLIOTT_DOUBLE_COMBO);
+        assertThat(Arrays.stream(DrawingType.values()).filter(type -> type.anchors() == 5))
+                .containsExactlyInAnyOrder(DrawingType.XABCD_PATTERN, DrawingType.CYPHER_PATTERN);
+        assertThat(Arrays.stream(DrawingType.values()).filter(type -> type.anchors() == 6))
+                .containsExactlyInAnyOrder(
+                        DrawingType.THREE_DRIVES_PATTERN,
+                        DrawingType.ELLIOTT_IMPULSE_WAVE,
+                        DrawingType.ELLIOTT_TRIANGLE_WAVE,
+                        DrawingType.ELLIOTT_TRIPLE_COMBO);
+        assertThat(Arrays.stream(DrawingType.values()).filter(type -> type.anchors() == 7))
+                .containsExactly(DrawingType.HEAD_AND_SHOULDERS);
+        assertThat(Arrays.stream(DrawingType.values())
+                        .mapToInt(DrawingType::anchors)
+                        .max())
+                .hasValue(DrawingType.MAX_ANCHORS);
     }
 
     /** Anchors are entry, stop, target. */
