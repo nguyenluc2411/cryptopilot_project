@@ -33,7 +33,8 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * The markets' data health as the Traders' banner and the administration console read it (D-158): the state of each
  * market from {@link MarketHealthService}, the open incident's times, reason and message, and, for ten minutes after
- * an incident ended, when it did, so the banner can say trading is back.
+ * an incident ended, when it did, so the banner can say trading is back; while a market is open, the pairs whose data
+ * is lost (E5).
  *
  * <p>Maintenance is audited as a change of a system setting named {@code market.maintenance.<MARKET>}, a reopening
  * by hand as one named {@code market.resume.<MARKET>} (BR-57).
@@ -50,6 +51,7 @@ public class MarketStatusServiceImpl implements MarketStatusService {
     private final MarketHealthService health;
     private final MarketIncidentRepository incidents;
     private final AdminApi admin;
+    private final MarketLiveness liveness;
     private final Clock clock;
 
     @Override
@@ -122,9 +124,10 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                         incident.reason(),
                         incident.message(),
                         incident.id(),
-                        null);
+                        null,
+                        List.of());
             }
-            return new MarketHealthResponse(market, state, false, null, null, null, null, null, null);
+            return new MarketHealthResponse(market, state, false, null, null, null, null, null, null, List.of());
         }
         Instant shownAfter = clock.instant().minus(RESUMED_SHOWN_FOR);
         Optional<MarketIncident> ended = incidents.findRecent(market, 1).stream()
@@ -140,7 +143,8 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                 null,
                 null,
                 ended.map(MarketIncident::id).orElse(null),
-                ended.map(MarketIncident::resumedAt).orElse(null));
+                ended.map(MarketIncident::resumedAt).orElse(null),
+                liveness.silentSymbols(market));
     }
 
     private static MarketIncidentResponse response(MarketIncident incident) {

@@ -194,6 +194,15 @@ class MarketStatusApiTest {
                          where user_id = ? and new_value ->> 'key' like 'market.resume.%'""").param(admin).query(Long.class).single()).isZero();
     }
 
+    /** E5: an open market names the pairs whose data is lost; none here. */
+    @Test
+    void D158_anOpenMarket_namesItsLostPairs() throws Exception {
+        mvc.perform(get(STATUS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.markets[0].pausedPairs").isArray())
+                .andExpect(jsonPath("$.markets[0].pausedPairs").isEmpty());
+    }
+
     private long audited(UUID admin, String on) {
         return sql.sql("""
                         select count(*) from audit_log

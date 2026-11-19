@@ -21,6 +21,8 @@ import org.springframework.validation.annotation.Validated;
  * @param recoveryTimeout how long a recovery may run before the administrators are told of it
  * @param maxOutageReplay how far back the engines replay an incident's data at most; a market whose data was lost
  *     longer does not reopen by itself
+ * @param pauseRatio the share of a market's pairs whose connections may be silent while the market stays live (E5);
+ *     more than that pauses it
  */
 @Validated
 @ConfigurationProperties(prefix = "cryptopilot.market.health")
@@ -31,18 +33,22 @@ public record MarketHealthProperties(
         @NotNull @DefaultValue("15s") Duration stableBeforeRecover,
         @NotNull @DefaultValue("2m") Duration notifyAfter,
         @NotNull @DefaultValue("15m") Duration recoveryTimeout,
-        @NotNull @DefaultValue("7d") Duration maxOutageReplay) {
+        @NotNull @DefaultValue("7d") Duration maxOutageReplay,
+        @DefaultValue("0.5") double pauseRatio) {
 
     @ConstructorBinding
     public MarketHealthProperties {
         if (reconnectingAfter.compareTo(pauseAfter) >= 0) {
             throw new IllegalArgumentException("reconnecting-after must be shorter than pause-after");
         }
+        if (pauseRatio < 0 || pauseRatio >= 1) {
+            throw new IllegalArgumentException("pause-ratio must be at least 0 and below 1");
+        }
     }
 
     /**
      * The thresholds with the defaults: notify-after two minutes, recovery-timeout fifteen minutes, max-outage-replay
-     * seven days.
+     * seven days, pause-ratio a half.
      */
     public MarketHealthProperties(
             boolean enabled, Duration reconnectingAfter, Duration pauseAfter, Duration stableBeforeRecover) {
@@ -53,6 +59,7 @@ public record MarketHealthProperties(
                 stableBeforeRecover,
                 Duration.ofMinutes(2),
                 Duration.ofMinutes(15),
-                Duration.ofDays(7));
+                Duration.ofDays(7),
+                0.5);
     }
 }

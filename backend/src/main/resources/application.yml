@@ -400,6 +400,9 @@ cryptopilot:
       # D-158: the engines replay an incident's data at most this far back; a market whose data was lost longer stays
       # recovering until an administrator reopens it.
       max-outage-replay: 7d
+      # E5: while at most this share of a market's pairs have silent connections, the market stays open and only
+      # those pairs are named lost; more pauses it.
+      pause-ratio: 0.5
     stream:
       # NSF-03: the public market streams of the enabled pairs. Off here, on in the dev and prod profiles, so a
       # test context never connects to the exchange. Hosts verified 2026-09-24 (TECHNICAL_DESIGN 7.1.1): futures

@@ -7,7 +7,11 @@ import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.MarketStatusService;
+import com.cryptopilot.market.service.impl.MarketLiveness;
 import java.time.Duration;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -20,8 +24,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
  * Pushes the markets' data health to {@link #TOPIC} (D-158): whenever a market's state changes, once the change is
- * committed, and every {@link #RECOVERING_EVERY} while a market recovers, so the banner keeps showing it is still
- * catching up. Clients that missed a push read {@code GET /api/v1/market/status}.
+ * committed, every {@link #RECOVERING_EVERY} while a market recovers, so the banner keeps showing it is still catching
+ * up, and when the pairs whose data is lost on an open market change (E5). Clients that missed a push read {@code GET /api/v1/market/status}.
  *
  * <p>Rule: NSF-03; D-158.
  */
@@ -38,20 +42,27 @@ public class MarketStatusPusher {
 
     private final MarketStatusService status;
     private final MarketHealthService health;
+    private final MarketLiveness liveness;
     private final SimpMessageSendingOperations broker;
     private final TaskScheduler scheduler;
     private final MarketHealthProperties properties;
     private final BinanceStreamProperties streams;
+    private final Map<MarketType, List<String>> lastSilent = new EnumMap<>(MarketType.class);
 
     public MarketStatusPusher(
             MarketStatusService status,
             MarketHealthService health,
+            MarketLiveness liveness,
             SimpMessageSendingOperations broker,
             TaskScheduler scheduler,
             MarketHealthProperties properties,
             BinanceStreamProperties streams) {
         this.status = status;
         this.health = health;
+        this.liveness = liveness;
+        for (MarketType market : MarketType.values()) {
+            lastSilent.put(market, List.of());
+        }
         this.broker = broker;
         this.scheduler = scheduler;
         this.properties = properties;
@@ -76,12 +87,18 @@ public class MarketStatusPusher {
         push();
     }
 
+    /** One look: pushes while a market recovers, or when its lost pairs changed since the last look. */
     void pushWhileRecovering() {
+        boolean due = false;
         for (MarketType market : MarketType.values()) {
-            if (health.state(market) == MarketHealthState.RECOVERING) {
-                push();
-                return;
+            List<String> silent = liveness.silentSymbols(market);
+            if (!silent.equals(lastSilent.put(market, silent))
+                    || health.state(market) == MarketHealthState.RECOVERING) {
+                due = true;
             }
+        }
+        if (due) {
+            push();
         }
     }
 

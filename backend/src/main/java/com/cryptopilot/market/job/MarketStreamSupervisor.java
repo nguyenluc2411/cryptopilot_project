@@ -36,9 +36,10 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -242,34 +243,50 @@ public class MarketStreamSupervisor {
     private List<BinanceStreamShard> shardsFor(
             MarketType market, List<StreamTarget> targets, Map<String, StreamTarget> bySymbol) {
         BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
-        BinanceStreamShard.Listener listener = new Router(market, bySymbol);
         List<BinanceStreamShard> shards = new ArrayList<>();
-        pack(
-                targets,
-                target -> streams.streamsFor(venue, target.symbol()),
-                batch -> shards.add(streams.shard(venue, market + "-" + shards.size(), batch, listener)));
+        // D-158 E5: each price connection is watched on its own, with its pairs, for the market health.
+        Map<String, List<String>> symbolsByConnection = new LinkedHashMap<>();
+        pack(targets, target -> streams.streamsFor(venue, target.symbol()), (batch, symbols) -> {
+            String name = market + "-" + shards.size();
+            symbolsByConnection.put(name, symbols);
+            shards.add(streams.shard(venue, name, batch, new Router(market, bySymbol, name)));
+        });
+        liveness.connections(market, symbolsByConnection);
         // TR-38: the Futures best bid and ask and depth are served under /public only, on connections of their own.
+        BinanceStreamShard.Listener publicListener = new Router(market, bySymbol, null);
         pack(
                 targets,
                 target -> streams.publicStreamsFor(venue, target.symbol()),
-                batch -> shards.add(streams.publicShard(market + "-PUBLIC-" + shards.size(), batch, listener)));
+                (batch, symbols) ->
+                        shards.add(streams.publicShard(market + "-PUBLIC-" + shards.size(), batch, publicListener)));
         return shards;
     }
 
-    /** Packs the streams of the targets into batches of at most one connection's, a pair's never split. */
+    /**
+     * Packs the streams of the targets into batches of at most one connection's, a pair's never split; each batch is
+     * opened with the symbols of its pairs.
+     */
     private void pack(
-            List<StreamTarget> targets, Function<StreamTarget, List<String>> namesOf, Consumer<List<String>> open) {
+            List<StreamTarget> targets,
+            Function<StreamTarget, List<String>> namesOf,
+            BiConsumer<List<String>, List<String>> open) {
         List<String> batch = new ArrayList<>();
+        List<String> symbols = new ArrayList<>();
         for (StreamTarget target : targets) {
             List<String> names = namesOf.apply(target);
+            if (names.isEmpty()) {
+                continue;
+            }
             if (!batch.isEmpty() && batch.size() + names.size() > streams.maxStreamsPerConnection()) {
-                open.accept(batch);
+                open.accept(batch, symbols);
                 batch = new ArrayList<>();
+                symbols = new ArrayList<>();
             }
             batch.addAll(names);
+            symbols.add(target.symbol());
         }
         if (!batch.isEmpty()) {
-            open.accept(batch);
+            open.accept(batch, symbols);
         }
     }
 
@@ -281,16 +298,19 @@ public class MarketStreamSupervisor {
 
         private final MarketType market;
         private final Map<String, StreamTarget> bySymbol;
+        private final String connection;
 
-        private Router(MarketType market, Map<String, StreamTarget> bySymbol) {
+        /** @param connection the price connection it routes, as the liveness knows it; null for the book streams */
+        private Router(MarketType market, Map<String, StreamTarget> bySymbol, String connection) {
             this.market = market;
             this.bySymbol = Map.copyOf(bySymbol);
+            this.connection = connection;
         }
 
         @Override
         public void onMessage(StreamMessage message) {
-            // D-158: any message proves the market's stream is live, a pair's or not.
-            liveness.record(market, clock.instant());
+            // D-158: any message proves the market's stream is live, a pair's or not, and its connection's pairs.
+            liveness.record(market, connection, clock.instant());
             StreamTarget target = bySymbol.get(message.symbol());
             if (target == null) {
                 return;

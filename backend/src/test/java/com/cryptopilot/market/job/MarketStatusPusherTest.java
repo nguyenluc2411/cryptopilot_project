@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -17,6 +18,7 @@ import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.MarketStatusService;
+import com.cryptopilot.market.service.impl.MarketLiveness;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +36,7 @@ class MarketStatusPusherTest {
 
     private final MarketStatusService status = mock(MarketStatusService.class);
     private final MarketHealthService health = mock(MarketHealthService.class);
+    private final MarketLiveness liveness = mock(MarketLiveness.class);
     private final SimpMessageSendingOperations broker = mock(SimpMessageSendingOperations.class);
     private final TaskScheduler scheduler = mock(TaskScheduler.class);
     private final BinanceStreamProperties streams = mock(BinanceStreamProperties.class);
@@ -41,6 +44,7 @@ class MarketStatusPusherTest {
     private final MarketStatusPusher pusher = new MarketStatusPusher(
             status,
             health,
+            liveness,
             broker,
             scheduler,
             new MarketHealthProperties(true, Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(15)),
@@ -51,6 +55,23 @@ class MarketStatusPusherTest {
         when(streams.enabled()).thenReturn(true);
         when(status.status()).thenReturn(current);
         when(health.state(any())).thenReturn(MarketHealthState.LIVE);
+        when(liveness.silentSymbols(any())).thenReturn(List.of());
+    }
+
+    /** E5: the pairs whose data is lost on an open market are pushed when they change, and only then. */
+    @Test
+    void D158_theLostPairsOfAnOpenMarket_arePushedWhenTheyChange() {
+        pusher.pushWhileRecovering();
+        verify(broker, never()).convertAndSend(anyString(), any(Object.class));
+
+        when(liveness.silentSymbols(MarketType.SPOT)).thenReturn(List.of("BTCUSDT"));
+        pusher.pushWhileRecovering();
+        pusher.pushWhileRecovering();
+        verify(broker, times(1)).convertAndSend(MarketStatusPusher.TOPIC, current);
+
+        when(liveness.silentSymbols(MarketType.SPOT)).thenReturn(List.of());
+        pusher.pushWhileRecovering();
+        verify(broker, times(2)).convertAndSend(MarketStatusPusher.TOPIC, current);
     }
 
     @Test
@@ -78,6 +99,7 @@ class MarketStatusPusherTest {
         new MarketStatusPusher(
                         status,
                         health,
+                        liveness,
                         broker,
                         scheduler,
                         new MarketHealthProperties(

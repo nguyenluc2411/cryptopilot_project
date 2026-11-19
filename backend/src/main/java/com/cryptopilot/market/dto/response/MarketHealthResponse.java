@@ -4,6 +4,7 @@ import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -18,6 +19,8 @@ import java.util.UUID;
  * @param message the administrator's message of a maintenance, if any
  * @param incidentId the open incident, or the one that just ended; {@code null} otherwise
  * @param resumedAt when trading reopened, for an incident that ended in the last ten minutes; {@code null} otherwise
+ * @param pausedPairs the symbols whose exchange data is lost while the market is open (E5), sorted: their order forms
+ *     are locked; empty while the market is closed, as all of them are
  */
 public record MarketHealthResponse(
         MarketType market,
@@ -28,4 +31,5 @@ public record MarketHealthResponse(
         IncidentReason reason,
         String message,
         UUID incidentId,
-        Instant resumedAt) {}
+        Instant resumedAt,
+        List<String> pausedPairs) {}
