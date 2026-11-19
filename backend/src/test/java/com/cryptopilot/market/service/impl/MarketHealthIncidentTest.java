@@ -6,17 +6,24 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
+import com.cryptopilot.market.event.MarketRecoveryStarted;
+import com.cryptopilot.market.event.MarketTradingPaused;
+import com.cryptopilot.market.event.MarketTradingResumed;
+import com.cryptopilot.market.model.HealthSignals;
 import com.cryptopilot.market.model.MarketIncident;
 import com.cryptopilot.market.model.enums.IncidentKind;
 import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.MarketIncidentRepository;
+import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,9 +36,10 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * K2 (D-158): the incidents of the markets in {@code market_incident}: at most one open per market, a relapse and
- * maintenance during an outage stay the same incident, and a market with an open incident starts closed after a
- * restart (E1), never live.
+ * K2 and K4 (D-158): the incidents of the markets in {@code market_incident}: at most one open per market, a relapse
+ * and maintenance during an outage stay the same incident, and a market with an open incident starts closed after a
+ * restart (E1), never live; the monitor's ticks walk an incident from the pause to the reopening, announcing each
+ * step once (E3).
  *
  * <p>Each test works on a clean table and leaves it clean, so that the shared application's markets stay live.
  *
@@ -145,11 +153,124 @@ class MarketHealthIncidentTest {
                 .isNotNull();
     }
 
+    /**
+     * E3, one incident end to end: paused after 30 s of silence, recovering after 15 s of data, paused again on a
+     * break without a second announcement, recovering again, live once recovered; the row and the events tell it.
+     */
+    @Test
+    void D158_theTicks_walkOneIncident_fromThePauseToTheReopening() {
+        MutableTestClock clock = new MutableTestClock(START);
+        List<Object> published = new ArrayList<>();
+        MarketHealthServiceImpl health =
+                new MarketHealthServiceImpl(properties(true), incidents, published::add, clock);
+        Instant lastLive = START.minusSeconds(30);
+
+        assertThat(health.evaluate(MarketType.FUTURES, silentSince(lastLive), IncidentReason.STREAM_LOST))
+                .isEqualTo(MarketHealthState.PAUSED);
+        MarketIncident open = incidents.findOpen(MarketType.FUTURES).orElseThrow();
+        assertThat(open.lastLiveAt()).isEqualTo(lastLive);
+        assertThat(open.reason()).isEqualTo(IncidentReason.STREAM_LOST);
+        assertThat(health.state(MarketType.SPOT)).isEqualTo(MarketHealthState.LIVE);
+
+        clock.advance(Duration.ofSeconds(60));
+        assertThat(health.evaluate(MarketType.FUTURES, flowingFor(clock, 10), IncidentReason.STREAM_LOST))
+                .as("not stable yet")
+                .isEqualTo(MarketHealthState.PAUSED);
+        assertThat(health.evaluate(MarketType.FUTURES, flowingFor(clock, 15), IncidentReason.STREAM_LOST))
+                .isEqualTo(MarketHealthState.RECOVERING);
+        clock.advance(Duration.ofSeconds(20));
+        assertThat(health.evaluate(
+                        MarketType.FUTURES, silentSince(clock.instant().minusSeconds(12)), IncidentReason.STREAM_LOST))
+                .as("a relapse")
+                .isEqualTo(MarketHealthState.PAUSED);
+        assertThat(incidents.findOpen(MarketType.FUTURES).orElseThrow().recoveryStartedAt())
+                .isNull();
+        clock.advance(Duration.ofSeconds(30));
+        health.evaluate(MarketType.FUTURES, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        assertThat(health.evaluate(MarketType.FUTURES, flowingFor(clock, 20), IncidentReason.STREAM_LOST))
+                .as("still replaying")
+                .isEqualTo(MarketHealthState.RECOVERING);
+        assertThatThrownBy(() -> health.requireTrading(MarketType.FUTURES)).isInstanceOf(TradingPausedException.class);
+        assertThat(health.evaluate(
+                        MarketType.FUTURES, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST))
+                .isEqualTo(MarketHealthState.LIVE);
+
+        health.requireTrading(MarketType.FUTURES);
+        assertThat(incidents.findOpen(MarketType.FUTURES)).isEmpty();
+        MarketIncident closed = incidents.findRecent(MarketType.FUTURES, 1).getFirst();
+        assertThat(closed.id()).isEqualTo(open.id());
+        assertThat(closed.resumedAt()).isEqualTo(clock.instant());
+        assertThat(published)
+                .extracting(event -> event.getClass().getSimpleName())
+                .containsExactly(
+                        "MarketTradingPaused",
+                        "MarketRecoveryStarted",
+                        "MarketRecoveryStarted",
+                        "MarketTradingResumed");
+        assertThat(((MarketTradingResumed) published.getLast()).lastLiveAt()).isEqualTo(lastLive);
+        assertThat(((MarketTradingPaused) published.getFirst()).incidentId()).isEqualTo(open.id());
+        assertThat(((MarketRecoveryStarted) published.get(1)).lastLiveAt()).isEqualTo(lastLive);
+    }
+
+    /** A stream silent 10 s while the REST API is banned pauses at once, for the ban; a short silence alone does not. */
+    @Test
+    void D158_aSilentStream_withTheRestApiBanned_pausesAtOnce() {
+        MutableTestClock clock = new MutableTestClock(START);
+        MarketHealthServiceImpl health = new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock);
+        Instant lastLive = START.minusSeconds(12);
+
+        assertThat(health.evaluate(MarketType.SPOT, silentSince(lastLive), IncidentReason.STREAM_LOST))
+                .isEqualTo(MarketHealthState.RECONNECTING);
+        health.requireTrading(MarketType.SPOT);
+        assertThat(incidents.findOpen(MarketType.SPOT)).isEmpty();
+
+        HealthSignals banned = new HealthSignals(lastLive, lastLive, false, false, false);
+        assertThat(health.evaluate(MarketType.SPOT, banned, IncidentReason.IP_BANNED))
+                .isEqualTo(MarketHealthState.PAUSED);
+        assertThat(incidents.findOpen(MarketType.SPOT).orElseThrow().reason()).isEqualTo(IncidentReason.IP_BANNED);
+    }
+
+    /** E13, E14: maintenance holds a market whatever its data; ended while the data is lost, it pauses, not reopens. */
+    @Test
+    void D158_maintenance_holdsTheMarket_andEndingItWhileTheDataIsLost_pauses() {
+        MutableTestClock clock = new MutableTestClock(START);
+        List<Object> published = new ArrayList<>();
+        MarketHealthServiceImpl health =
+                new MarketHealthServiceImpl(properties(true), incidents, published::add, clock);
+
+        health.startMaintenance(MarketType.FUTURES, "maintenance", null);
+        assertThat(health.evaluate(MarketType.FUTURES, flowingFor(clock, 600), IncidentReason.STREAM_LOST))
+                .isEqualTo(MarketHealthState.MAINTENANCE);
+
+        health.endMaintenance(MarketType.FUTURES);
+        assertThat(health.state(MarketType.FUTURES)).isEqualTo(MarketHealthState.RECOVERING);
+        assertThat(health.evaluate(MarketType.FUTURES, silentSince(START.minusSeconds(60)), IncidentReason.STREAM_LOST))
+                .isEqualTo(MarketHealthState.PAUSED);
+        assertThat(incidents.findAllOpen()).hasSize(1);
+        assertThat(published)
+                .extracting(event -> event.getClass().getSimpleName())
+                .containsExactly("MarketTradingPaused", "MarketRecoveryStarted");
+    }
+
+    private static HealthSignals silentSince(Instant lastLive) {
+        return new HealthSignals(lastLive, lastLive, true, false, false);
+    }
+
+    private static HealthSignals flowingFor(MutableTestClock clock, long seconds) {
+        return new HealthSignals(clock.instant(), clock.instant().minusSeconds(seconds), true, false, false);
+    }
+
+    private static MarketHealthProperties properties(boolean monitor) {
+        return new MarketHealthProperties(
+                monitor, Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(15));
+    }
+
     private MarketHealthServiceImpl service(boolean monitor) {
         return new MarketHealthServiceImpl(
                 new MarketHealthProperties(
                         monitor, Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(15)),
                 incidents,
+                event -> {},
                 Clock.systemUTC());
     }
 

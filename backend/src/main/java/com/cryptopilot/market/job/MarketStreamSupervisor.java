@@ -29,6 +29,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketUpdateService;
 import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.market.service.impl.LatestMarketData;
+import com.cryptopilot.market.service.impl.MarketLiveness;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import jakarta.annotation.PreDestroy;
 import java.time.Clock;
@@ -100,6 +101,7 @@ public class MarketStreamSupervisor {
     private final List<MarketTradeListener> tradeListeners;
     private final List<MarkPriceListener> markListeners;
     private final Clock clock;
+    private final MarketLiveness liveness;
     private final Map<MarketType, MarketStreams> running = new EnumMap<>(MarketType.class);
 
     public MarketStreamSupervisor(
@@ -115,7 +117,8 @@ public class MarketStreamSupervisor {
             TradingMarketData trading,
             List<MarketTradeListener> tradeListeners,
             List<MarkPriceListener> markListeners,
-            Clock clock) {
+            Clock clock,
+            MarketLiveness liveness) {
         this.streams = streams;
         this.candles = candles;
         this.latest = latest;
@@ -129,6 +132,7 @@ public class MarketStreamSupervisor {
         this.tradeListeners = List.copyOf(tradeListeners);
         this.markListeners = List.copyOf(markListeners);
         this.clock = clock;
+        this.liveness = liveness;
     }
 
     /** Opens the streams of both markets and schedules the refresh, when enabled. */
@@ -285,6 +289,8 @@ public class MarketStreamSupervisor {
 
         @Override
         public void onMessage(StreamMessage message) {
+            // D-158: any message proves the market's stream is live, a pair's or not.
+            liveness.record(market, clock.instant());
             StreamTarget target = bySymbol.get(message.symbol());
             if (target == null) {
                 return;

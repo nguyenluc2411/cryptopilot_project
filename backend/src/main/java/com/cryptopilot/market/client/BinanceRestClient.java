@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import org.springframework.core.retry.RetryException;
 import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.retry.RetryTemplate;
@@ -209,6 +210,15 @@ public class BinanceRestClient implements AutoCloseable {
     public int usedWeightThisMinute(BinanceVenue venue) {
         return gates.get(Objects.requireNonNull(venue, "venue must not be null"))
                 .usedWeightThisMinute();
+    }
+
+    /**
+     * Why the venue cannot be called now, when that outlasts a reconnecting stream: a ban or an open circuit; empty
+     * while calls may go out (D-158).
+     */
+    public Optional<RestOutage> outage(BinanceVenue venue) {
+        return gates.get(Objects.requireNonNull(venue, "venue must not be null"))
+                .outage();
     }
 
     /** The documented weight budget per minute of a venue (TECHNICAL_DESIGN 7.1.1). */

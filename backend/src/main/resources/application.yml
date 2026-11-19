@@ -385,6 +385,14 @@ cryptopilot:
       settlement-depth: 30d
       # An older streamed next funding time is read from premiumIndex instead (BR-11).
       mark-price-max-age: 2m
+    health:
+      # D-158: trading on a market is paused while its exchange data is lost, and reopens once the engines have
+      # replayed what was missed. Off here, so a test context closes a market only through maintenance; on in the dev
+      # and prod profiles, with the streams.
+      enabled: false
+      reconnecting-after: 10s
+      pause-after: 30s
+      stable-before-recover: 15s
     stream:
       # NSF-03: the public market streams of the enabled pairs. Off here, on in the dev and prod profiles, so a
       # test context never connects to the exchange. Hosts verified 2026-09-24 (TECHNICAL_DESIGN 7.1.1): futures

@@ -20,4 +20,14 @@ public record HealthSignals(
         Objects.requireNonNull(lastLiveAt, "lastLiveAt");
         Objects.requireNonNull(liveSince, "liveSince");
     }
+
+    /** The same signals, with maintenance as given. */
+    public HealthSignals withMaintenance(boolean held) {
+        return new HealthSignals(lastLiveAt, liveSince, restAvailable, held, recoveryDone);
+    }
+
+    /** The same signals, with recovery done or not. */
+    public HealthSignals withRecoveryDone(boolean done) {
+        return new HealthSignals(lastLiveAt, liveSince, restAvailable, maintenance, done);
+    }
 }

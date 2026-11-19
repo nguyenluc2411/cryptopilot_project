@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -173,6 +174,22 @@ final class BinanceRequestGate {
             log.warn("{} failed {} calls in a row; circuit open until {}", venue, consecutiveFailures, until);
             closeUntil(until, BinanceClientException.Kind.CIRCUIT_OPEN);
         }
+    }
+
+    /**
+     * Why calls to the venue cannot reach it now, when the reason is one that outlasts a reconnecting stream: a ban
+     * (418) or an open circuit. A 429 or the weight pause end within a minute and are left out. Read by the market's
+     * health monitor (D-158).
+     */
+    synchronized Optional<RestOutage> outage() {
+        loadRecordedBanOnce();
+        Instant now = clock.instant();
+        if (now.isBefore(closedUntil)
+                && (closedFor == BinanceClientException.Kind.BANNED
+                        || closedFor == BinanceClientException.Kind.CIRCUIT_OPEN)) {
+            return Optional.of(new RestOutage(closedFor, closedUntil));
+        }
+        return Optional.empty();
     }
 
     /**
