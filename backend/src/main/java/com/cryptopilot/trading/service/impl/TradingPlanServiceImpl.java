@@ -12,6 +12,7 @@ import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.SetupScoreReading;
 import com.cryptopilot.market.SetupStyleSource;
 import com.cryptopilot.market.TradablePair;
@@ -124,6 +125,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     private final PlanCalculationAssembler calculations;
     private final UserLock activePlanLock;
     private final MarketApi market;
+    private final MarketHealth health;
     private final RiskProfileApi riskProfiles;
     private final EntitlementApi entitlements;
     private final Clock clock;
@@ -161,6 +163,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             activePlanLock.lock(userId);
         }
         PlanTerms terms = terms(request);
+        if (activate) {
+            // D-158: a plan starts waiting only on a market whose prices are current; a draft needs none.
+            health.requireTrading(terms.market());
+        }
         TradablePair pair = pair(userId, request.pairId(), terms.market());
         Optional<BigDecimal> last = lastPriceRead(pair, terms.entryType(), request.invalidationPrice(), activate);
         OpenExposure exposure = exposure(userId, NO_PLAN, activate);
@@ -211,6 +217,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         Instant now = clock.instant();
         activePlanLock.lock(userId);
         TradingPlan plan = owned(userId, planId);
+        health.requireTrading(plan.getMarket());
         if (!plan.getStatus().canTransitionTo(PlanStatus.ACTIVE)) {
             // Before the count, so activating twice is a state error and not a limit error.
             throw new IllegalPlanStateException(plan.getId(), plan.getStatus(), "move to " + PlanStatus.ACTIVE);
@@ -234,6 +241,10 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         // Row lock: a fill committing first is seen here as EXECUTED, so the loser gets MSG43, not a lost update.
         TradingPlan plan = plans.findForUpdate(planId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("TradingPlan", planId));
+        if (plan.getStatus() == PlanStatus.ACTIVE) {
+            // D-158 (Q1): a waiting plan stays while its market is paused, as the replay may still fill it.
+            health.requireTrading(plan.getMarket());
+        }
         plan.cancel(clock.instant());
         events.publishEvent(new TradingPlanCancelled(plan.getId(), plan.getMarket(), plan.getPairId()));
         return detail(plans.save(plan));

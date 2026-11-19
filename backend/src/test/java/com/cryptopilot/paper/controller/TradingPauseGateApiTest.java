@@ -21,13 +21,17 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
@@ -41,6 +45,8 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 /**
  * M1, the gate of a paused market (D-158): every request that changes a paper order, position or wallet of a market is
@@ -75,6 +81,10 @@ class TradingPauseGateApiTest {
 
     @Autowired
     private MarketHealthService health;
+
+    @Autowired
+    @Qualifier("requestMappingHandlerMapping")
+    private RequestMappingHandlerMapping mappings;
 
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
@@ -260,6 +270,72 @@ class TradingPauseGateApiTest {
                 health.endMaintenance(market);
             }
         }
+    }
+
+    /**
+     * The write endpoints of paper trading and of plans that need no gate, each with why: they change no order,
+     * position or wallet, or a draft only.
+     */
+    private static final Set<String> UNGATED = Set.of(
+            // Opening the paper account grants its starting balances, at no price.
+            "POST /api/v1/paper/account",
+            // The calculators and the order form's warnings compute; they store nothing.
+            "POST /api/v1/paper/futures/order/warnings",
+            "POST /api/v1/paper/futures/calculator/pnl",
+            "POST /api/v1/paper/futures/calculator/target",
+            "POST /api/v1/paper/futures/calculator/liquidation",
+            "POST /api/v1/paper/futures/calculator/maxOpen",
+            "POST /api/v1/paper/futures/calculator/openPrice",
+            "POST /api/v1/plans/calculate",
+            // A plan saved active, activated, cancelled while it waits, closed or given new levels is gated by its
+            // market (PlanPauseGateApiTest); saved or edited as a draft it is not.
+            "POST /api/v1/plans",
+            "PUT /api/v1/plans/{id}");
+
+    /** The plan endpoints gated by the plan's market, proven in PlanPauseGateApiTest. */
+    private static final Set<String> PLANS_GATED = Set.of(
+            "POST /api/v1/plans/{id}/activate",
+            "POST /api/v1/plans/{id}/cancel",
+            "POST /api/v1/plans/{id}/close-position",
+            "PATCH /api/v1/plans/{id}/position-levels");
+
+    /**
+     * The safety net of the gate: every write endpoint of the paper and plan controllers is in this matrix, in the
+     * plans' matrix, or named as needing no gate. A new endpoint fails here until it is placed in one of them.
+     */
+    @Test
+    void D158_everyWriteEndpointOfTrading_isGatedOrNamedUngated() {
+        Set<String> written = new TreeSet<>();
+        mappings.getHandlerMethods().forEach((info, handler) -> {
+            String module = handler.getBeanType().getPackageName();
+            if (!module.equals("com.cryptopilot.paper.controller")
+                    && !module.equals("com.cryptopilot.trading.controller")) {
+                return;
+            }
+            for (RequestMethod method : info.getMethodsCondition().getMethods()) {
+                if (method == RequestMethod.GET || method == RequestMethod.HEAD || method == RequestMethod.OPTIONS) {
+                    continue;
+                }
+                for (String path : info.getPatternValues()) {
+                    written.add(method + " " + path);
+                }
+            }
+        });
+        Set<String> placed = new TreeSet<>(calls().map(call ->
+                        call.method() + " " + call.path().replace("{id}/cancel", "{" + idName(call) + "}/cancel"))
+                .collect(Collectors.toSet()));
+        placed.addAll(UNGATED);
+        placed.addAll(PLANS_GATED);
+
+        assertThat(written)
+                .as("write endpoints neither gated nor named ungated")
+                .isSubsetOf(placed);
+        assertThat(placed).as("entries that name no endpoint").isSubsetOf(written);
+    }
+
+    /** The path variable the controller names for the id of a cancel. */
+    private static String idName(Call call) {
+        return call.path().contains("order-lists") ? "listId" : "orderId";
     }
 
     private MvcResult send(UUID trader, Call call) throws Exception {

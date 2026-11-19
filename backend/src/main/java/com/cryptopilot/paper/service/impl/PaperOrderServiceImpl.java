@@ -12,6 +12,7 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairCoins;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.PairListing;
@@ -117,6 +118,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     private final PaperOrderListRepository groups;
     private final SpotOrderLimits limits;
     private final UserLock lock;
+    private final MarketHealth health;
     private final MarketApi market;
     private final QuoteUsdtRate usdtRates;
     private final ApplicationEventPublisher events;
@@ -127,6 +129,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Transactional
     public PlacedOrder place(UUID userId, PlaceOrderRequest request) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.SPOT);
         PaperAccount account = accountOf(userId);
         requireShape(request);
         if (request.clientOrderId() != null) {
@@ -181,6 +184,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Transactional
     public OrderResponse cancel(UUID userId, UUID orderId) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.SPOT);
         PaperAccount account = accountOf(userId);
         PaperOrder order = orders.findByIdAndUserIdAndMarketType(orderId, account.userId(), MarketType.SPOT)
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
@@ -203,6 +207,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Transactional
     public List<OrderResponse> cancelAll(UUID userId, UUID pairId) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.SPOT);
         PaperAccount account = accountOf(userId);
         List<PaperOrder> open = orders.findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(
                 account.userId(), pairId, MarketType.SPOT, OrderStatus.OPEN);
@@ -228,6 +233,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Transactional
     public PlacedOrderList placeList(UUID userId, PlaceOrderListRequest request) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.SPOT);
         return lists.place(accountOf(userId), request);
     }
 
@@ -235,6 +241,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Transactional
     public OrderListResponse cancelList(UUID userId, UUID listId) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.SPOT);
         PaperAccount account = accountOf(userId);
         PaperOrderList list = groups.findByIdAndUserId(listId, account.userId())
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrderList", listId));

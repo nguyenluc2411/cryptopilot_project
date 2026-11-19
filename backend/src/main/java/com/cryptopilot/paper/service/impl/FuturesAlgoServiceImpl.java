@@ -8,6 +8,7 @@ import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperFuturesProperties;
@@ -88,6 +89,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     private final PaperOrderRepository orders;
     private final FuturesMargins margins;
     private final UserLock lock;
+    private final MarketHealth health;
     private final MarketApi market;
     private final ApplicationEventPublisher events;
     private final FuturesOrderLists tpSl;
@@ -100,6 +102,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     public FuturesAlgoOrderResponse place(UUID userId, FuturesAlgoOrderRequest request) {
         PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         FuturesAccountConfig accountConfig = margins.accountConfig(userId);
         if (accountConfig.liquidating()) {
             throw new FuturesRejection(ErrorCode.PAPER_USER_IN_LIQUIDATION, -2023, "User in liquidation mode now.");
@@ -188,6 +191,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     public FuturesAlgoOrderResponse cancel(UUID userId, String symbol, UUID algoId, String clientAlgoId) {
         PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         FuturesPair pair = margins.pair(symbol);
         PaperOrder order = find(userId, pair, algoId, clientAlgoId);
         if (!order.isOpen()) {
@@ -203,6 +207,7 @@ public class FuturesAlgoServiceImpl implements FuturesAlgoService {
     public List<FuturesAlgoOrderResponse> cancelAll(UUID userId, String symbol) {
         PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         FuturesPair pair = margins.pair(symbol);
         List<PaperOrder> open = margins.openConditionalOrders(userId).stream()
                 .filter(order -> order.getPairId().equals(pair.pairId()))

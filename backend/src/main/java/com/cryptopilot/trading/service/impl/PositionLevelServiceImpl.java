@@ -6,6 +6,7 @@ import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.RecordedPosition;
@@ -77,6 +78,7 @@ public class PositionLevelServiceImpl implements PositionLevelService {
     private final TradingPlanRepository plans;
     private final TradeJournal journal;
     private final MarketApi market;
+    private final MarketHealth health;
     private final RiskProfileApi riskProfiles;
     private final UserLock userLock;
     private final PositionViews positionViews;
@@ -93,6 +95,7 @@ public class PositionLevelServiceImpl implements PositionLevelService {
         userLock.lock(userId);
         TradingPlan plan = plans.findByIdAndUserId(planId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("TradingPlan", planId));
+        health.requireTrading(plan.getMarket());
         OpenTrade trade = openTrade(plan);
         TradablePair pair = market.tradablePair(plan.getPairId(), plan.getMarket())
                 .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", plan.getPairId()));

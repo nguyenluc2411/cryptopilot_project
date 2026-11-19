@@ -8,6 +8,7 @@ import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
@@ -128,6 +129,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     private final FuturesArrival futuresArrival;
     private final FuturesOrderLists tpSl;
     private final UserLock lock;
+    private final MarketHealth health;
     private final MarketApi market;
     private final ApplicationEventPublisher events;
     private final PaperUserFeed feed;
@@ -139,6 +141,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     public FuturesOrderResponse place(UUID userId, FuturesOrderRequest request) {
         PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         FuturesAccountConfig accountConfig = margins.accountConfig(userId);
         if (accountConfig.liquidating()) {
             throw new FuturesRejection(ErrorCode.PAPER_USER_IN_LIQUIDATION, -2023, "User in liquidation mode now.");
@@ -225,6 +228,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     public FuturesOrderResponse cancel(UUID userId, String symbol, UUID orderId, String origClientOrderId) {
         PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         FuturesPair pair = margins.pair(symbol);
         PaperOrder order = find(userId, pair, orderId, origClientOrderId);
         if (!order.isOpen()) {
@@ -240,6 +244,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     public FuturesOrderResponse amend(UUID userId, FuturesAmendOrderRequest request) {
         PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         if (margins.accountConfig(userId).liquidating()) {
             throw new FuturesRejection(ErrorCode.PAPER_USER_IN_LIQUIDATION, -2023, "User in liquidation mode now.");
         }
@@ -333,6 +338,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
     public List<FuturesOrderResponse> cancelAll(UUID userId, String symbol) {
         PaperAccount account = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         FuturesPair pair = margins.pair(symbol);
         List<PaperOrder> open = orders
                 .findByUserIdAndPairIdAndMarketTypeAndOrderStatusInOrderByCreatedAtAscIdAsc(

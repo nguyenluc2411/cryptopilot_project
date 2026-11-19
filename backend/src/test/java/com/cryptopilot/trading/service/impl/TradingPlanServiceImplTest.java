@@ -31,6 +31,7 @@ import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.SetupScoreReading;
@@ -152,6 +153,7 @@ class TradingPlanServiceImplTest {
                 new PlanCalculationAssembler(market, settings, new FeeRates(settings)),
                 lock,
                 market,
+                mock(MarketHealth.class),
                 riskProfiles,
                 entitlements,
                 Clock.fixed(NOW, ZoneOffset.UTC),

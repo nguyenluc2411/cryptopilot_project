@@ -109,6 +109,10 @@ class PlanPauseGateApiTest {
         health.endMaintenance(MarketType.FUTURES);
         InAppNotifications.awaitDeliveries(sql);
         for (UUID account : accounts) {
+            sql.sql("delete from trading_journal_level_change where journal_id in"
+                            + " (select journal_id from trading_journal where user_id = ?)")
+                    .param(account)
+                    .update();
             sql.sql("delete from trading_journal where user_id = ?")
                     .param(account)
                     .update();

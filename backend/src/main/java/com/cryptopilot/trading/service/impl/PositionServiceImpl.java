@@ -4,6 +4,7 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.dto.response.CloseEstimateResponse;
@@ -52,6 +53,7 @@ public class PositionServiceImpl implements PositionService {
     private final TradeJournal journal;
     private final PositionCloser closer;
     private final MarketApi market;
+    private final MarketHealth health;
     private final TradingPlanService tradingPlans;
     private final Clock clock;
 
@@ -79,6 +81,7 @@ public class PositionServiceImpl implements PositionService {
     @Transactional
     public TradingPlanResponse closePosition(UUID userId, UUID planId) {
         OpenTrade trade = openTrade(userId, planId);
+        health.requireTrading(trade.market());
         BigDecimal currentPrice = currentLastPrice(trade);
         Instant now = clock.instant();
         boolean closed = closer.close(new PositionExit(
