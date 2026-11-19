@@ -403,6 +403,15 @@ cryptopilot:
       # E5: while at most this share of a market's pairs have silent connections, the market stays open and only
       # those pairs are named lost; more pauses it.
       pause-ratio: 0.5
+    fallback:
+      # D-158: display-only reference prices while a market's exchange data is lost, from OKX's public API (no key),
+      # labelled with their source; they never fill, trigger, liquidate or charge anything and are never stored
+      # (BR-09). Read only while a market is paused or recovering. Off here, on in the dev and prod profiles.
+      enabled: false
+      base-url: https://www.okx.com
+      poll-interval: 3s
+      # A reference price further than this fraction from the exchange's last price is flagged on the banner.
+      divergence: 0.05
     stream:
       # NSF-03: the public market streams of the enabled pairs. Off here, on in the dev and prod profiles, so a
       # test context never connects to the exchange. Hosts verified 2026-09-24 (TECHNICAL_DESIGN 7.1.1): futures

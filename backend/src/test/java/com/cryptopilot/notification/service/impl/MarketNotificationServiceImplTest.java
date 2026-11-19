@@ -6,6 +6,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.market.event.MarketFallbackUnavailable;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.market.model.enums.IncidentReason;
@@ -115,6 +116,20 @@ class MarketNotificationServiceImplTest {
         assertThat(written.getFirst().content()).contains("reopened by hand");
         assertThat(written.getFirst().sourceKey()).isEqualTo("MARKET_OVERDUE_ADMIN:" + INCIDENT + ":" + first);
         assertThat(written.getLast().content()).contains("still catching up");
+    }
+
+    /** E9: a lost market whose fallback prices cannot be read either is told to each active administrator. */
+    @Test
+    void D158_anUnavailableFallback_isToldToEveryAdministrator() {
+        UUID admin = UUID.randomUUID();
+        when(users.activeAdministrators()).thenReturn(List.of(admin));
+
+        service.fallbackUnavailable(new MarketFallbackUnavailable(MarketType.SPOT, INCIDENT, "OKX answered 503"));
+
+        NewNotification written = written(1).getFirst();
+        assertThat(written.type()).isEqualTo(NotificationType.SYSTEM);
+        assertThat(written.content()).contains("OKX answered 503");
+        assertThat(written.sourceKey()).isEqualTo("MARKET_FALLBACK_ADMIN:" + INCIDENT + ":" + admin);
     }
 
     private PaperIncidentNotice paper(PaperIncidentNotice.Kind kind, long fills, long liquidations, String message) {

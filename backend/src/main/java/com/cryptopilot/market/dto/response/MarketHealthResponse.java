@@ -1,5 +1,6 @@
 package com.cryptopilot.market.dto.response;
 
+import com.cryptopilot.market.model.enums.DisplaySource;
 import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -25,6 +26,8 @@ import java.util.UUID;
  * @param retryAt while trading is closed and the exchange refuses the server's calls (a ban or an open circuit), when
  *     they may be tried again; {@code null} otherwise
  * @param recovery how far the market has caught up, while it recovers; {@code null} otherwise
+ * @param displaySource where the market's displayed prices come from now: the exchange, the display-only fallback while
+ *     its data is lost, or none
  */
 public record MarketHealthResponse(
         MarketType market,
@@ -39,4 +42,5 @@ public record MarketHealthResponse(
         List<String> pausedPairs,
         Instant expectedEndAt,
         Instant retryAt,
-        MarketRecoveryResponse recovery) {}
+        MarketRecoveryResponse recovery,
+        DisplaySource displaySource) {}

@@ -59,6 +59,9 @@ cryptopilot:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
       enabled: true
   market:
+    fallback:
+      # D-158: display-only reference prices while a market's exchange data is lost (application.yml).
+      enabled: true
     coinpaprika:
       # Coin names, logos and supplies and the whole market's cap (application.yml).
       enabled: true

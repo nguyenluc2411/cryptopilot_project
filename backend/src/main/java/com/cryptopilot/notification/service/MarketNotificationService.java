@@ -1,5 +1,6 @@
 package com.cryptopilot.notification.service;
 
+import com.cryptopilot.market.event.MarketFallbackUnavailable;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.paper.event.PaperIncidentNotice;
@@ -25,4 +26,7 @@ public interface MarketNotificationService {
 
     /** Tells every active administrator that a market's recovery needs them. */
     void recoveryOverdue(MarketRecoveryOverdue overdue);
+
+    /** Tells every active administrator that a lost market's fallback prices could not be read either. */
+    void fallbackUnavailable(MarketFallbackUnavailable unavailable);
 }

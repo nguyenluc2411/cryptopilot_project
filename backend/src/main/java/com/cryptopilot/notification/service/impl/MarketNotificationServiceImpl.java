@@ -1,5 +1,6 @@
 package com.cryptopilot.notification.service.impl;
 
+import com.cryptopilot.market.event.MarketFallbackUnavailable;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.market.model.enums.IncidentReason;
@@ -133,6 +134,24 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
                     null,
                     null,
                     "MARKET_OVERDUE_ADMIN:" + overdue.incidentId() + ":" + admin));
+        }
+    }
+
+    @Override
+    @Transactional
+    public void fallbackUnavailable(MarketFallbackUnavailable unavailable) {
+        String content = name(unavailable.market()) + " exchange data is lost and the reference prices could not be"
+                + " read either (" + unavailable.failure() + "). The screens show no price; trading stays closed"
+                + " until the exchange data is back.";
+        for (UUID admin : users.activeAdministrators()) {
+            writer.write(new NewNotification(
+                    admin,
+                    NotificationType.SYSTEM,
+                    name(unavailable.market()) + " reference prices unavailable",
+                    content,
+                    null,
+                    null,
+                    "MARKET_FALLBACK_ADMIN:" + unavailable.incidentId() + ":" + admin));
         }
     }
 

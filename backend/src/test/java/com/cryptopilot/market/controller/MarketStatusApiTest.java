@@ -226,6 +226,30 @@ class MarketStatusApiTest {
                 .andExpect(jsonPath("$[0].expectedEndAt").value(end.toString()));
     }
 
+    /**
+     * The fallback prices are public, as the market data is; a live market shows the exchange's own, so none here, and
+     * no candles. A candle limit outside 1 to 300 is refused.
+     */
+    @Test
+    void D158_theFallbackPrices_arePublic_andNoneWhileLive() throws Exception {
+        mvc.perform(get("/api/v1/market/fallback").param("market", "FUTURES"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.source").value("BINANCE"))
+                .andExpect(jsonPath("$.prices").isEmpty());
+        mvc.perform(get("/api/v1/market/fallback/candles")
+                        .param("market", "SPOT")
+                        .param("symbol", "BTCUSDT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+        mvc.perform(get("/api/v1/market/fallback/candles")
+                        .param("market", "SPOT")
+                        .param("symbol", "BTCUSDT")
+                        .param("limit", "301"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(STATUS))
+                .andExpect(jsonPath("$.markets[0].displaySource").value("BINANCE"));
+    }
+
     /** E5: an open market names the pairs whose data is lost; none here. */
     @Test
     void D158_anOpenMarket_namesItsLostPairs() throws Exception {

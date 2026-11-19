@@ -15,9 +15,11 @@ import com.cryptopilot.market.dto.response.MarketRecoveryResponse;
 import com.cryptopilot.market.dto.response.MarketStatusResponse;
 import com.cryptopilot.market.model.MarketIncident;
 import com.cryptopilot.market.model.enums.BinanceVenue;
+import com.cryptopilot.market.model.enums.DisplaySource;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.MarketIncidentRepository;
+import com.cryptopilot.market.service.DisplayPriceService;
 import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.MarketStatusService;
 import java.time.Clock;
@@ -57,6 +59,7 @@ public class MarketStatusServiceImpl implements MarketStatusService {
     private final AdminApi admin;
     private final MarketLiveness liveness;
     private final BinanceRestClient exchange;
+    private final DisplayPriceService prices;
     private final Clock clock;
 
     @Override
@@ -138,7 +141,8 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                         List.of(),
                         incident.expectedEndAt(),
                         retryAt(market),
-                        recovery(market));
+                        recovery(market),
+                        prices.source(market));
             }
             return new MarketHealthResponse(
                     market,
@@ -153,7 +157,8 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                     List.of(),
                     null,
                     retryAt(market),
-                    recovery(market));
+                    recovery(market),
+                    prices.source(market));
         }
         Instant shownAfter = clock.instant().minus(RESUMED_SHOWN_FOR);
         Optional<MarketIncident> ended = incidents.findRecent(market, 1).stream()
@@ -173,7 +178,8 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                 liveness.silentSymbols(market),
                 null,
                 null,
-                null);
+                null,
+                DisplaySource.BINANCE);
     }
 
     /** When the exchange takes the market's calls again, while it refuses them. */

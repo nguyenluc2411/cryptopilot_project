@@ -1,5 +1,6 @@
 package com.cryptopilot.notification.job;
 
+import com.cryptopilot.market.event.MarketFallbackUnavailable;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.notification.service.MarketNotificationService;
@@ -43,5 +44,10 @@ public class MarketNotificationListener {
     @ApplicationModuleListener
     public void on(MarketRecoveryOverdue overdue) {
         notifications.recoveryOverdue(overdue);
+    }
+
+    @ApplicationModuleListener
+    public void on(MarketFallbackUnavailable unavailable) {
+        notifications.fallbackUnavailable(unavailable);
     }
 }

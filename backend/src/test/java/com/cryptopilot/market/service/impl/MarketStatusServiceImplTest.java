@@ -13,11 +13,13 @@ import com.cryptopilot.market.dto.response.MarketHealthResponse;
 import com.cryptopilot.market.dto.response.MarketRecoveryResponse;
 import com.cryptopilot.market.model.MarketIncident;
 import com.cryptopilot.market.model.enums.BinanceVenue;
+import com.cryptopilot.market.model.enums.DisplaySource;
 import com.cryptopilot.market.model.enums.IncidentKind;
 import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.MarketIncidentRepository;
+import com.cryptopilot.market.service.DisplayPriceService;
 import com.cryptopilot.market.service.MarketHealthService;
 import java.time.Clock;
 import java.time.Instant;
@@ -42,8 +44,9 @@ class MarketStatusServiceImplTest {
     private final MarketIncidentRepository incidents = mock(MarketIncidentRepository.class);
     private final MarketLiveness liveness = mock(MarketLiveness.class);
     private final BinanceRestClient exchange = mock(BinanceRestClient.class);
+    private final DisplayPriceService prices = mock(DisplayPriceService.class);
     private final MarketStatusServiceImpl service = new MarketStatusServiceImpl(
-            health, incidents, mock(AdminApi.class), liveness, exchange, Clock.fixed(NOW, ZoneOffset.UTC));
+            health, incidents, mock(AdminApi.class), liveness, exchange, prices, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @BeforeEach
     void spotLive_futuresRecovering() {
@@ -67,6 +70,7 @@ class MarketStatusServiceImplTest {
                 .thenReturn(Optional.of(new RestOutage(BinanceClientException.Kind.BANNED, NOW.plusSeconds(300))));
         when(exchange.outage(BinanceVenue.SPOT)).thenReturn(Optional.empty());
         when(liveness.silentSymbols(MarketType.SPOT)).thenReturn(List.of("BTCUSDT"));
+        when(prices.source(MarketType.FUTURES)).thenReturn(DisplaySource.OKX);
     }
 
     @Test
@@ -78,6 +82,7 @@ class MarketStatusServiceImplTest {
         assertThat(futures.retryAt()).isEqualTo(NOW.plusSeconds(300));
         assertThat(futures.reason()).isEqualTo(IncidentReason.IP_BANNED);
         assertThat(futures.pausedPairs()).isEmpty();
+        assertThat(futures.displaySource()).isEqualTo(DisplaySource.OKX);
     }
 
     @Test
@@ -88,5 +93,6 @@ class MarketStatusServiceImplTest {
         assertThat(spot.pausedPairs()).containsExactly("BTCUSDT");
         assertThat(spot.retryAt()).isNull();
         assertThat(spot.recovery()).isNull();
+        assertThat(spot.displaySource()).isEqualTo(DisplaySource.BINANCE);
     }
 }
