@@ -11,6 +11,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.support.InAppNotifications;
+import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.StreamedPrices;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -107,6 +108,7 @@ class PlanPauseGateApiTest {
     void reopenAndRemoveRows() {
         health.endMaintenance(MarketType.SPOT);
         health.endMaintenance(MarketType.FUTURES);
+        MarketIncidents.removeAll(sql);
         InAppNotifications.awaitDeliveries(sql);
         for (UUID account : accounts) {
             sql.sql("delete from trading_journal_level_change where journal_id in"

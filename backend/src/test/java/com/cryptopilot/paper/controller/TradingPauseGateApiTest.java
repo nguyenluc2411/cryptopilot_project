@@ -11,6 +11,7 @@ import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
+import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -198,6 +199,7 @@ class TradingPauseGateApiTest {
     void reopenAndRemoveRows() {
         health.endMaintenance(MarketType.SPOT);
         health.endMaintenance(MarketType.FUTURES);
+        MarketIncidents.removeAll(sql);
         for (UUID trader : traders) {
             for (String table : List.of(
                     "futures_margin_adjustment",

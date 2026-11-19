@@ -1,5 +1,7 @@
 package com.cryptopilot.market.job;
 
+import com.cryptopilot.market.client.BinanceStreamProperties;
+import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.event.MarketHealthChanged;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -38,21 +40,33 @@ public class MarketStatusPusher {
     private final MarketHealthService health;
     private final SimpMessageSendingOperations broker;
     private final TaskScheduler scheduler;
+    private final MarketHealthProperties properties;
+    private final BinanceStreamProperties streams;
 
     public MarketStatusPusher(
             MarketStatusService status,
             MarketHealthService health,
             SimpMessageSendingOperations broker,
-            TaskScheduler scheduler) {
+            TaskScheduler scheduler,
+            MarketHealthProperties properties,
+            BinanceStreamProperties streams) {
         this.status = status;
         this.health = health;
         this.broker = broker;
         this.scheduler = scheduler;
+        this.properties = properties;
+        this.streams = streams;
     }
 
-    /** Schedules the pushes while a market recovers. */
+    /**
+     * Schedules the pushes while a market recovers, when the monitor runs, as {@link MarketHealthMonitor} does: with the
+     * monitor or the streams off, no market ever recovers.
+     */
     @EventListener(ApplicationReadyEvent.class)
     public void start() {
+        if (!properties.enabled() || !streams.enabled()) {
+            return;
+        }
         scheduler.scheduleWithFixedDelay(this::pushWhileRecovering, RECOVERING_EVERY);
     }
 

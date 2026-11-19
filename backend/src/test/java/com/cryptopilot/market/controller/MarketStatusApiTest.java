@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
+import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import java.sql.Timestamp;
@@ -72,7 +73,7 @@ class MarketStatusApiTest {
     void liveAndClean() {
         health.endMaintenance(MarketType.SPOT);
         health.endMaintenance(MarketType.FUTURES);
-        sql.sql("delete from market_incident").update();
+        MarketIncidents.removeAll(sql);
         for (UUID account : accounts) {
             sql.sql("delete from audit_log where user_id = ?").param(account).update();
             sql.sql("delete from user_account where user_id = ?").param(account).update();

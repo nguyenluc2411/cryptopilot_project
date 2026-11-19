@@ -4,6 +4,7 @@ import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.event.MarketHealthChanged;
+import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketRecoveryStarted;
 import com.cryptopilot.market.event.MarketTradingPaused;
 import com.cryptopilot.market.event.MarketTradingResumed;
@@ -76,7 +77,9 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         for (MarketIncident open : incidents.findAllOpen()) {
             MarketHealthState state =
                     open.kind() == IncidentKind.MAINTENANCE ? MarketHealthState.MAINTENANCE : MarketHealthState.PAUSED;
-            statuses.put(open.market(), new Status(state, open.id(), open.lastLiveAt()));
+            // Announced before the restart if it was open long enough; a second notice would be written once only.
+            boolean announced = !open.pausedAt().plus(properties.notifyAfter()).isAfter(clock.instant());
+            statuses.put(open.market(), new Status(state, open.id(), open.lastLiveAt(), open.pausedAt(), announced));
             log.warn("D-158 {} starts {}: incident {} open since {}", open.market(), state, open.id(), open.pausedAt());
         }
     }
@@ -107,6 +110,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     public synchronized void startMaintenance(MarketType market, String message, UUID by) {
         Instant now = clock.instant();
         Status current = statuses.get(market);
+        Status held;
         if (current.incidentId() == null) {
             UUID id = UuidV7.next();
             incidents.open(new MarketIncident(
@@ -120,13 +124,15 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                     null,
                     message,
                     by));
-            statuses.put(market, new Status(MarketHealthState.MAINTENANCE, id, now));
+            held = new Status(MarketHealthState.MAINTENANCE, id, now, now, false);
             events.publishEvent(new MarketTradingPaused(
                     market, id, MarketHealthState.MAINTENANCE, IncidentReason.MAINTENANCE, now));
         } else {
             incidents.toMaintenance(current.incidentId(), message, by);
-            statuses.put(market, new Status(MarketHealthState.MAINTENANCE, current.incidentId(), current.since()));
+            held = current.in(MarketHealthState.MAINTENANCE);
         }
+        // Maintenance is decided on purpose: the Traders are told at once, not after notify-after.
+        statuses.put(market, announce(market, held, IncidentReason.MAINTENANCE, message));
         log.warn("D-158 {} under maintenance", market);
         changed(market, current.state(), MarketHealthState.MAINTENANCE);
     }
@@ -152,6 +158,12 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     public synchronized MarketHealthState evaluate(MarketType market, HealthSignals signals, IncidentReason reason) {
         Status current = statuses.get(market);
         MarketHealthState from = current.state();
+        if (current.incidentId() != null
+                && !current.announced()
+                && !current.pausedAt().plus(properties.notifyAfter()).isAfter(clock.instant())) {
+            current = announce(market, current, reason, null);
+            statuses.put(market, current);
+        }
         MarketHealthState to =
                 machine.next(from, signals.withMaintenance(from == MarketHealthState.MAINTENANCE), clock.instant());
         if (to == from) {
@@ -165,11 +177,11 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             recover(market, current);
         } else if (from == MarketHealthState.RECOVERING && to == MarketHealthState.PAUSED) {
             incidents.relapse(current.incidentId());
-            statuses.put(market, new Status(to, current.incidentId(), current.since()));
+            statuses.put(market, current.in(to));
             log.warn(
                     "D-158 {} lost its data again while recovering; incident {} goes on", market, current.incidentId());
         } else {
-            statuses.put(market, new Status(to, current.incidentId(), current.since()));
+            statuses.put(market, current.in(to));
         }
         changed(market, from, to);
         return to;
@@ -181,14 +193,24 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         Instant lastLiveAt = signals.lastLiveAt().isAfter(now) ? now : signals.lastLiveAt();
         incidents.open(
                 new MarketIncident(id, market, IncidentKind.OUTAGE, reason, lastLiveAt, now, null, null, null, null));
-        statuses.put(market, new Status(MarketHealthState.PAUSED, id, lastLiveAt));
+        statuses.put(market, new Status(MarketHealthState.PAUSED, id, lastLiveAt, now, false));
         events.publishEvent(new MarketTradingPaused(market, id, MarketHealthState.PAUSED, reason, lastLiveAt));
         log.warn("D-158 {} trading paused ({}): no live data since {}", market, reason, lastLiveAt);
     }
 
+    /** Publishes, once per incident, that the Traders should hear of it; returns the status marked announced. */
+    private Status announce(MarketType market, Status current, IncidentReason reason, String message) {
+        if (current.announced()) {
+            return current;
+        }
+        events.publishEvent(new MarketPauseAnnounced(
+                market, current.incidentId(), current.state(), reason, current.since(), message));
+        return current.announcedNow();
+    }
+
     private void recover(MarketType market, Status current) {
         incidents.recovering(current.incidentId(), clock.instant());
-        statuses.put(market, new Status(MarketHealthState.RECOVERING, current.incidentId(), current.since()));
+        statuses.put(market, current.in(MarketHealthState.RECOVERING));
         events.publishEvent(new MarketRecoveryStarted(market, current.incidentId(), current.since()));
         log.info("D-158 {} recovering: replaying from {}", market, current.since());
     }
@@ -197,7 +219,8 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         Instant now = clock.instant();
         incidents.resume(current.incidentId(), now);
         statuses.put(market, Status.LIVE);
-        events.publishEvent(new MarketTradingResumed(market, current.incidentId(), current.since(), now));
+        events.publishEvent(
+                new MarketTradingResumed(market, current.incidentId(), current.since(), now, current.announced()));
         log.info("D-158 {} trading resumed; incident {} closed", market, current.incidentId());
     }
 
@@ -207,9 +230,21 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         }
     }
 
-    /** A market's state, its open incident if any, and since when it has not been live. */
-    private record Status(MarketHealthState state, UUID incidentId, Instant since) {
+    /**
+     * A market's state, its open incident if any, since when it has not been live, when trading closed, and whether
+     * the Traders were told of the incident.
+     */
+    private record Status(
+            MarketHealthState state, UUID incidentId, Instant since, Instant pausedAt, boolean announced) {
 
-        private static final Status LIVE = new Status(MarketHealthState.LIVE, null, null);
+        private static final Status LIVE = new Status(MarketHealthState.LIVE, null, null, null, false);
+
+        private Status in(MarketHealthState next) {
+            return new Status(next, incidentId, since, pausedAt, announced);
+        }
+
+        private Status announcedNow() {
+            return new Status(state, incidentId, since, pausedAt, true);
+        }
     }
 }

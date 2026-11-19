@@ -9,6 +9,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.market.client.BinanceStreamProperties;
+import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.dto.response.MarketStatusResponse;
 import com.cryptopilot.market.event.MarketHealthChanged;
 import com.cryptopilot.market.model.enums.MarketHealthState;
@@ -34,11 +36,19 @@ class MarketStatusPusherTest {
     private final MarketHealthService health = mock(MarketHealthService.class);
     private final SimpMessageSendingOperations broker = mock(SimpMessageSendingOperations.class);
     private final TaskScheduler scheduler = mock(TaskScheduler.class);
+    private final BinanceStreamProperties streams = mock(BinanceStreamProperties.class);
     private final MarketStatusResponse current = new MarketStatusResponse(List.of());
-    private final MarketStatusPusher pusher = new MarketStatusPusher(status, health, broker, scheduler);
+    private final MarketStatusPusher pusher = new MarketStatusPusher(
+            status,
+            health,
+            broker,
+            scheduler,
+            new MarketHealthProperties(true, Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(15)),
+            streams);
 
     @BeforeEach
     void allLive() {
+        when(streams.enabled()).thenReturn(true);
         when(status.status()).thenReturn(current);
         when(health.state(any())).thenReturn(MarketHealthState.LIVE);
     }
@@ -61,6 +71,21 @@ class MarketStatusPusherTest {
         when(health.state(MarketType.SPOT)).thenReturn(MarketHealthState.RECOVERING);
         pusher.pushWhileRecovering();
         verify(broker).convertAndSend(MarketStatusPusher.TOPIC, current);
+    }
+
+    @Test
+    void D158_withoutTheMonitor_nothingIsScheduled() {
+        new MarketStatusPusher(
+                        status,
+                        health,
+                        broker,
+                        scheduler,
+                        new MarketHealthProperties(
+                                false, Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(15)),
+                        streams)
+                .start();
+
+        verify(scheduler, never()).scheduleWithFixedDelay(any(Runnable.class), any(Duration.class));
     }
 
     @Test

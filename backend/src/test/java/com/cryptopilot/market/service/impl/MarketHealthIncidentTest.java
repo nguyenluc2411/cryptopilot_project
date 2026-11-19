@@ -8,6 +8,7 @@ import com.cryptopilot.market.MarketRecoveryCheck;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.event.MarketHealthChanged;
+import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketRecoveryStarted;
 import com.cryptopilot.market.event.MarketTradingPaused;
 import com.cryptopilot.market.event.MarketTradingResumed;
@@ -264,7 +265,8 @@ class MarketHealthIncidentTest {
         assertThat(incidents.findAllOpen()).hasSize(1);
         assertThat(published)
                 .extracting(event -> event.getClass().getSimpleName())
-                .containsExactly("MarketTradingPaused", "MarketRecoveryStarted");
+                .as("maintenance is announced at once")
+                .containsExactly("MarketTradingPaused", "MarketPauseAnnounced", "MarketRecoveryStarted");
     }
 
     /** Records what the service publishes to other modules; the module's own state changes are left out. */
@@ -274,6 +276,47 @@ class MarketHealthIncidentTest {
                 published.add(event);
             }
         };
+    }
+
+    /**
+     * K9: an outage is announced to the Traders once it has lasted notify-after (2 minutes), once however many ticks
+     * follow, and its reopening says so; one that ends sooner is never announced.
+     */
+    @Test
+    void D158_anOutage_isAnnouncedOnceAfterNotifyAfter_andAShortOneNever() {
+        MutableTestClock clock = new MutableTestClock(START);
+        List<Object> published = new ArrayList<>();
+        MarketHealthServiceImpl health =
+                new MarketHealthServiceImpl(properties(true), incidents, publishedOutside(published), clock);
+
+        health.evaluate(MarketType.SPOT, silentSince(START.minusSeconds(30)), IncidentReason.STREAM_LOST);
+        clock.advance(Duration.ofSeconds(60));
+        health.evaluate(MarketType.SPOT, silentSince(START.minusSeconds(30)), IncidentReason.STREAM_LOST);
+        assertThat(published).noneMatch(event -> event instanceof MarketPauseAnnounced);
+        clock.advance(Duration.ofSeconds(60));
+        health.evaluate(MarketType.SPOT, silentSince(START.minusSeconds(30)), IncidentReason.STREAM_LOST);
+        clock.advance(Duration.ofSeconds(1));
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST);
+
+        assertThat(published)
+                .extracting(event -> event.getClass().getSimpleName())
+                .containsExactly(
+                        "MarketTradingPaused", "MarketPauseAnnounced", "MarketRecoveryStarted", "MarketTradingResumed");
+        MarketPauseAnnounced announced = (MarketPauseAnnounced) published.get(1);
+        assertThat(announced.lastLiveAt()).isEqualTo(START.minusSeconds(30));
+        assertThat(announced.reason()).isEqualTo(IncidentReason.STREAM_LOST);
+        assertThat(((MarketTradingResumed) published.getLast()).announced()).isTrue();
+
+        published.clear();
+        Instant later = clock.instant();
+        health.evaluate(MarketType.SPOT, silentSince(later.minusSeconds(30)), IncidentReason.STREAM_LOST);
+        clock.advance(Duration.ofSeconds(20));
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 15), IncidentReason.STREAM_LOST);
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 15).withRecoveryDone(true), IncidentReason.STREAM_LOST);
+
+        assertThat(published).noneMatch(event -> event instanceof MarketPauseAnnounced);
+        assertThat(((MarketTradingResumed) published.getLast()).announced()).isFalse();
     }
 
     private static HealthSignals silentSince(Instant lastLive) {

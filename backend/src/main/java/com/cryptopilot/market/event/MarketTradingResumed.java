@@ -15,6 +15,8 @@ import org.springframework.modulith.NamedInterface;
  * @param incidentId the incident that ended
  * @param lastLiveAt when its data was last live before the incident
  * @param resumedAt when trading reopened
+ * @param announced whether {@link MarketPauseAnnounced} was published for the incident
  */
 @NamedInterface("events")
-public record MarketTradingResumed(MarketType market, UUID incidentId, Instant lastLiveAt, Instant resumedAt) {}
+public record MarketTradingResumed(
+        MarketType market, UUID incidentId, Instant lastLiveAt, Instant resumedAt, boolean announced) {}

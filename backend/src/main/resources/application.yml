@@ -393,6 +393,8 @@ cryptopilot:
       reconnecting-after: 10s
       pause-after: 30s
       stable-before-recover: 15s
+      # An outage shorter than this writes no notice; maintenance is announced at once.
+      notify-after: 2m
     stream:
       # NSF-03: the public market streams of the enabled pairs. Off here, on in the dev and prod profiles, so a
       # test context never connects to the exchange. Hosts verified 2026-09-24 (TECHNICAL_DESIGN 7.1.1): futures

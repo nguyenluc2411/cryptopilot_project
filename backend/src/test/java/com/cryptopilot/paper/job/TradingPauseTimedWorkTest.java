@@ -17,6 +17,7 @@ import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.model.LiquidationLevel;
 import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.service.PaperMatchingService;
+import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -123,6 +124,7 @@ class TradingPauseTimedWorkTest {
     @AfterEach
     void reopenAndRemoveRows() {
         health.endMaintenance(MarketType.FUTURES);
+        MarketIncidents.removeAll(sql);
         // The liquidation notices (TR-43) are written after the commit: wait for them before the Traders go.
         await().atMost(Duration.ofSeconds(10))
                 .until(() -> sql.sql("select count(*) from event_publication"

@@ -32,3 +32,10 @@ CREATE TABLE market_incident (
 CREATE UNIQUE INDEX uq_market_incident_open ON market_incident (market_type) WHERE resumed_at IS NULL;
 -- The console's list, newest first.
 CREATE INDEX idx_market_incident_paused ON market_incident (market_type, paused_at DESC);
+
+-- The Traders are told when trading on a market they have orders, positions or plans on is paused and reopened.
+ALTER TABLE notification DROP CONSTRAINT ck_notification_type;
+ALTER TABLE notification
+    ADD CONSTRAINT ck_notification_type
+        CHECK (notification_type IN ('ALERT', 'PLAN', 'MODERATION', 'SUBSCRIPTION', 'COMMENT', 'SYSTEM', 'FOLLOW',
+                                     'MENTION', 'FUTURES', 'MARKET'));
