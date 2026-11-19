@@ -78,6 +78,21 @@ class MarketNotificationServiceImplTest {
         assertThat(mailed.getValue().html()).contains("Open the trading screen");
     }
 
+    /** A mail server that refuses the mail loses the mail only: the notice stands and nothing is thrown. */
+    @Test
+    void D158_aRefusedMail_neverLosesTheNotice() {
+        when(writer.write(any())).thenReturn(true);
+        when(users.notificationMailAddress(TRADER)).thenReturn(Optional.of("trader@example.test"));
+        org.mockito.Mockito.doThrow(new IllegalStateException("535 authentication failed"))
+                .when(sender)
+                .send(any());
+
+        service.paperIncident(paper(PaperIncidentNotice.Kind.PAUSED, 0, 0, null));
+
+        written(1);
+        verify(sender).send(any());
+    }
+
     /** N4: a Trader whose account takes no notification mail still gets the notice in the bell. */
     @Test
     void D158_aTraderWithoutNotificationMail_getsTheNoticeOnly() {

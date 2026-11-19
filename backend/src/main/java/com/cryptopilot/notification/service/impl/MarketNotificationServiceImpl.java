@@ -6,6 +6,7 @@ import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.market.event.MarketTradingResumed;
 import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.notification.client.EmailMessage;
 import com.cryptopilot.notification.client.EmailSender;
 import com.cryptopilot.notification.model.NewNotification;
 import com.cryptopilot.notification.model.enums.NotificationType;
@@ -19,11 +20,16 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * The texts of a market incident's notices (D-158). The pause notice of a Trader is keyed by the incident and the
@@ -31,7 +37,7 @@ import org.springframework.transaction.annotation.Transactional;
  * they say different things. Times are given in UTC, as the client localises the notice's own time.
  *
  * <p>A Trader the incident affects is mailed each notice the first time it is written, when their account takes
- * notification mail; a mail that fails rolls the notice back, so the redelivered event writes and mails it again. Every
+ * notification mail, once the notice is committed: a mail server that fails loses the mail, never the notice. Every
  * other active Trader gets one general notice in the bell, and no mail.
  *
  * <p>Rule: NSF-03; NSF-15; D-158.
@@ -39,6 +45,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class MarketNotificationServiceImpl implements MarketNotificationService {
+
+    private static final Logger log = LoggerFactory.getLogger(MarketNotificationServiceImpl.class);
 
     /** How many Traders a general notice is written for per read of their keys. */
     static final int TRADERS_PAGE = 500;
@@ -191,13 +199,37 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
         return written;
     }
 
-    /** Writes a notice of a Trader the incident affects, and mails it the first time, if the account takes mail. */
+    /**
+     * Writes a notice of a Trader the incident affects, and mails it the first time, if the account takes mail. The mail
+     * leaves once the notice is committed and holds no transaction; a mail server that refuses it is logged and loses
+     * the mail only, never the notice.
+     */
     private void writeAndMail(MarketType market, NewNotification notice) {
         if (!writer.write(notice)) {
             return;
         }
-        users.notificationMailAddress(notice.recipientId())
-                .ifPresent(address -> sender.send(mails.notice(address, market, notice.title(), notice.content())));
+        Optional<String> address = users.notificationMailAddress(notice.recipientId());
+        if (address.isEmpty()) {
+            return;
+        }
+        EmailMessage mail = mails.notice(address.get(), market, notice.title(), notice.content());
+        Runnable send = () -> {
+            try {
+                sender.send(mail);
+            } catch (RuntimeException failure) {
+                log.warn("D-158 notice {} not mailed: {}", notice.sourceKey(), failure.toString());
+            }
+        };
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            send.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                send.run();
+            }
+        });
     }
 
     @Override
