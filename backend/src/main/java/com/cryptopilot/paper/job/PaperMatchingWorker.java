@@ -4,6 +4,7 @@ import com.cryptopilot.market.LeverageBracketsReplaced;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarkPriceListener;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketRecoveryCheck;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MarketTradeListener;
 import com.cryptopilot.market.MinuteKline;
@@ -51,6 +52,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -59,6 +61,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -169,10 +173,20 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * "Aggregator" (the forming updates of a candle merged into one).
  */
 @Component
-public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeListener, MarkPriceListener {
+public class PaperMatchingWorker
+        implements MinuteKlineListener, MarketTradeListener, MarkPriceListener, MarketRecoveryCheck {
 
     private static final Logger log = LoggerFactory.getLogger(PaperMatchingWorker.class);
     private static final Duration MINUTE = Duration.ofMinutes(1);
+
+    /** How long the health monitor waits for the consumer's answer before taking it as not caught up (D-158). */
+    static final Duration CAUGHT_UP_WAIT = Duration.ofMillis(500);
+
+    /**
+     * How far behind the running minute a pair's last closed candle may be and the pair still be caught up; and how
+     * long before an incident a pair may have gone quiet and be left out, as no longer streamed (D-158).
+     */
+    static final Duration CAUGHT_UP_SLACK = Duration.ofMinutes(2);
 
     private final PaperMatchingService matching;
     private final MarketApi market;
@@ -680,6 +694,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                     onTrades(tradesKey.key(), waiting.drain());
                 }
             }
+            case Command.CaughtUp asked -> asked.answer().complete(isCaughtUp(asked.market(), asked.lastLiveAt()));
             case Command.ReplayDone done -> {
                 replaying.remove(done.key());
                 lastClosed.merge(done.key(), done.until().minus(MINUTE), (a, b) -> a.isAfter(b) ? a : b);
@@ -1258,6 +1273,69 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
     }
 
+    /**
+     * The health monitor asks, while a market recovers from an incident, whether this engine has caught up (D-158).
+     * Answered by the consumer, which owns the books, in turn with what it was handed before; no answer within
+     * {@link #CAUGHT_UP_WAIT} counts as not caught up. An engine that does not run has nothing to catch up on.
+     */
+    @Override
+    public boolean caughtUp(MarketType market, Instant lastLiveAt) {
+        if (!running) {
+            return true;
+        }
+        CompletableFuture<Boolean> answer = new CompletableFuture<>();
+        queue.offer(new Command.CaughtUp(market, lastLiveAt, answer));
+        try {
+            return answer.get(CAUGHT_UP_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (ExecutionException | TimeoutException notAnswered) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether every pair of the market the engine runs on prices has caught up: no replay or mark catch-up running,
+     * its last closed candle applied within {@link #CAUGHT_UP_SLACK} of the running minute, and, for the marks of a
+     * Futures pair, a live mark within {@code mark-max-age}. A pair that went quiet well before the incident is left
+     * out: it is no longer streamed, and waiting for it would hold the market closed for good.
+     */
+    private boolean isCaughtUp(MarketType market, Instant lastLiveAt) {
+        Instant now = clock.instant();
+        Instant recent = minuteOf(now).minus(CAUGHT_UP_SLACK);
+        Instant quietBefore = lastLiveAt.minus(CAUGHT_UP_SLACK);
+        Set<BookKey> onPrices = new HashSet<>(book.pairs());
+        onPrices.addAll(triggers.pairs());
+        for (BookKey key : onPrices) {
+            if (key.market() != market) {
+                continue;
+            }
+            Instant closed = lastClosed.get(key);
+            if (replaying.contains(key) || closed == null) {
+                return false;
+            }
+            if (!closed.isBefore(quietBefore) && closed.isBefore(recent)) {
+                return false;
+            }
+        }
+        if (market != MarketType.FUTURES) {
+            return true;
+        }
+        Set<BookKey> onMarks = new HashSet<>(markTriggers.pairs());
+        onMarks.addAll(liquidations.pairs());
+        for (BookKey key : onMarks) {
+            Instant mark = lastMark.get(key);
+            if (markCatchUps.containsKey(key) || mark == null) {
+                return false;
+            }
+            if (!mark.isBefore(quietBefore) && mark.isBefore(now.minus(futures.markMaxAge()))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** Tries again the pair's failed fills whose delay has passed. */
     private void retryDue(BookKey key) {
         List<PendingFill> waiting = retries.get(key);
@@ -1662,6 +1740,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
         /** A replay of the pair has caught up; {@code until} is the open time of the first candle not replayed. */
         record ReplayDone(BookKey key, Instant until) implements Command {}
+
+        /** Answer whether the market has caught up since {@code lastLiveAt} (D-158). */
+        record CaughtUp(MarketType market, Instant lastLiveAt, CompletableFuture<Boolean> answer) implements Command {}
 
         /** Wakes the consumer so it sees the stop. */
         record Stop() implements Command {}

@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -55,6 +56,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -402,6 +404,80 @@ class PaperMatchingWorkerTest {
 
         verify(market, timeout(WAIT)).closedMarkPriceKlines(PAIR, MINUTE_1);
         verify(matching, timeout(WAIT)).liquidate(eq(level), eq(new BigDecimal("94")), any(), any());
+    }
+
+    /** D-158 (K6): an engine that does not run has nothing to catch up on. */
+    @Test
+    void D158_anEngineThatDoesNotRun_isCaughtUp() {
+        worker = started(properties(false, true, Duration.ofMinutes(10)));
+
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1)).isTrue();
+        assertThat(worker.caughtUp(MarketType.FUTURES, MINUTE_1)).isTrue();
+    }
+
+    /**
+     * D-158 (K6, I6): a pair with an order is caught up once a closed candle of the last two minutes was applied and
+     * no replay runs; one whose last closed candle is older is not, unless it went quiet before the incident, as a pair
+     * no longer streamed. The other market is not held by it.
+     */
+    @Test
+    void D158_aPairWithAnOrder_isCaughtUp_onceARecentClosedCandleIsApplied_andNoReplayRuns() throws Exception {
+        CountDownLatch exchange = new CountDownLatch(1);
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2)).thenAnswer(call -> {
+            exchange.await();
+            return MinuteKlineBatch.of(List.of());
+        });
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        worker.onRested(new PaperOrderRested(buy("50")));
+
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1))
+                .as("no closed candle yet")
+                .isFalse();
+        assertThat(worker.caughtUp(MarketType.FUTURES, MINUTE_1)).isTrue();
+
+        worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1)).isTrue();
+
+        clock.set(MINUTE_5.plusSeconds(10));
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_2))
+                .as("its last candle is old")
+                .isFalse();
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_5))
+                .as("quiet since before the incident")
+                .isTrue();
+
+        worker.onMinuteKline(kline(MINUTE_5, "99", "110", true));
+        verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2);
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_2))
+                .as("replaying the hole")
+                .isFalse();
+
+        exchange.countDown();
+        await().atMost(Duration.ofMillis(WAIT)).until(() -> worker.caughtUp(MarketType.SPOT, MINUTE_2));
+    }
+
+    /** D-158 (K6): a Futures pair watched on its marks is caught up once a live mark came within mark-max-age. */
+    @Test
+    void D158_aPairWatchedOnItsMarks_isCaughtUp_onceALiveMarkCame() {
+        UUID trader = UUID.randomUUID();
+        when(matching.liquidationLevels(trader, PAIR))
+                .thenReturn(List.of(new LiquidationLevel(
+                        UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("95"))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        worker.onAccountChanged(new FuturesAccountChanged(trader, PAIR));
+
+        assertThat(worker.caughtUp(MarketType.FUTURES, MINUTE_1))
+                .as("no mark yet")
+                .isFalse();
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), clock.instant()));
+        assertThat(worker.caughtUp(MarketType.FUTURES, MINUTE_1)).isTrue();
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1)).isTrue();
+
+        clock.set(clock.instant().plusSeconds(30));
+        assertThat(worker.caughtUp(MarketType.FUTURES, clock.instant().minusSeconds(40)))
+                .as("its last mark is stale")
+                .isFalse();
     }
 
     @Test

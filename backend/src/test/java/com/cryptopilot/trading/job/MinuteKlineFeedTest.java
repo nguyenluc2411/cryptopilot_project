@@ -366,6 +366,33 @@ class MinuteKlineFeedTest {
                         tuple(minute(5), true));
     }
 
+    /**
+     * D-158 (K6, I6): the plans of a market have caught up once every pair streamed around the incident is live, not
+     * replaying, with a closed candle of the last two minutes handed on; a pair quiet since before the incident is
+     * left out, and a feed that does not run has nothing to catch up on.
+     */
+    @Test
+    void D158_theFeed_isCaughtUp_onceEveryPairStreamedAroundTheIncidentIsLiveAndRecent() {
+        Instant incident = minute(6);
+        feed = feed(replay(true, 3, 1440));
+        assertThat(feed.caughtUp(MarketType.SPOT, incident)).as("not started").isTrue();
+        startAndAwaitIdle();
+
+        feed.onMinuteKline(update(minute(9), "1", "2", true, 60));
+        awaitIdle();
+        assertThat(feed.caughtUp(MarketType.SPOT, incident)).isTrue();
+        assertThat(feed.caughtUp(MarketType.FUTURES, incident)).isTrue();
+
+        feed.onMinuteKline(otherPairUpdate(minute(5), true, 60));
+        awaitIdle();
+        assertThat(feed.caughtUp(MarketType.SPOT, incident))
+                .as("another pair seen around the incident, its last candle old")
+                .isFalse();
+        assertThat(feed.caughtUp(MarketType.SPOT, NOW.plus(Duration.ofMinutes(5))))
+                .as("quiet since before a later incident")
+                .isTrue();
+    }
+
     /** R1: a minute whose closed update never comes is replayed once the next minute's updates show it is missing. */
     @Test
     void R1_aMinuteWhoseClosedUpdateNeverCame_isReplayedFromTheExchange() {
@@ -1046,6 +1073,18 @@ class MinuteKlineFeedTest {
                 new BigDecimal(low),
                 new BigDecimal(high),
                 new BigDecimal(high),
+                closed,
+                open.plusSeconds(seconds).minusMillis(closed ? 1 : 0));
+    }
+
+    private static MinuteKline otherPairUpdate(Instant open, boolean closed, long seconds) {
+        return new MinuteKline(
+                MarketType.SPOT,
+                OTHER_PAIR,
+                open,
+                BigDecimal.ONE,
+                BigDecimal.TWO,
+                BigDecimal.TWO,
                 closed,
                 open.plusSeconds(seconds).minusMillis(closed ? 1 : 0));
     }

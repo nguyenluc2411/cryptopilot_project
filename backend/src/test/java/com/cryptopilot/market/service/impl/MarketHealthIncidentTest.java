@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.cryptopilot.common.util.UuidV7;
+import com.cryptopilot.market.MarketRecoveryCheck;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.event.MarketRecoveryStarted;
@@ -34,6 +35,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.util.ClassUtils;
 
 /**
  * K2 and K4 (D-158): the incidents of the markets in {@code market_incident}: at most one open per market, a relapse
@@ -58,10 +60,21 @@ class MarketHealthIncidentTest {
     @Autowired
     private JdbcClient sql;
 
+    @Autowired
+    private List<MarketRecoveryCheck> recoveryChecks;
+
     @BeforeEach
     @AfterEach
     void noIncidents() {
         sql.sql("delete from market_incident").update();
+    }
+
+    /** I6: a recovering market waits on both engines that run on its prices, the paper orders' and the plans'. */
+    @Test
+    void D158_theMonitor_asksThePaperEngineAndThePlanFeed() {
+        assertThat(recoveryChecks)
+                .extracting(check -> ClassUtils.getUserClass(check).getSimpleName())
+                .contains("PaperMatchingWorker", "MinuteKlineFeed");
     }
 
     @Test
