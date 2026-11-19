@@ -29,6 +29,7 @@ import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
@@ -476,10 +477,13 @@ class PaperMatchingWorkerTest {
         assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1))
                 .as("no closed candle yet")
                 .isFalse();
+        assertThat(worker.progress(MarketType.SPOT, MINUTE_1)).isEqualTo(new RecoveryProgress(0, 1));
         assertThat(worker.caughtUp(MarketType.FUTURES, MINUTE_1)).isTrue();
+        assertThat(worker.progress(MarketType.FUTURES, MINUTE_1)).isEqualTo(RecoveryProgress.NOTHING);
 
         worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
         assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1)).isTrue();
+        assertThat(worker.progress(MarketType.SPOT, MINUTE_1)).isEqualTo(new RecoveryProgress(1, 1));
 
         clock.set(MINUTE_5.plusSeconds(10));
         assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_2))

@@ -16,6 +16,7 @@ CREATE TABLE market_incident (
     recovery_started_at timestamptz,
     resumed_at          timestamptz,
     message             varchar(500),
+    expected_end_at     timestamptz,
     created_by          uuid,
     CONSTRAINT pk_market_incident PRIMARY KEY (market_incident_id),
     CONSTRAINT ck_market_incident_market_type CHECK (market_type IN ('SPOT', 'FUTURES')),

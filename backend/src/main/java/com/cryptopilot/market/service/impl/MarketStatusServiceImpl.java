@@ -5,12 +5,16 @@ import com.cryptopilot.admin.AuditEntry;
 import com.cryptopilot.admin.model.enums.AuditAction;
 import com.cryptopilot.admin.model.enums.AuditedEntity;
 import com.cryptopilot.common.exception.FieldValidationException;
+import com.cryptopilot.market.client.BinanceRestClient;
+import com.cryptopilot.market.client.RestOutage;
 import com.cryptopilot.market.dto.request.MaintenanceRequest;
 import com.cryptopilot.market.dto.request.ResumeRequest;
 import com.cryptopilot.market.dto.response.MarketHealthResponse;
 import com.cryptopilot.market.dto.response.MarketIncidentResponse;
+import com.cryptopilot.market.dto.response.MarketRecoveryResponse;
 import com.cryptopilot.market.dto.response.MarketStatusResponse;
 import com.cryptopilot.market.model.MarketIncident;
+import com.cryptopilot.market.model.enums.BinanceVenue;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.MarketIncidentRepository;
@@ -52,6 +56,7 @@ public class MarketStatusServiceImpl implements MarketStatusService {
     private final MarketIncidentRepository incidents;
     private final AdminApi admin;
     private final MarketLiveness liveness;
+    private final BinanceRestClient exchange;
     private final Clock clock;
 
     @Override
@@ -80,7 +85,12 @@ public class MarketStatusServiceImpl implements MarketStatusService {
         boolean before = health.state(market) == MarketHealthState.MAINTENANCE;
         boolean on = request.on();
         if (on) {
-            health.startMaintenance(market, blankToNull(request.message()), adminId);
+            Instant expectedEndAt = request.expectedEndAt();
+            if (expectedEndAt != null && !expectedEndAt.isAfter(clock.instant())) {
+                throw new FieldValidationException(
+                        "expectedEndAt must be in the future, not " + expectedEndAt, Map.of("expectedEndAt", "MSG01"));
+            }
+            health.startMaintenance(market, blankToNull(request.message()), expectedEndAt, adminId);
         } else {
             health.endMaintenance(market);
         }
@@ -125,9 +135,25 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                         incident.message(),
                         incident.id(),
                         null,
-                        List.of());
+                        List.of(),
+                        incident.expectedEndAt(),
+                        retryAt(market),
+                        recovery(market));
             }
-            return new MarketHealthResponse(market, state, false, null, null, null, null, null, null, List.of());
+            return new MarketHealthResponse(
+                    market,
+                    state,
+                    false,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of(),
+                    null,
+                    retryAt(market),
+                    recovery(market));
         }
         Instant shownAfter = clock.instant().minus(RESUMED_SHOWN_FOR);
         Optional<MarketIncident> ended = incidents.findRecent(market, 1).stream()
@@ -144,7 +170,22 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                 null,
                 ended.map(MarketIncident::id).orElse(null),
                 ended.map(MarketIncident::resumedAt).orElse(null),
-                liveness.silentSymbols(market));
+                liveness.silentSymbols(market),
+                null,
+                null,
+                null);
+    }
+
+    /** When the exchange takes the market's calls again, while it refuses them. */
+    private Instant retryAt(MarketType market) {
+        BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
+        return exchange.outage(venue).map(RestOutage::until).orElse(null);
+    }
+
+    private MarketRecoveryResponse recovery(MarketType market) {
+        return health.recoveryProgress(market)
+                .map(progress -> new MarketRecoveryResponse(progress.pairsDone(), progress.pairsTotal()))
+                .orElse(null);
     }
 
     private static MarketIncidentResponse response(MarketIncident incident) {
@@ -158,7 +199,8 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                 incident.recoveryStartedAt(),
                 incident.resumedAt(),
                 incident.message(),
-                incident.createdBy());
+                incident.createdBy(),
+                incident.expectedEndAt());
     }
 
     private static Map<String, Object> setting(MarketType market, boolean on, String message) {

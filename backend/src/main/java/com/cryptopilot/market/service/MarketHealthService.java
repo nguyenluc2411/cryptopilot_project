@@ -1,11 +1,13 @@
 package com.cryptopilot.market.service;
 
 import com.cryptopilot.market.MarketHealth;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.model.HealthSignals;
 import com.cryptopilot.market.model.MarketIncident;
 import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -19,6 +21,9 @@ public interface MarketHealthService extends MarketHealth {
 
     /** Closes trading on the market on purpose, with an optional message for the Traders. */
     void startMaintenance(MarketType market, String message, UUID by);
+
+    /** Closes trading on the market on purpose, with an optional message and expected end for the Traders. */
+    void startMaintenance(MarketType market, String message, Instant expectedEndAt, UUID by);
 
     /** Ends maintenance; the market reopens through recovery, never straight away while its data is lost. */
     void endMaintenance(MarketType market);
@@ -38,6 +43,12 @@ public interface MarketHealthService extends MarketHealth {
      * @return the state after the tick
      */
     MarketHealthState evaluate(MarketType market, HealthSignals signals, IncidentReason reason);
+
+    /** Records how far the modules have caught up with the recovering market, as the monitor last read it. */
+    void recoveryProgress(MarketType market, RecoveryProgress progress);
+
+    /** How far the modules have caught up with the market, while it recovers; empty otherwise. */
+    Optional<RecoveryProgress> recoveryProgress(MarketType market);
 
     /** The market's open incident, if trading on it is closed. */
     Optional<MarketIncident> openIncident(MarketType market);

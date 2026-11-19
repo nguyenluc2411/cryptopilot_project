@@ -7,6 +7,7 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.MarketRecoveryCheck;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.event.MarketHealthChanged;
@@ -122,7 +123,7 @@ class MarketHealthIncidentTest {
         incidents.open(opened);
         UUID admin = UUID.randomUUID();
 
-        incidents.toMaintenance(opened.id(), "Bảo trì", admin);
+        incidents.toMaintenance(opened.id(), "Bảo trì", START.plusSeconds(3600), admin);
 
         MarketIncident open = incidents.findOpen(MarketType.SPOT).orElseThrow();
         assertThat(open.id()).isEqualTo(opened.id());
@@ -130,6 +131,7 @@ class MarketHealthIncidentTest {
         assertThat(open.reason()).isEqualTo(IncidentReason.MAINTENANCE);
         assertThat(open.message()).isEqualTo("Bảo trì");
         assertThat(open.createdBy()).isEqualTo(admin);
+        assertThat(open.expectedEndAt()).isEqualTo(START.plusSeconds(3600));
         assertThat(open.lastLiveAt()).as("still where the replay starts").isEqualTo(START.minusSeconds(30));
     }
 
@@ -427,6 +429,24 @@ class MarketHealthIncidentTest {
         assertThat(health.state(MarketType.FUTURES)).isEqualTo(MarketHealthState.LIVE);
         assertThat(incidents.findOpen(MarketType.FUTURES)).isEmpty();
         assertThat(published.getLast()).isInstanceOf(MarketTradingResumed.class);
+    }
+
+    /** The progress the monitor reads is kept while the market recovers, and only then. */
+    @Test
+    void D158_theRecoveryProgress_isKeptWhileRecovering_only() {
+        MutableTestClock clock = new MutableTestClock(START);
+        MarketHealthServiceImpl health = new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock);
+        health.recoveryProgress(MarketType.SPOT, new RecoveryProgress(1, 2));
+        assertThat(health.recoveryProgress(MarketType.SPOT)).as("live").isEmpty();
+
+        health.evaluate(MarketType.SPOT, silentSince(START.minusSeconds(30)), IncidentReason.STREAM_LOST);
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        assertThat(health.recoveryProgress(MarketType.SPOT)).as("not read yet").isEmpty();
+        health.recoveryProgress(MarketType.SPOT, new RecoveryProgress(1, 2));
+        assertThat(health.recoveryProgress(MarketType.SPOT)).contains(new RecoveryProgress(1, 2));
+
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST);
+        assertThat(health.recoveryProgress(MarketType.SPOT)).isEmpty();
     }
 
     private static HealthSignals silentSince(Instant lastLive) {

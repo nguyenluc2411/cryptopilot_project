@@ -21,6 +21,10 @@ import java.util.UUID;
  * @param resumedAt when trading reopened, for an incident that ended in the last ten minutes; {@code null} otherwise
  * @param pausedPairs the symbols whose exchange data is lost while the market is open (E5), sorted: their order forms
  *     are locked; empty while the market is closed, as all of them are
+ * @param expectedEndAt when an administrator expects the maintenance to end, if said; {@code null} otherwise
+ * @param retryAt while trading is closed and the exchange refuses the server's calls (a ban or an open circuit), when
+ *     they may be tried again; {@code null} otherwise
+ * @param recovery how far the market has caught up, while it recovers; {@code null} otherwise
  */
 public record MarketHealthResponse(
         MarketType market,
@@ -32,4 +36,7 @@ public record MarketHealthResponse(
         String message,
         UUID incidentId,
         Instant resumedAt,
-        List<String> pausedPairs) {}
+        List<String> pausedPairs,
+        Instant expectedEndAt,
+        Instant retryAt,
+        MarketRecoveryResponse recovery) {}

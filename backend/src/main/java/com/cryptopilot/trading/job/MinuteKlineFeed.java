@@ -8,6 +8,7 @@ import com.cryptopilot.market.MarketRecoveryCheck;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.MinuteKlineListener;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
@@ -512,24 +513,29 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener, 
     static final Duration CAUGHT_UP_SLACK = Duration.ofMinutes(2);
 
     /**
-     * The health monitor asks, while a market recovers from an incident, whether the plans have caught up (D-158):
+     * The health monitor asks, while a market recovers from an incident, how far the plans have caught up (D-158):
      * every pair of the market streamed around the incident is live again, not replaying, with its last closed candle
      * handed on within {@link #CAUGHT_UP_SLACK} of the running minute. A feed that does not run has nothing to catch
      * up on.
      */
     @Override
-    public boolean caughtUp(MarketType market, Instant lastLiveAt) {
+    public RecoveryProgress progress(MarketType market, Instant lastLiveAt) {
         if (!started) {
-            return true;
+            return RecoveryProgress.NOTHING;
         }
         Instant recent = minuteOf(clock.instant()).minus(CAUGHT_UP_SLACK);
         Instant quietBefore = lastLiveAt.minus(CAUGHT_UP_SLACK);
+        int total = 0;
+        int done = 0;
         for (Map.Entry<PairKey, PairFeed> entry : feeds.entrySet()) {
-            if (entry.getKey().market() == market && !entry.getValue().caughtUp(recent, quietBefore)) {
-                return false;
+            if (entry.getKey().market() == market) {
+                total++;
+                if (entry.getValue().caughtUp(recent, quietBefore)) {
+                    done++;
+                }
             }
         }
-        return true;
+        return new RecoveryProgress(done, total);
     }
 
     /** One pair's updates: held while it waits or replays, handed to the engine in order once live. */

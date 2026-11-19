@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.MarketRecoveryCheck;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.BinanceStreamProperties;
@@ -107,11 +108,11 @@ class MarketHealthMonitorTest {
         boolean[] engineDone = {false};
         MarketRecoveryCheck paper = (market, since) -> {
             asked.add("paper " + market + " " + since);
-            return engineDone[0];
+            return new RecoveryProgress(engineDone[0] ? 3 : 1, 3);
         };
         MarketRecoveryCheck plans = (market, since) -> {
             asked.add("plans " + market + " " + since);
-            return true;
+            return new RecoveryProgress(2, 2);
         };
         MarketHealthMonitor monitor = monitor(List.of(paper, plans));
 
@@ -127,7 +128,13 @@ class MarketHealthMonitorTest {
                 .containsExactly(false, true);
         assertThat(asked)
                 .as("asked about the recovering market only, from its last live data")
-                .containsExactly("paper FUTURES " + lastLive, "paper FUTURES " + lastLive, "plans FUTURES " + lastLive);
+                .containsExactly(
+                        "paper FUTURES " + lastLive,
+                        "plans FUTURES " + lastLive,
+                        "paper FUTURES " + lastLive,
+                        "plans FUTURES " + lastLive);
+        verify(health).recoveryProgress(MarketType.FUTURES, new RecoveryProgress(3, 5));
+        verify(health).recoveryProgress(MarketType.FUTURES, new RecoveryProgress(5, 5));
     }
 
     @Test

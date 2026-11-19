@@ -24,6 +24,7 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
@@ -423,6 +424,7 @@ class MinuteKlineFeedTest {
         assertThat(feed.caughtUp(MarketType.SPOT, incident))
                 .as("another pair seen around the incident, its last candle old")
                 .isFalse();
+        assertThat(feed.progress(MarketType.SPOT, incident)).isEqualTo(new RecoveryProgress(1, 2));
         assertThat(feed.caughtUp(MarketType.SPOT, NOW.plus(Duration.ofMinutes(5))))
                 .as("quiet since before a later incident")
                 .isTrue();

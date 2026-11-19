@@ -33,14 +33,15 @@ public class MarketIncidentRepository {
 
     private static final String COLUMNS = """
             market_incident_id, market_type, incident_kind, reason, last_live_at, paused_at, recovery_started_at,
-            resumed_at, message, created_by""";
+            resumed_at, message, created_by, expected_end_at""";
 
     private final JdbcClient sql;
 
     /** Stores a new open incident; refused by the database when the market already has one open. */
     public void open(MarketIncident incident) {
         sql.sql("insert into market_incident (" + COLUMNS + """
-                        ) values (:id, :market, :kind, :reason, :lastLiveAt, :pausedAt, null, null, :message, :createdBy)""")
+                        ) values (:id, :market, :kind, :reason, :lastLiveAt, :pausedAt, null, null, :message, :createdBy,
+                                  :expectedEndAt)""")
                 .param("id", incident.id())
                 .param("market", incident.market().name())
                 .param("kind", incident.kind().name())
@@ -49,6 +50,7 @@ public class MarketIncidentRepository {
                 .param("pausedAt", utc(incident.pausedAt()))
                 .param("message", incident.message())
                 .param("createdBy", incident.createdBy())
+                .param("expectedEndAt", incident.expectedEndAt() == null ? null : utc(incident.expectedEndAt()))
                 .update();
     }
 
@@ -78,13 +80,19 @@ public class MarketIncidentRepository {
                 .list();
     }
 
-    /** Turns an open incident into maintenance, with the administrator's message. */
-    public void toMaintenance(UUID id, String message, UUID by) {
+    /** Turns an open incident into maintenance, with the administrator's message and expected end. */
+    public void toMaintenance(UUID id, String message, Instant expectedEndAt, UUID by) {
         sql.sql("""
                         update market_incident
                            set incident_kind = 'MAINTENANCE', reason = 'MAINTENANCE', message = :message,
-                               created_by = coalesce(:by, created_by), recovery_started_at = null
-                         where market_incident_id = :id and resumed_at is null""").param("id", id).param("message", message).param("by", by).update();
+                               expected_end_at = :expectedEndAt, created_by = coalesce(:by, created_by),
+                               recovery_started_at = null
+                         where market_incident_id = :id and resumed_at is null""")
+                .param("id", id)
+                .param("message", message)
+                .param("expectedEndAt", expectedEndAt == null ? null : utc(expectedEndAt))
+                .param("by", by)
+                .update();
     }
 
     /** Records that an open incident's data came back and the replay began. */
@@ -120,7 +128,8 @@ public class MarketIncidentRepository {
                 instant(row.getTimestamp("recovery_started_at")),
                 instant(row.getTimestamp("resumed_at")),
                 row.getString("message"),
-                row.getObject("created_by", UUID.class));
+                row.getObject("created_by", UUID.class),
+                instant(row.getTimestamp("expected_end_at")));
     }
 
     private static Instant instant(Timestamp timestamp) {

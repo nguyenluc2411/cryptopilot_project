@@ -13,8 +13,13 @@ import java.time.Instant;
 public interface MarketRecoveryCheck {
 
     /**
-     * Whether everything this module runs on the market's prices has replayed the data missed since
-     * {@code lastLiveAt}, up to now, and the work that fell due meanwhile has run.
+     * How many of the pairs this module runs on the market's prices have replayed the data missed since
+     * {@code lastLiveAt}, up to now, with the work that fell due meanwhile run.
      */
-    boolean caughtUp(MarketType market, Instant lastLiveAt);
+    RecoveryProgress progress(MarketType market, Instant lastLiveAt);
+
+    /** Whether everything this module runs on the market's prices has caught up. */
+    default boolean caughtUp(MarketType market, Instant lastLiveAt) {
+        return progress(market, lastLiveAt).done();
+    }
 }

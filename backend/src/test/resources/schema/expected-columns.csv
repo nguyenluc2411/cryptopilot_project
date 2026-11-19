@@ -322,6 +322,7 @@ leverage_bracket,pair_id,uuid,,,NO
 leverage_bracket,updated_at,timestamp with time zone,,,NO
 leverage_bracket,updated_by,uuid,,,YES
 market_incident,created_by,uuid,,,YES
+market_incident,expected_end_at,timestamp with time zone,,,YES
 market_incident,incident_kind,character varying,,,NO
 market_incident,last_live_at,timestamp with time zone,,,NO
 market_incident,market_incident_id,uuid,,,NO

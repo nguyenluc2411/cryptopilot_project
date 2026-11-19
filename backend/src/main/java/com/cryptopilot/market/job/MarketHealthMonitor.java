@@ -1,6 +1,7 @@
 package com.cryptopilot.market.job;
 
 import com.cryptopilot.market.MarketRecoveryCheck;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.BinanceStreamProperties;
@@ -27,8 +28,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Watches the data health of each market every {@link #INTERVAL} (D-158): reads when its stream last delivered and
- * whether its REST API is banned or behind an open circuit, asks the modules whether they have caught up while it
- * recovers, and hands the signals to {@link MarketHealthService#evaluate}.
+ * whether its REST API is banned or behind an open circuit, asks the modules how far they have caught up while it
+ * recovers, records it for the status, and hands the signals to {@link MarketHealthService#evaluate}.
  *
  * <p>Runs only while both the monitor and the streams are enabled: without streams every market would look lost.
  *
@@ -94,24 +95,29 @@ public class MarketHealthMonitor {
 
     private void evaluate(MarketType market) {
         Optional<RestOutage> outage = exchange.outage(venue(market));
-        boolean recovered = health.state(market) == MarketHealthState.RECOVERING && caughtUp(market);
+        boolean recovered = false;
+        if (health.state(market) == MarketHealthState.RECOVERING) {
+            RecoveryProgress progress = progress(market);
+            health.recoveryProgress(market, progress);
+            recovered = progress.done();
+        }
         HealthSignals signals = new HealthSignals(
                 liveness.lastLiveAt(market), liveness.liveSince(market), outage.isEmpty(), false, recovered);
         health.evaluate(market, signals, reason(outage));
     }
 
-    private boolean caughtUp(MarketType market) {
+    /** How far every module has caught up since the open incident's last live data, added up. */
+    private RecoveryProgress progress(MarketType market) {
         Instant lastLiveAt =
                 health.openIncident(market).map(MarketIncident::lastLiveAt).orElse(null);
+        RecoveryProgress progress = RecoveryProgress.NOTHING;
         if (lastLiveAt == null) {
-            return true;
+            return progress;
         }
         for (MarketRecoveryCheck check : checks) {
-            if (!check.caughtUp(market, lastLiveAt)) {
-                return false;
-            }
+            progress = progress.plus(check.progress(market, lastLiveAt));
         }
-        return true;
+        return progress;
     }
 
     private static IncidentReason reason(Optional<RestOutage> outage) {

@@ -12,6 +12,7 @@ import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.config.PaperFuturesProperties;
@@ -711,7 +712,7 @@ public class PaperMatchingWorker
                     onTrades(tradesKey.key(), waiting.drain());
                 }
             }
-            case Command.CaughtUp asked -> asked.answer().complete(isCaughtUp(asked.market(), asked.lastLiveAt()));
+            case Command.CaughtUp asked -> asked.answer().complete(progressOf(asked.market(), asked.lastLiveAt()));
             case Command.ReplayDone done -> {
                 replaying.remove(done.key());
                 lastClosed.merge(done.key(), done.until().minus(MINUTE), (a, b) -> a.isAfter(b) ? a : b);
@@ -1296,61 +1297,75 @@ public class PaperMatchingWorker
      * {@link #CAUGHT_UP_WAIT} counts as not caught up. An engine that does not run has nothing to catch up on.
      */
     @Override
-    public boolean caughtUp(MarketType market, Instant lastLiveAt) {
+    public RecoveryProgress progress(MarketType market, Instant lastLiveAt) {
         if (!running) {
-            return true;
+            return RecoveryProgress.NOTHING;
         }
-        CompletableFuture<Boolean> answer = new CompletableFuture<>();
+        CompletableFuture<RecoveryProgress> answer = new CompletableFuture<>();
         queue.offer(new Command.CaughtUp(market, lastLiveAt, answer));
         try {
             return answer.get(CAUGHT_UP_WAIT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            return false;
+            return RecoveryProgress.NOT_ANSWERED;
         } catch (ExecutionException | TimeoutException notAnswered) {
-            return false;
+            return RecoveryProgress.NOT_ANSWERED;
         }
     }
 
     /**
-     * Whether every pair of the market the engine runs on prices has caught up: no replay or mark catch-up running,
-     * its last closed candle applied within {@link #CAUGHT_UP_SLACK} of the running minute, and, for the marks of a
-     * Futures pair, a live mark within {@code mark-max-age}. A pair that went quiet well before the incident is left
-     * out: it is no longer streamed, and waiting for it would hold the market closed for good.
+     * How many pairs of the market the engine runs on prices have caught up: no replay or mark catch-up running, the
+     * last closed candle applied within {@link #CAUGHT_UP_SLACK} of the running minute, and, for the marks of a
+     * Futures pair, a live mark within {@code mark-max-age}. A pair that went quiet well before the incident counts as
+     * caught up: it is no longer streamed, and waiting for it would hold the market closed for good.
      */
-    private boolean isCaughtUp(MarketType market, Instant lastLiveAt) {
+    private RecoveryProgress progressOf(MarketType market, Instant lastLiveAt) {
         Instant now = clock.instant();
         Instant recent = minuteOf(now).minus(CAUGHT_UP_SLACK);
         Instant quietBefore = lastLiveAt.minus(CAUGHT_UP_SLACK);
-        Set<BookKey> onPrices = new HashSet<>(book.pairs());
-        onPrices.addAll(triggers.pairs());
-        for (BookKey key : onPrices) {
-            if (key.market() != market) {
-                continue;
-            }
-            Instant closed = lastClosed.get(key);
-            if (replaying.contains(key) || closed == null) {
-                return false;
-            }
-            if (!closed.isBefore(quietBefore) && closed.isBefore(recent)) {
-                return false;
+        Set<BookKey> onPrices = new HashSet<>();
+        for (BookKey key : book.pairs()) {
+            if (key.market() == market) {
+                onPrices.add(key);
             }
         }
-        if (market != MarketType.FUTURES) {
-            return true;
-        }
-        Set<BookKey> onMarks = new HashSet<>(markTriggers.pairs());
-        onMarks.addAll(liquidations.pairs());
-        for (BookKey key : onMarks) {
-            Instant mark = lastMark.get(key);
-            if (markCatchUps.containsKey(key) || mark == null) {
-                return false;
-            }
-            if (!mark.isBefore(quietBefore) && mark.isBefore(now.minus(futures.markMaxAge()))) {
-                return false;
+        for (BookKey key : triggers.pairs()) {
+            if (key.market() == market) {
+                onPrices.add(key);
             }
         }
-        return true;
+        Set<BookKey> onMarks = new HashSet<>();
+        if (market == MarketType.FUTURES) {
+            onMarks.addAll(markTriggers.pairs());
+            onMarks.addAll(liquidations.pairs());
+        }
+        Set<BookKey> watched = new HashSet<>(onPrices);
+        watched.addAll(onMarks);
+        int done = 0;
+        for (BookKey key : watched) {
+            boolean prices = !onPrices.contains(key) || pricesCaughtUp(key, recent, quietBefore);
+            boolean marks = !onMarks.contains(key) || marksCaughtUp(key, now, quietBefore);
+            if (prices && marks) {
+                done++;
+            }
+        }
+        return new RecoveryProgress(done, watched.size());
+    }
+
+    private boolean pricesCaughtUp(BookKey key, Instant recent, Instant quietBefore) {
+        Instant closed = lastClosed.get(key);
+        if (replaying.contains(key) || closed == null) {
+            return false;
+        }
+        return closed.isBefore(quietBefore) || !closed.isBefore(recent);
+    }
+
+    private boolean marksCaughtUp(BookKey key, Instant now, Instant quietBefore) {
+        Instant mark = lastMark.get(key);
+        if (markCatchUps.containsKey(key) || mark == null) {
+            return false;
+        }
+        return mark.isBefore(quietBefore) || !mark.isBefore(now.minus(futures.markMaxAge()));
     }
 
     /** Tries again the pair's failed fills whose delay has passed. */
@@ -1774,7 +1789,8 @@ public class PaperMatchingWorker
         record ReplayDone(BookKey key, Instant until) implements Command {}
 
         /** Answer whether the market has caught up since {@code lastLiveAt} (D-158). */
-        record CaughtUp(MarketType market, Instant lastLiveAt, CompletableFuture<Boolean> answer) implements Command {}
+        record CaughtUp(MarketType market, Instant lastLiveAt, CompletableFuture<RecoveryProgress> answer)
+                implements Command {}
 
         /** Wakes the consumer so it sees the stop. */
         record Stop() implements Command {}

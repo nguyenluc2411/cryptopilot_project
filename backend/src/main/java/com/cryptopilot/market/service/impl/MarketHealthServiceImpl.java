@@ -3,6 +3,7 @@ package com.cryptopilot.market.service.impl;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.util.UuidV7;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.event.MarketHealthChanged;
@@ -68,6 +69,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     private final Clock clock;
     private final Map<MarketType, Status> statuses = new EnumMap<>(MarketType.class);
     private final Map<MarketType, Ended> ended = new EnumMap<>(MarketType.class);
+    private final Map<MarketType, RecoveryProgress> progress = new EnumMap<>(MarketType.class);
 
     public MarketHealthServiceImpl(
             MarketHealthProperties properties,
@@ -152,13 +154,34 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     }
 
     @Override
+    public synchronized void recoveryProgress(MarketType market, RecoveryProgress read) {
+        if (statuses.get(market).state() == MarketHealthState.RECOVERING) {
+            progress.put(market, read);
+        }
+    }
+
+    @Override
+    public synchronized Optional<RecoveryProgress> recoveryProgress(MarketType market) {
+        if (statuses.get(market).state() != MarketHealthState.RECOVERING) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(progress.get(market));
+    }
+
+    @Override
     public Optional<MarketIncident> openIncident(MarketType market) {
         return incidents.findOpen(market);
     }
 
     @Override
     @Transactional
-    public synchronized void startMaintenance(MarketType market, String message, UUID by) {
+    public void startMaintenance(MarketType market, String message, UUID by) {
+        startMaintenance(market, message, null, by);
+    }
+
+    @Override
+    @Transactional
+    public synchronized void startMaintenance(MarketType market, String message, Instant expectedEndAt, UUID by) {
         Instant now = clock.instant();
         Status current = statuses.get(market);
         Status held;
@@ -174,12 +197,13 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                     null,
                     null,
                     message,
-                    by));
+                    by,
+                    expectedEndAt));
             held = Status.closed(MarketHealthState.MAINTENANCE, id, now, now, false);
             events.publishEvent(new MarketTradingPaused(
                     market, id, MarketHealthState.MAINTENANCE, IncidentReason.MAINTENANCE, now));
         } else {
-            incidents.toMaintenance(current.incidentId(), message, by);
+            incidents.toMaintenance(current.incidentId(), message, expectedEndAt, by);
             held = current.in(MarketHealthState.MAINTENANCE);
         }
         // Maintenance is decided on purpose: the Traders are told at once, not after notify-after.
@@ -318,6 +342,9 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     }
 
     private void changed(MarketType market, MarketHealthState from, MarketHealthState to) {
+        if (to != MarketHealthState.RECOVERING) {
+            progress.remove(market);
+        }
         if (from != to) {
             events.publishEvent(new MarketHealthChanged(market, from, to));
         }

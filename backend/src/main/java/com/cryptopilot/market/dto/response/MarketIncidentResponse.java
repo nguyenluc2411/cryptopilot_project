@@ -19,6 +19,7 @@ import java.util.UUID;
  * @param resumedAt when trading reopened; {@code null} while it is open
  * @param message the administrator's message, if any
  * @param createdBy the administrator who started maintenance, if any
+ * @param expectedEndAt when the administrator expected the maintenance to end, if said
  */
 public record MarketIncidentResponse(
         UUID id,
@@ -30,4 +31,5 @@ public record MarketIncidentResponse(
         Instant recoveryStartedAt,
         Instant resumedAt,
         String message,
-        UUID createdBy) {}
+        UUID createdBy,
+        Instant expectedEndAt) {}

@@ -20,6 +20,7 @@ import java.util.UUID;
  * @param resumedAt when trading reopened; {@code null} while the incident is open
  * @param message the administrator's message for the Traders, if any
  * @param createdBy the administrator who started maintenance, if any
+ * @param expectedEndAt when the administrator expects a maintenance to end, if said
  */
 public record MarketIncident(
         UUID id,
@@ -31,7 +32,23 @@ public record MarketIncident(
         Instant recoveryStartedAt,
         Instant resumedAt,
         String message,
-        UUID createdBy) {
+        UUID createdBy,
+        Instant expectedEndAt) {
+
+    /** An incident with no expected end. */
+    public MarketIncident(
+            UUID id,
+            MarketType market,
+            IncidentKind kind,
+            IncidentReason reason,
+            Instant lastLiveAt,
+            Instant pausedAt,
+            Instant recoveryStartedAt,
+            Instant resumedAt,
+            String message,
+            UUID createdBy) {
+        this(id, market, kind, reason, lastLiveAt, pausedAt, recoveryStartedAt, resumedAt, message, createdBy, null);
+    }
 
     public MarketIncident {
         Objects.requireNonNull(id, "id");

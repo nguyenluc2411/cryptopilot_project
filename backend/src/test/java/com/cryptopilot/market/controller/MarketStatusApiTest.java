@@ -1,6 +1,7 @@
 package com.cryptopilot.market.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -14,7 +15,9 @@ import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -192,6 +195,35 @@ class MarketStatusApiTest {
         assertThat(sql.sql("""
                         select count(*) from audit_log
                          where user_id = ? and new_value ->> 'key' like 'market.resume.%'""").param(admin).query(Long.class).single()).isZero();
+    }
+
+    /**
+     * Maintenance may say when it is expected to end, which the banner shows; a time already past is refused. A live
+     * market has no retry time and no recovery progress.
+     */
+    @Test
+    void D158_maintenance_mayNameItsExpectedEnd_inTheFuture() throws Exception {
+        UUID admin = account(UserRole.ADMIN);
+        Instant end = Instant.now().plus(Duration.ofHours(2)).truncatedTo(ChronoUnit.SECONDS);
+
+        as(admin, post(ADMIN + "/maintenance"), """
+                        {"market": "SPOT", "on": true, "expectedEndAt": "%s"}""".formatted(Instant.now().minusSeconds(60)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.expectedEndAt").value("MSG01"));
+        as(admin, post(ADMIN + "/maintenance"), """
+                        {"market": "SPOT", "on": true, "expectedEndAt": "%s"}""".formatted(end)).andExpect(status().isOk());
+
+        mvc.perform(get(STATUS))
+                .andExpect(jsonPath("$.markets[?(@.market == 'SPOT')].expectedEndAt")
+                        .value(end.toString()))
+                .andExpect(
+                        jsonPath("$.markets[?(@.market == 'FUTURES')].retryAt").value(contains((Object) null)))
+                .andExpect(
+                        jsonPath("$.markets[?(@.market == 'FUTURES')].recovery").value(contains((Object) null)));
+        mvc.perform(get(ADMIN + "/incidents")
+                        .param("market", "SPOT")
+                        .header(HttpHeaders.AUTHORIZATION, bearer(admin, UserRole.ADMIN)))
+                .andExpect(jsonPath("$[0].expectedEndAt").value(end.toString()));
     }
 
     /** E5: an open market names the pairs whose data is lost; none here. */
