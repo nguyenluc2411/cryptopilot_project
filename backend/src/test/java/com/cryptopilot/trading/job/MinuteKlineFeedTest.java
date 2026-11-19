@@ -21,6 +21,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -202,6 +203,40 @@ class MinuteKlineFeedTest {
         startAndAwaitIdle();
 
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(3));
+    }
+
+    /** D-158: during an incident the start-up replay reaches back to it, beyond the window, and skips nothing. */
+    @Test
+    void D158_duringAnIncident_aStartOlderThanTheWindow_isReplayedFromTheWatermark() {
+        activeEntry(PAIR, M0.minus(Duration.ofDays(3)));
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0.minus(Duration.ofDays(2))));
+        MarketHealth health = mock(MarketHealth.class);
+        when(health.catchUpFrom(MarketType.SPOT))
+                .thenReturn(Optional.of(M0.minus(Duration.ofDays(2).plusHours(1))));
+        feed = new MinuteKlineFeed(
+                worker,
+                matching,
+                market,
+                new MatchingProperties(
+                        true,
+                        1,
+                        100,
+                        SLOW_RETRY,
+                        60,
+                        Duration.ofSeconds(5),
+                        new MatchingProperties.Replay(true, Duration.ofHours(24), Duration.ZERO, 0, 1440)),
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                recording,
+                locks,
+                health);
+
+        startAndAwaitIdle();
+
+        verify(market)
+                .closedMinuteKlines(
+                        MarketType.SPOT, PAIR, M0.minus(Duration.ofDays(2)).plusSeconds(60));
+        assertThat(logged())
+                .noneSatisfy(event -> assertThat(event.getFormattedMessage()).contains("beyond the replay window"));
     }
 
     @Test

@@ -4,6 +4,7 @@ import com.cryptopilot.market.LeverageBracketsReplaced;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarkPriceListener;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.MarketRecoveryCheck;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MarketTradeListener;
@@ -190,6 +191,9 @@ public class PaperMatchingWorker
 
     private final PaperMatchingService matching;
     private final MarketApi market;
+    /** Where an incident makes a start-up replay reach back to (D-158); null in tests that do not need it. */
+    private final MarketHealth health;
+
     private final PaperMatchingProperties properties;
     private final PaperFuturesProperties futures;
     private final Clock clock;
@@ -283,8 +287,9 @@ public class PaperMatchingWorker
             MarketApi market,
             PaperMatchingProperties properties,
             PaperFuturesProperties futures,
-            Clock clock) {
-        this(matching, market, properties, futures, clock, Thread.ofVirtual().factory());
+            Clock clock,
+            MarketHealth health) {
+        this(matching, market, properties, futures, clock, Thread.ofVirtual().factory(), health);
     }
 
     PaperMatchingWorker(
@@ -294,6 +299,18 @@ public class PaperMatchingWorker
             PaperFuturesProperties futures,
             Clock clock,
             ThreadFactory threads) {
+        this(matching, market, properties, futures, clock, threads, null);
+    }
+
+    PaperMatchingWorker(
+            PaperMatchingService matching,
+            MarketApi market,
+            PaperMatchingProperties properties,
+            PaperFuturesProperties futures,
+            Clock clock,
+            ThreadFactory threads,
+            MarketHealth health) {
+        this.health = health;
         this.matching = matching;
         this.market = market;
         this.properties = properties;
@@ -1486,7 +1503,7 @@ public class PaperMatchingWorker
         if (afterWatermark.isAfter(from)) {
             from = afterWatermark;
         }
-        Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
+        Instant oldest = oldestReplayed(key.market());
         if (from.isBefore(oldest)) {
             log.warn(
                     "TR-02 {} {}: candles from {} to {} are beyond the replay window of {} and not replayed",
@@ -1513,7 +1530,7 @@ public class PaperMatchingWorker
         if (afterWatermark.isAfter(from)) {
             from = afterWatermark;
         }
-        Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
+        Instant oldest = oldestReplayed(MarketType.FUTURES);
         if (from.isBefore(oldest)) {
             log.warn(
                     "TR-42 FUTURES {}: mark candles from {} to {} are beyond the replay window of {} and not replayed",
@@ -1524,6 +1541,21 @@ public class PaperMatchingWorker
             from = oldest;
         }
         startCatchUp(key, from);
+    }
+
+    /**
+     * The oldest minute a start-up replay of the market reaches back to: the replay window, or further while an
+     * incident is open or just ended, to where its data stopped (D-158).
+     */
+    private Instant oldestReplayed(MarketType market) {
+        Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
+        if (health == null) {
+            return oldest;
+        }
+        return health.catchUpFrom(market)
+                .map(PaperMatchingWorker::minuteOf)
+                .filter(from -> from.isBefore(oldest))
+                .orElse(oldest);
     }
 
     /** The replay thread: one pair at a time, page by page, until it has caught up with the closed candles. */

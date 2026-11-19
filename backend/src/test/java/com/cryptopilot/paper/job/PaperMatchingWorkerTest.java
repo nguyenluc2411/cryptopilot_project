@@ -24,6 +24,7 @@ import com.cryptopilot.market.LeverageBracketsReplaced;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
@@ -336,6 +337,48 @@ class PaperMatchingWorkerTest {
         verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_1);
         verify(market, timeout(WAIT))
                 .closedMinuteKlines(MarketType.SPOT, old.pairId(), MINUTE_2.minus(Duration.ofHours(24)));
+    }
+
+    /**
+     * D-158: started during an incident, a replay reaches back to where the market's data stopped, beyond its
+     * window; the other market keeps the window.
+     */
+    @Test
+    void D158_aStartUpReplayDuringAnIncident_reachesBackToIt_beyondTheWindow() {
+        Instant lastLive = MINUTE_0.minus(Duration.ofDays(2));
+        RestingOrder spot = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                UUID.randomUUID(),
+                OrderSide.SELL,
+                new BigDecimal("100"),
+                MINUTE_0.minus(Duration.ofDays(3)));
+        RestingOrder futures = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                UUID.randomUUID(),
+                OrderSide.SELL,
+                new BigDecimal("100"),
+                MINUTE_0.minus(Duration.ofDays(3)));
+        when(matching.restingOrders()).thenReturn(List.of(spot, futures));
+        MarketHealth health = mock(MarketHealth.class);
+        when(health.catchUpFrom(MarketType.SPOT)).thenReturn(Optional.of(lastLive.plusSeconds(25)));
+        when(health.catchUpFrom(MarketType.FUTURES)).thenReturn(Optional.empty());
+        worker = new PaperMatchingWorker(
+                matching,
+                market,
+                properties(true, true, Duration.ofMinutes(10)),
+                FUTURES_PROPERTIES,
+                clock,
+                recording,
+                health);
+        worker.start();
+
+        verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, spot.pairId(), lastLive);
+        verify(market, timeout(WAIT))
+                .closedMinuteKlines(MarketType.FUTURES, futures.pairId(), MINUTE_2.minus(Duration.ofHours(24)));
     }
 
     @Test

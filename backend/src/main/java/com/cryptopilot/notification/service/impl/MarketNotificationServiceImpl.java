@@ -1,6 +1,7 @@
 package com.cryptopilot.notification.service.impl;
 
 import com.cryptopilot.market.event.MarketPauseAnnounced;
+import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.notification.model.NewNotification;
@@ -110,6 +111,28 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
                     null,
                     null,
                     "MARKET_PAUSED_ADMIN:" + announced.incidentId() + ":" + admin));
+        }
+    }
+
+    @Override
+    @Transactional
+    public void recoveryOverdue(MarketRecoveryOverdue overdue) {
+        String content = overdue.beyondReplay()
+                ? name(overdue.market()) + " exchange data was lost since " + TIME.format(overdue.lastLiveAt())
+                        + ", longer than can be replayed. Trading stays closed until it is reopened by hand in the"
+                        + " market health console."
+                : name(overdue.market()) + " is still catching up on the exchange data lost since "
+                        + TIME.format(overdue.lastLiveAt()) + ", recovering since "
+                        + TIME.format(overdue.recoveringSince()) + ". Trading stays closed until it has.";
+        for (UUID admin : users.activeAdministrators()) {
+            writer.write(new NewNotification(
+                    admin,
+                    NotificationType.SYSTEM,
+                    name(overdue.market()) + " recovery needs attention",
+                    content,
+                    null,
+                    null,
+                    "MARKET_OVERDUE_ADMIN:" + overdue.incidentId() + ":" + admin));
         }
     }
 

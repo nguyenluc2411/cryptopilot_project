@@ -24,6 +24,13 @@ public interface MarketHealthService extends MarketHealth {
     void endMaintenance(MarketType market);
 
     /**
+     * Reopens a recovering market by an administrator's decision, though its engines have not said they caught up:
+     * for an outage longer than can be replayed (D-158). Refused with {@code DATA_CONFLICT} unless the market is
+     * recovering, so never while its data is lost.
+     */
+    void forceResume(MarketType market, UUID by);
+
+    /**
      * One tick of the monitor: moves the market to the state its signals call for, records the incident and publishes
      * what changed. Maintenance is the service's own; the signals' flag is ignored.
      *

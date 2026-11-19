@@ -1,10 +1,13 @@
 package com.cryptopilot.market.service.impl;
 
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.event.MarketHealthChanged;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
+import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.market.event.MarketRecoveryStarted;
 import com.cryptopilot.market.event.MarketTradingPaused;
 import com.cryptopilot.market.event.MarketTradingResumed;
@@ -17,6 +20,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.MarketIncidentRepository;
 import com.cryptopilot.market.service.MarketHealthService;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.Map;
@@ -52,6 +56,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class MarketHealthServiceImpl implements MarketHealthService {
 
+    /** How long after an incident ended the engines still catch up from it: the timed work runs once it is open. */
+    static final Duration CATCH_UP_AFTER_RESUME = Duration.ofHours(1);
+
     private static final Logger log = LoggerFactory.getLogger(MarketHealthServiceImpl.class);
 
     private final MarketHealthProperties properties;
@@ -60,6 +67,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     private final ApplicationEventPublisher events;
     private final Clock clock;
     private final Map<MarketType, Status> statuses = new EnumMap<>(MarketType.class);
+    private final Map<MarketType, Ended> ended = new EnumMap<>(MarketType.class);
 
     public MarketHealthServiceImpl(
             MarketHealthProperties properties,
@@ -79,8 +87,17 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                     open.kind() == IncidentKind.MAINTENANCE ? MarketHealthState.MAINTENANCE : MarketHealthState.PAUSED;
             // Announced before the restart if it was open long enough; a second notice would be written once only.
             boolean announced = !open.pausedAt().plus(properties.notifyAfter()).isAfter(clock.instant());
-            statuses.put(open.market(), new Status(state, open.id(), open.lastLiveAt(), open.pausedAt(), announced));
+            statuses.put(open.market(), Status.closed(state, open.id(), open.lastLiveAt(), open.pausedAt(), announced));
             log.warn("D-158 {} starts {}: incident {} open since {}", open.market(), state, open.id(), open.pausedAt());
+        }
+        for (MarketType market : MarketType.values()) {
+            if (statuses.get(market).incidentId() == null) {
+                incidents.findRecent(market, 1).stream()
+                        .filter(incident -> incident.resumedAt() != null)
+                        .findFirst()
+                        .ifPresent(
+                                incident -> ended.put(market, new Ended(incident.lastLiveAt(), incident.resumedAt())));
+            }
         }
     }
 
@@ -98,6 +115,40 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         if (!current.state().tradingOpen()) {
             throw new TradingPausedException(market, current.state(), current.since());
         }
+    }
+
+    @Override
+    public synchronized Optional<Instant> catchUpFrom(MarketType market) {
+        Instant now = clock.instant();
+        Status current = statuses.get(market);
+        Instant from = null;
+        if (current.incidentId() != null) {
+            from = current.since();
+        } else {
+            Ended last = ended.get(market);
+            if (last != null && last.resumedAt().plus(CATCH_UP_AFTER_RESUME).isAfter(now)) {
+                from = last.lastLiveAt();
+            }
+        }
+        if (from == null) {
+            return Optional.empty();
+        }
+        Instant oldest = now.minus(properties.maxOutageReplay());
+        return Optional.of(from.isBefore(oldest) ? oldest : from);
+    }
+
+    @Override
+    @Transactional
+    public synchronized void forceResume(MarketType market, UUID by) {
+        Status current = statuses.get(market);
+        if (current.state() != MarketHealthState.RECOVERING) {
+            throw new BusinessException(
+                    ErrorCode.DATA_CONFLICT,
+                    market + " is " + current.state() + ", not recovering: only a recovering market can be reopened");
+        }
+        resume(market, current);
+        log.warn("D-158 {} reopened by administrator {} before its engines caught up", market, by);
+        changed(market, MarketHealthState.RECOVERING, MarketHealthState.LIVE);
     }
 
     @Override
@@ -124,7 +175,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                     null,
                     message,
                     by));
-            held = new Status(MarketHealthState.MAINTENANCE, id, now, now, false);
+            held = Status.closed(MarketHealthState.MAINTENANCE, id, now, now, false);
             events.publishEvent(new MarketTradingPaused(
                     market, id, MarketHealthState.MAINTENANCE, IncidentReason.MAINTENANCE, now));
         } else {
@@ -164,8 +215,16 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             current = announce(market, current, reason, null);
             statuses.put(market, current);
         }
+        boolean beyondReplay = beyondReplay(current);
+        if (beyondReplay) {
+            // Not all of the missed data can be replayed: only an administrator reopens the market (D-158).
+            signals = signals.withRecoveryDone(false);
+        }
         MarketHealthState to =
                 machine.next(from, signals.withMaintenance(from == MarketHealthState.MAINTENANCE), clock.instant());
+        if (to == MarketHealthState.RECOVERING && from == MarketHealthState.RECOVERING) {
+            tellOverdue(market, current, beyondReplay);
+        }
         if (to == from) {
             return to;
         }
@@ -193,7 +252,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         Instant lastLiveAt = signals.lastLiveAt().isAfter(now) ? now : signals.lastLiveAt();
         incidents.open(
                 new MarketIncident(id, market, IncidentKind.OUTAGE, reason, lastLiveAt, now, null, null, null, null));
-        statuses.put(market, new Status(MarketHealthState.PAUSED, id, lastLiveAt, now, false));
+        statuses.put(market, Status.closed(MarketHealthState.PAUSED, id, lastLiveAt, now, false));
         events.publishEvent(new MarketTradingPaused(market, id, MarketHealthState.PAUSED, reason, lastLiveAt));
         log.warn("D-158 {} trading paused ({}): no live data since {}", market, reason, lastLiveAt);
     }
@@ -209,16 +268,50 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     }
 
     private void recover(MarketType market, Status current) {
-        incidents.recovering(current.incidentId(), clock.instant());
-        statuses.put(market, current.in(MarketHealthState.RECOVERING));
+        Instant now = clock.instant();
+        incidents.recovering(current.incidentId(), now);
+        Status recovering = current.recoveringFrom(now);
+        statuses.put(market, recovering);
         events.publishEvent(new MarketRecoveryStarted(market, current.incidentId(), current.since()));
         log.info("D-158 {} recovering: replaying from {}", market, current.since());
+        if (beyondReplay(recovering)) {
+            tellOverdue(market, recovering, true);
+        }
+    }
+
+    /** Whether the incident's data was lost longer than the engines replay (D-158). */
+    private boolean beyondReplay(Status current) {
+        return current.incidentId() != null
+                && current.since().isBefore(clock.instant().minus(properties.maxOutageReplay()));
+    }
+
+    /**
+     * Tells the administrators, once per incident, of a recovery that needs them: beyond the replay at once, otherwise
+     * once it has run longer than recovery-timeout.
+     */
+    private void tellOverdue(MarketType market, Status current, boolean beyondReplay) {
+        if (current.overdueTold() || current.recoveringAt() == null) {
+            return;
+        }
+        if (!beyondReplay
+                && current.recoveringAt().plus(properties.recoveryTimeout()).isAfter(clock.instant())) {
+            return;
+        }
+        events.publishEvent(new MarketRecoveryOverdue(
+                market, current.incidentId(), current.since(), current.recoveringAt(), beyondReplay));
+        statuses.put(market, current.overdueToldNow());
+        log.warn(
+                "D-158 {} recovery of incident {} needs an administrator: {}",
+                market,
+                current.incidentId(),
+                beyondReplay ? "data lost longer than max-outage-replay" : "running since " + current.recoveringAt());
     }
 
     private void resume(MarketType market, Status current) {
         Instant now = clock.instant();
         incidents.resume(current.incidentId(), now);
         statuses.put(market, Status.LIVE);
+        ended.put(market, new Ended(current.since(), now));
         events.publishEvent(
                 new MarketTradingResumed(market, current.incidentId(), current.since(), now, current.announced()));
         log.info("D-158 {} trading resumed; incident {} closed", market, current.incidentId());
@@ -231,20 +324,43 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     }
 
     /**
-     * A market's state, its open incident if any, since when it has not been live, when trading closed, and whether
-     * the Traders were told of the incident.
+     * A market's state, its open incident if any, since when it has not been live, when trading closed, whether the
+     * Traders were told of the incident, when its current recovery began, and whether the administrators were told it
+     * needs them.
      */
     private record Status(
-            MarketHealthState state, UUID incidentId, Instant since, Instant pausedAt, boolean announced) {
+            MarketHealthState state,
+            UUID incidentId,
+            Instant since,
+            Instant pausedAt,
+            boolean announced,
+            Instant recoveringAt,
+            boolean overdueTold) {
 
-        private static final Status LIVE = new Status(MarketHealthState.LIVE, null, null, null, false);
+        private static final Status LIVE = new Status(MarketHealthState.LIVE, null, null, null, false, null, false);
+
+        private static Status closed(
+                MarketHealthState state, UUID incidentId, Instant since, Instant pausedAt, boolean announced) {
+            return new Status(state, incidentId, since, pausedAt, announced, null, false);
+        }
 
         private Status in(MarketHealthState next) {
-            return new Status(next, incidentId, since, pausedAt, announced);
+            return new Status(next, incidentId, since, pausedAt, announced, recoveringAt, overdueTold);
         }
 
         private Status announcedNow() {
-            return new Status(state, incidentId, since, pausedAt, true);
+            return new Status(state, incidentId, since, pausedAt, true, recoveringAt, overdueTold);
+        }
+
+        private Status recoveringFrom(Instant at) {
+            return new Status(MarketHealthState.RECOVERING, incidentId, since, pausedAt, announced, at, overdueTold);
+        }
+
+        private Status overdueToldNow() {
+            return new Status(state, incidentId, since, pausedAt, announced, recoveringAt, true);
         }
     }
+
+    /** When the data of a market's last incident was last live, and when trading reopened. */
+    private record Ended(Instant lastLiveAt, Instant resumedAt) {}
 }

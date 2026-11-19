@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.event.MarketPauseAnnounced;
+import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -98,6 +99,22 @@ class MarketNotificationServiceImplTest {
         assertThat(written).extracting(NewNotification::recipientId).containsExactly(first, second);
         assertThat(written).allMatch(notice -> notice.type() == NotificationType.SYSTEM);
         assertThat(written.getFirst().content()).contains("the exchange banned the server's address");
+    }
+
+    /** D-158: a recovery that needs an administrator is told to each active one, saying why. */
+    @Test
+    void D158_anOverdueRecovery_isToldToEveryAdministrator() {
+        UUID first = UUID.randomUUID();
+        when(users.activeAdministrators()).thenReturn(List.of(first));
+
+        service.recoveryOverdue(new MarketRecoveryOverdue(MarketType.FUTURES, INCIDENT, LIVE, RESUMED, true));
+        service.recoveryOverdue(new MarketRecoveryOverdue(MarketType.SPOT, INCIDENT, LIVE, RESUMED, false));
+
+        List<NewNotification> written = written(2);
+        assertThat(written).allMatch(notice -> notice.type() == NotificationType.SYSTEM);
+        assertThat(written.getFirst().content()).contains("reopened by hand");
+        assertThat(written.getFirst().sourceKey()).isEqualTo("MARKET_OVERDUE_ADMIN:" + INCIDENT + ":" + first);
+        assertThat(written.getLast().content()).contains("still catching up");
     }
 
     private PaperIncidentNotice paper(PaperIncidentNotice.Kind kind, long fills, long liquidations, String message) {

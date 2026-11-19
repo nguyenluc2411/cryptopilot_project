@@ -2,6 +2,8 @@ package com.cryptopilot.market;
 
 import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
+import java.time.Instant;
+import java.util.Optional;
 
 /**
  * What the {@code market} module tells other modules about whether a market may be traded now (D-158): while its
@@ -26,4 +28,11 @@ public interface MarketHealth {
      * request racing a pause either completes before it or is refused.
      */
     void requireTrading(MarketType market);
+
+    /**
+     * Where the engines replay the market from (D-158): while an incident is open, and for an hour after it
+     * ended, when its data was last live, never more than {@code max-outage-replay} back. Empty otherwise: the engines
+     * keep their own windows. A replay window or a lookback reaches at least this far back.
+     */
+    Optional<Instant> catchUpFrom(MarketType market);
 }

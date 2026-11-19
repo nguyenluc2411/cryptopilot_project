@@ -395,6 +395,11 @@ cryptopilot:
       stable-before-recover: 15s
       # An outage shorter than this writes no notice; maintenance is announced at once.
       notify-after: 2m
+      # A recovery running longer than this is told to the administrators; trading stays closed.
+      recovery-timeout: 15m
+      # D-158: the engines replay an incident's data at most this far back; a market whose data was lost longer stays
+      # recovering until an administrator reopens it.
+      max-outage-replay: 7d
     stream:
       # NSF-03: the public market streams of the enabled pairs. Off here, on in the dev and prod profiles, so a
       # test context never connects to the exchange. Hosts verified 2026-09-24 (TECHNICAL_DESIGN 7.1.1): futures

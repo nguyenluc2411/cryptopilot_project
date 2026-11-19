@@ -1,6 +1,7 @@
 package com.cryptopilot.notification.job;
 
 import com.cryptopilot.market.event.MarketPauseAnnounced;
+import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.notification.service.MarketNotificationService;
 import com.cryptopilot.paper.event.PaperIncidentNotice;
 import com.cryptopilot.trading.event.PlanIncidentNotice;
@@ -37,5 +38,10 @@ public class MarketNotificationListener {
     @ApplicationModuleListener
     public void on(MarketPauseAnnounced announced) {
         notifications.pauseAnnounced(announced);
+    }
+
+    @ApplicationModuleListener
+    public void on(MarketRecoveryOverdue overdue) {
+        notifications.recoveryOverdue(overdue);
     }
 }

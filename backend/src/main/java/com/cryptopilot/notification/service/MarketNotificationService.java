@@ -1,6 +1,7 @@
 package com.cryptopilot.notification.service;
 
 import com.cryptopilot.market.event.MarketPauseAnnounced;
+import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.paper.event.PaperIncidentNotice;
 import com.cryptopilot.trading.event.PlanIncidentNotice;
 
@@ -21,4 +22,7 @@ public interface MarketNotificationService {
 
     /** Tells every active administrator that trading on a market is paused. */
     void pauseAnnounced(MarketPauseAnnounced announced);
+
+    /** Tells every active administrator that a market's recovery needs them. */
+    void recoveryOverdue(MarketRecoveryOverdue overdue);
 }

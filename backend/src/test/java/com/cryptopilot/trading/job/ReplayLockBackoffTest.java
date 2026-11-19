@@ -131,7 +131,8 @@ class ReplayLockBackoffTest {
                         Duration.ofSeconds(5),
                         new MatchingProperties.Replay(true, Duration.ofHours(24), Duration.ZERO, 0, 1440)),
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                locks);
+                locks,
+                null);
         feed.start();
         feed.onMinuteKline(update(minute(1), true));
         feed.onMinuteKline(update(minute(4), false));

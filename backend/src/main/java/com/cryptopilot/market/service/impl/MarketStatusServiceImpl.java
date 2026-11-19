@@ -6,6 +6,7 @@ import com.cryptopilot.admin.model.enums.AuditAction;
 import com.cryptopilot.admin.model.enums.AuditedEntity;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.market.dto.request.MaintenanceRequest;
+import com.cryptopilot.market.dto.request.ResumeRequest;
 import com.cryptopilot.market.dto.response.MarketHealthResponse;
 import com.cryptopilot.market.dto.response.MarketIncidentResponse;
 import com.cryptopilot.market.dto.response.MarketStatusResponse;
@@ -34,7 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
  * market from {@link MarketHealthService}, the open incident's times, reason and message, and, for ten minutes after
  * an incident ended, when it did, so the banner can say trading is back.
  *
- * <p>Maintenance is audited as a change of a system setting named {@code market.maintenance.<MARKET>} (BR-57).
+ * <p>Maintenance is audited as a change of a system setting named {@code market.maintenance.<MARKET>}, a reopening
+ * by hand as one named {@code market.resume.<MARKET>} (BR-57).
  *
  * <p>Rule: NSF-03; BR-57; D-158.
  */
@@ -89,6 +91,19 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                     setting(market, before, null),
                     setting(market, on, on ? blankToNull(request.message()) : null)));
         }
+        return status();
+    }
+
+    @Override
+    @Transactional
+    public MarketStatusResponse resume(UUID adminId, ResumeRequest request) {
+        MarketType market = request.market();
+        health.forceResume(market, adminId);
+        Map<String, Object> resumed = new LinkedHashMap<>();
+        resumed.put("key", "market.resume." + market.name());
+        resumed.put("on", true);
+        admin.audit(new AuditEntry(
+                adminId, AuditAction.CONFIGURATION_CHANGED, AuditedEntity.SYSTEM_SETTING, null, null, resumed));
         return status();
     }
 

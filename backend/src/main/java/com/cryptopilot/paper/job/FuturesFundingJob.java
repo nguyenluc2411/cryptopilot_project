@@ -61,6 +61,17 @@ public class FuturesFundingJob {
      *
      * @return how many fees it wrote
      */
+    /**
+     * Where a run looks back from: the lookback, or further while an incident just ended, to where its data stopped,
+     * so the settlements that fell due while the market was closed are taken (D-158).
+     */
+    private Instant from(Instant now) {
+        Instant lookback = now.minus(properties.lookback());
+        return health.catchUpFrom(MarketType.FUTURES)
+                .filter(from -> from.isBefore(lookback))
+                .orElse(lookback);
+    }
+
     public int run() {
         if (!health.tradingOpen(MarketType.FUTURES)) {
             return 0;
@@ -68,7 +79,7 @@ public class FuturesFundingJob {
         Instant now = clock.instant();
         int written = 0;
         try {
-            for (FuturesFunding.Owed owed : funding.owed(now.minus(properties.lookback()), now)) {
+            for (FuturesFunding.Owed owed : funding.owed(from(now), now)) {
                 try {
                     if (funding.settle(owed)) {
                         written++;

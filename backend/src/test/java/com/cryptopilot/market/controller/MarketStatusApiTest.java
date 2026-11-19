@@ -167,6 +167,33 @@ class MarketStatusApiTest {
         mvc.perform(get(STATUS)).andExpect(jsonPath("$.markets[0].state").value("LIVE"));
     }
 
+    /**
+     * D-158: only an administrator reopens a market by hand, and only a recovering one: a live market, or one whose data
+     * is lost, is refused, and nothing is audited.
+     */
+    @Test
+    void D158_reopeningByHand_isForAdministrators_andOnlyForARecoveringMarket() throws Exception {
+        UUID admin = account(UserRole.ADMIN);
+
+        as(account(UserRole.TRADER), post(ADMIN + "/resume"), """
+                        {"market": "FUTURES"}""").andExpect(status().isForbidden());
+        as(admin, post(ADMIN + "/resume"), "{}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.market").value("MSG01"));
+        as(admin, post(ADMIN + "/resume"), """
+                        {"market": "FUTURES"}""")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+        as(admin, post(ADMIN + "/maintenance"), """
+                        {"market": "FUTURES", "on": true}""").andExpect(status().isOk());
+        as(admin, post(ADMIN + "/resume"), """
+                        {"market": "FUTURES"}""").andExpect(status().isConflict());
+
+        assertThat(sql.sql("""
+                        select count(*) from audit_log
+                         where user_id = ? and new_value ->> 'key' like 'market.resume.%'""").param(admin).query(Long.class).single()).isZero();
+    }
+
     private long audited(UUID admin, String on) {
         return sql.sql("""
                         select count(*) from audit_log

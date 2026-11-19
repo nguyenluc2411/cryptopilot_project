@@ -1,6 +1,7 @@
 package com.cryptopilot.market.service;
 
 import com.cryptopilot.market.dto.request.MaintenanceRequest;
+import com.cryptopilot.market.dto.request.ResumeRequest;
 import com.cryptopilot.market.dto.response.MarketIncidentResponse;
 import com.cryptopilot.market.dto.response.MarketStatusResponse;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -23,4 +24,10 @@ public interface MarketStatusService {
 
     /** Starts or ends maintenance of a market, audited as the administrator's change; returns the status after. */
     MarketStatusResponse maintenance(UUID adminId, MaintenanceRequest request);
+
+    /**
+     * Reopens a recovering market by an administrator's decision (D-158), audited; refused with {@code DATA_CONFLICT}
+     * unless it is recovering.
+     */
+    MarketStatusResponse resume(UUID adminId, ResumeRequest request);
 }

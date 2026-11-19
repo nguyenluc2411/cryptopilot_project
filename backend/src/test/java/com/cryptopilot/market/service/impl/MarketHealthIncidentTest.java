@@ -3,12 +3,15 @@ package com.cryptopilot.market.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.cryptopilot.common.exception.BusinessException;
+import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.MarketRecoveryCheck;
 import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.event.MarketHealthChanged;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
+import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.market.event.MarketRecoveryStarted;
 import com.cryptopilot.market.event.MarketTradingPaused;
 import com.cryptopilot.market.event.MarketTradingResumed;
@@ -317,6 +320,113 @@ class MarketHealthIncidentTest {
 
         assertThat(published).noneMatch(event -> event instanceof MarketPauseAnnounced);
         assertThat(((MarketTradingResumed) published.getLast()).announced()).isFalse();
+    }
+
+    /**
+     * D-158: while an incident is open the engines replay from where its data stopped, however long ago, but never more
+     * than max-outage-replay (7 days) back; for an hour after it ends too, for the timed work that runs once it is open.
+     */
+    @Test
+    void D158_theCatchUp_reachesBackToTheIncident_atMostSevenDays() {
+        MutableTestClock clock = new MutableTestClock(START);
+        MarketHealthServiceImpl health = new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock);
+        assertThat(health.catchUpFrom(MarketType.FUTURES)).isEmpty();
+
+        Instant lastLive = START.minus(Duration.ofDays(3));
+        health.evaluate(MarketType.FUTURES, silentSince(lastLive), IncidentReason.STREAM_LOST);
+        assertThat(health.catchUpFrom(MarketType.FUTURES)).contains(lastLive);
+        assertThat(health.catchUpFrom(MarketType.SPOT)).isEmpty();
+        assertThat(service(true).catchUpFrom(MarketType.FUTURES))
+                .as("after a restart")
+                .contains(lastLive);
+
+        health.evaluate(MarketType.FUTURES, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        health.evaluate(MarketType.FUTURES, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST);
+        assertThat(health.state(MarketType.FUTURES)).isEqualTo(MarketHealthState.LIVE);
+        clock.advance(Duration.ofMinutes(59));
+        assertThat(health.catchUpFrom(MarketType.FUTURES)).as("just ended").contains(lastLive);
+        assertThat(new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock)
+                        .catchUpFrom(MarketType.FUTURES))
+                .as("just ended, after a restart")
+                .contains(lastLive);
+        clock.advance(Duration.ofMinutes(2));
+        assertThat(health.catchUpFrom(MarketType.FUTURES)).isEmpty();
+
+        health.evaluate(
+                MarketType.SPOT, silentSince(clock.instant().minus(Duration.ofDays(9))), IncidentReason.STREAM_LOST);
+        assertThat(health.catchUpFrom(MarketType.SPOT)).contains(clock.instant().minus(Duration.ofDays(7)));
+    }
+
+    /**
+     * D-158: a recovery that has not ended after recovery-timeout (15 minutes) is told to the administrators, once; it
+     * still reopens by itself once the engines have caught up.
+     */
+    @Test
+    void D158_aRecoveryLongerThanTheTimeout_isToldOnce_andStillReopens() {
+        MutableTestClock clock = new MutableTestClock(START);
+        List<Object> published = new ArrayList<>();
+        MarketHealthServiceImpl health =
+                new MarketHealthServiceImpl(properties(true), incidents, publishedOutside(published), clock);
+        health.evaluate(MarketType.SPOT, silentSince(START.minusSeconds(30)), IncidentReason.STREAM_LOST);
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        assertThat(health.state(MarketType.SPOT)).isEqualTo(MarketHealthState.RECOVERING);
+
+        clock.advance(Duration.ofMinutes(14));
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        assertThat(published).noneMatch(event -> event instanceof MarketRecoveryOverdue);
+        clock.advance(Duration.ofMinutes(2));
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        clock.advance(Duration.ofMinutes(2));
+        health.evaluate(MarketType.SPOT, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+
+        assertThat(published)
+                .filteredOn(event -> event instanceof MarketRecoveryOverdue)
+                .singleElement()
+                .isInstanceOfSatisfying(MarketRecoveryOverdue.class, overdue -> {
+                    assertThat(overdue.market()).isEqualTo(MarketType.SPOT);
+                    assertThat(overdue.lastLiveAt()).isEqualTo(START.minusSeconds(30));
+                    assertThat(overdue.recoveringSince()).isEqualTo(START);
+                    assertThat(overdue.beyondReplay()).isFalse();
+                });
+        assertThat(health.evaluate(
+                        MarketType.SPOT, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST))
+                .isEqualTo(MarketHealthState.LIVE);
+    }
+
+    /**
+     * D-158: data lost longer than max-outage-replay cannot all be replayed, so the market never reopens by itself: it
+     * stays recovering, the administrators are told at once, and only one of them reopens it.
+     */
+    @Test
+    void D158_anOutageBeyondTheReplay_staysRecovering_untilAnAdministratorReopensIt() {
+        MutableTestClock clock = new MutableTestClock(START);
+        List<Object> published = new ArrayList<>();
+        MarketHealthServiceImpl health =
+                new MarketHealthServiceImpl(properties(true), incidents, publishedOutside(published), clock);
+        assertThatThrownBy(() -> health.forceResume(MarketType.FUTURES, null))
+                .as("a live market")
+                .isInstanceOfSatisfying(BusinessException.class, refused -> assertThat(refused.errorCode())
+                        .isEqualTo(ErrorCode.DATA_CONFLICT));
+
+        health.evaluate(MarketType.FUTURES, silentSince(START.minus(Duration.ofDays(8))), IncidentReason.STREAM_LOST);
+        assertThatThrownBy(() -> health.forceResume(MarketType.FUTURES, null))
+                .as("a paused market, its data still lost")
+                .isInstanceOf(BusinessException.class);
+        health.evaluate(MarketType.FUTURES, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        assertThat(health.evaluate(
+                        MarketType.FUTURES, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST))
+                .isEqualTo(MarketHealthState.RECOVERING);
+        assertThat(published)
+                .filteredOn(event -> event instanceof MarketRecoveryOverdue)
+                .singleElement()
+                .isInstanceOfSatisfying(MarketRecoveryOverdue.class, overdue -> assertThat(overdue.beyondReplay())
+                        .isTrue());
+
+        health.forceResume(MarketType.FUTURES, UUID.randomUUID());
+
+        assertThat(health.state(MarketType.FUTURES)).isEqualTo(MarketHealthState.LIVE);
+        assertThat(incidents.findOpen(MarketType.FUTURES)).isEmpty();
+        assertThat(published.getLast()).isInstanceOf(MarketTradingResumed.class);
     }
 
     private static HealthSignals silentSince(Instant lastLive) {

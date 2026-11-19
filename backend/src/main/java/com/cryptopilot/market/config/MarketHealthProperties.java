@@ -18,6 +18,9 @@ import org.springframework.validation.annotation.Validated;
  * @param pauseAfter how long without data before trading on the market is paused
  * @param stableBeforeRecover how long the data must flow without a break before a paused market starts recovering
  * @param notifyAfter how long an outage must last before the Traders are told of it; maintenance is told at once
+ * @param recoveryTimeout how long a recovery may run before the administrators are told of it
+ * @param maxOutageReplay how far back the engines replay an incident's data at most; a market whose data was lost
+ *     longer does not reopen by itself
  */
 @Validated
 @ConfigurationProperties(prefix = "cryptopilot.market.health")
@@ -26,7 +29,9 @@ public record MarketHealthProperties(
         @NotNull @DefaultValue("10s") Duration reconnectingAfter,
         @NotNull @DefaultValue("30s") Duration pauseAfter,
         @NotNull @DefaultValue("15s") Duration stableBeforeRecover,
-        @NotNull @DefaultValue("2m") Duration notifyAfter) {
+        @NotNull @DefaultValue("2m") Duration notifyAfter,
+        @NotNull @DefaultValue("15m") Duration recoveryTimeout,
+        @NotNull @DefaultValue("7d") Duration maxOutageReplay) {
 
     @ConstructorBinding
     public MarketHealthProperties {
@@ -35,9 +40,19 @@ public record MarketHealthProperties(
         }
     }
 
-    /** The thresholds with the default notify-after of two minutes. */
+    /**
+     * The thresholds with the defaults: notify-after two minutes, recovery-timeout fifteen minutes, max-outage-replay
+     * seven days.
+     */
     public MarketHealthProperties(
             boolean enabled, Duration reconnectingAfter, Duration pauseAfter, Duration stableBeforeRecover) {
-        this(enabled, reconnectingAfter, pauseAfter, stableBeforeRecover, Duration.ofMinutes(2));
+        this(
+                enabled,
+                reconnectingAfter,
+                pauseAfter,
+                stableBeforeRecover,
+                Duration.ofMinutes(2),
+                Duration.ofMinutes(15),
+                Duration.ofDays(7));
     }
 }
