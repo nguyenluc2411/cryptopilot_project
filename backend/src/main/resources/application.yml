@@ -474,6 +474,17 @@ cryptopilot:
           max-futures-leverage: 10
           max-total-open-risk-percent: 6
           min-setup-score-to-alert: 55
+    profile-image:
+      # D-99: avatars and member page banners, on the community's Cloudinary account (same variables) in a folder of
+      # their own, outside the folder the post media sweep lists. All three empty: uploads are refused.
+      cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+      api-key: ${CLOUDINARY_API_KEY:}
+      api-secret: ${CLOUDINARY_API_SECRET:}
+      api-base-url: https://api.cloudinary.com
+      # Every image is stored under <folder>/<owner account>/<random key>.
+      folder: cryptopilot/profiles
+      connect-timeout: 5s
+      read-timeout: 10s
   paper:
     futures:
       # TR-22a, plan 8.2.1: a mark price older than this means a lost stream; its pair is MARK_STALE, where only

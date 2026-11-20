@@ -48,6 +48,8 @@ class OpenApiDocsTest {
             "/api/v1/me/password",
             "/api/v1/me/profile",
             "/api/v1/me/notification-preferences",
+            "/api/v1/me/community-profile",
+            "/api/v1/me/profile-images/upload-signature",
             "/api/v1/me/risk-profile",
             "/api/v1/me/risk-questionnaire",
             "/api/v1/me/devices",
@@ -174,6 +176,9 @@ class OpenApiDocsTest {
             "/api/v1/community/members/{memberId}/follow",
             "/api/v1/community/members/{memberId}/followers",
             "/api/v1/community/members/{memberId}/following",
+            "/api/v1/community/members/{memberId}/token-mentions",
+            "/api/v1/community/members/{memberId}/comments",
+            "/api/v1/community/members/{memberId}/reactions",
             "/api/v1/community/members/{memberId}/block",
             "/api/v1/community/blocks",
             "/api/v1/community/members",
@@ -241,7 +246,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/orders/{orderCode}/reconcile",
             "/api/v1/admin/orders/{orderCode}/handled");
 
-    private static final int OPERATIONS = 258;
+    private static final int OPERATIONS = 263;
 
     @Autowired
     private MockMvc mvc;

@@ -26,6 +26,11 @@ import java.math.BigDecimal;
  * @param riskProfile the risk profile (BR-66), CONSERVATIVE until the Trader chooses (D-64)
  * @param notifyEmail whether notifications also go out by mail
  * @param notifyPush whether notifications also go out as push messages
+ * @param bio the introduction on the member page, or {@code null} (D-99)
+ * @param websiteUrl the link on the member page, or {@code null} (D-99)
+ * @param bannerUrl the cover image of the member page, or {@code null} for the default (D-99)
+ * @param avatarPublicId the key the avatar is stored under, sent back unchanged to keep it (D-99)
+ * @param bannerPublicId the key the banner is stored under, sent back unchanged to keep it (D-99)
  */
 public record ProfileResponse(
         String email,
@@ -36,4 +41,9 @@ public record ProfileResponse(
         TradingStyle tradingStyle,
         RiskProfile riskProfile,
         boolean notifyEmail,
-        boolean notifyPush) {}
+        boolean notifyPush,
+        String bio,
+        String websiteUrl,
+        String bannerUrl,
+        String avatarPublicId,
+        String bannerPublicId) {}

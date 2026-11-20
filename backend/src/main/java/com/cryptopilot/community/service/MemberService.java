@@ -4,7 +4,10 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.community.dto.response.AuthorResponse;
 import com.cryptopilot.community.dto.response.EngagementResponse;
 import com.cryptopilot.community.dto.response.InfluencerResponse;
+import com.cryptopilot.community.dto.response.MemberCommentResponse;
 import com.cryptopilot.community.dto.response.MemberProfileResponse;
+import com.cryptopilot.community.dto.response.PostSummaryResponse;
+import com.cryptopilot.community.dto.response.TokenMentionResponse;
 import com.cryptopilot.community.model.enums.InfluencerRank;
 import java.time.Instant;
 import java.util.List;
@@ -62,6 +65,25 @@ public interface MemberService {
      * caller; {@code caller} is {@code null} for a Guest. MSG41 when the member blocks the caller.
      */
     PageResponse<AuthorResponse> following(UUID caller, UUID memberId, Integer page, Integer pageSize);
+
+    /**
+     * The coins a member's published posts talk about, for Token Mentions on their page (D-99): the most posted about
+     * first, at most {@code limit}, 1 to 20, 10 when {@code null}. MSG41 when the member blocks the caller.
+     */
+    List<TokenMentionResponse> tokenMentions(UUID caller, UUID memberId, Integer limit);
+
+    /**
+     * One page of a member's published comments, the newest first, for the Comments tab of their page (D-99), without
+     * those on the posts of a member in a block with the caller. MSG41 when the member blocks the caller.
+     */
+    PageResponse<MemberCommentResponse> comments(UUID caller, UUID memberId, Integer page, Integer pageSize);
+
+    /**
+     * One page of the published posts a member liked or voted on, the most recently first, for the Reactions tab of
+     * their page (D-99), without the posts of a member in a block with the caller. MSG41 when the member blocks the
+     * caller.
+     */
+    PageResponse<PostSummaryResponse> reactions(UUID caller, UUID memberId, Integer page, Integer pageSize);
 
     /** One page of the members the caller blocks, the most recent first; only the caller sees it. */
     PageResponse<AuthorResponse> blocked(UUID caller, Integer page, Integer pageSize);

@@ -262,7 +262,13 @@ public class UserServiceImpl implements UserService {
                 .filter(account -> account.getAccountStatus() != AccountStatus.BANNED)
                 .flatMap(account -> profiles.findById(userId)
                         .map(profile -> new PublicProfile(
-                                userId, profile.getDisplayName(), profile.getAvatarUrl(), account.getCreatedAt())));
+                                userId,
+                                profile.getDisplayName(),
+                                profile.getAvatarUrl(),
+                                account.getCreatedAt(),
+                                profile.getBio(),
+                                profile.getWebsiteUrl(),
+                                profile.getBannerUrl())));
     }
 
     @Override

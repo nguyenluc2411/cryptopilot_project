@@ -1,7 +1,9 @@
 package com.cryptopilot.user.service;
 
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.user.dto.request.CommunityProfileRequest;
 import com.cryptopilot.user.dto.request.UpdateProfileRequest;
+import com.cryptopilot.user.dto.response.ProfileImageUploadResponse;
 import com.cryptopilot.user.dto.response.ProfileResponse;
 import java.util.UUID;
 
@@ -30,4 +32,22 @@ public interface ProfileService {
 
     /** Saves the Notifications tab (UC-08). In-app notifications have no switch and stay on. */
     void updateNotificationPreferences(UUID userId, boolean email, boolean push);
+
+    /**
+     * A signed form to upload one avatar or banner of the caller's member page (D-99).
+     *
+     * @throws com.cryptopilot.common.exception.BusinessException {@code MEDIA_STORAGE_UNAVAILABLE} without a storage
+     */
+    ProfileImageUploadResponse signProfileImage(UUID userId);
+
+    /**
+     * Saves what the caller's member page says of them (D-99): introduction, link, avatar and banner, replaced as a
+     * whole. A replaced or cleared image is deleted from the storage once the save is committed.
+     *
+     * @throws com.cryptopilot.common.exception.FieldValidationException MSG32 ({@code MEDIA_INVALID}) for an image key
+     *     not signed for the caller, with nothing stored, or not an image within the size limit
+     * @throws com.cryptopilot.common.exception.BusinessException {@code MEDIA_STORAGE_UNAVAILABLE} when the storage
+     *     cannot be read
+     */
+    void updateCommunityProfile(UUID userId, CommunityProfileRequest request);
 }

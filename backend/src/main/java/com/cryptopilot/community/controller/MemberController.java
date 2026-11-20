@@ -5,7 +5,10 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.community.dto.response.AuthorResponse;
 import com.cryptopilot.community.dto.response.EngagementResponse;
 import com.cryptopilot.community.dto.response.InfluencerResponse;
+import com.cryptopilot.community.dto.response.MemberCommentResponse;
 import com.cryptopilot.community.dto.response.MemberProfileResponse;
+import com.cryptopilot.community.dto.response.PostSummaryResponse;
+import com.cryptopilot.community.dto.response.TokenMentionResponse;
 import com.cryptopilot.community.model.enums.InfluencerRank;
 import com.cryptopilot.community.service.MemberService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -27,9 +30,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Member pages, following and blocking, as on CoinMarketCap Community (D-125). Anyone reads a page and its follower
- * lists; a Trader follows, blocks and looks members up to mention them. A member's posts are
- * {@code GET /posts?author=}.
+ * Member pages, following and blocking, as on CoinMarketCap Community (D-125). Anyone reads a page, its follower
+ * lists, its Token Mentions and its Comments and Reactions tabs; a Trader follows, blocks and looks members up to
+ * mention them. A member's posts are {@code GET /posts?author=}.
  *
  * <p>Rule: D-99.
  */
@@ -93,6 +96,44 @@ public class MemberController {
     @DeleteMapping(MEMBER + "/block")
     public EngagementResponse unblock(@AuthenticationPrincipal Jwt caller, @PathVariable UUID memberId) {
         return service.unblock(callerOf(caller), memberId);
+    }
+
+    @Operation(summary = "The coins a member's posts talk about, for Token Mentions on their page (D-99); public")
+    @ApiResponse(responseCode = "200", description = "The most posted about first, with the member's own lean")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such member, banned, or blocking the caller")
+    @GetMapping(MEMBER + "/token-mentions")
+    public List<TokenMentionResponse> tokenMentions(
+            @AuthenticationPrincipal Jwt caller,
+            @PathVariable UUID memberId,
+            @Parameter(description = "How many coins, 1 to 20; 10 when absent") @RequestParam(required = false)
+                    Integer limit) {
+        return service.tokenMentions(optionalCaller(caller), memberId, limit);
+    }
+
+    @Operation(summary = "A member's comments, the newest first, for the Comments tab of their page (D-99); public")
+    @ApiResponse(responseCode = "200", description = "One page of comments, each with the post it is on")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such member, banned, or blocking the caller")
+    @GetMapping(MEMBER + "/comments")
+    public PageResponse<MemberCommentResponse> comments(
+            @AuthenticationPrincipal Jwt caller,
+            @PathVariable UUID memberId,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize) {
+        return service.comments(optionalCaller(caller), memberId, page, pageSize);
+    }
+
+    @Operation(
+            summary = "The posts a member liked or voted on, the most recently first, for the Reactions tab of their"
+                    + " page (D-99); public")
+    @ApiResponse(responseCode = "200", description = "One page of post cards")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such member, banned, or blocking the caller")
+    @GetMapping(MEMBER + "/reactions")
+    public PageResponse<PostSummaryResponse> reactions(
+            @AuthenticationPrincipal Jwt caller,
+            @PathVariable UUID memberId,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize) {
+        return service.reactions(optionalCaller(caller), memberId, page, pageSize);
     }
 
     @Operation(summary = "A member's followers, the most recent first; public")

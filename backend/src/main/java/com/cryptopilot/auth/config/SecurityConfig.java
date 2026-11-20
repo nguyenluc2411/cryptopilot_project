@@ -177,6 +177,9 @@ public class SecurityConfig {
         "/api/v1/community/members/*",
         "/api/v1/community/members/*/followers",
         "/api/v1/community/members/*/following",
+        "/api/v1/community/members/*/token-mentions",
+        "/api/v1/community/members/*/comments",
+        "/api/v1/community/members/*/reactions",
         "/api/v1/community/influencers"
     };
 

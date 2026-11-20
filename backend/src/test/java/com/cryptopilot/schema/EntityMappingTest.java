@@ -169,7 +169,9 @@ class EntityMappingTest {
     void aProfile_survivesAWriteAndAReadWithEveryColumnIntact() {
         UserAccount account = persistedAccount("profile.owner@example.invalid");
         UserProfile profile = UserProfile.createFor(account.getId(), "Round Trip");
-        profile.changeAvatar("https://example.invalid/a.png");
+        profile.changeAvatar("https://example.invalid/a.png", "cryptopilot/profiles/a");
+        profile.changeBanner("https://example.invalid/b.png", "cryptopilot/profiles/b");
+        profile.describe("Swing trader, BTC and ETH", "https://x.com/round_trip");
         profile.updateTradingDefaults(new BigDecimal("1234.56780000"), new BigDecimal("1.250"), TradingStyle.SWING);
         profile.updateNotificationPreferences(false, true);
 
@@ -180,6 +182,11 @@ class EntityMappingTest {
                 .isEqualTo(account.getId());
         assertThat(reread.getDisplayName()).isEqualTo("Round Trip");
         assertThat(reread.getAvatarUrl()).isEqualTo("https://example.invalid/a.png");
+        assertThat(reread.getAvatarPublicId()).isEqualTo("cryptopilot/profiles/a");
+        assertThat(reread.getBannerUrl()).isEqualTo("https://example.invalid/b.png");
+        assertThat(reread.getBannerPublicId()).isEqualTo("cryptopilot/profiles/b");
+        assertThat(reread.getBio()).isEqualTo("Swing trader, BTC and ETH");
+        assertThat(reread.getWebsiteUrl()).isEqualTo("https://x.com/round_trip");
         assertThat(reread.getTradingStyle()).isEqualTo(TradingStyle.SWING);
         assertThat(reread.isNotifyEmail()).isFalse();
         assertThat(reread.isNotifyPush()).isTrue();

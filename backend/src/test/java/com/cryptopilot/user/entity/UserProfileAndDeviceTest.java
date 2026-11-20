@@ -50,17 +50,42 @@ class UserProfileAndDeviceTest {
         UserProfile profile = UserProfile.createFor(ACCOUNT, "Before");
 
         profile.rename("After");
-        profile.changeAvatar("https://example.invalid/avatar.png");
+        profile.changeAvatar("https://example.invalid/avatar.png", "cryptopilot/profiles/avatar");
         profile.updateTradingDefaults(new BigDecimal("2500.00000000"), new BigDecimal("1.500"), TradingStyle.DAY);
         profile.updateNotificationPreferences(false, false);
 
         assertThat(profile.getDisplayName()).isEqualTo("After");
         assertThat(profile.getAvatarUrl()).isEqualTo("https://example.invalid/avatar.png");
+        assertThat(profile.getAvatarPublicId()).isEqualTo("cryptopilot/profiles/avatar");
         assertThat(profile.getDefaultCapital()).isEqualByComparingTo("2500");
         assertThat(profile.getDefaultRiskPercent()).isEqualByComparingTo("1.5");
         assertThat(profile.getTradingStyle()).isEqualTo(TradingStyle.DAY);
         assertThat(profile.isNotifyEmail()).isFalse();
         assertThat(profile.isNotifyPush()).isFalse();
+    }
+
+    @Test
+    void aProfile_describesItselfForItsMemberPage_andClearsItAgain() {
+        UserProfile profile = UserProfile.createFor(ACCOUNT, "Member");
+
+        profile.describe("Swing trader", "https://x.com/member");
+        profile.changeBanner("https://example.invalid/banner.png", "cryptopilot/profiles/banner");
+
+        assertThat(profile.getBio()).isEqualTo("Swing trader");
+        assertThat(profile.getWebsiteUrl()).isEqualTo("https://x.com/member");
+        assertThat(profile.getBannerUrl()).isEqualTo("https://example.invalid/banner.png");
+        assertThat(profile.getBannerPublicId()).isEqualTo("cryptopilot/profiles/banner");
+
+        profile.describe(null, null);
+        profile.changeBanner(null, null);
+        profile.changeAvatar(null, null);
+
+        assertThat(profile.getBio()).isNull();
+        assertThat(profile.getWebsiteUrl()).isNull();
+        assertThat(profile.getBannerUrl()).isNull();
+        assertThat(profile.getBannerPublicId()).isNull();
+        assertThat(profile.getAvatarUrl()).isNull();
+        assertThat(profile.getAvatarPublicId()).isNull();
     }
 
     @Test

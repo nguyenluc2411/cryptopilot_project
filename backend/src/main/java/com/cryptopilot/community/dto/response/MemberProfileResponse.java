@@ -20,6 +20,11 @@ import java.util.UUID;
  * @param followedByMe whether the caller follows them; {@code false} for a Guest
  * @param blockedByMe whether the caller blocks them; {@code false} for a Guest
  * @param me whether this is the caller's own page
+ * @param bio the introduction the member wrote, or {@code null}
+ * @param websiteUrl the link the member gave, or {@code null}
+ * @param bannerUrl the cover image of the page, or {@code null} for the default
+ * @param influenceScore their Social Influence (D-125), 0 when they published nothing
+ * @param depthScore their Analytical Depth (D-125), 0 when they published nothing
  */
 public record MemberProfileResponse(
         UUID userId,
@@ -32,4 +37,9 @@ public record MemberProfileResponse(
         long following,
         boolean followedByMe,
         boolean blockedByMe,
-        boolean me) {}
+        boolean me,
+        String bio,
+        String websiteUrl,
+        String bannerUrl,
+        double influenceScore,
+        double depthScore) {}

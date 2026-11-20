@@ -772,7 +772,11 @@ user_device,platform,character varying,,,NO
 user_device,updated_at,timestamp with time zone,,,NO
 user_device,user_id,uuid,,,NO
 user_device,version,bigint,64,0,NO
+user_profile,avatar_public_id,character varying,,,YES
 user_profile,avatar_url,character varying,,,YES
+user_profile,banner_public_id,character varying,,,YES
+user_profile,banner_url,character varying,,,YES
+user_profile,bio,character varying,,,YES
 user_profile,created_at,timestamp with time zone,,,NO
 user_profile,default_capital,numeric,28,8,YES
 user_profile,default_risk_percent,numeric,6,3,YES
@@ -784,6 +788,7 @@ user_profile,trading_style,character varying,,,YES
 user_profile,updated_at,timestamp with time zone,,,NO
 user_profile,user_id,uuid,,,NO
 user_profile,version,bigint,64,0,NO
+user_profile,website_url,character varying,,,YES
 user_relation,created_at,timestamp with time zone,,,NO
 user_relation,relation_id,uuid,,,NO
 user_relation,relation_type,character varying,,,NO
