@@ -27,6 +27,8 @@ import com.cryptopilot.journal.TradeRow;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.jayway.jsonpath.JsonPath;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
@@ -347,17 +349,12 @@ class AiAssistantApiTest {
         assertThat(root.path("performance").path("available").asBoolean()).isTrue();
         assertThat(summary.path("trades").asInt()).isEqualTo(1);
         assertThat(summary.path("wins").asInt()).isEqualTo(1);
-        assertThat(new java.math.BigDecimal(summary.path("totalNetPnl").asString()))
-                .isEqualByComparingTo("19");
-        assertThat(new java.math.BigDecimal(summary.path("averageRealizedR").asString()))
-                .isEqualByComparingTo("1.9");
-        assertThat(new java.math.BigDecimal(
-                        summary.path("averageEntryDeviationR").asString()))
+        assertThat(new BigDecimal(summary.path("totalNetPnl").asString())).isEqualByComparingTo("19");
+        assertThat(new BigDecimal(summary.path("averageRealizedR").asString())).isEqualByComparingTo("1.9");
+        assertThat(new BigDecimal(summary.path("averageEntryDeviationR").asString()))
                 .isEqualByComparingTo("0.1");
-        assertThat(new java.math.BigDecimal(summary.path("averageMaeR").asString()))
-                .isEqualByComparingTo("0.5");
-        assertThat(new java.math.BigDecimal(summary.path("averageMfeR").asString()))
-                .isEqualByComparingTo("2.5");
+        assertThat(new BigDecimal(summary.path("averageMaeR").asString())).isEqualByComparingTo("0.5");
+        assertThat(new BigDecimal(summary.path("averageMfeR").asString())).isEqualByComparingTo("2.5");
         assertThat(summary.propertyNames())
                 .containsExactlyInAnyOrder(
                         "trades",
@@ -376,44 +373,36 @@ class AiAssistantApiTest {
                         "costOfLateEntryR",
                         "averageMaeR",
                         "averageMfeR");
-        assertThat(List.of(
-                        summary.path("averageEntryDeviationR"),
-                        summary.path("averageMaeR"),
-                        summary.path("averageMfeR")))
-                .as("the averages over the learning columns are known once a trade carries them")
-                .allSatisfy(average ->
-                        assertThat(average.isNull() || average.isMissingNode()).isFalse());
         JsonNode trades = root.path("performance").path("recentTrades");
         assertThat(trades.size()).isEqualTo(1);
         JsonNode trade = trades.get(0);
         assertThat(trade.path("symbol").asString()).isEqualTo(symbol);
         assertThat(trade.path("market").asString()).isEqualTo("SPOT");
         assertThat(trade.path("direction").asString()).isEqualTo("LONG");
-        assertThat(new java.math.BigDecimal(trade.path("entryDeviationR").asString()))
-                .isEqualTo(new java.math.BigDecimal("0.10"));
-        assertThat(new java.math.BigDecimal(trade.path("setupScoreAtPlan").asString()))
-                .isEqualByComparingTo("72.50");
-        assertThat(new java.math.BigDecimal(trade.path("setupScoreAtFill").asString()))
-                .isEqualByComparingTo("64.00");
+        assertThat(new BigDecimal(trade.path("entryDeviationR").asString())).isEqualTo(new BigDecimal("0.10"));
+        assertThat(new BigDecimal(trade.path("setupScoreAtPlan").asString())).isEqualByComparingTo("72.50");
+        assertThat(new BigDecimal(trade.path("setupScoreAtFill").asString())).isEqualByComparingTo("64.00");
         assertThat(stored.rMultiple())
                 .as("the journal's own figure for this trade")
                 .isNotNull();
-        assertThat(new java.math.BigDecimal(trade.path("rMultiple").asString()))
-                .isEqualByComparingTo(stored.rMultiple().setScale(2, java.math.RoundingMode.HALF_UP));
-        assertThat(new java.math.BigDecimal(trade.path("rMultiple").asString()))
+        assertThat(new BigDecimal(trade.path("rMultiple").asString()))
+                .isEqualByComparingTo(stored.rMultiple().setScale(2, RoundingMode.HALF_UP));
+        assertThat(new BigDecimal(trade.path("rMultiple").asString()))
                 .as("one trade, so its R-multiple is the average")
-                .isEqualByComparingTo(new java.math.BigDecimal(
-                        summary.path("averageRealizedR").asString()));
-        assertThat(new java.math.BigDecimal(trade.path("maeR").asString()))
-                .isEqualByComparingTo(stored.maeR().setScale(2, java.math.RoundingMode.HALF_UP));
-        assertThat(new java.math.BigDecimal(trade.path("mfeR").asString()))
-                .isEqualByComparingTo(stored.mfeR().setScale(2, java.math.RoundingMode.HALF_UP));
+                .isEqualByComparingTo(
+                        new BigDecimal(summary.path("averageRealizedR").asString()));
+        assertThat(new BigDecimal(trade.path("maeR").asString()))
+                .isEqualByComparingTo(stored.maeR().setScale(2, RoundingMode.HALF_UP));
+        assertThat(new BigDecimal(trade.path("mfeR").asString()))
+                .isEqualByComparingTo(stored.mfeR().setScale(2, RoundingMode.HALF_UP));
         assertThat(snapshot)
                 .doesNotContain(premium.toString())
                 .doesNotContain(pair.toString())
                 .doesNotContain(plan.toString())
+                .doesNotContain(stored.journalId().toString())
                 .doesNotContain("my secret setup")
-                .doesNotContain("my lesson");
+                .doesNotContain("my lesson")
+                .doesNotContain("my mistake");
     }
 
     @Test

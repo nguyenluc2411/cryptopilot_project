@@ -56,6 +56,9 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -342,7 +345,7 @@ class ContextSnapshotBuilderTest {
     void T074b_aSummaryWithoutTradeList_carriesAnEmptyOne_andAGivenListIsCopied() {
         assertThat(new PerformanceContext(true, null, digest(), null).recentTrades())
                 .isEmpty();
-        List<PerformanceContext.TradeLearning> given = new java.util.ArrayList<>();
+        List<PerformanceContext.TradeLearning> given = new ArrayList<>();
         PerformanceContext context = new PerformanceContext(true, null, digest(), given);
         given.add(new PerformanceContext.TradeLearning(null, null, null, null, null, null, null, null, null));
         assertThat(context.recentTrades()).isEmpty();
@@ -403,7 +406,7 @@ class ContextSnapshotBuilderTest {
     }
 
     @Test
-    void BR51_withoutAClosedTrade_theTradesAreNotRead() {
+    void T074b_withoutAClosedTrade_theTradesAreNotRead() {
         when(journal.performanceDigest(USER))
                 .thenReturn(new PerformanceDigest(
                         0,
@@ -427,6 +430,7 @@ class ContextSnapshotBuilderTest {
 
         assertThat(premium.performance().recentTrades()).isEmpty();
         verifyNoInteractions(learning);
+        verify(market, never()).pairListings(any());
     }
 
     @Test
@@ -438,6 +442,7 @@ class ContextSnapshotBuilderTest {
         assertThatThrownBy(() -> builder.build(USER, new AiContextSelection(null, null, null, null, true)))
                 .isInstanceOf(BusinessException.class);
         verifyNoInteractions(learning);
+        verify(market, never()).pairListings(any());
     }
 
     @Test
@@ -510,7 +515,7 @@ class ContextSnapshotBuilderTest {
     }
 
     private static List<String> fieldNames(JsonNode node) {
-        List<String> names = new java.util.ArrayList<>();
+        List<String> names = new ArrayList<>();
         collect(node, names);
         return names;
     }
@@ -669,7 +674,7 @@ class ContextSnapshotBuilderTest {
                 CapReason.LOW_ROOM,
                 wide,
                 wide);
-        List<PlanContext.Warning> warnings = java.util.Arrays.stream(WarningType.values())
+        List<PlanContext.Warning> warnings = Arrays.stream(WarningType.values())
                 .map(type -> new PlanContext.Warning(type, type.severity(), "x".repeat(200)))
                 .toList();
         PlanContext plan = new PlanContext(
@@ -706,7 +711,7 @@ class ContextSnapshotBuilderTest {
         // A setup score is numeric(5,2) checked to 0..100, so 100.00 is its widest value.
         BigDecimal widestScore = new BigDecimal("100.00");
         when(learning.latestClosed(USER, ContextSnapshotBuilder.RECENT_TRADES))
-                .thenReturn(java.util.Collections.nCopies(
+                .thenReturn(Collections.nCopies(
                         ContextSnapshotBuilder.RECENT_TRADES,
                         trade(tradedPair, wide, widestScore, widestScore, wide, wide, wide)));
         when(market.pairListings(any())).thenReturn(List.of(new PairListing(tradedPair, "S".repeat(20), true, true)));
@@ -716,8 +721,8 @@ class ContextSnapshotBuilderTest {
                 .thenReturn(new AssistantNews(
                         "1000SATS",
                         NOW,
-                        java.util.Collections.nCopies(coinArticles, longest),
-                        java.util.Collections.nCopies(marketArticles, longest)));
+                        Collections.nCopies(coinArticles, longest),
+                        Collections.nCopies(marketArticles, longest)));
 
         String context = worst.toJson(worst.build(USER, new AiContextSelection(null, null, null, PLAN, true)));
         return context.length();
