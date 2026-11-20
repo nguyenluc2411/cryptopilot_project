@@ -41,6 +41,9 @@ public record MarketHealthProperties(
         if (reconnectingAfter.compareTo(pauseAfter) >= 0) {
             throw new IllegalArgumentException("reconnecting-after must be shorter than pause-after");
         }
+        if (stableBeforeRecover.compareTo(reconnectingAfter) <= 0) {
+            throw new IllegalArgumentException("stable-before-recover must be longer than reconnecting-after");
+        }
         if (pauseRatio < 0 || pauseRatio >= 1) {
             throw new IllegalArgumentException("pause-ratio must be at least 0 and below 1");
         }

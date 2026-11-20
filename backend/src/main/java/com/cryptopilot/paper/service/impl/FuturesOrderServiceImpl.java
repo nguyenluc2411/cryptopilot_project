@@ -223,6 +223,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         return PaperResponses.futuresOrder(order, pair.symbol());
     }
 
+    /** A closed market blocks cancels too, as the exchange does during maintenance (D-158). */
     @Override
     @Transactional
     public FuturesOrderResponse cancel(UUID userId, String symbol, UUID orderId, String origClientOrderId) {
@@ -333,6 +334,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         return PaperResponses.futuresOrder(order, pair.symbol());
     }
 
+    /** A closed market blocks cancels too, as the exchange does during maintenance (D-158). */
     @Override
     @Transactional
     public List<FuturesOrderResponse> cancelAll(UUID userId, String symbol) {

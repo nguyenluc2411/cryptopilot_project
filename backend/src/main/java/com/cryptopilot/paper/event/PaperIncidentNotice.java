@@ -16,6 +16,7 @@ import java.util.UUID;
  * @param lastLiveAt when the market's data was last live before it
  * @param resumedAt when trading reopened; {@code null} for a pause
  * @param message the administrator's message of a maintenance, if any
+ * @param maintenance whether the pause is a maintenance, with or without a message; {@code false} for a resumption
  * @param replayedFills how many of the Trader's fills the catch-up applied; zero for a pause
  * @param liquidations how many of the Trader's positions the catch-up liquidated; zero for a pause
  */
@@ -27,6 +28,7 @@ public record PaperIncidentNotice(
         Instant lastLiveAt,
         Instant resumedAt,
         String message,
+        boolean maintenance,
         long replayedFills,
         long liquidations) {
 

@@ -17,6 +17,7 @@ import java.util.UUID;
  * @param lastLiveAt when the market's data was last live before it
  * @param resumedAt when trading reopened; {@code null} for the pause
  * @param message the administrator's message of a maintenance, if any
+ * @param maintenance whether the pause is a maintenance, with or without a message; {@code false} once resumed
  */
 public record PlanIncidentNotice(
         UUID userId,
@@ -25,7 +26,8 @@ public record PlanIncidentNotice(
         boolean resumed,
         Instant lastLiveAt,
         Instant resumedAt,
-        String message) {
+        String message,
+        boolean maintenance) {
 
     public PlanIncidentNotice {
         Objects.requireNonNull(userId, "userId");

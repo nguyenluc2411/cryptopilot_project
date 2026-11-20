@@ -180,6 +180,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         return new PlacedOrder(toResponse(order, pair.symbol()), true);
     }
 
+    /** A closed market blocks cancels too, as the exchange does during maintenance (D-158). */
     @Override
     @Transactional
     public OrderResponse cancel(UUID userId, UUID orderId) {
@@ -203,6 +204,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         return toResponse(order, symbolsOf(List.of(order.getPairId())));
     }
 
+    /** A closed market blocks cancels too, as the exchange does during maintenance (D-158). */
     @Override
     @Transactional
     public List<OrderResponse> cancelAll(UUID userId, UUID pairId) {

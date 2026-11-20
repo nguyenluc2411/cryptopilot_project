@@ -114,17 +114,20 @@ class FuturesLiquidation {
                 .toList();
     }
 
-    /**
-     * Liquidates the position if the mark still reaches it; see the class comment.
-     *
-     * @return whether it was liquidated
-     */
     /** Whether the position held anything at {@code at}, each fill counted at the time of the price it took. */
     private boolean openAt(FuturesPosition position, Instant at) {
         OrderSide opening = position.getDirection().closingSide() == OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
         return fills.sizeBefore(position.getId(), opening, at).signum() > 0;
     }
 
+    /**
+     * Liquidates the position if the mark still reaches it; see the class comment.
+     *
+     * <p>Known limitation (D-158): a replayed mark is checked against the position being open at {@code markTime},
+     * but its margin and quantity are the current ones, not those it had then.
+     *
+     * @return whether it was liquidated
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     boolean liquidate(PaperAccount account, UUID positionId, BigDecimal mark, Instant at, Instant markTime) {
         Optional<FuturesPosition> found = positions.findById(positionId);

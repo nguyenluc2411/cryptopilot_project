@@ -56,12 +56,6 @@ public class FuturesFundingJob {
     }
 
     /**
-     * One run; none while Futures trading is paused (D-158, I5): the replay that follows may show a position closed
-     * before a funding time, so the settlements wait for it, and the next run reaches back to them.
-     *
-     * @return how many fees it wrote
-     */
-    /**
      * Where a run looks back from: the lookback, or further while an incident just ended, to where its data stopped,
      * so the settlements that fell due while the market was closed are taken (D-158).
      */
@@ -72,6 +66,12 @@ public class FuturesFundingJob {
                 .orElse(lookback);
     }
 
+    /**
+     * One run; none while Futures trading is paused (D-158, I5): the replay that follows may show a position closed
+     * before a funding time, so the settlements wait for it, and the next run reaches back to them.
+     *
+     * @return how many fees it wrote
+     */
     public int run() {
         if (!health.tradingOpen(MarketType.FUTURES)) {
             return 0;

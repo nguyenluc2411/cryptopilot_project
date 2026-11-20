@@ -10,7 +10,8 @@ import java.time.Instant;
  *
  * @param market the market
  * @param on {@code true} to close trading on it, {@code false} to end the maintenance
- * @param message what the Traders' banner says, at most 500 characters; ignored when ending
+ * @param message what the Traders' banner says, at most 500 characters, shown by the clients as plain text, never
+ *     as markup; ignored when ending
  * @param expectedEndAt when the maintenance is expected to end, in the future, shown on the banner; optional, ignored
  *     when ending
  */

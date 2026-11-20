@@ -16,7 +16,9 @@ import org.springframework.stereotype.Component;
 /**
  * When each market's stream last delivered data, and since when it has delivered without a break (D-158): the two
  * signals of the health monitor that come from the stream. Written by the stream readers on every message, so a write
- * costs a lock held for two field reads and writes.
+ * costs a lock held for two field reads and writes, and finding a message's connection costs none: the registered
+ * connections are an immutable map behind a volatile field, replaced whole (copy-on-write). Reference: Goetz, B. et
+ * al. (2006). Java Concurrency in Practice. Addison-Wesley, ch. 3.5 "Safe publication".
  *
  * <p>A break is a silence of at least {@code reconnectingAfter}; the run of live data after it starts anew. Before the
  * first message, both read as the start of the process, so a stream that never connects is paused after
@@ -38,7 +40,7 @@ public class MarketLiveness {
     private final double pauseRatio;
     private final Clock clock;
     private final Map<MarketType, Run> runs = new EnumMap<>(MarketType.class);
-    private final Map<MarketType, Map<String, Connection>> connections = new EnumMap<>(MarketType.class);
+    private volatile Map<MarketType, Map<String, Connection>> connections;
 
     public MarketLiveness(MarketHealthProperties properties, Clock clock) {
         this.breakAfter = properties.reconnectingAfter();
@@ -46,17 +48,19 @@ public class MarketLiveness {
         this.pauseRatio = properties.pauseRatio();
         this.clock = clock;
         Instant start = clock.instant();
+        Map<MarketType, Map<String, Connection>> none = new EnumMap<>(MarketType.class);
         for (MarketType market : MarketType.values()) {
             runs.put(market, new Run(start));
-            connections.put(market, Map.of());
+            none.put(market, Map.of());
         }
+        this.connections = Map.copyOf(none);
     }
 
     /**
      * The market's price connections now, each with the symbols it streams; replaces those before, each starting as if
      * it had just delivered.
      */
-    public void connections(MarketType market, Map<String, List<String>> symbolsByConnection) {
+    public synchronized void connections(MarketType market, Map<String, List<String>> symbolsByConnection) {
         Instant now = clock.instant();
         Map<String, Connection> registered = new LinkedHashMap<>();
         symbolsByConnection.forEach((name, symbols) -> {
@@ -64,9 +68,9 @@ public class MarketLiveness {
                 registered.put(name, new Connection(List.copyOf(symbols), new Run(now)));
             }
         });
-        synchronized (connections) {
-            connections.put(market, Map.copyOf(registered));
-        }
+        Map<MarketType, Map<String, Connection>> next = new EnumMap<>(connections);
+        next.put(market, Map.copyOf(registered));
+        connections = Map.copyOf(next);
     }
 
     /** A message of the market arrived at {@code at}, on no registered connection. */
@@ -136,9 +140,7 @@ public class MarketLiveness {
     }
 
     private Map<String, Connection> registered(MarketType market) {
-        synchronized (connections) {
-            return connections.get(market);
-        }
+        return connections.get(market);
     }
 
     /** The connection, in the given order, at which the pairs so far reach the share that must be live. */

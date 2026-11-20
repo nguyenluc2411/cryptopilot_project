@@ -63,7 +63,8 @@ class MarketNotificationServiceImplTest {
         when(users.notificationMailAddress(TRADER)).thenReturn(Optional.of("trader@example.test"));
 
         service.paperIncident(paper(PaperIncidentNotice.Kind.PAUSED, 0, 0, null));
-        service.planIncident(new PlanIncidentNotice(TRADER, MarketType.FUTURES, INCIDENT, false, LIVE, null, null));
+        service.planIncident(
+                new PlanIncidentNotice(TRADER, MarketType.FUTURES, INCIDENT, false, LIVE, null, null, false));
         service.paperIncident(paper(PaperIncidentNotice.Kind.RESUMED, 2, 0, null));
 
         ArgumentCaptor<EmailMessage> mailed = ArgumentCaptor.forClass(EmailMessage.class);
@@ -99,7 +100,8 @@ class MarketNotificationServiceImplTest {
         when(writer.write(any())).thenReturn(true);
         when(users.notificationMailAddress(TRADER)).thenReturn(Optional.empty());
 
-        service.planIncident(new PlanIncidentNotice(TRADER, MarketType.SPOT, INCIDENT, true, LIVE, RESUMED, null));
+        service.planIncident(
+                new PlanIncidentNotice(TRADER, MarketType.SPOT, INCIDENT, true, LIVE, RESUMED, null, false));
 
         written(1);
         verify(sender, never()).send(any());
@@ -175,7 +177,8 @@ class MarketNotificationServiceImplTest {
     @Test
     void D158_thePauseNotice_isOnePerTraderAndIncident_whicheverModuleAsks() {
         service.paperIncident(paper(PaperIncidentNotice.Kind.PAUSED, 0, 0, null));
-        service.planIncident(new PlanIncidentNotice(TRADER, MarketType.FUTURES, INCIDENT, false, LIVE, null, null));
+        service.planIncident(
+                new PlanIncidentNotice(TRADER, MarketType.FUTURES, INCIDENT, false, LIVE, null, null, false));
 
         List<NewNotification> written = written(2);
         assertThat(written)
@@ -195,6 +198,26 @@ class MarketNotificationServiceImplTest {
         assertThat(written(1).getFirst().content()).startsWith("Futures trading is under maintenance: Back at 22:00.");
     }
 
+    /** A maintenance without a message is still told as maintenance, to the affected Traders and to every other one. */
+    @Test
+    void D158_aMaintenanceWithoutAMessage_isToldAsMaintenance() {
+        when(users.activeTraders(null, MarketNotificationServiceImpl.TRADERS_PAGE))
+                .thenReturn(List.of(TRADER));
+        service.paperIncident(new PaperIncidentNotice(
+                TRADER, MarketType.FUTURES, INCIDENT, PaperIncidentNotice.Kind.PAUSED, LIVE, null, null, true, 0, 0));
+        service.planIncident(new PlanIncidentNotice(TRADER, MarketType.SPOT, INCIDENT, false, LIVE, null, null, true));
+        service.broadcastPause(new MarketPauseAnnounced(
+                MarketType.FUTURES, INCIDENT, MarketHealthState.MAINTENANCE, IncidentReason.MAINTENANCE, LIVE, null));
+
+        assertThat(written(3))
+                .extracting(NewNotification::content)
+                .allSatisfy(content -> assertThat(content).doesNotContain("unavailable"))
+                .containsExactly(
+                        "Futures trading is under maintenance. Your orders, positions and plans are kept as they are.",
+                        "Spot trading is under maintenance. Your orders, positions and plans are kept as they are.",
+                        "Futures trading is under maintenance.");
+    }
+
     @Test
     void D158_theReopening_namesWhatTheCatchUpDid_orThatNothingChanged() {
         service.paperIncident(paper(PaperIncidentNotice.Kind.RESUMED, 2, 1, null));
@@ -212,7 +235,8 @@ class MarketNotificationServiceImplTest {
 
     @Test
     void D158_thePlansReopening_isAnotherNotice() {
-        service.planIncident(new PlanIncidentNotice(TRADER, MarketType.SPOT, INCIDENT, true, LIVE, RESUMED, null));
+        service.planIncident(
+                new PlanIncidentNotice(TRADER, MarketType.SPOT, INCIDENT, true, LIVE, RESUMED, null, false));
 
         NewNotification written = written(1).getFirst();
         assertThat(written.title()).isEqualTo("Plans on Spot watched again");
@@ -273,6 +297,7 @@ class MarketNotificationServiceImplTest {
                 LIVE,
                 kind == PaperIncidentNotice.Kind.RESUMED ? RESUMED : null,
                 message,
+                message != null,
                 fills,
                 liquidations);
     }

@@ -64,7 +64,13 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
     @Transactional
     public void paperIncident(PaperIncidentNotice notice) {
         if (notice.kind() == PaperIncidentNotice.Kind.PAUSED) {
-            paused(notice.userId(), notice.market(), notice.incidentId(), notice.lastLiveAt(), notice.message());
+            paused(
+                    notice.userId(),
+                    notice.market(),
+                    notice.incidentId(),
+                    notice.lastLiveAt(),
+                    notice.maintenance(),
+                    notice.message());
             return;
         }
         StringBuilder content = new StringBuilder(name(notice.market()))
@@ -106,7 +112,13 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
     @Transactional
     public void planIncident(PlanIncidentNotice notice) {
         if (!notice.resumed()) {
-            paused(notice.userId(), notice.market(), notice.incidentId(), notice.lastLiveAt(), notice.message());
+            paused(
+                    notice.userId(),
+                    notice.market(),
+                    notice.incidentId(),
+                    notice.lastLiveAt(),
+                    notice.maintenance(),
+                    notice.message());
             return;
         }
         writeAndMail(
@@ -146,8 +158,8 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
     @Override
     @Transactional
     public int broadcastPause(MarketPauseAnnounced announced) {
-        String content = announced.message() != null
-                ? name(announced.market()) + " trading is under maintenance: " + announced.message()
+        String content = announced.reason() == IncidentReason.MAINTENANCE
+                ? maintenance(announced.market(), announced.message())
                 : "Exchange data for " + name(announced.market()) + " has been unavailable since "
                         + TIME.format(announced.lastLiveAt()) + ", so " + name(announced.market())
                         + " trading is paused until the data is back and caught up.";
@@ -272,10 +284,10 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
         }
     }
 
-    private void paused(UUID userId, MarketType market, UUID incidentId, Instant lastLiveAt, String message) {
-        String content = message != null
-                ? name(market) + " trading is under maintenance: " + message
-                        + " Your orders, positions and plans are kept as they are."
+    private void paused(
+            UUID userId, MarketType market, UUID incidentId, Instant lastLiveAt, boolean maintenance, String message) {
+        String content = maintenance
+                ? maintenance(market, message) + " Your orders, positions and plans are kept as they are."
                 : "Exchange data for " + name(market) + " has been unavailable since " + TIME.format(lastLiveAt)
                         + ". Your orders, positions and plans are kept: nothing is filled, liquidated or charged"
                         + " funding until the data is back, then the period is applied as the exchange traded.";
@@ -289,6 +301,13 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
                         null,
                         null,
                         "MARKET_PAUSED:" + incidentId + ":" + userId));
+    }
+
+    /** The maintenance text: the administrator's message when given, else that the market is under maintenance. */
+    private static String maintenance(MarketType market, String message) {
+        return message == null
+                ? name(market) + " trading is under maintenance."
+                : name(market) + " trading is under maintenance: " + message;
     }
 
     private static String reason(IncidentReason reason) {

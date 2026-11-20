@@ -2,6 +2,7 @@ package com.cryptopilot.paper.job;
 
 import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketTradingResumed;
+import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.event.PaperIncidentNotice;
 import com.cryptopilot.paper.service.PaperIncidentService;
@@ -43,6 +44,7 @@ public class PaperIncidentNotices {
                     announced.lastLiveAt(),
                     null,
                     announced.message(),
+                    announced.reason() == IncidentReason.MAINTENANCE,
                     0,
                     0));
         }
@@ -69,6 +71,7 @@ public class PaperIncidentNotices {
                     resumed.lastLiveAt(),
                     resumed.resumedAt(),
                     null,
+                    false,
                     fills.getOrDefault(trader, 0L),
                     liquidations.getOrDefault(trader, 0L)));
         }

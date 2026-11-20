@@ -2,6 +2,7 @@ package com.cryptopilot.trading.job;
 
 import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.event.MarketTradingResumed;
+import com.cryptopilot.market.model.enums.IncidentReason;
 import com.cryptopilot.trading.event.PlanIncidentNotice;
 import com.cryptopilot.trading.service.PlanIncidentService;
 import java.util.UUID;
@@ -37,7 +38,8 @@ public class PlanIncidentNotices {
                     false,
                     announced.lastLiveAt(),
                     null,
-                    announced.message()));
+                    announced.message(),
+                    announced.reason() == IncidentReason.MAINTENANCE));
         }
     }
 
@@ -54,7 +56,8 @@ public class PlanIncidentNotices {
                     true,
                     resumed.lastLiveAt(),
                     resumed.resumedAt(),
-                    null));
+                    null,
+                    false));
         }
     }
 }
