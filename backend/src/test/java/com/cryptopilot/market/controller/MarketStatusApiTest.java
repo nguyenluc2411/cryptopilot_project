@@ -153,6 +153,27 @@ class MarketStatusApiTest {
         assertThat(audited(admin, "true")).isOne();
     }
 
+    /** A maintenance write from a version the incident has moved past is a conflict (409), not a server error. */
+    @Test
+    void D159_aStaleMaintenanceWrite_answers409() throws Exception {
+        UUID admin = account(UserRole.ADMIN);
+        as(admin, post(ADMIN + "/maintenance"), """
+                        {"market": "SPOT", "on": true}""").andExpect(status().isOk());
+        sql.sql("update market_incident set version = version + 1").update();
+
+        as(admin, post(ADMIN + "/maintenance"), """
+                        {"market": "SPOT", "on": true, "message": "deploy"}""")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+
+        assertThat(sql.sql("select count(*) from market_incident where resumed_at is null and message is null")
+                        .query(Long.class)
+                        .single())
+                .isOne();
+        // Back to the version the service holds, so the clean-up can end the maintenance.
+        sql.sql("update market_incident set version = version - 1").update();
+    }
+
     @Test
     void D159_onlyAnAdministrator_switchesMaintenance() throws Exception {
         UUID trader = account(UserRole.TRADER);

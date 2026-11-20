@@ -127,6 +127,15 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                 .at(open.version());
     }
 
+    /**
+     * The status of a market reloaded at run time: as at start, except that an incident whose recovery began stays
+     * recovering since the row's time, as the replay is still running.
+     */
+    private Status resynced(MarketIncident open) {
+        Status status = restored(open);
+        return open.recoveryStartedAt() == null ? status : status.recoveringFrom(open.recoveryStartedAt());
+    }
+
     private void restoreEnded(MarketType market) {
         incidents.findRecent(market, 1).stream()
                 .filter(incident -> incident.resumedAt() != null)
@@ -490,7 +499,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
 
     private void resync(MarketType market) {
         Optional<MarketIncident> open = incidents.findOpen(market);
-        statuses.put(market, open.map(this::restored).orElse(Status.LIVE));
+        statuses.put(market, open.map(this::resynced).orElse(Status.LIVE));
         if (open.isEmpty()) {
             restoreEnded(market);
         }

@@ -12,6 +12,7 @@ import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.dto.request.MaintenanceRequest;
 import com.cryptopilot.market.event.MarketPauseAnnounced;
+import com.cryptopilot.market.event.MarketRecoveryOverdue;
 import com.cryptopilot.market.model.HealthSignals;
 import com.cryptopilot.market.model.MarketIncident;
 import com.cryptopilot.market.model.enums.IncidentKind;
@@ -22,6 +23,7 @@ import com.cryptopilot.market.repository.MarketIncidentRepository;
 import com.cryptopilot.market.service.DisplayPriceService;
 import com.cryptopilot.support.MutableTestClock;
 import com.cryptopilot.support.TestcontainersConfig;
+import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -44,7 +46,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Import;
-import org.springframework.dao.InvalidDataAccessApiUsageException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -153,14 +155,13 @@ class MarketHealthRollbackTest {
 
     /**
      * A write to an incident that is not there, or already closed, changes no row and is refused: an
-     * {@link IllegalStateException}, which the repository's translation wraps as a data access exception.
+     * {@link OptimisticLockingFailureException}, which the API answers as a conflict.
      */
     @Test
     void D159_aWriteToAnUnknownOrClosedIncident_throws() {
         UUID unknown = UuidV7.next();
         assertThatThrownBy(() -> incidents.recovering(unknown, 0, START))
-                .isInstanceOf(InvalidDataAccessApiUsageException.class)
-                .hasCauseInstanceOf(IllegalStateException.class)
+                .isInstanceOf(OptimisticLockingFailureException.class)
                 .hasMessageContaining("recovering of " + unknown);
         assertThatThrownBy(() -> incidents.relapse(unknown, 0)).hasMessageContaining("relapse of " + unknown);
         assertThatThrownBy(() -> incidents.toMaintenance(unknown, 0, null, null, null))
@@ -171,7 +172,7 @@ class MarketHealthRollbackTest {
         incidents.open(closed);
         incidents.resume(closed.id(), 0, START.plusSeconds(60));
         assertThatThrownBy(() -> incidents.resume(closed.id(), 1, START.plusSeconds(90)))
-                .hasCauseInstanceOf(IllegalStateException.class)
+                .isInstanceOf(OptimisticLockingFailureException.class)
                 .hasMessageContaining("resume of " + closed.id());
     }
 
@@ -183,7 +184,7 @@ class MarketHealthRollbackTest {
         incidents.recovering(open.id(), 0, START.plusSeconds(10));
 
         assertThatThrownBy(() -> incidents.toMaintenance(open.id(), 0, "deploy", null, null))
-                .hasCauseInstanceOf(IllegalStateException.class)
+                .isInstanceOf(OptimisticLockingFailureException.class)
                 .hasMessageContaining("toMaintenance of " + open.id());
         MarketIncident row = incidents.findOpen(MarketType.SPOT).orElseThrow();
         assertThat(row.kind()).isEqualTo(IncidentKind.OUTAGE);
@@ -223,7 +224,7 @@ class MarketHealthRollbackTest {
             monitor.get(30, TimeUnit.SECONDS);
             assertThatThrownBy(() -> admin.get(30, TimeUnit.SECONDS))
                     .isInstanceOf(ExecutionException.class)
-                    .hasCauseInstanceOf(InvalidDataAccessApiUsageException.class);
+                    .hasCauseInstanceOf(OptimisticLockingFailureException.class);
         } finally {
             commit.countDown();
             threads.shutdownNow();
@@ -260,6 +261,43 @@ class MarketHealthRollbackTest {
 
         assertThat(health.state(MarketType.SPOT)).isEqualTo(MarketHealthState.PAUSED);
         assertThat(health.dataLost(MarketType.SPOT)).isTrue();
+    }
+
+    /**
+     * A reload at run time keeps a recovery the database holds: the incident's recovery began, so the market stays
+     * recovering since the row's time, and the overdue notice counts from it.
+     */
+    @Test
+    void D159_aReloadOfARecoveringIncident_keepsItRecovering_sinceTheRowsTime() {
+        MutableTestClock clock = new MutableTestClock(START);
+        MarketHealthServiceImpl health = health(clock);
+        TransactionTemplate apart = inTransaction();
+        apart.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        Instant recoveringAt = START.plusSeconds(5);
+
+        inTransaction().executeWithoutResult(done -> {
+            assertThat(health.evaluate(
+                            MarketType.SPOT, silentSince(START.minusSeconds(12)), IncidentReason.STREAM_LOST))
+                    .isEqualTo(MarketHealthState.RECONNECTING);
+            apart.executeWithoutResult(other -> health.startMaintenance(MarketType.SPOT, "deploy", null));
+            sql.sql("""
+                            update market_incident
+                               set incident_kind = 'OUTAGE', reason = 'STREAM_LOST', recovery_started_at = :at,
+                                   version = version + 1""").param("at", Timestamp.from(recoveringAt)).update();
+        });
+
+        assertThat(health.state(MarketType.SPOT)).isEqualTo(MarketHealthState.RECOVERING);
+        assertThat(health.dataLost(MarketType.SPOT)).isTrue();
+
+        heard.clear();
+        clock.advance(Duration.ofMinutes(15).plusSeconds(6));
+        assertThat(health.evaluate(MarketType.SPOT, flowing(clock), IncidentReason.STREAM_LOST))
+                .isEqualTo(MarketHealthState.RECOVERING);
+        assertThat(heard)
+                .filteredOn(MarketRecoveryOverdue.class::isInstance)
+                .singleElement()
+                .extracting(event -> ((MarketRecoveryOverdue) event).recoveringSince())
+                .isEqualTo(recoveringAt);
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

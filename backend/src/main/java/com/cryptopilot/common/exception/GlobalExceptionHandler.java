@@ -12,12 +12,12 @@ import org.springframework.beans.TypeMismatchException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
-import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.ObjectError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -157,11 +157,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     /**
      * A write that lost a race on the optimistic lock (TECHNICAL_DESIGN 5.5): another transaction changed the row since
      * it was read, e.g. a Trader cancels a plan while the matching engine fills it. 409 like a refused write, because
-     * nothing is broken and the client reloads and decides again; the row and the versions go to the log only.
+     * nothing is broken and the client reloads and decides again; the row and the versions go to the log only. The
+     * parent type also covers a version check written in SQL, e.g. a stale {@code market_incident} write (D-159).
      */
-    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
-    public ResponseEntity<ProblemDetail> handleOptimisticLockingFailure(
-            ObjectOptimisticLockingFailureException exception) {
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ProblemDetail> handleOptimisticLockingFailure(OptimisticLockingFailureException exception) {
         String reference = CorrelationIdFilter.currentCorrelationId()
                 .orElseGet(() -> UuidV7.next().toString());
         log.warn("A concurrent change won the optimistic lock, reference {}: {}", reference, exception.getMessage());

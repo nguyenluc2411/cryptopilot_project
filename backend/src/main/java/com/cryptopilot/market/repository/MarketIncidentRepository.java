@@ -15,6 +15,7 @@ import java.util.Optional;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -138,12 +139,12 @@ public class MarketIncidentRepository {
 
     /**
      * A write that changed no row met an incident that is not there, already closed, or updated since the caller read
-     * it (another version): the caller's state is stale.
+     * it (another version): the caller's state is stale, answered as a conflict (409), not a failure.
      */
     private static void changed(int rows, UUID id, String operation) {
         if (rows != 1) {
-            throw new IllegalStateException("market_incident " + operation + " of " + id + " changed " + rows
-                    + " rows: unknown, closed or updated since read");
+            throw new OptimisticLockingFailureException("market_incident " + operation + " of " + id + " changed "
+                    + rows + " rows: unknown, closed or updated since read");
         }
     }
 
