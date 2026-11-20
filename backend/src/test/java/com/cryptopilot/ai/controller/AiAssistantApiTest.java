@@ -21,6 +21,8 @@ import com.cryptopilot.ai.model.AiChatRequest;
 import com.cryptopilot.ai.model.enums.SenderRole;
 import com.cryptopilot.ai.service.AiAnswerService;
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.journal.FillLearning;
+import com.cryptopilot.journal.FillLearningReader;
 import com.cryptopilot.journal.TradeRow;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -85,6 +87,9 @@ class AiAssistantApiTest {
 
     @Autowired
     private Clock clock;
+
+    @Autowired
+    private FillLearningReader learning;
 
     @MockitoBean
     private AiServiceClient client;
@@ -286,27 +291,25 @@ class AiAssistantApiTest {
     }
 
     @Test
-    void BR51_onPremium_theSnapshotCarriesTheJournalsAggregates_andNothingOfTheTrades() throws Exception {
+    void BR51_onPremium_theSnapshotCarriesTheJournalsAggregatesAndRecentTrades_andNothingPersonal() throws Exception {
         UUID premium = account();
         subscribe(premium, PREMIUM_MONTHLY);
-        UUID pair = new MarketTestData(sql, Instant.now())
-                .pair(
-                        "AI" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT",
-                        true,
-                        true,
-                        "TRADING",
-                        "TRADING",
-                        0);
+        String symbol = "AI" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
+        UUID pair = new MarketTestData(sql, Instant.now()).pair(symbol, true, true, "TRADING", "TRADING", 0);
         pairs.add(pair);
         UUID plan = plan(premium, pair);
         TradeRow.closed(premium, pair, Instant.now().minus(1, ChronoUnit.DAYS))
                 .simulated(plan)
                 .stop("90")
+                // (entry 100 - stop 90) x quantity 1, the risk the plan was sized with
+                .risk("10")
                 .amounts("20", "1")
                 .deviation("0.1")
                 .excursions("95", "125")
+                .setupScores("72.50", "64.00")
                 .review("my secret setup", "my lesson", "my mistake", null)
                 .insert(sql);
+        FillLearning stored = learning.latestClosed(premium, 1).getFirst();
         Timestamp profiled = Timestamp.from(Instant.now());
         sql.sql("""
                         insert into user_profile (user_id, display_name, default_capital, trading_style, risk_profile,
@@ -328,7 +331,7 @@ class AiAssistantApiTest {
                 .query(String.class)
                 .single();
         JsonNode root = JsonMapper.builder().build().readTree(snapshot);
-        assertThat(root.path("version").asInt()).isEqualTo(4);
+        assertThat(root.path("version").asInt()).isEqualTo(5);
         assertThat(root.path("builtAt").isString())
                 .as("instants are ISO-8601 text, which the cited sources of an answer rely on (T-074)")
                 .isTrue();
@@ -373,6 +376,38 @@ class AiAssistantApiTest {
                         "costOfLateEntryR",
                         "averageMaeR",
                         "averageMfeR");
+        assertThat(List.of(
+                        summary.path("averageEntryDeviationR"),
+                        summary.path("averageMaeR"),
+                        summary.path("averageMfeR")))
+                .as("the averages over the learning columns are known once a trade carries them")
+                .allSatisfy(average ->
+                        assertThat(average.isNull() || average.isMissingNode()).isFalse());
+        JsonNode trades = root.path("performance").path("recentTrades");
+        assertThat(trades.size()).isEqualTo(1);
+        JsonNode trade = trades.get(0);
+        assertThat(trade.path("symbol").asString()).isEqualTo(symbol);
+        assertThat(trade.path("market").asString()).isEqualTo("SPOT");
+        assertThat(trade.path("direction").asString()).isEqualTo("LONG");
+        assertThat(new java.math.BigDecimal(trade.path("entryDeviationR").asString()))
+                .isEqualTo(new java.math.BigDecimal("0.10"));
+        assertThat(new java.math.BigDecimal(trade.path("setupScoreAtPlan").asString()))
+                .isEqualByComparingTo("72.50");
+        assertThat(new java.math.BigDecimal(trade.path("setupScoreAtFill").asString()))
+                .isEqualByComparingTo("64.00");
+        assertThat(stored.rMultiple())
+                .as("the journal's own figure for this trade")
+                .isNotNull();
+        assertThat(new java.math.BigDecimal(trade.path("rMultiple").asString()))
+                .isEqualByComparingTo(stored.rMultiple().setScale(2, java.math.RoundingMode.HALF_UP));
+        assertThat(new java.math.BigDecimal(trade.path("rMultiple").asString()))
+                .as("one trade, so its R-multiple is the average")
+                .isEqualByComparingTo(new java.math.BigDecimal(
+                        summary.path("averageRealizedR").asString()));
+        assertThat(new java.math.BigDecimal(trade.path("maeR").asString()))
+                .isEqualByComparingTo(stored.maeR().setScale(2, java.math.RoundingMode.HALF_UP));
+        assertThat(new java.math.BigDecimal(trade.path("mfeR").asString()))
+                .isEqualByComparingTo(stored.mfeR().setScale(2, java.math.RoundingMode.HALF_UP));
         assertThat(snapshot)
                 .doesNotContain(premium.toString())
                 .doesNotContain(pair.toString())

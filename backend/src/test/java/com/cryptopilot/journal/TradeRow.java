@@ -50,6 +50,8 @@ public final class TradeRow {
             "deviation",
             "adverse",
             "favorable",
+            "scoreAtPlan",
+            "scoreAtFill",
             "setup",
             "lessons",
             "mistakes",
@@ -164,6 +166,13 @@ public final class TradeRow {
         return this;
     }
 
+    /** The setup score at activation and at the fill. */
+    public TradeRow setupScores(String atPlan, String atFill) {
+        values.put("scoreAtPlan", new BigDecimal(atPlan));
+        values.put("scoreAtFill", new BigDecimal(atFill));
+        return this;
+    }
+
     public TradeRow reason(String reason) {
         values.put("reason", reason);
         return this;
@@ -202,14 +211,15 @@ public final class TradeRow {
                                                      exit_time, close_reason, fee_amount, funding_fee_amount,
                                                      funding_incomplete, realized_pnl, risk_amount,
                                                      planned_entry_price, entry_deviation_r, max_adverse_price,
-                                                     max_favorable_price, trade_status, setup_description,
+                                                     max_favorable_price, setup_score_at_plan,
+                                                     setup_score_at_fill, trade_status, setup_description,
                                                      lessons_learned, mistakes, chart_image_url, created_at, updated_at,
                                                      version)
                         values (:id, :user, :pair, :plan, :strategy, :source, :market, :direction, :leverage, :entry,
                                 :stop, :take, :originalStop, :originalTake, :exitPrice, :quantity, :entryTime,
                                 :exitTime, :reason, :fee, :funding, :incomplete, :realized, :risk, :plannedEntry,
-                                :deviation, :adverse, :favorable, :status, :setup, :lessons, :mistakes, :chart,
-                                :written, :written, 1)""")
+                                :deviation, :adverse, :favorable, :scoreAtPlan, :scoreAtFill, :status, :setup,
+                                :lessons, :mistakes, :chart, :written, :written, 1)""")
                 .params(values)
                 .param("id", id)
                 .param("user", user)
