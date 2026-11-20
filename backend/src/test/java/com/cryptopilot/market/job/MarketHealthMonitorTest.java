@@ -164,10 +164,12 @@ class MarketHealthMonitorTest {
                         scheduler)
                 .start();
         verify(scheduler, never()).scheduleWithFixedDelay(any(Runnable.class), any(Duration.class));
+        verify(health, never()).monitorStarted();
 
         when(streams.enabled()).thenReturn(true);
         monitor(List.of()).start();
         verify(scheduler).scheduleWithFixedDelay(any(Runnable.class), eq(MarketHealthMonitor.INTERVAL));
+        verify(health).monitorStarted();
     }
 
     private MarketHealthMonitor monitor(List<MarketRecoveryCheck> checks) {

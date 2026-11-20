@@ -30,8 +30,11 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.core.Ordered;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * The data health of each market (D-158): the current state in memory, each closed period in
@@ -46,11 +49,19 @@ import org.springframework.transaction.annotation.Transactional;
  *       {@link MarketTradingResumed}.
  *   <li>Maintenance opens an incident, or takes over the open outage (E13), and holds the market until it is ended,
  *       whatever the data does. Ending it reopens the market through recovery while the monitor runs; with the
- *       monitor off, as in tests, at once, as there is nothing to recover.
+ *       monitor off or not running (no streams), as in tests, at once, as nothing would end the recovery.
  * </ul>
  *
  * <p>The changes are written and published in one transaction, so the listeners of other modules hear them after
  * the incident is stored.
+ *
+ * <p>The state in memory follows the database: a change made inside a transaction is staged, seen by that
+ * transaction alone, and applied only after it commits, so a rollback (a failed audit, say) leaves no phantom state.
+ * Two transitions computed from the same state cannot both land: the database refuses the second (one open incident
+ * per market; an update of a closed incident changes no row and throws), and one that commits after the state moved
+ * anyway is skipped and logged. References: Fowler, M. (2002). Patterns of Enterprise Application Architecture.
+ * Addison-Wesley, "Unit of Work"; Spring Framework reference, "Transaction-bound events" and
+ * {@code TransactionSynchronization}.
  *
  * <p>Rule: NSF-03; D-158.
  */
@@ -70,6 +81,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     private final Map<MarketType, Status> statuses = new EnumMap<>(MarketType.class);
     private final Map<MarketType, Ended> ended = new EnumMap<>(MarketType.class);
     private final Map<MarketType, RecoveryProgress> progress = new EnumMap<>(MarketType.class);
+    private volatile boolean monitorRunning;
 
     public MarketHealthServiceImpl(
             MarketHealthProperties properties,
@@ -110,12 +122,17 @@ public class MarketHealthServiceImpl implements MarketHealthService {
 
     @Override
     public synchronized MarketHealthState state(MarketType market) {
-        return statuses.get(market).state();
+        return current(market).state();
+    }
+
+    @Override
+    public void monitorStarted() {
+        monitorRunning = true;
     }
 
     @Override
     public synchronized boolean dataLost(MarketType market) {
-        Status current = statuses.get(market);
+        Status current = current(market);
         return current.state() == MarketHealthState.PAUSED
                 || (current.state() == MarketHealthState.RECOVERING && current.lost());
     }
@@ -124,7 +141,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     public void requireTrading(MarketType market) {
         Status current;
         synchronized (this) {
-            current = statuses.get(market);
+            current = current(market);
         }
         if (!current.state().tradingOpen()) {
             throw new TradingPausedException(market, current.state(), current.since());
@@ -134,12 +151,12 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     @Override
     public synchronized Optional<Instant> catchUpFrom(MarketType market) {
         Instant now = clock.instant();
-        Status current = statuses.get(market);
+        Status current = current(market);
         Instant from = null;
         if (current.incidentId() != null) {
             from = current.since();
         } else {
-            Ended last = ended.get(market);
+            Ended last = endedOf(market);
             if (last != null && last.resumedAt().plus(CATCH_UP_AFTER_RESUME).isAfter(now)) {
                 from = last.lastLiveAt();
             }
@@ -154,7 +171,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     @Override
     @Transactional
     public synchronized void forceResume(MarketType market, UUID by) {
-        Status current = statuses.get(market);
+        Status current = current(market);
         if (current.state() != MarketHealthState.RECOVERING) {
             throw new BusinessException(
                     ErrorCode.DATA_CONFLICT,
@@ -167,14 +184,14 @@ public class MarketHealthServiceImpl implements MarketHealthService {
 
     @Override
     public synchronized void recoveryProgress(MarketType market, RecoveryProgress read) {
-        if (statuses.get(market).state() == MarketHealthState.RECOVERING) {
+        if (current(market).state() == MarketHealthState.RECOVERING) {
             progress.put(market, read);
         }
     }
 
     @Override
     public synchronized Optional<RecoveryProgress> recoveryProgress(MarketType market) {
-        if (statuses.get(market).state() != MarketHealthState.RECOVERING) {
+        if (current(market).state() != MarketHealthState.RECOVERING) {
             return Optional.empty();
         }
         return Optional.ofNullable(progress.get(market));
@@ -195,7 +212,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     @Transactional
     public synchronized void startMaintenance(MarketType market, String message, Instant expectedEndAt, UUID by) {
         Instant now = clock.instant();
-        Status current = statuses.get(market);
+        Status current = current(market);
         Status held;
         if (current.incidentId() == null) {
             UUID id = UuidV7.next();
@@ -219,7 +236,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             held = current.in(MarketHealthState.MAINTENANCE);
         }
         // Maintenance is decided on purpose: the Traders are told at once, not after notify-after.
-        statuses.put(market, announce(market, held, IncidentReason.MAINTENANCE, message));
+        stage(market, announce(market, held, IncidentReason.MAINTENANCE, message));
         log.warn("D-158 {} under maintenance", market);
         changed(market, current.state(), MarketHealthState.MAINTENANCE);
     }
@@ -227,29 +244,29 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     @Override
     @Transactional
     public synchronized void endMaintenance(MarketType market) {
-        Status current = statuses.get(market);
+        Status current = current(market);
         if (current.state() != MarketHealthState.MAINTENANCE) {
             return;
         }
-        if (properties.enabled()) {
+        if (properties.enabled() && monitorRunning) {
             recover(market, current);
         } else {
             resume(market, current);
         }
         log.info("D-158 {} maintenance ended", market);
-        changed(market, MarketHealthState.MAINTENANCE, statuses.get(market).state());
+        changed(market, MarketHealthState.MAINTENANCE, current(market).state());
     }
 
     @Override
     @Transactional
     public synchronized MarketHealthState evaluate(MarketType market, HealthSignals signals, IncidentReason reason) {
-        Status current = statuses.get(market);
+        Status current = current(market);
         MarketHealthState from = current.state();
         if (current.incidentId() != null
                 && !current.announced()
                 && !current.pausedAt().plus(properties.notifyAfter()).isAfter(clock.instant())) {
             current = announce(market, current, reason, null);
-            statuses.put(market, current);
+            stage(market, current);
         }
         boolean beyondReplay = beyondReplay(current);
         if (beyondReplay) {
@@ -272,12 +289,12 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             recover(market, current);
         } else if (from == MarketHealthState.RECOVERING && to == MarketHealthState.PAUSED) {
             incidents.relapse(current.incidentId());
-            statuses.put(market, current.in(to).dataLostNow());
+            stage(market, current.in(to).dataLostNow());
             log.warn(
                     "D-158 {} lost its data again while recovering; incident {} goes on", market, current.incidentId());
         } else {
             Status next = current.in(to);
-            statuses.put(market, to == MarketHealthState.PAUSED ? next.dataLostNow() : next);
+            stage(market, to == MarketHealthState.PAUSED ? next.dataLostNow() : next);
         }
         changed(market, from, to);
         return to;
@@ -289,7 +306,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         Instant lastLiveAt = signals.lastLiveAt().isAfter(now) ? now : signals.lastLiveAt();
         incidents.open(
                 new MarketIncident(id, market, IncidentKind.OUTAGE, reason, lastLiveAt, now, null, null, null, null));
-        statuses.put(market, Status.closed(MarketHealthState.PAUSED, id, lastLiveAt, now, false, true));
+        stage(market, Status.closed(MarketHealthState.PAUSED, id, lastLiveAt, now, false, true));
         events.publishEvent(new MarketTradingPaused(market, id, MarketHealthState.PAUSED, reason, lastLiveAt));
         log.warn("D-158 {} trading paused ({}): no live data since {}", market, reason, lastLiveAt);
     }
@@ -308,7 +325,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         Instant now = clock.instant();
         incidents.recovering(current.incidentId(), now);
         Status recovering = current.recoveringFrom(now);
-        statuses.put(market, recovering);
+        stage(market, recovering);
         events.publishEvent(new MarketRecoveryStarted(market, current.incidentId(), current.since()));
         log.info("D-158 {} recovering: replaying from {}", market, current.since());
         if (beyondReplay(recovering)) {
@@ -336,7 +353,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         }
         events.publishEvent(new MarketRecoveryOverdue(
                 market, current.incidentId(), current.since(), current.recoveringAt(), beyondReplay));
-        statuses.put(market, current.overdueToldNow());
+        stage(market, current.overdueToldNow());
         log.warn(
                 "D-158 {} recovery of incident {} needs an administrator: {}",
                 market,
@@ -347,8 +364,8 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     private void resume(MarketType market, Status current) {
         Instant now = clock.instant();
         incidents.resume(current.incidentId(), now);
-        statuses.put(market, Status.LIVE);
-        ended.put(market, new Ended(current.since(), now));
+        stage(market, Status.LIVE);
+        stageEnded(market, new Ended(current.since(), now));
         events.publishEvent(
                 new MarketTradingResumed(market, current.incidentId(), current.since(), now, current.announced()));
         log.info("D-158 {} trading resumed; incident {} closed", market, current.incidentId());
@@ -356,18 +373,148 @@ public class MarketHealthServiceImpl implements MarketHealthService {
 
     private void changed(MarketType market, MarketHealthState from, MarketHealthState to) {
         if (to != MarketHealthState.RECOVERING) {
-            progress.remove(market);
+            stageProgressCleared(market);
         }
         if (from != to) {
             events.publishEvent(new MarketHealthChanged(market, from, to));
         }
     }
 
-    /**
-     * A market's state, its open incident if any, since when it has not been live, when trading closed, whether the
-     * Traders were told of the incident, when its current recovery began, and whether the administrators were told it
-     * needs them.
-     */
+    /** The market's state as this transaction sees it: its own staged change, else the committed one. */
+    private Status current(MarketType market) {
+        Staged staged = stagedOf(market);
+        return staged == null ? statuses.get(market) : staged.status;
+    }
+
+    private Ended endedOf(MarketType market) {
+        Staged staged = stagedOf(market);
+        return staged == null || staged.ended == null ? ended.get(market) : staged.ended;
+    }
+
+    private void stage(MarketType market, Status next) {
+        Map<MarketType, Staged> staging = staging();
+        if (staging == null) {
+            statuses.put(market, next);
+        } else {
+            staging.computeIfAbsent(market, this::stagedFrom).status = next;
+        }
+    }
+
+    private void stageEnded(MarketType market, Ended next) {
+        Map<MarketType, Staged> staging = staging();
+        if (staging == null) {
+            ended.put(market, next);
+        } else {
+            staging.computeIfAbsent(market, this::stagedFrom).ended = next;
+        }
+    }
+
+    private void stageProgressCleared(MarketType market) {
+        Map<MarketType, Staged> staging = staging();
+        if (staging == null) {
+            progress.remove(market);
+        } else {
+            staging.computeIfAbsent(market, this::stagedFrom).progressCleared = true;
+        }
+    }
+
+    private Staged stagedFrom(MarketType market) {
+        return new Staged(statuses.get(market));
+    }
+
+    private Staged stagedOf(MarketType market) {
+        Map<MarketType, Staged> bound = bound();
+        return bound == null ? null : bound.get(market);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<MarketType, Staged> bound() {
+        return TransactionSynchronizationManager.isSynchronizationActive()
+                ? (Map<MarketType, Staged>) TransactionSynchronizationManager.getResource(this)
+                : null;
+    }
+
+    /** This transaction's staged changes, bound on first use; {@code null} outside a transaction (applied at once). */
+    private Map<MarketType, Staged> staging() {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return null;
+        }
+        Map<MarketType, Staged> staging = bound();
+        if (staging == null) {
+            staging = new EnumMap<>(MarketType.class);
+            TransactionSynchronizationManager.bindResource(this, staging);
+            TransactionSynchronizationManager.registerSynchronization(new ApplyAfterCommit(staging));
+        }
+        return staging;
+    }
+
+    /** Applies a committed transaction's changes, each only if the state it started from is still the one held. */
+    private synchronized void apply(Map<MarketType, Staged> staging) {
+        staging.forEach((market, staged) -> {
+            if (statuses.get(market) != staged.from) {
+                log.warn(
+                        "D-158 {} health change of a committed transaction skipped: the state moved meanwhile", market);
+                return;
+            }
+            statuses.put(market, staged.status);
+            if (staged.ended != null) {
+                ended.put(market, staged.ended);
+            }
+            if (staged.progressCleared) {
+                progress.remove(market);
+            }
+        });
+    }
+
+    /** One market's change staged by a transaction: the state it started from and what it becomes. */
+    private static final class Staged {
+
+        private final Status from;
+        private Status status;
+        private Ended ended;
+        private boolean progressCleared;
+
+        private Staged(Status from) {
+            this.from = from;
+            this.status = from;
+        }
+    }
+
+    /** Applies the staged changes after commit, first of the synchronizations, so the status pushes read them. */
+    private final class ApplyAfterCommit implements TransactionSynchronization {
+
+        private final Map<MarketType, Staged> staging;
+
+        private ApplyAfterCommit(Map<MarketType, Staged> staging) {
+            this.staging = staging;
+        }
+
+        @Override
+        public int getOrder() {
+            return Ordered.HIGHEST_PRECEDENCE;
+        }
+
+        @Override
+        public void suspend() {
+            TransactionSynchronizationManager.unbindResourceIfPossible(MarketHealthServiceImpl.this);
+        }
+
+        @Override
+        public void resume() {
+            TransactionSynchronizationManager.bindResource(MarketHealthServiceImpl.this, staging);
+        }
+
+        @Override
+        public void afterCommit() {
+            apply(staging);
+        }
+
+        @Override
+        public void afterCompletion(int status) {
+            TransactionSynchronizationManager.unbindResourceIfPossible(MarketHealthServiceImpl.this);
+        }
+    }
+
     /**
      * One market's state in memory.
      *

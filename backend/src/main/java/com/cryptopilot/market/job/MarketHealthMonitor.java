@@ -79,6 +79,7 @@ public class MarketHealthMonitor {
             return;
         }
         scheduler.scheduleWithFixedDelay(this::tick, INTERVAL);
+        health.monitorStarted();
         log.info("D-158 market health watched every {}", INTERVAL);
     }
 

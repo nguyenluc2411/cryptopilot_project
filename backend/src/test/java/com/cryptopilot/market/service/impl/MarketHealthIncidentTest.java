@@ -166,12 +166,23 @@ class MarketHealthIncidentTest {
         assertThat(incidents.findRecent(MarketType.SPOT, 1).getFirst().resumedAt())
                 .isNotNull();
 
-        MarketHealthServiceImpl on = service(true);
+        MarketHealthServiceImpl on = watched(service(true));
         on.startMaintenance(MarketType.FUTURES, null, null);
         on.endMaintenance(MarketType.FUTURES);
         assertThat(on.state(MarketType.FUTURES)).isEqualTo(MarketHealthState.RECOVERING);
         assertThat(incidents.findOpen(MarketType.FUTURES).orElseThrow().recoveryStartedAt())
                 .isNotNull();
+    }
+
+    /** Enabled but with no monitor running (streams off), nothing would end a recovery: ending maintenance reopens. */
+    @Test
+    void D158_endingMaintenance_withoutARunningMonitor_reopensAtOnce() {
+        MarketHealthServiceImpl unwatched = service(true);
+        unwatched.startMaintenance(MarketType.SPOT, null, null);
+        unwatched.endMaintenance(MarketType.SPOT);
+
+        assertThat(unwatched.state(MarketType.SPOT)).isEqualTo(MarketHealthState.LIVE);
+        assertThat(incidents.findOpen(MarketType.SPOT)).isEmpty();
     }
 
     /**
@@ -257,7 +268,7 @@ class MarketHealthIncidentTest {
         MutableTestClock clock = new MutableTestClock(START);
         List<Object> published = new ArrayList<>();
         MarketHealthServiceImpl health =
-                new MarketHealthServiceImpl(properties(true), incidents, publishedOutside(published), clock);
+                watched(new MarketHealthServiceImpl(properties(true), incidents, publishedOutside(published), clock));
 
         health.startMaintenance(MarketType.FUTURES, "maintenance", null);
         assertThat(health.evaluate(MarketType.FUTURES, flowingFor(clock, 600), IncidentReason.STREAM_LOST))
@@ -282,7 +293,8 @@ class MarketHealthIncidentTest {
     @Test
     void D158_dataLost_isTrueOnlyWhileTheExchangeDataIsMissingOrRefilled() {
         MutableTestClock clock = new MutableTestClock(START);
-        MarketHealthServiceImpl health = new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock);
+        MarketHealthServiceImpl health =
+                watched(new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock));
         MarketType m = MarketType.FUTURES;
         assertThat(health.dataLost(m)).as("M1 live").isFalse();
 
@@ -314,7 +326,7 @@ class MarketHealthIncidentTest {
                 .isFalse();
         health.endMaintenance(m);
         assertThat(health.dataLost(m)).as("M7 recovering after it").isTrue();
-        MarketHealthServiceImpl restarted = service(true);
+        MarketHealthServiceImpl restarted = watched(service(true));
         restarted.endMaintenance(m);
         assertThat(restarted.dataLost(m)).as("M8 restarted, then ended").isTrue();
         health.evaluate(m, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST);
@@ -339,7 +351,7 @@ class MarketHealthIncidentTest {
         sql.sql("delete from market_incident").update();
         MarketHealthServiceImpl fresh = service(true);
         fresh.startMaintenance(MarketType.SPOT, null, null);
-        MarketHealthServiceImpl again = service(true);
+        MarketHealthServiceImpl again = watched(service(true));
         again.endMaintenance(MarketType.SPOT);
         assertThat(again.dataLost(MarketType.SPOT))
                 .as("M8 open maintenance over a live market")
@@ -519,6 +531,11 @@ class MarketHealthIncidentTest {
 
         health.evaluate(MarketType.SPOT, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST);
         assertThat(health.recoveryProgress(MarketType.SPOT)).isEmpty();
+    }
+
+    private static MarketHealthServiceImpl watched(MarketHealthServiceImpl health) {
+        health.monitorStarted();
+        return health;
     }
 
     private static HealthSignals silentSince(Instant lastLive) {

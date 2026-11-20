@@ -25,7 +25,10 @@ public interface MarketHealthService extends MarketHealth {
     /** Closes trading on the market on purpose, with an optional message and expected end for the Traders. */
     void startMaintenance(MarketType market, String message, Instant expectedEndAt, UUID by);
 
-    /** Ends maintenance; the market reopens through recovery, never straight away while its data is lost. */
+    /**
+     * Ends maintenance; the market reopens through recovery, never straight away while its data is lost. Without a
+     * running monitor nothing would end the recovery, so it reopens at once.
+     */
     void endMaintenance(MarketType market);
 
     /**
@@ -56,6 +59,9 @@ public interface MarketHealthService extends MarketHealth {
      * is live or under maintenance, nor while it recovers from a maintenance during which the data kept flowing.
      */
     boolean dataLost(MarketType market);
+
+    /** Told by the monitor once its ticks are scheduled: only then can a recovery end by itself. */
+    void monitorStarted();
 
     /** The market's open incident, if trading on it is closed. */
     Optional<MarketIncident> openIncident(MarketType market);
