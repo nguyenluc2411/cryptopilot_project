@@ -16,7 +16,7 @@ import lombok.Getter;
 
 /**
  * The part of an account a person edits: display name, avatar, the figures a new trading plan
- * starts from, and how the account wants to be notified.
+ * starts from, how the account wants to be notified, and what its community page says of it (D-99).
  *
  * <p>Part of the {@link UserAccount} aggregate, not an aggregate of its own. Its primary key
  * <em>is</em> the account's key — one row per account, created with the account and deleted with it
@@ -77,6 +77,26 @@ public class UserProfile extends BaseEntity {
     @Column(name = "notify_push", nullable = false)
     private boolean notifyPush = true;
 
+    /** The key the avatar is stored under in the media storage, or {@code null} (D-99). */
+    @Column(name = "avatar_public_id", length = 255)
+    private String avatarPublicId;
+
+    /** A short introduction on the member page, or {@code null} (D-99). */
+    @Column(name = "bio", length = 300)
+    private String bio;
+
+    /** One https link on the member page, or {@code null} (D-99). */
+    @Column(name = "website_url", length = 200)
+    private String websiteUrl;
+
+    /** Where the cover image of the member page is served from, or {@code null} for the default (D-99). */
+    @Column(name = "banner_url", length = 500)
+    private String bannerUrl;
+
+    /** The key the cover image is stored under, or {@code null} (D-99). */
+    @Column(name = "banner_public_id", length = 255)
+    private String bannerPublicId;
+
     /** For JPA only. */
     protected UserProfile() {}
 
@@ -105,9 +125,30 @@ public class UserProfile extends BaseEntity {
         this.displayName = requireText(newDisplayName);
     }
 
-    /** Points the avatar at a newly uploaded image, or clears it with {@code null}. */
-    public void changeAvatar(String newAvatarUrl) {
+    /**
+     * Points the avatar at a newly uploaded image, or clears it when both are {@code null} (D-99).
+     *
+     * @param newAvatarUrl where the image is served from
+     * @param newPublicId the key it is stored under
+     */
+    public void changeAvatar(String newAvatarUrl, String newPublicId) {
         this.avatarUrl = newAvatarUrl;
+        this.avatarPublicId = newPublicId;
+    }
+
+    /** Points the cover image at a newly uploaded image, or clears it when both are {@code null} (D-99). */
+    public void changeBanner(String newBannerUrl, String newPublicId) {
+        this.bannerUrl = newBannerUrl;
+        this.bannerPublicId = newPublicId;
+    }
+
+    /**
+     * Replaces what the member page says of the member (D-99): the introduction and the link, either {@code null}.
+     * Their lengths and the link's scheme are checked by the request.
+     */
+    public void describe(String newBio, String newWebsiteUrl) {
+        this.bio = newBio;
+        this.websiteUrl = newWebsiteUrl;
     }
 
     /**

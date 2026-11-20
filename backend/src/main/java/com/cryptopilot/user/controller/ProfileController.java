@@ -2,8 +2,10 @@ package com.cryptopilot.user.controller;
 
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.MessageResponse;
+import com.cryptopilot.user.dto.request.CommunityProfileRequest;
 import com.cryptopilot.user.dto.request.NotificationPreferencesRequest;
 import com.cryptopilot.user.dto.request.UpdateProfileRequest;
+import com.cryptopilot.user.dto.response.ProfileImageUploadResponse;
 import com.cryptopilot.user.dto.response.ProfileResponse;
 import com.cryptopilot.user.service.ProfileService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -17,13 +19,15 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The Profile and Notifications tabs of SCR-07 (SRS UC-06, UC-08, section 3.2.5).
+ * The Profile and Notifications tabs of SCR-07 (SRS UC-06, UC-08, section 3.2.5), and the Edit dialog of the
+ * caller's community member page with the avatar and banner uploads (D-99).
  *
  * <p>Every path is under {@code /me}, and the account is the subject of the access token, never a
  * value the request carries. So there is no identifier in the URL to change and no other account's
@@ -75,6 +79,32 @@ public class ProfileController {
     public MessageResponse updateNotificationPreferences(
             @AuthenticationPrincipal Jwt caller, @Valid @RequestBody NotificationPreferencesRequest request) {
         profiles.updateNotificationPreferences(accountOf(caller), request.email(), request.push());
+        return new MessageResponse("MSG14");
+    }
+
+    /** A signed form for one avatar or banner of the member page (D-99). */
+    @Operation(summary = "A signed form to upload one avatar or banner of the member page (D-99)")
+    @ApiResponse(responseCode = "200", description = "The form, the key to name afterwards and the largest file")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "503", description = "MSG43: no media storage is set (`MEDIA_STORAGE_UNAVAILABLE`)")
+    @PostMapping("/profile-images/upload-signature")
+    public ProfileImageUploadResponse signProfileImage(@AuthenticationPrincipal Jwt caller) {
+        return profiles.signProfileImage(accountOf(caller));
+    }
+
+    /** Saves the Edit dialog of the member page: introduction, link, avatar and banner (D-99). */
+    @Operation(summary = "Save the member page: introduction, link, avatar and banner (D-99)")
+    @ApiResponse(responseCode = "200", description = "MSG14: saved")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01: a field too long or a link that is not https; MSG32: an image key not signed for"
+                    + " the caller, with nothing stored, or not an image within the size limit (`MEDIA_INVALID`)")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "503", description = "MSG43: the media storage cannot be read")
+    @PutMapping("/community-profile")
+    public MessageResponse updateCommunityProfile(
+            @AuthenticationPrincipal Jwt caller, @Valid @RequestBody CommunityProfileRequest request) {
+        profiles.updateCommunityProfile(accountOf(caller), request);
         return new MessageResponse("MSG14");
     }
 
