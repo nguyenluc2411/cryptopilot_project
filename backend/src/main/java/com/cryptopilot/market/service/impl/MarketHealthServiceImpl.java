@@ -89,7 +89,12 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                     open.kind() == IncidentKind.MAINTENANCE ? MarketHealthState.MAINTENANCE : MarketHealthState.PAUSED;
             // Announced before the restart if it was open long enough; a second notice would be written once only.
             boolean announced = !open.pausedAt().plus(properties.notifyAfter()).isAfter(clock.instant());
-            statuses.put(open.market(), Status.closed(state, open.id(), open.lastLiveAt(), open.pausedAt(), announced));
+            // An outage lost data; so did a maintenance that took one over, as its data stopped before it closed.
+            boolean lost =
+                    open.kind() == IncidentKind.OUTAGE || open.lastLiveAt().isBefore(open.pausedAt());
+            statuses.put(
+                    open.market(),
+                    Status.closed(state, open.id(), open.lastLiveAt(), open.pausedAt(), announced, lost));
             log.warn("D-158 {} starts {}: incident {} open since {}", open.market(), state, open.id(), open.pausedAt());
         }
         for (MarketType market : MarketType.values()) {
@@ -106,6 +111,13 @@ public class MarketHealthServiceImpl implements MarketHealthService {
     @Override
     public synchronized MarketHealthState state(MarketType market) {
         return statuses.get(market).state();
+    }
+
+    @Override
+    public synchronized boolean dataLost(MarketType market) {
+        Status current = statuses.get(market);
+        return current.state() == MarketHealthState.PAUSED
+                || (current.state() == MarketHealthState.RECOVERING && current.lost());
     }
 
     @Override
@@ -199,7 +211,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                     message,
                     by,
                     expectedEndAt));
-            held = Status.closed(MarketHealthState.MAINTENANCE, id, now, now, false);
+            held = Status.closed(MarketHealthState.MAINTENANCE, id, now, now, false, false);
             events.publishEvent(new MarketTradingPaused(
                     market, id, MarketHealthState.MAINTENANCE, IncidentReason.MAINTENANCE, now));
         } else {
@@ -260,11 +272,12 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             recover(market, current);
         } else if (from == MarketHealthState.RECOVERING && to == MarketHealthState.PAUSED) {
             incidents.relapse(current.incidentId());
-            statuses.put(market, current.in(to));
+            statuses.put(market, current.in(to).dataLostNow());
             log.warn(
                     "D-158 {} lost its data again while recovering; incident {} goes on", market, current.incidentId());
         } else {
-            statuses.put(market, current.in(to));
+            Status next = current.in(to);
+            statuses.put(market, to == MarketHealthState.PAUSED ? next.dataLostNow() : next);
         }
         changed(market, from, to);
         return to;
@@ -276,7 +289,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         Instant lastLiveAt = signals.lastLiveAt().isAfter(now) ? now : signals.lastLiveAt();
         incidents.open(
                 new MarketIncident(id, market, IncidentKind.OUTAGE, reason, lastLiveAt, now, null, null, null, null));
-        statuses.put(market, Status.closed(MarketHealthState.PAUSED, id, lastLiveAt, now, false));
+        statuses.put(market, Status.closed(MarketHealthState.PAUSED, id, lastLiveAt, now, false, true));
         events.publishEvent(new MarketTradingPaused(market, id, MarketHealthState.PAUSED, reason, lastLiveAt));
         log.warn("D-158 {} trading paused ({}): no live data since {}", market, reason, lastLiveAt);
     }
@@ -355,6 +368,12 @@ public class MarketHealthServiceImpl implements MarketHealthService {
      * Traders were told of the incident, when its current recovery began, and whether the administrators were told it
      * needs them.
      */
+    /**
+     * One market's state in memory.
+     *
+     * @param lost whether the exchange data was really lost during the open incident: set by an outage or a relapse,
+     *     kept when maintenance takes the incident over, so the recovery after it shows the fallback only then
+     */
     private record Status(
             MarketHealthState state,
             UUID incidentId,
@@ -362,29 +381,41 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             Instant pausedAt,
             boolean announced,
             Instant recoveringAt,
-            boolean overdueTold) {
+            boolean overdueTold,
+            boolean lost) {
 
-        private static final Status LIVE = new Status(MarketHealthState.LIVE, null, null, null, false, null, false);
+        private static final Status LIVE =
+                new Status(MarketHealthState.LIVE, null, null, null, false, null, false, false);
 
         private static Status closed(
-                MarketHealthState state, UUID incidentId, Instant since, Instant pausedAt, boolean announced) {
-            return new Status(state, incidentId, since, pausedAt, announced, null, false);
+                MarketHealthState state,
+                UUID incidentId,
+                Instant since,
+                Instant pausedAt,
+                boolean announced,
+                boolean lost) {
+            return new Status(state, incidentId, since, pausedAt, announced, null, false, lost);
         }
 
         private Status in(MarketHealthState next) {
-            return new Status(next, incidentId, since, pausedAt, announced, recoveringAt, overdueTold);
+            return new Status(next, incidentId, since, pausedAt, announced, recoveringAt, overdueTold, lost);
         }
 
         private Status announcedNow() {
-            return new Status(state, incidentId, since, pausedAt, true, recoveringAt, overdueTold);
+            return new Status(state, incidentId, since, pausedAt, true, recoveringAt, overdueTold, lost);
         }
 
         private Status recoveringFrom(Instant at) {
-            return new Status(MarketHealthState.RECOVERING, incidentId, since, pausedAt, announced, at, overdueTold);
+            return new Status(
+                    MarketHealthState.RECOVERING, incidentId, since, pausedAt, announced, at, overdueTold, lost);
         }
 
         private Status overdueToldNow() {
-            return new Status(state, incidentId, since, pausedAt, announced, recoveringAt, true);
+            return new Status(state, incidentId, since, pausedAt, announced, recoveringAt, true, lost);
+        }
+
+        private Status dataLostNow() {
+            return new Status(state, incidentId, since, pausedAt, announced, recoveringAt, overdueTold, true);
         }
     }
 

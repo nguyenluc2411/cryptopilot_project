@@ -274,6 +274,78 @@ class MarketHealthIncidentTest {
                 .containsExactly("MarketTradingPaused", "MarketPauseAnnounced", "MarketRecoveryStarted");
     }
 
+    /**
+     * D-158 data-lost matrix: the market's exchange data counts as lost, so the screens show the fallback, only while
+     * it is paused, or recovering from an incident in which the data really was lost; never live or under
+     * maintenance, and never while recovering from a maintenance during which the data kept flowing.
+     */
+    @Test
+    void D158_dataLost_isTrueOnlyWhileTheExchangeDataIsMissingOrRefilled() {
+        MutableTestClock clock = new MutableTestClock(START);
+        MarketHealthServiceImpl health = new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock);
+        MarketType m = MarketType.FUTURES;
+        assertThat(health.dataLost(m)).as("M1 live").isFalse();
+
+        // M4, M5: maintenance over a live market, ended while the data flows.
+        health.startMaintenance(m, null, null);
+        assertThat(health.dataLost(m)).as("M4 maintenance").isFalse();
+        health.endMaintenance(m);
+        assertThat(health.state(m)).isEqualTo(MarketHealthState.RECOVERING);
+        assertThat(health.dataLost(m)).as("M5 recovering from maintenance").isFalse();
+        health.evaluate(m, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST);
+        assertThat(health.state(m)).isEqualTo(MarketHealthState.LIVE);
+        assertThat(health.dataLost(m)).as("M9 live again").isFalse();
+
+        // M2, M3: an outage.
+        health.evaluate(m, silentSince(clock.instant().minusSeconds(30)), IncidentReason.STREAM_LOST);
+        assertThat(health.dataLost(m)).as("M2 paused").isTrue();
+        clock.advance(Duration.ofSeconds(20));
+        health.evaluate(m, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        assertThat(health.state(m)).isEqualTo(MarketHealthState.RECOVERING);
+        assertThat(health.dataLost(m)).as("M3 recovering from an outage").isTrue();
+
+        // M7: maintenance taking over the outage, then ended.
+        health.startMaintenance(m, null, null);
+        assertThat(health.dataLost(m))
+                .as("M7 maintenance shows the exchange's prices")
+                .isFalse();
+        assertThat(service(true).dataLost(m))
+                .as("M8 restart under that maintenance")
+                .isFalse();
+        health.endMaintenance(m);
+        assertThat(health.dataLost(m)).as("M7 recovering after it").isTrue();
+        MarketHealthServiceImpl restarted = service(true);
+        restarted.endMaintenance(m);
+        assertThat(restarted.dataLost(m)).as("M8 restarted, then ended").isTrue();
+        health.evaluate(m, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST);
+        assertThat(health.dataLost(m)).as("M9 reopened").isFalse();
+
+        // M9, M6: a new maintenance starts clean; ended while the data is lost, it pauses and recovers as lost.
+        health.startMaintenance(m, null, null);
+        health.endMaintenance(m);
+        assertThat(health.dataLost(m)).as("M9 the flag is not carried over").isFalse();
+        health.evaluate(m, silentSince(clock.instant().minusSeconds(60)), IncidentReason.STREAM_LOST);
+        assertThat(health.state(m)).isEqualTo(MarketHealthState.PAUSED);
+        assertThat(health.dataLost(m)).as("M6 paused").isTrue();
+        clock.advance(Duration.ofSeconds(20));
+        health.evaluate(m, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+        assertThat(health.state(m)).isEqualTo(MarketHealthState.RECOVERING);
+        assertThat(health.dataLost(m)).as("M6 recovering after the relapse").isTrue();
+        health.evaluate(m, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST);
+
+        // M8: restarts with an open incident of each kind.
+        incidents.open(outage(MarketType.SPOT));
+        assertThat(service(true).dataLost(MarketType.SPOT)).as("M8 open outage").isTrue();
+        sql.sql("delete from market_incident").update();
+        MarketHealthServiceImpl fresh = service(true);
+        fresh.startMaintenance(MarketType.SPOT, null, null);
+        MarketHealthServiceImpl again = service(true);
+        again.endMaintenance(MarketType.SPOT);
+        assertThat(again.dataLost(MarketType.SPOT))
+                .as("M8 open maintenance over a live market")
+                .isFalse();
+    }
+
     /** Records what the service publishes to other modules; the module's own state changes are left out. */
     private static ApplicationEventPublisher publishedOutside(List<Object> published) {
         return event -> {

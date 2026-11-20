@@ -14,7 +14,6 @@ import com.cryptopilot.market.client.fallback.OkxProperties;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.dto.response.FallbackPricesResponse;
 import com.cryptopilot.market.model.enums.DisplaySource;
-import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.DisplayPriceService;
 import com.cryptopilot.market.service.MarketHealthService;
@@ -47,8 +46,8 @@ class FallbackPriceJobTest {
     @BeforeEach
     void futuresPaused() {
         when(streams.enabled()).thenReturn(true);
-        when(health.state(MarketType.SPOT)).thenReturn(MarketHealthState.MAINTENANCE);
-        when(health.state(MarketType.FUTURES)).thenReturn(MarketHealthState.PAUSED);
+        when(health.dataLost(MarketType.SPOT)).thenReturn(false);
+        when(health.dataLost(MarketType.FUTURES)).thenReturn(true);
         when(prices.prices(MarketType.FUTURES)).thenReturn(futures);
     }
 
@@ -61,7 +60,6 @@ class FallbackPriceJobTest {
         verify(prices).clear(MarketType.SPOT);
         verify(prices, never()).refresh(MarketType.SPOT);
 
-        when(health.state(MarketType.FUTURES)).thenReturn(MarketHealthState.RECOVERING);
         doThrow(new IllegalStateException("broker down")).when(broker).convertAndSend(anyString(), any(Object.class));
         job(true, true).poll();
     }

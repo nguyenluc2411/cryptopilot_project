@@ -15,7 +15,6 @@ import com.cryptopilot.market.event.MarketFallbackUnavailable;
 import com.cryptopilot.market.model.MarketIncident;
 import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.model.enums.DisplaySource;
-import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.DisplayPriceService;
 import com.cryptopilot.market.service.MarketHealthService;
@@ -51,8 +50,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   <li>A price further from the exchange's last one (the Spot last price, the Futures mark) than {@code divergence} is
  *       flagged, so the banner warns it may differ markedly.
  *   <li>A failed read leaves no prices, and is told to the administrators once per incident (E9).
- *   <li>The prices are shown only while the market is paused or recovering; under maintenance and while live the
- *       exchange's own prices are.
+ *   <li>The prices are shown only while the market's data is lost: paused, or recovering from an incident that lost
+ *       data; while live, under maintenance and recovering from a maintenance the exchange's own prices are.
  * </ul>
  *
  * <p>Rule: BR-09; NSF-03; D-158.
@@ -189,8 +188,7 @@ public class DisplayPriceServiceImpl implements DisplayPriceService {
 
     /** Whether the market's exchange data is lost: paused or recovering, the states the fallback is shown in. */
     private boolean lost(MarketType market) {
-        MarketHealthState state = health.state(market);
-        return state == MarketHealthState.PAUSED || state == MarketHealthState.RECOVERING;
+        return health.dataLost(market);
     }
 
     private Snapshot snapshot(MarketType market) {

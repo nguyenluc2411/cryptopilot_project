@@ -50,6 +50,13 @@ public interface MarketHealthService extends MarketHealth {
     /** How far the modules have caught up with the market, while it recovers; empty otherwise. */
     Optional<RecoveryProgress> recoveryProgress(MarketType market);
 
+    /**
+     * Whether the market's exchange data is missing or being refilled now, so the screens show the display-only
+     * fallback: while it is paused, or recovering from an incident in which the data really was lost. Never while it
+     * is live or under maintenance, nor while it recovers from a maintenance during which the data kept flowing.
+     */
+    boolean dataLost(MarketType market);
+
     /** The market's open incident, if trading on it is closed. */
     Optional<MarketIncident> openIncident(MarketType market);
 }

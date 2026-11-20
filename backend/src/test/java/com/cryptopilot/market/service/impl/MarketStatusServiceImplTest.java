@@ -71,6 +71,7 @@ class MarketStatusServiceImplTest {
         when(exchange.outage(BinanceVenue.SPOT)).thenReturn(Optional.empty());
         when(liveness.silentSymbols(MarketType.SPOT)).thenReturn(List.of("BTCUSDT"));
         when(prices.source(MarketType.FUTURES)).thenReturn(DisplaySource.OKX);
+        when(health.dataLost(MarketType.FUTURES)).thenReturn(true);
     }
 
     @Test
@@ -83,6 +84,7 @@ class MarketStatusServiceImplTest {
         assertThat(futures.reason()).isEqualTo(IncidentReason.IP_BANNED);
         assertThat(futures.pausedPairs()).isEmpty();
         assertThat(futures.displaySource()).isEqualTo(DisplaySource.OKX);
+        assertThat(futures.dataLost()).isTrue();
     }
 
     @Test
@@ -94,5 +96,6 @@ class MarketStatusServiceImplTest {
         assertThat(spot.retryAt()).isNull();
         assertThat(spot.recovery()).isNull();
         assertThat(spot.displaySource()).isEqualTo(DisplaySource.BINANCE);
+        assertThat(spot.dataLost()).isFalse();
     }
 }

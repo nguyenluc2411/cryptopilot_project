@@ -13,7 +13,6 @@ import com.cryptopilot.market.client.fallback.OkxProperties;
 import com.cryptopilot.market.client.fallback.OkxTicker;
 import com.cryptopilot.market.dto.response.FallbackPricesResponse;
 import com.cryptopilot.market.model.enums.DisplaySource;
-import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.PriceCacheService;
@@ -104,7 +103,7 @@ class DisplayPriceIsolationTest {
                 .thenReturn(List.of(
                         new OkxTicker(base + "-USDT", new BigDecimal("1000"), null, null, null, null, Instant.now())));
         MarketHealthService paused = mock(MarketHealthService.class);
-        when(paused.state(any())).thenReturn(MarketHealthState.PAUSED);
+        when(paused.dataLost(any())).thenReturn(true);
         DisplayPriceServiceImpl display = new DisplayPriceServiceImpl(
                 provider(okx),
                 new OkxProperties(

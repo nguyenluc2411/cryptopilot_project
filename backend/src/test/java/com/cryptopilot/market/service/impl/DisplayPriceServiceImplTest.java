@@ -24,7 +24,6 @@ import com.cryptopilot.market.model.StreamTarget;
 import com.cryptopilot.market.model.enums.DisplaySource;
 import com.cryptopilot.market.model.enums.IncidentKind;
 import com.cryptopilot.market.model.enums.IncidentReason;
-import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.StreamCandleService;
@@ -84,7 +83,7 @@ class DisplayPriceServiceImplTest {
                         ticker("PEPE-USDT-SWAP", "0.0102", null),
                         ticker("ETH-USDT-SWAP", "2000", "2000")));
         when(okx.spotTickers()).thenReturn(List.of(ticker("BTC-USDT", "65100", "65000")));
-        when(health.state(any())).thenReturn(MarketHealthState.PAUSED);
+        when(health.dataLost(any())).thenReturn(true);
         when(health.openIncident(any()))
                 .thenReturn(Optional.of(new MarketIncident(
                         INCIDENT,
@@ -130,22 +129,21 @@ class DisplayPriceServiceImplTest {
                         assertThat(spot.diverged()).as("no exchange price").isFalse());
     }
 
-    /** The fallback is shown only while the market is paused or recovering; under maintenance or live, the exchange's. */
+    /**
+     * The fallback is shown only while the market's data is lost (paused, or recovering from an incident that lost
+     * data); live, under maintenance or recovering from a maintenance, the exchange's.
+     */
     @Test
     void D158_theFallback_isShownOnlyWhileTheMarketIsLost() {
         service.refresh(MarketType.FUTURES);
-        when(health.state(MarketType.FUTURES)).thenReturn(MarketHealthState.RECOVERING);
         assertThat(service.source(MarketType.FUTURES)).isEqualTo(DisplaySource.OKX);
 
-        for (MarketHealthState shown :
-                List.of(MarketHealthState.LIVE, MarketHealthState.RECONNECTING, MarketHealthState.MAINTENANCE)) {
-            when(health.state(MarketType.FUTURES)).thenReturn(shown);
-            assertThat(service.source(MarketType.FUTURES)).as(shown.name()).isEqualTo(DisplaySource.BINANCE);
-            assertThat(service.prices(MarketType.FUTURES).prices()).isEmpty();
-            assertThat(service.candles(MarketType.FUTURES, "BTCUSDT", 10)).isEmpty();
-        }
+        when(health.dataLost(MarketType.FUTURES)).thenReturn(false);
+        assertThat(service.source(MarketType.FUTURES)).isEqualTo(DisplaySource.BINANCE);
+        assertThat(service.prices(MarketType.FUTURES).prices()).isEmpty();
+        assertThat(service.candles(MarketType.FUTURES, "BTCUSDT", 10)).isEmpty();
 
-        when(health.state(MarketType.FUTURES)).thenReturn(MarketHealthState.PAUSED);
+        when(health.dataLost(MarketType.FUTURES)).thenReturn(true);
         service.clear(MarketType.FUTURES);
         assertThat(service.source(MarketType.FUTURES)).as("nothing read").isEqualTo(DisplaySource.NONE);
     }

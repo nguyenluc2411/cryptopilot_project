@@ -28,6 +28,9 @@ import java.util.UUID;
  * @param recovery how far the market has caught up, while it recovers; {@code null} otherwise
  * @param displaySource where the market's displayed prices come from now: the exchange, the display-only fallback while
  *     its data is lost, or none
+ * @param dataLost whether the market's exchange data is missing or being refilled now: paused, or recovering from an
+ *     incident that lost data, so the screens hide the book and trades and show the reference prices; {@code false}
+ *     while live, under maintenance and recovering from a maintenance during which the data kept flowing
  */
 public record MarketHealthResponse(
         MarketType market,
@@ -43,4 +46,5 @@ public record MarketHealthResponse(
         Instant expectedEndAt,
         Instant retryAt,
         MarketRecoveryResponse recovery,
-        DisplaySource displaySource) {}
+        DisplaySource displaySource,
+        boolean dataLost) {}

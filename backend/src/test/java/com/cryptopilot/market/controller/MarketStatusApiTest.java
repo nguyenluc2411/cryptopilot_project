@@ -247,7 +247,8 @@ class MarketStatusApiTest {
                         .param("limit", "301"))
                 .andExpect(status().isBadRequest());
         mvc.perform(get(STATUS))
-                .andExpect(jsonPath("$.markets[0].displaySource").value("BINANCE"));
+                .andExpect(jsonPath("$.markets[0].displaySource").value("BINANCE"))
+                .andExpect(jsonPath("$.markets[0].dataLost").value(false));
     }
 
     /** E5: an open market names the pairs whose data is lost; none here. */

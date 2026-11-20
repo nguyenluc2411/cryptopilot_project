@@ -3,7 +3,6 @@ package com.cryptopilot.market.job;
 import com.cryptopilot.market.client.BinanceStreamProperties;
 import com.cryptopilot.market.client.fallback.OkxProperties;
 import com.cryptopilot.market.config.MarketHealthProperties;
-import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.DisplayPriceService;
 import com.cryptopilot.market.service.MarketHealthService;
@@ -17,8 +16,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Reads the display-only fallback prices of each market whose exchange data is lost every {@code poll-interval}
- * (D-158) and pushes them to {@code /topic/market.fallback.<MARKET>}; forgets them once the market is live or under
- * maintenance, when the exchange's own prices are shown, so nothing is read while all is well.
+ * (D-158) and pushes them to {@code /topic/market.fallback.<MARKET>}; forgets them once its data is no longer lost (live,
+ * under maintenance, or recovering from a maintenance), when the exchange's own prices are shown.
  *
  * <p>Runs only while the fallback, the health monitor and the streams are all enabled: without the monitor no market
  * is ever lost. Orchestration only.
@@ -72,8 +71,7 @@ public class FallbackPriceJob {
     void poll() {
         for (MarketType market : MarketType.values()) {
             try {
-                MarketHealthState state = health.state(market);
-                if (state == MarketHealthState.PAUSED || state == MarketHealthState.RECOVERING) {
+                if (health.dataLost(market)) {
                     prices.refresh(market);
                     broker.convertAndSend(TOPIC + market.name(), prices.prices(market));
                 } else {

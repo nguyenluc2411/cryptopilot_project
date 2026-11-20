@@ -142,7 +142,8 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                         incident.expectedEndAt(),
                         retryAt(market),
                         recovery(market),
-                        prices.source(market));
+                        prices.source(market),
+                        health.dataLost(market));
             }
             return new MarketHealthResponse(
                     market,
@@ -158,7 +159,8 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                     null,
                     retryAt(market),
                     recovery(market),
-                    prices.source(market));
+                    prices.source(market),
+                    health.dataLost(market));
         }
         Instant shownAfter = clock.instant().minus(RESUMED_SHOWN_FOR);
         Optional<MarketIncident> ended = incidents.findRecent(market, 1).stream()
@@ -179,7 +181,8 @@ public class MarketStatusServiceImpl implements MarketStatusService {
                 null,
                 null,
                 null,
-                DisplaySource.BINANCE);
+                DisplaySource.BINANCE,
+                false);
     }
 
     /** When the exchange takes the market's calls again, while it refuses them. */
