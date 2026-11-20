@@ -332,6 +332,7 @@ market_incident,paused_at,timestamp with time zone,,,NO
 market_incident,reason,character varying,,,NO
 market_incident,recovery_started_at,timestamp with time zone,,,YES
 market_incident,resumed_at,timestamp with time zone,,,YES
+market_incident,version,integer,32,0,NO
 matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
 matching_watermark,market_type,character varying,,,NO
 matching_watermark,pair_id,uuid,,,NO

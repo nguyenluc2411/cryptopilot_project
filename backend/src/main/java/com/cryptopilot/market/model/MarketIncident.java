@@ -21,6 +21,7 @@ import java.util.UUID;
  * @param message the administrator's message for the Traders, if any
  * @param createdBy the administrator who started maintenance, if any
  * @param expectedEndAt when the administrator expects a maintenance to end, if said
+ * @param version the row's version, bumped by every update: a write names the one it read
  */
 public record MarketIncident(
         UUID id,
@@ -33,7 +34,36 @@ public record MarketIncident(
         Instant resumedAt,
         String message,
         UUID createdBy,
-        Instant expectedEndAt) {
+        Instant expectedEndAt,
+        int version) {
+
+    /** A new incident, not yet updated. */
+    public MarketIncident(
+            UUID id,
+            MarketType market,
+            IncidentKind kind,
+            IncidentReason reason,
+            Instant lastLiveAt,
+            Instant pausedAt,
+            Instant recoveryStartedAt,
+            Instant resumedAt,
+            String message,
+            UUID createdBy,
+            Instant expectedEndAt) {
+        this(
+                id,
+                market,
+                kind,
+                reason,
+                lastLiveAt,
+                pausedAt,
+                recoveryStartedAt,
+                resumedAt,
+                message,
+                createdBy,
+                expectedEndAt,
+                0);
+    }
 
     /** An incident with no expected end. */
     public MarketIncident(

@@ -11,6 +11,7 @@ import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.dto.request.MaintenanceRequest;
+import com.cryptopilot.market.event.MarketPauseAnnounced;
 import com.cryptopilot.market.model.HealthSignals;
 import com.cryptopilot.market.model.MarketIncident;
 import com.cryptopilot.market.model.enums.IncidentKind;
@@ -28,6 +29,13 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,6 +47,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -149,18 +158,126 @@ class MarketHealthRollbackTest {
     @Test
     void D159_aWriteToAnUnknownOrClosedIncident_throws() {
         UUID unknown = UuidV7.next();
-        assertThatThrownBy(() -> incidents.recovering(unknown, START))
+        assertThatThrownBy(() -> incidents.recovering(unknown, 0, START))
                 .isInstanceOf(InvalidDataAccessApiUsageException.class)
                 .hasCauseInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("recovering of " + unknown);
-        assertThatThrownBy(() -> incidents.relapse(unknown)).hasMessageContaining("relapse of " + unknown);
-        assertThatThrownBy(() -> incidents.toMaintenance(unknown, null, null, null))
+        assertThatThrownBy(() -> incidents.relapse(unknown, 0)).hasMessageContaining("relapse of " + unknown);
+        assertThatThrownBy(() -> incidents.toMaintenance(unknown, 0, null, null, null))
                 .hasMessageContaining("toMaintenance of " + unknown);
-        assertThatThrownBy(() -> incidents.resume(unknown, START)).hasMessageContaining("resume of " + unknown);
+        assertThatThrownBy(() -> incidents.resume(unknown, 0, START)).hasMessageContaining("resume of " + unknown);
 
-        MarketIncident closed = new MarketIncident(
+        MarketIncident closed = outage(MarketType.SPOT);
+        incidents.open(closed);
+        incidents.resume(closed.id(), 0, START.plusSeconds(60));
+        assertThatThrownBy(() -> incidents.resume(closed.id(), 1, START.plusSeconds(90)))
+                .hasCauseInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("resume of " + closed.id());
+    }
+
+    /** An update that names a version the row has moved past changes nothing and is refused. */
+    @Test
+    void D159_anUpdateFromAStaleVersion_throws() {
+        MarketIncident open = outage(MarketType.SPOT);
+        incidents.open(open);
+        incidents.recovering(open.id(), 0, START.plusSeconds(10));
+
+        assertThatThrownBy(() -> incidents.toMaintenance(open.id(), 0, "deploy", null, null))
+                .hasCauseInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("toMaintenance of " + open.id());
+        MarketIncident row = incidents.findOpen(MarketType.SPOT).orElseThrow();
+        assertThat(row.kind()).isEqualTo(IncidentKind.OUTAGE);
+        assertThat(row.version()).isEqualTo(1);
+    }
+
+    /**
+     * The monitor's recovery and an administrator's maintenance start from the same paused state: the second waits on
+     * the first's row, then finds its version gone, throws and rolls back; memory and row both say recovering.
+     */
+    @Test
+    void D159_twoTransactionsFromOnePausedState_onlyTheFirstLands() throws Exception {
+        MutableTestClock clock = new MutableTestClock(START);
+        incidents.open(outage(MarketType.FUTURES));
+        MarketHealthServiceImpl health = health(clock);
+        CountDownLatch recovered = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> monitor = threads.submit(() -> inTransaction().executeWithoutResult(done -> {
+                assertThat(health.evaluate(MarketType.FUTURES, flowing(clock), IncidentReason.STREAM_LOST))
+                        .isEqualTo(MarketHealthState.RECOVERING);
+                recovered.countDown();
+                awaitQuietly(commit);
+            }));
+            assertThat(recovered.await(30, TimeUnit.SECONDS)).isTrue();
+            Future<?> admin = threads.submit(() -> inTransaction()
+                    .executeWithoutResult(done -> health.startMaintenance(MarketType.FUTURES, "deploy", null)));
+            Awaitility.await()
+                    .atMost(Duration.ofSeconds(30))
+                    .until(() -> sql.sql("select count(*) from pg_locks where not granted")
+                                    .query(Long.class)
+                                    .single()
+                            > 0);
+            commit.countDown();
+
+            monitor.get(30, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> admin.get(30, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(InvalidDataAccessApiUsageException.class);
+        } finally {
+            commit.countDown();
+            threads.shutdownNow();
+        }
+
+        MarketIncident row = incidents.findOpen(MarketType.FUTURES).orElseThrow();
+        assertThat(row.kind()).isEqualTo(IncidentKind.OUTAGE);
+        assertThat(row.recoveryStartedAt()).isNotNull();
+        assertThat(row.version()).isEqualTo(1);
+        assertThat(health.state(MarketType.FUTURES)).isEqualTo(MarketHealthState.RECOVERING);
+        assertThat(heard).noneMatch(MarketPauseAnnounced.class::isInstance);
+    }
+
+    /**
+     * A committed change whose start state moved meanwhile is not applied over the newer one: the market is reloaded
+     * from the database, here an incident another writer turned back into an outage.
+     */
+    @Test
+    void D159_aCommittedChange_whoseStateMoved_reloadsTheMarketFromTheDatabase() {
+        MarketHealthServiceImpl health = health(new MutableTestClock(START));
+        TransactionTemplate apart = inTransaction();
+        apart.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        inTransaction().executeWithoutResult(done -> {
+            assertThat(health.evaluate(
+                            MarketType.SPOT, silentSince(START.minusSeconds(12)), IncidentReason.STREAM_LOST))
+                    .isEqualTo(MarketHealthState.RECONNECTING);
+            apart.executeWithoutResult(other -> health.startMaintenance(MarketType.SPOT, "deploy", null));
+            assertThat(health.state(MarketType.SPOT)).isEqualTo(MarketHealthState.RECONNECTING);
+            sql.sql(
+                            "update market_incident set incident_kind = 'OUTAGE', reason = 'STREAM_LOST', version = version + 1")
+                    .update();
+        });
+
+        assertThat(health.state(MarketType.SPOT)).isEqualTo(MarketHealthState.PAUSED);
+        assertThat(health.dataLost(MarketType.SPOT)).isTrue();
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static HealthSignals flowing(MutableTestClock clock) {
+        return new HealthSignals(clock.instant(), clock.instant().minusSeconds(20), true, false, false);
+    }
+
+    private static MarketIncident outage(MarketType market) {
+        return new MarketIncident(
                 UuidV7.next(),
-                MarketType.SPOT,
+                market,
                 IncidentKind.OUTAGE,
                 IncidentReason.STREAM_LOST,
                 START.minusSeconds(30),
@@ -169,11 +286,6 @@ class MarketHealthRollbackTest {
                 null,
                 null,
                 null);
-        incidents.open(closed);
-        incidents.resume(closed.id(), START.plusSeconds(60));
-        assertThatThrownBy(() -> incidents.resume(closed.id(), START.plusSeconds(90)))
-                .hasCauseInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("resume of " + closed.id());
     }
 
     private MarketHealthServiceImpl health(Clock clock) {

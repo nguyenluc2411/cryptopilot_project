@@ -99,14 +99,14 @@ class MarketHealthIncidentTest {
         MarketIncident opened = outage(MarketType.FUTURES);
         incidents.open(opened);
 
-        incidents.recovering(opened.id(), START.plusSeconds(60));
+        incidents.recovering(opened.id(), 0, START.plusSeconds(60));
         assertThat(incidents.findOpen(MarketType.FUTURES).orElseThrow().recoveryStartedAt())
                 .isEqualTo(START.plusSeconds(60));
-        incidents.relapse(opened.id());
+        incidents.relapse(opened.id(), 1);
         assertThat(incidents.findOpen(MarketType.FUTURES).orElseThrow().recoveryStartedAt())
                 .isNull();
-        incidents.recovering(opened.id(), START.plusSeconds(120));
-        incidents.resume(opened.id(), START.plusSeconds(180));
+        incidents.recovering(opened.id(), 2, START.plusSeconds(120));
+        incidents.resume(opened.id(), 3, START.plusSeconds(180));
 
         assertThat(incidents.findOpen(MarketType.FUTURES)).isEmpty();
         MarketIncident closed = incidents.findRecent(MarketType.FUTURES, 10).getFirst();
@@ -114,6 +114,7 @@ class MarketHealthIncidentTest {
         assertThat(closed.recoveryStartedAt()).isEqualTo(START.plusSeconds(120));
         assertThat(closed.resumedAt()).isEqualTo(START.plusSeconds(180));
         assertThat(closed.lastLiveAt()).isEqualTo(START.minusSeconds(30));
+        assertThat(closed.version()).as("one bump per update").isEqualTo(4);
         assertThat(incidents.findRecent(MarketType.FUTURES, 10)).hasSize(1);
     }
 
@@ -123,7 +124,7 @@ class MarketHealthIncidentTest {
         incidents.open(opened);
         UUID admin = UUID.randomUUID();
 
-        incidents.toMaintenance(opened.id(), "Bảo trì", START.plusSeconds(3600), admin);
+        incidents.toMaintenance(opened.id(), 0, "Bảo trì", START.plusSeconds(3600), admin);
 
         MarketIncident open = incidents.findOpen(MarketType.SPOT).orElseThrow();
         assertThat(open.id()).isEqualTo(opened.id());
@@ -152,6 +153,26 @@ class MarketHealthIncidentTest {
 
         restarted.startMaintenance(MarketType.SPOT, "deploy", null);
         assertThat(service(true).state(MarketType.SPOT)).isEqualTo(MarketHealthState.MAINTENANCE);
+    }
+
+    /** Maintenance is announced when it begins: a restart soon after does not announce it a second time. */
+    @Test
+    void D159_aRestartDuringMaintenance_doesNotAnnounceItAgain() {
+        MutableTestClock clock = new MutableTestClock(START);
+        List<Object> published = new ArrayList<>();
+        new MarketHealthServiceImpl(properties(true), incidents, publishedOutside(published), clock)
+                .startMaintenance(MarketType.SPOT, "deploy", null);
+        assertThat(published).filteredOn(MarketPauseAnnounced.class::isInstance).hasSize(1);
+
+        published.clear();
+        clock.advance(Duration.ofSeconds(30));
+        MarketHealthServiceImpl restarted =
+                new MarketHealthServiceImpl(properties(true), incidents, publishedOutside(published), clock);
+        clock.advance(Duration.ofMinutes(3));
+        restarted.evaluate(MarketType.SPOT, flowingFor(clock, 20), IncidentReason.STREAM_LOST);
+
+        assertThat(restarted.state(MarketType.SPOT)).isEqualTo(MarketHealthState.MAINTENANCE);
+        assertThat(published).noneMatch(MarketPauseAnnounced.class::isInstance);
     }
 
     /** Maintenance records an incident; ending it with the monitor off resumes it at once, with the monitor on recovers. */
@@ -326,9 +347,10 @@ class MarketHealthIncidentTest {
                 .isFalse();
         health.endMaintenance(m);
         assertThat(health.dataLost(m)).as("M7 recovering after it").isTrue();
-        MarketHealthServiceImpl restarted = watched(service(true));
-        restarted.endMaintenance(m);
-        assertThat(restarted.dataLost(m)).as("M8 restarted, then ended").isTrue();
+        // The restarted service takes over: the old one's status is behind the row.
+        health = watched(new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock));
+        health.endMaintenance(m);
+        assertThat(health.dataLost(m)).as("M8 restarted, then ended").isTrue();
         health.evaluate(m, flowingFor(clock, 20).withRecoveryDone(true), IncidentReason.STREAM_LOST);
         assertThat(health.dataLost(m)).as("M9 reopened").isFalse();
 

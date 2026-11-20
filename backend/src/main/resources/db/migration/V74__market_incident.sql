@@ -1,4 +1,4 @@
--- The incidents during which trading on a market was closed (D-158): its exchange data was lost, or an administrator
+-- The incidents during which trading on a market was closed (D-159): its exchange data was lost, or an administrator
 -- held it under maintenance. One row per incident, open while resumed_at is null; a relapse while recovering, or
 -- maintenance started during an outage, stays the same incident.
 --
@@ -18,6 +18,8 @@ CREATE TABLE market_incident (
     message             varchar(500),
     expected_end_at     timestamptz,
     created_by          uuid,
+    -- Bumped by every update: a write from a stale state changes no row (optimistic lock).
+    version             int           NOT NULL DEFAULT 0,
     CONSTRAINT pk_market_incident PRIMARY KEY (market_incident_id),
     CONSTRAINT ck_market_incident_market_type CHECK (market_type IN ('SPOT', 'FUTURES')),
     CONSTRAINT ck_market_incident_kind CHECK (incident_kind IN ('OUTAGE', 'MAINTENANCE')),
