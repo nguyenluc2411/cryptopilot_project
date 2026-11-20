@@ -41,7 +41,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Holds the display-only fallback prices of each market whose exchange data is lost (D-158): one OKX call per market
+ * Holds the display-only fallback prices of each market whose exchange data is lost (D-159): one OKX call per market
  * and poll gives every ticker, matched to the pairs the market streams.
  *
  * <ul>
@@ -54,7 +54,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       data; while live, under maintenance and recovering from a maintenance the exchange's own prices are.
  * </ul>
  *
- * <p>Rule: BR-09; NSF-03; D-158.
+ * <p>Rule: BR-09; NSF-03; D-159.
  */
 @Service
 public class DisplayPriceServiceImpl implements DisplayPriceService {
@@ -105,7 +105,7 @@ public class DisplayPriceServiceImpl implements DisplayPriceService {
             synchronized (snapshots) {
                 snapshots.remove(market);
             }
-            log.warn("D-158 {} fallback prices not read: {}", market, failure.getMessage());
+            log.warn("D-159 {} fallback prices not read: {}", market, failure.getMessage());
             tellUnavailable(market, failure.getMessage());
             return;
         }
@@ -181,7 +181,7 @@ public class DisplayPriceServiceImpl implements DisplayPriceService {
                     .map(DisplayPriceServiceImpl::response)
                     .toList();
         } catch (OkxException failure) {
-            log.warn("D-158 {} {} fallback candles not read: {}", market, symbol, failure.getMessage());
+            log.warn("D-159 {} {} fallback candles not read: {}", market, symbol, failure.getMessage());
             return List.of();
         }
     }

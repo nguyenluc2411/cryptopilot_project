@@ -293,9 +293,9 @@ class MarketStreamSupervisorTest {
         assertThat(storedCandles()).isZero();
     }
 
-    /** D-158: every message of a market's stream, of a streamed pair or not, tells the health monitor it is live. */
+    /** D-159: every message of a market's stream, of a streamed pair or not, tells the health monitor it is live. */
     @Test
-    void D158_everyMessage_marksItsMarketLive() {
+    void D159_everyMessage_marksItsMarketLive() {
         supervisor = supervisor(true, 100);
         supervisor.start();
         server.awaitConnection(2);

@@ -25,10 +25,10 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.TaskScheduler;
 
 /**
- * The general notice of a market incident to every other Trader (D-158): written {@code delay} after an announced
+ * The general notice of a market incident to every other Trader (D-159): written {@code delay} after an announced
  * pause and after its reopening, never for a pause never announced, nothing while off, and a failure stops nothing.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 class MarketBroadcastJobTest {
 
@@ -41,7 +41,7 @@ class MarketBroadcastJobTest {
             MarketType.SPOT, INCIDENT, MarketHealthState.PAUSED, IncidentReason.STREAM_LOST, NOW, null);
 
     @Test
-    void D158_theGeneralNotices_areWrittenAfterTheDelay() {
+    void D159_theGeneralNotices_areWrittenAfterTheDelay() {
         MarketBroadcastJob job = job(true);
 
         job.on(announced);
@@ -55,7 +55,7 @@ class MarketBroadcastJobTest {
     }
 
     @Test
-    void D158_aPauseNeverAnnounced_tellsNoOneElse_andNothingRunsWhileOff() {
+    void D159_aPauseNeverAnnounced_tellsNoOneElse_andNothingRunsWhileOff() {
         job(true).on(new MarketTradingResumed(MarketType.SPOT, INCIDENT, NOW, NOW.plusSeconds(20), false));
         job(false).on(announced);
 
@@ -63,7 +63,7 @@ class MarketBroadcastJobTest {
     }
 
     @Test
-    void D158_aFailedBroadcast_stopsNothing() {
+    void D159_aFailedBroadcast_stopsNothing() {
         when(notifications.broadcastPause(any())).thenThrow(new IllegalStateException("database down"));
         job(true).on(announced);
 

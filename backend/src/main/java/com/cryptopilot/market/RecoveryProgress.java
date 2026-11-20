@@ -1,7 +1,7 @@
 package com.cryptopilot.market;
 
 /**
- * How far a module has caught up with a recovering market (D-158): of the pairs it runs on the market's prices, how
+ * How far a module has caught up with a recovering market (D-159): of the pairs it runs on the market's prices, how
  * many have replayed the missed data up to now.
  *
  * @param pairsDone the pairs caught up

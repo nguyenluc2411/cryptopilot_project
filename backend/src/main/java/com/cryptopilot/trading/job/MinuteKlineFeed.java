@@ -88,7 +88,7 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener, 
     private final MatchingWorker worker;
     private final MatchingService matching;
     private final MarketApi market;
-    /** Where an incident makes a start-up replay reach back to (D-158); null in tests that do not need it. */
+    /** Where an incident makes a start-up replay reach back to (D-159); null in tests that do not need it. */
     private final MarketHealth health;
 
     private final MatchingProperties properties;
@@ -508,12 +508,12 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener, 
 
     /**
      * How far behind the running minute a pair's last closed candle may be and the pair still be caught up; and how
-     * long before an incident a pair may have gone quiet and be left out, as no longer streamed (D-158).
+     * long before an incident a pair may have gone quiet and be left out, as no longer streamed (D-159).
      */
     static final Duration CAUGHT_UP_SLACK = Duration.ofMinutes(2);
 
     /**
-     * The health monitor asks, while a market recovers from an incident, how far the plans have caught up (D-158):
+     * The health monitor asks, while a market recovers from an incident, how far the plans have caught up (D-159):
      * every pair of the market streamed around the incident is live again, not replaying, with its last closed candle
      * handed on within {@link #CAUGHT_UP_SLACK} of the running minute. A feed that does not run has nothing to catch
      * up on.
@@ -722,7 +722,7 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener, 
 
     /**
      * The oldest minute a start-up replay of the market reaches back to: the replay window, or further while an
-     * incident is open or just ended, to where its data stopped (D-158).
+     * incident is open or just ended, to where its data stopped (D-159).
      */
     private Instant oldestReplayed(MarketType market) {
         Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());

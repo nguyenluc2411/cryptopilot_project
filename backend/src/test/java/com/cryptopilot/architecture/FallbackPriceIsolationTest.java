@@ -14,12 +14,12 @@ import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 
 /**
- * The display-only fallback prices stay display only (D-158, invariant I1): nothing that fills, triggers, liquidates,
+ * The display-only fallback prices stay display only (D-159, invariant I1): nothing that fills, triggers, liquidates,
  * charges or alerts can reach them. Only the service that holds them, its configuration and its poll know the fallback
  * client; only the screens' controller, the status and the poll read the service. The market's API to the other modules
  * and its price cache never do, so a fallback price can never become an exchange price.
  *
- * <p>Rule: BR-09; D-158.
+ * <p>Rule: BR-09; D-159.
  */
 @AnalyzeClasses(packages = LayerRulesTest.ROOT, importOptions = ImportOption.DoNotIncludeTests.class)
 class FallbackPriceIsolationTest {

@@ -102,7 +102,7 @@ class SeedDataTest {
      * own history, the event publication registry, which is a technical table (A-09), the
      * system log (UC-52), which the running application writes whenever a call fails, and BR-65's
      * resend counter, which every registration writes (T-105), and the incidents of the markets, which maintenance
-     * writes (D-158).
+     * writes (D-159).
      */
     private static final List<String> TECHNICAL_TABLES = List.of(
             "flyway_schema_history",

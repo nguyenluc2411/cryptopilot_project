@@ -12,10 +12,10 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * The data health of each market inside the {@code market} module (D-158): what {@link MarketHealth} tells the other
+ * The data health of each market inside the {@code market} module (D-159): what {@link MarketHealth} tells the other
  * modules, the maintenance switch of the administration console, and the monitor's tick.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 public interface MarketHealthService extends MarketHealth {
 
@@ -33,7 +33,7 @@ public interface MarketHealthService extends MarketHealth {
 
     /**
      * Reopens a recovering market by an administrator's decision, though its engines have not said they caught up:
-     * for an outage longer than can be replayed (D-158). Refused with {@code DATA_CONFLICT} unless the market is
+     * for an outage longer than can be replayed (D-159). Refused with {@code DATA_CONFLICT} unless the market is
      * recovering, so never while its data is lost.
      */
     void forceResume(MarketType market, UUID by);

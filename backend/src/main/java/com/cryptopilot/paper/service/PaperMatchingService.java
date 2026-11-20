@@ -47,7 +47,7 @@ public interface PaperMatchingService {
     /**
      * As {@link #liquidate(LiquidationLevel, BigDecimal, Instant)}, for a mark a replay applies: the liquidation is
      * dated {@code at}, when applied, and its closing fill keeps {@code markTime}, the time of the mark it took, so
-     * that what was open at an instant reads as on the exchange (D-158, TR-24).
+     * that what was open at an instant reads as on the exchange (D-159, TR-24).
      *
      * @param markTime the time of the replayed mark, or {@code null} for a live one
      */

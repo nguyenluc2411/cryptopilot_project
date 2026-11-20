@@ -85,7 +85,7 @@ public final class TriggerBook {
         return books.containsKey(new BookKey(market, pairId));
     }
 
-    /** The pairs with an order waiting for a trigger (D-158: what a recovery waits for). */
+    /** The pairs with an order waiting for a trigger (D-159: what a recovery waits for). */
     public Set<BookKey> pairs() {
         return Set.copyOf(books.keySet());
     }

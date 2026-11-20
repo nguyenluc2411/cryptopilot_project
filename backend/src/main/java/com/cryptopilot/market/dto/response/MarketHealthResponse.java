@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Whether one market may be traded now, as the Traders' banner shows it (D-158).
+ * Whether one market may be traded now, as the Traders' banner shows it (D-159).
  *
  * @param market the market
  * @param state its data health

@@ -33,10 +33,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 /**
- * The texts and keys of a market incident's notices (D-158): one pause notice per Trader and incident whichever module
+ * The texts and keys of a market incident's notices (D-159): one pause notice per Trader and incident whichever module
  * asks, a reopening notice per module, the catch-up's counts named, and the administrators told of the pause.
  *
- * <p>Rule: NSF-03; NSF-15; D-158.
+ * <p>Rule: NSF-03; NSF-15; D-159.
  */
 class MarketNotificationServiceImplTest {
 
@@ -58,7 +58,7 @@ class MarketNotificationServiceImplTest {
 
     /** N1, N6: a Trader the incident affects is mailed each notice once, when it is first written. */
     @Test
-    void D158_anAffectedTrader_isMailedEachNotice_onlyWhenItIsFirstWritten() {
+    void D159_anAffectedTrader_isMailedEachNotice_onlyWhenItIsFirstWritten() {
         when(writer.write(any())).thenReturn(true, false, true);
         when(users.notificationMailAddress(TRADER)).thenReturn(Optional.of("trader@example.test"));
 
@@ -81,7 +81,7 @@ class MarketNotificationServiceImplTest {
 
     /** A mail server that refuses the mail loses the mail only: the notice stands and nothing is thrown. */
     @Test
-    void D158_aRefusedMail_neverLosesTheNotice() {
+    void D159_aRefusedMail_neverLosesTheNotice() {
         when(writer.write(any())).thenReturn(true);
         when(users.notificationMailAddress(TRADER)).thenReturn(Optional.of("trader@example.test"));
         org.mockito.Mockito.doThrow(new IllegalStateException("535 authentication failed"))
@@ -96,7 +96,7 @@ class MarketNotificationServiceImplTest {
 
     /** N4: a Trader whose account takes no notification mail still gets the notice in the bell. */
     @Test
-    void D158_aTraderWithoutNotificationMail_getsTheNoticeOnly() {
+    void D159_aTraderWithoutNotificationMail_getsTheNoticeOnly() {
         when(writer.write(any())).thenReturn(true);
         when(users.notificationMailAddress(TRADER)).thenReturn(Optional.empty());
 
@@ -112,7 +112,7 @@ class MarketNotificationServiceImplTest {
      * own is left out.
      */
     @Test
-    void D158_everyOtherTrader_getsOneGeneralNoticeInTheBell_andNoMail() {
+    void D159_everyOtherTrader_getsOneGeneralNoticeInTheBell_andNoMail() {
         UUID other = UUID.randomUUID();
         when(users.activeTraders(null, MarketNotificationServiceImpl.TRADERS_PAGE))
                 .thenReturn(List.of(TRADER, other));
@@ -141,7 +141,7 @@ class MarketNotificationServiceImplTest {
 
     /** The Traders are read page by page until a page is not full. */
     @Test
-    void D158_theGeneralNotice_walksTheTradersPageByPage() {
+    void D159_theGeneralNotice_walksTheTradersPageByPage() {
         List<UUID> full = java.util.stream.Stream.generate(UUID::randomUUID)
                 .limit(MarketNotificationServiceImpl.TRADERS_PAGE)
                 .toList();
@@ -157,7 +157,7 @@ class MarketNotificationServiceImplTest {
     }
 
     @Test
-    void D158_theGeneralNoticeOfMaintenance_quotesTheMessage() {
+    void D159_theGeneralNoticeOfMaintenance_quotesTheMessage() {
         when(users.activeTraders(null, MarketNotificationServiceImpl.TRADERS_PAGE))
                 .thenReturn(List.of(TRADER));
         when(writer.write(any())).thenReturn(false);
@@ -175,7 +175,7 @@ class MarketNotificationServiceImplTest {
     }
 
     @Test
-    void D158_thePauseNotice_isOnePerTraderAndIncident_whicheverModuleAsks() {
+    void D159_thePauseNotice_isOnePerTraderAndIncident_whicheverModuleAsks() {
         service.paperIncident(paper(PaperIncidentNotice.Kind.PAUSED, 0, 0, null));
         service.planIncident(
                 new PlanIncidentNotice(TRADER, MarketType.FUTURES, INCIDENT, false, LIVE, null, null, false));
@@ -192,7 +192,7 @@ class MarketNotificationServiceImplTest {
     }
 
     @Test
-    void D158_aMaintenancePause_quotesTheAdministratorsMessage() {
+    void D159_aMaintenancePause_quotesTheAdministratorsMessage() {
         service.paperIncident(paper(PaperIncidentNotice.Kind.PAUSED, 0, 0, "Back at 22:00."));
 
         assertThat(written(1).getFirst().content()).startsWith("Futures trading is under maintenance: Back at 22:00.");
@@ -200,7 +200,7 @@ class MarketNotificationServiceImplTest {
 
     /** A maintenance without a message is still told as maintenance, to the affected Traders and to every other one. */
     @Test
-    void D158_aMaintenanceWithoutAMessage_isToldAsMaintenance() {
+    void D159_aMaintenanceWithoutAMessage_isToldAsMaintenance() {
         when(users.activeTraders(null, MarketNotificationServiceImpl.TRADERS_PAGE))
                 .thenReturn(List.of(TRADER));
         service.paperIncident(new PaperIncidentNotice(
@@ -219,7 +219,7 @@ class MarketNotificationServiceImplTest {
     }
 
     @Test
-    void D158_theReopening_namesWhatTheCatchUpDid_orThatNothingChanged() {
+    void D159_theReopening_namesWhatTheCatchUpDid_orThatNothingChanged() {
         service.paperIncident(paper(PaperIncidentNotice.Kind.RESUMED, 2, 1, null));
         service.paperIncident(paper(PaperIncidentNotice.Kind.RESUMED, 0, 0, null));
 
@@ -234,7 +234,7 @@ class MarketNotificationServiceImplTest {
     }
 
     @Test
-    void D158_thePlansReopening_isAnotherNotice() {
+    void D159_thePlansReopening_isAnotherNotice() {
         service.planIncident(
                 new PlanIncidentNotice(TRADER, MarketType.SPOT, INCIDENT, true, LIVE, RESUMED, null, false));
 
@@ -244,7 +244,7 @@ class MarketNotificationServiceImplTest {
     }
 
     @Test
-    void D158_everyActiveAdministrator_isToldOfThePause() {
+    void D159_everyActiveAdministrator_isToldOfThePause() {
         UUID first = UUID.randomUUID();
         UUID second = UUID.randomUUID();
         when(users.activeAdministrators()).thenReturn(List.of(first, second));
@@ -258,9 +258,9 @@ class MarketNotificationServiceImplTest {
         assertThat(written.getFirst().content()).contains("the exchange banned the server's address");
     }
 
-    /** D-158: a recovery that needs an administrator is told to each active one, saying why. */
+    /** D-159: a recovery that needs an administrator is told to each active one, saying why. */
     @Test
-    void D158_anOverdueRecovery_isToldToEveryAdministrator() {
+    void D159_anOverdueRecovery_isToldToEveryAdministrator() {
         UUID first = UUID.randomUUID();
         when(users.activeAdministrators()).thenReturn(List.of(first));
 
@@ -276,7 +276,7 @@ class MarketNotificationServiceImplTest {
 
     /** E9: a lost market whose fallback prices cannot be read either is told to each active administrator. */
     @Test
-    void D158_anUnavailableFallback_isToldToEveryAdministrator() {
+    void D159_anUnavailableFallback_isToldToEveryAdministrator() {
         UUID admin = UUID.randomUUID();
         when(users.activeAdministrators()).thenReturn(List.of(admin));
 

@@ -47,11 +47,11 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
- * K9 end to end (D-158), through the event publication registry: maintenance of Futures tells a Trader with a waiting
+ * K9 end to end (D-159), through the event publication registry: maintenance of Futures tells a Trader with a waiting
  * Futures order that trading is paused, with the administrator's message, and tells the administrators; ending it
  * tells the Trader it reopened and that nothing of theirs changed. A Trader with nothing on the market hears nothing.
  *
- * <p>Rule: NSF-03; NSF-15; D-158.
+ * <p>Rule: NSF-03; NSF-15; D-159.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -168,7 +168,7 @@ class MarketIncidentNoticeApiTest {
     }
 
     @Test
-    void D158_maintenance_tellsTheTradersItAffects_andTheAdministrators_thenTheReopening() throws Exception {
+    void D159_maintenance_tellsTheTradersItAffects_andTheAdministrators_thenTheReopening() throws Exception {
         UUID waiting = trader();
         UUID bystander = trader();
         UUID admin = account(UserRole.ADMIN);

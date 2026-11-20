@@ -6,7 +6,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * A Trader with a waiting plan or an open plan position on a market is to be told of an incident on it (D-158): that
+ * A Trader with a waiting plan or an open plan position on a market is to be told of an incident on it (D-159): that
  * the plans are paused, or that they are watched again. What a catch-up filled or closed is told by the plans' own
  * notices.
  *

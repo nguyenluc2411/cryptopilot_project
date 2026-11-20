@@ -44,14 +44,14 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
- * M1 for trading plans (D-158): on a paused market a plan cannot start waiting, be cancelled while it waits, or have
+ * M1 for trading plans (D-159): on a paused market a plan cannot start waiting, be cancelled while it waits, or have
  * its open position closed or its levels moved, as each of these depends on prices the replay has not caught up on;
  * a draft is created, edited and cancelled as usual, since it touches no price. The other market's pause never refuses
  * any of it.
  *
  * <p>Markets are closed through maintenance, with the health monitor off.
  *
- * <p>Rule: UC-16, UC-17, UC-21, BR-39; NSF-03; D-158.
+ * <p>Rule: UC-16, UC-17, UC-21, BR-39; NSF-03; D-159.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -137,7 +137,7 @@ class PlanPauseGateApiTest {
     /** A draft touches no price: created, edited and cancelled while both markets are paused. */
     @ParameterizedTest
     @EnumSource(MarketType.class)
-    void D158_aDraft_isCreatedEditedAndCancelled_whileBothMarketsArePaused(MarketType market) throws Exception {
+    void D159_aDraft_isCreatedEditedAndCancelled_whileBothMarketsArePaused(MarketType market) throws Exception {
         UUID trader = trader();
         pauseBoth();
 
@@ -151,7 +151,7 @@ class PlanPauseGateApiTest {
     /** Saving a plan to start waiting at once is refused on its paused market only. */
     @ParameterizedTest
     @EnumSource(MarketType.class)
-    void D158_savingAPlanActive_isRefusedOnItsPausedMarket(MarketType market) throws Exception {
+    void D159_savingAPlanActive_isRefusedOnItsPausedMarket(MarketType market) throws Exception {
         UUID trader = trader();
 
         refusedOn(market, () -> send(trader, post(PLANS), limit(market, true)), "save active");
@@ -161,7 +161,7 @@ class PlanPauseGateApiTest {
     /** Activating a draft is refused on its paused market only. */
     @ParameterizedTest
     @EnumSource(MarketType.class)
-    void D158_activatingADraft_isRefusedOnItsPausedMarket(MarketType market) throws Exception {
+    void D159_activatingADraft_isRefusedOnItsPausedMarket(MarketType market) throws Exception {
         UUID trader = trader();
         String id = id(send(trader, post(PLANS), limit(market, false)));
 
@@ -172,7 +172,7 @@ class PlanPauseGateApiTest {
     /** Q1 (rule A): a waiting plan is not cancelled on its paused market, as the replay may still fill it. */
     @ParameterizedTest
     @EnumSource(MarketType.class)
-    void D158_cancellingAWaitingPlan_isRefusedOnItsPausedMarket(MarketType market) throws Exception {
+    void D159_cancellingAWaitingPlan_isRefusedOnItsPausedMarket(MarketType market) throws Exception {
         UUID trader = trader();
         String id = id(send(trader, post(PLANS), limit(market, true)));
 
@@ -183,7 +183,7 @@ class PlanPauseGateApiTest {
     /** The open position of an executed plan is neither closed nor given new levels on its paused market. */
     @ParameterizedTest
     @EnumSource(MarketType.class)
-    void D158_anOpenPosition_isNotClosedOrMoved_onItsPausedMarket(MarketType market) throws Exception {
+    void D159_anOpenPosition_isNotClosedOrMoved_onItsPausedMarket(MarketType market) throws Exception {
         UUID trader = trader();
         MvcResult executed = send(trader, post(PLANS), marketEntry(market));
         assertThat((String) JsonPath.read(executed.getResponse().getContentAsString(), "$.status"))

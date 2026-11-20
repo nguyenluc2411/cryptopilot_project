@@ -5,7 +5,7 @@ import java.util.UUID;
 import org.springframework.modulith.NamedInterface;
 
 /**
- * The display-only fallback prices of a market whose exchange data is lost could not be read either (D-158, E9): the
+ * The display-only fallback prices of a market whose exchange data is lost could not be read either (D-159, E9): the
  * screens show no price. Published once per incident; nothing else changes.
  *
  * <p>Exposed in the named interface {@code events}.

@@ -59,7 +59,7 @@ public class FuturesGoodTillJob {
     }
 
     /**
-     * One run: every due order, earliest first; none while Futures trading is paused (D-158, I5), as the replay that
+     * One run: every due order, earliest first; none while Futures trading is paused (D-159, I5), as the replay that
      * follows may fill an order on a candle before its date.
      */
     void run() {

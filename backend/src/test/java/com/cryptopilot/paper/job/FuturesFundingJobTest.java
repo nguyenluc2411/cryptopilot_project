@@ -20,10 +20,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.TaskScheduler;
 
 /**
- * How far back a funding run looks (TR-24; D-158, 6.2): its lookback, or further for an incident that just ended
+ * How far back a funding run looks (TR-24; D-159, 6.2): its lookback, or further for an incident that just ended
  * further back, so the settlements due while Futures was closed are all taken once it is open.
  *
- * <p>Rule: TR-24; D-158.
+ * <p>Rule: TR-24; D-159.
  */
 class FuturesFundingJobTest {
 
@@ -55,7 +55,7 @@ class FuturesFundingJobTest {
     }
 
     @Test
-    void D158_afterAnIncidentLongerThanTheLookback_aRunLooksBackToItsStart() {
+    void D159_afterAnIncidentLongerThanTheLookback_aRunLooksBackToItsStart() {
         when(health.catchUpFrom(MarketType.FUTURES)).thenReturn(Optional.of(NOW.minus(Duration.ofDays(5))));
 
         job.run();
@@ -64,7 +64,7 @@ class FuturesFundingJobTest {
     }
 
     @Test
-    void D158_afterAShortIncident_aRunKeepsItsLookback() {
+    void D159_afterAShortIncident_aRunKeepsItsLookback() {
         when(health.catchUpFrom(MarketType.FUTURES)).thenReturn(Optional.of(NOW.minus(Duration.ofHours(1))));
 
         job.run();

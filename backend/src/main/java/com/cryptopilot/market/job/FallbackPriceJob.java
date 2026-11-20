@@ -16,13 +16,13 @@ import org.springframework.stereotype.Component;
 
 /**
  * Reads the display-only fallback prices of each market whose exchange data is lost every {@code poll-interval}
- * (D-158) and pushes them to {@code /topic/market.fallback.<MARKET>}; forgets them once its data is no longer lost (live,
+ * (D-159) and pushes them to {@code /topic/market.fallback.<MARKET>}; forgets them once its data is no longer lost (live,
  * under maintenance, or recovering from a maintenance), when the exchange's own prices are shown.
  *
  * <p>Runs only while the fallback, the health monitor and the streams are all enabled: without the monitor no market
  * is ever lost. Orchestration only.
  *
- * <p>Rule: BR-09; NSF-03; D-158.
+ * <p>Rule: BR-09; NSF-03; D-159.
  */
 @Component
 public class FallbackPriceJob {
@@ -64,7 +64,7 @@ public class FallbackPriceJob {
             return;
         }
         scheduler.scheduleWithFixedDelay(this::poll, fallback.pollInterval());
-        log.info("D-158 fallback prices of a lost market read every {}", fallback.pollInterval());
+        log.info("D-159 fallback prices of a lost market read every {}", fallback.pollInterval());
     }
 
     /** One poll of every market; one that fails does not stop the other. */
@@ -78,7 +78,7 @@ public class FallbackPriceJob {
                     prices.clear(market);
                 }
             } catch (RuntimeException failure) {
-                log.warn("D-158 {} fallback prices not polled: {}", market, failure.toString());
+                log.warn("D-159 {} fallback prices not polled: {}", market, failure.toString());
             }
         }
     }

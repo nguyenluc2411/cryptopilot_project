@@ -9,10 +9,10 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 /**
- * Who the notices of a market incident reach among the plans' Traders (D-158): those with a plan waiting on the
+ * Who the notices of a market incident reach among the plans' Traders (D-159): those with a plan waiting on the
  * market or a plan position still open there. Plain SQL through {@link JdbcClient}, a read-only lookup.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Repository
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

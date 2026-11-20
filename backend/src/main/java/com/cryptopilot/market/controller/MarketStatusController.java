@@ -12,10 +12,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The markets' data health, public as the market data is (D-158): what the Traders' banner shows when trading is
+ * The markets' data health, public as the market data is (D-159): what the Traders' banner shows when trading is
  * paused, recovering or back. The same payload is pushed on {@code /topic/market.status}.
  *
- * <p>Rule: NSF-03; D-50; D-158.
+ * <p>Rule: NSF-03; D-50; D-159.
  */
 @Tag(name = "Market data")
 @RestController

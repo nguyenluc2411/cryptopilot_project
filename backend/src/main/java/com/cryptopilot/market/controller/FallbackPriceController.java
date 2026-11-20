@@ -17,11 +17,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The display-only fallback prices and candles of a market whose exchange data is lost (D-158), public as the market
+ * The display-only fallback prices and candles of a market whose exchange data is lost (D-159), public as the market
  * data is; the screens label them with their source. Clients that missed a push of
  * {@code /topic/market.fallback.<MARKET>} read them here.
  *
- * <p>Rule: BR-09; D-158.
+ * <p>Rule: BR-09; D-159.
  */
 @Tag(name = "Market fallback prices", description = "Display-only prices while a market's exchange data is lost.")
 @RestController

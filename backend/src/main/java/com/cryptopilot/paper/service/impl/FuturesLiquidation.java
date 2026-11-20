@@ -123,7 +123,7 @@ class FuturesLiquidation {
     /**
      * Liquidates the position if the mark still reaches it; see the class comment.
      *
-     * <p>Known limitation (D-158): a replayed mark is checked against the position being open at {@code markTime},
+     * <p>Known limitation (D-159): a replayed mark is checked against the position being open at {@code markTime},
      * but its margin and quantity are the current ones, not those it had then.
      *
      * @return whether it was liquidated
@@ -136,7 +136,7 @@ class FuturesLiquidation {
         }
         FuturesPosition position = found.get();
         if (markTime != null && !openAt(position, markTime)) {
-            // D-158 E2b: a replayed mark from before the position was open is not one it lived through.
+            // D-159 E2b: a replayed mark from before the position was open is not one it lived through.
             return false;
         }
         List<LeverageTier> tiers = market.leverageBrackets(position.getPairId());

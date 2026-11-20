@@ -1,10 +1,10 @@
 package com.cryptopilot.market.model.enums;
 
 /**
- * How current the exchange data of one market is, and so whether that market may be traded (D-158). Each market has
+ * How current the exchange data of one market is, and so whether that market may be traded (D-159). Each market has
  * its own, as Spot and Futures come from different streams.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 public enum MarketHealthState {
 

@@ -1,10 +1,10 @@
 package com.cryptopilot.market.model.enums;
 
 /**
- * What closed trading on a market (D-158), as the Traders' banner names it. The values of
+ * What closed trading on a market (D-159), as the Traders' banner names it. The values of
  * {@code market_incident.reason}.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 public enum IncidentReason {
 

@@ -13,11 +13,11 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
 /**
- * Tells every other Trader of an announced market incident (D-158): {@code delay} after the pause is announced, and
+ * Tells every other Trader of an announced market incident (D-159): {@code delay} after the pause is announced, and
  * after an announced pause ends, one general notice in the bell to each active Trader who got no notice of their own,
  * by then written for the Traders the incident affects. A pause never announced tells no one else. Orchestration only.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Component
 public class MarketBroadcastJob {
@@ -59,9 +59,9 @@ public class MarketBroadcastJob {
         scheduler.schedule(
                 () -> {
                     try {
-                        log.info("D-158 {} told to {} other Traders", what, broadcast.getAsInt());
+                        log.info("D-159 {} told to {} other Traders", what, broadcast.getAsInt());
                     } catch (RuntimeException failure) {
-                        log.warn("D-158 {} not told to the other Traders: {}", what, failure.toString());
+                        log.warn("D-159 {} not told to the other Traders: {}", what, failure.toString());
                     }
                 },
                 clock.instant().plus(properties.delay()));

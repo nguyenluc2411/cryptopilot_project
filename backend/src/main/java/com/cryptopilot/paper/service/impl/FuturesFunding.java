@@ -45,7 +45,7 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <ul>
  *   <li>A position owes a settlement at {@code t} when it was open then: opened before {@code t} (a fill a replay
- *       applied counting at its candle's time, D-158), not closed before it, as the plan calculator's {@code entry < t ≤ exit}. Its size at {@code t} is what its fills before
+ *       applied counting at its candle's time, D-159), not closed before it, as the plan calculator's {@code entry < t ≤ exit}. Its size at {@code t} is what its fills before
  *       {@code t} opened less what they closed, so a run on time and a late one charge the same.
  *   <li>The fee is {@code −side × Q × mark × rate} at the settlement's mark: a positive rate makes longs pay and shorts
  *       receive. A fee that rounds to zero is not written.
@@ -112,7 +112,7 @@ public class FuturesFunding {
 
     /**
      * When a position opened on the exchange: its stored opening, or the candle of an earlier fill a replay applied
-     * after it (D-158), read once per run and only for a position dated after a settlement it may owe.
+     * after it (D-159), read once per run and only for a position dated after a settlement it may owe.
      */
     private Instant openedAt(FuturesPosition position, Map<UUID, Instant> openings) {
         return openings.computeIfAbsent(position.getId(), id -> fills.firstFillAt(id)

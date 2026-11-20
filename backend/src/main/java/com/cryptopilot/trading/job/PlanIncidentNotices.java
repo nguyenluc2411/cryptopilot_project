@@ -11,11 +11,11 @@ import org.springframework.modulith.events.ApplicationModuleListener;
 import org.springframework.stereotype.Component;
 
 /**
- * Tells the Traders with plans waiting or open on a market of an announced incident on it (D-158): when it is
+ * Tells the Traders with plans waiting or open on a market of an announced incident on it (D-159): when it is
  * announced, and when trading reopens. A pause never announced writes nothing; what its catch-up did to a plan is told
  * by the plan's own notices. Orchestration only.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Component
 public class PlanIncidentNotices {

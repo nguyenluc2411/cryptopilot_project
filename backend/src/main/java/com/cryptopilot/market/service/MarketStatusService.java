@@ -9,10 +9,10 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * What the Traders and the administration console read of the markets' data health (D-158), and the maintenance
+ * What the Traders and the administration console read of the markets' data health (D-159), and the maintenance
  * switch.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 public interface MarketStatusService {
 
@@ -26,7 +26,7 @@ public interface MarketStatusService {
     MarketStatusResponse maintenance(UUID adminId, MaintenanceRequest request);
 
     /**
-     * Reopens a recovering market by an administrator's decision (D-158), audited; refused with {@code DATA_CONFLICT}
+     * Reopens a recovering market by an administrator's decision (D-159), audited; refused with {@code DATA_CONFLICT}
      * unless it is recovering.
      */
     MarketStatusResponse resume(UUID adminId, ResumeRequest request);

@@ -50,7 +50,7 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 /**
- * M1, the gate of a paused market (D-158): every request that changes a paper order, position or wallet of a market is
+ * M1, the gate of a paused market (D-159): every request that changes a paper order, position or wallet of a market is
  * refused with {@code TRADING_PAUSED} (503, MSG57, naming the market) while that market is closed, cancels and amends
  * included, before the order or the position is even looked up; the same request is never refused for the other
  * market's pause; and the few requests that need no price (a transfer into Futures, the risk warnings of an order form)
@@ -58,7 +58,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  *
  * <p>Markets are closed through maintenance, which closes them as an outage does, with the health monitor off.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -238,7 +238,7 @@ class TradingPauseGateApiTest {
      */
     @ParameterizedTest(name = "{0}")
     @MethodSource("calls")
-    void D158_aPausedMarket_refusesWhatChangesItsOrdersPositionsAndWallets(Call call) throws Exception {
+    void D159_aPausedMarket_refusesWhatChangesItsOrdersPositionsAndWallets(Call call) throws Exception {
         UUID trader = trader();
 
         for (MarketType market : call.gatedBy()) {
@@ -306,7 +306,7 @@ class TradingPauseGateApiTest {
      * plans' matrix, or named as needing no gate. A new endpoint fails here until it is placed in one of them.
      */
     @Test
-    void D158_everyWriteEndpointOfTrading_isGatedOrNamedUngated() {
+    void D159_everyWriteEndpointOfTrading_isGatedOrNamedUngated() {
         Set<String> written = new TreeSet<>();
         mappings.getHandlerMethods().forEach((info, handler) -> {
             String module = handler.getBeanType().getPackageName();

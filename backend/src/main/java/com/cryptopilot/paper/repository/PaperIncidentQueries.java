@@ -13,11 +13,11 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 /**
- * What the notices of a market incident read of the paper tables (D-158): who has something waiting on the market's
+ * What the notices of a market incident read of the paper tables (D-159): who has something waiting on the market's
  * prices, and what a catch-up did to whom. Plain SQL through {@link JdbcClient}: read-only aggregates across tables
  * that no entity maps as one.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Repository
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

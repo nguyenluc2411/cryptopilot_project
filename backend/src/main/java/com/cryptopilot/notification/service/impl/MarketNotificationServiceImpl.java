@@ -32,7 +32,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * The texts of a market incident's notices (D-158). The pause notice of a Trader is keyed by the incident and the
+ * The texts of a market incident's notices (D-159). The pause notice of a Trader is keyed by the incident and the
  * Trader only, so paper trading and plans on the same market write it once; the reopening notices are keyed apart, as
  * they say different things. Times are given in UTC, as the client localises the notice's own time.
  *
@@ -40,7 +40,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * notification mail, once the notice is committed: a mail server that fails loses the mail, never the notice. Every
  * other active Trader gets one general notice in the bell, and no mail.
  *
- * <p>Rule: NSF-03; NSF-15; D-158.
+ * <p>Rule: NSF-03; NSF-15; D-159.
  */
 @Service
 @RequiredArgsConstructor
@@ -229,7 +229,7 @@ public class MarketNotificationServiceImpl implements MarketNotificationService 
             try {
                 sender.send(mail);
             } catch (RuntimeException failure) {
-                log.warn("D-158 notice {} not mailed: {}", notice.sourceKey(), failure.toString());
+                log.warn("D-159 notice {} not mailed: {}", notice.sourceKey(), failure.toString());
             }
         };
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {

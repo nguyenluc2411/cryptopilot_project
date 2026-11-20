@@ -33,7 +33,7 @@ cryptopilot:
       enabled: true
   notification:
     market-broadcast:
-      # D-158 runs in this profile: every other Trader hears of a market incident in the bell.
+      # D-159 runs in this profile: every other Trader hears of a market incident in the bell.
       enabled: true
     mail:
       # From the environment only, no default: a production mail must come from a real sender and link to the real site.
@@ -63,7 +63,7 @@ cryptopilot:
       enabled: true
   market:
     fallback:
-      # D-158: display-only reference prices while a market's exchange data is lost (application.yml).
+      # D-159: display-only reference prices while a market's exchange data is lost (application.yml).
       enabled: true
     coinpaprika:
       # Coin names, logos and supplies and the whole market's cap (application.yml).
@@ -98,7 +98,7 @@ cryptopilot:
       # application.yml, within half of each venue's weight budget.
       enabled: true
     health:
-      # D-158: trading pauses while a market's exchange data is lost.
+      # D-159: trading pauses while a market's exchange data is lost.
       enabled: true
     stream:
       # NSF-03 runs in this profile: the streams of the pairs an administrator enabled (BR-07).

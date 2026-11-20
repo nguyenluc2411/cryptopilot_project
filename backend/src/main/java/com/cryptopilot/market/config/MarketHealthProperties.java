@@ -8,10 +8,10 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
 
 /**
- * When a market's exchange data counts as lost and when it counts as back (D-158), under
+ * When a market's exchange data counts as lost and when it counts as back (D-159), under
  * {@code cryptopilot.market.health}.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  *
  * @param enabled whether the monitor watches the streams; off, a market is only closed by maintenance
  * @param reconnectingAfter how long without data before a market is reconnecting (no notice, stale rules apply)

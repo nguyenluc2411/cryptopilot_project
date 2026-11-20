@@ -8,11 +8,11 @@ import com.cryptopilot.paper.event.PaperIncidentNotice;
 import com.cryptopilot.trading.event.PlanIncidentNotice;
 
 /**
- * The in-app notices of a market incident (D-158): to the Traders it affects, when trading on the market is paused and
+ * The in-app notices of a market incident (D-159): to the Traders it affects, when trading on the market is paused and
  * when it reopens, and to the administrators when it is paused. Each is written once however often its event is
  * delivered; a Trader with both paper trading and plans on the market gets one pause notice.
  *
- * <p>Rule: NSF-03; NSF-15; D-158.
+ * <p>Rule: NSF-03; NSF-15; D-159.
  */
 public interface MarketNotificationService {
 

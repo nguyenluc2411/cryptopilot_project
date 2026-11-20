@@ -181,18 +181,18 @@ public class PaperMatchingWorker
     private static final Logger log = LoggerFactory.getLogger(PaperMatchingWorker.class);
     private static final Duration MINUTE = Duration.ofMinutes(1);
 
-    /** How long the health monitor waits for the consumer's answer before taking it as not caught up (D-158). */
+    /** How long the health monitor waits for the consumer's answer before taking it as not caught up (D-159). */
     static final Duration CAUGHT_UP_WAIT = Duration.ofMillis(500);
 
     /**
      * How far behind the running minute a pair's last closed candle may be and the pair still be caught up; and how
-     * long before an incident a pair may have gone quiet and be left out, as no longer streamed (D-158).
+     * long before an incident a pair may have gone quiet and be left out, as no longer streamed (D-159).
      */
     static final Duration CAUGHT_UP_SLACK = Duration.ofMinutes(2);
 
     private final PaperMatchingService matching;
     private final MarketApi market;
-    /** Where an incident makes a start-up replay reach back to (D-158); null in tests that do not need it. */
+    /** Where an incident makes a start-up replay reach back to (D-159); null in tests that do not need it. */
     private final MarketHealth health;
 
     private final PaperMatchingProperties properties;
@@ -349,7 +349,7 @@ public class PaperMatchingWorker
                     new BookKey(order.market(), order.pairId()), order.placedAt(), (a, b) -> a.isBefore(b) ? a : b);
         }
         // A position's level has no time of its own: its marks are caught up from after the pair's mark watermark, so
-        // a mark missed while the application was down still liquidates (D-158 E2b); a replayed mark from before the
+        // a mark missed while the application was down still liquidates (D-159 E2b); a replayed mark from before the
         // position opened liquidates nothing (FuturesLiquidation). Without a watermark, the minute running now.
         for (LiquidationLevel level : matching.liquidationLevels()) {
             liquidations.track(level);
@@ -1292,7 +1292,7 @@ public class PaperMatchingWorker
     }
 
     /**
-     * The health monitor asks, while a market recovers from an incident, whether this engine has caught up (D-158).
+     * The health monitor asks, while a market recovers from an incident, whether this engine has caught up (D-159).
      * Answered by the consumer, which owns the books, in turn with what it was handed before; no answer within
      * {@link #CAUGHT_UP_WAIT} counts as not caught up. An engine that does not run has nothing to catch up on.
      */
@@ -1560,7 +1560,7 @@ public class PaperMatchingWorker
 
     /**
      * The oldest minute a start-up replay of the market reaches back to: the replay window, or further while an
-     * incident is open or just ended, to where its data stopped (D-158).
+     * incident is open or just ended, to where its data stopped (D-159).
      */
     private Instant oldestReplayed(MarketType market) {
         Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
@@ -1788,7 +1788,7 @@ public class PaperMatchingWorker
         /** A replay of the pair has caught up; {@code until} is the open time of the first candle not replayed. */
         record ReplayDone(BookKey key, Instant until) implements Command {}
 
-        /** Answer whether the market has caught up since {@code lastLiveAt} (D-158). */
+        /** Answer whether the market has caught up since {@code lastLiveAt} (D-159). */
         record CaughtUp(MarketType market, Instant lastLiveAt, CompletableFuture<RecoveryProgress> answer)
                 implements Command {}
 

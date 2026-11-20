@@ -164,7 +164,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         }
         PlanTerms terms = terms(request);
         if (activate) {
-            // D-158: a plan starts waiting only on a market whose prices are current; a draft needs none.
+            // D-159: a plan starts waiting only on a market whose prices are current; a draft needs none.
             health.requireTrading(terms.market());
         }
         TradablePair pair = pair(userId, request.pairId(), terms.market());
@@ -242,7 +242,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         TradingPlan plan = plans.findForUpdate(planId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("TradingPlan", planId));
         if (plan.getStatus() == PlanStatus.ACTIVE) {
-            // D-158 (Q1): a waiting plan stays while its market is paused, as the replay may still fill it.
+            // D-159 (Q1): a waiting plan stays while its market is paused, as the replay may still fill it.
             health.requireTrading(plan.getMarket());
         }
         plan.cancel(clock.instant());

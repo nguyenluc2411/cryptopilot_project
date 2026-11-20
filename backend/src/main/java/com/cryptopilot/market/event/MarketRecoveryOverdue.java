@@ -6,7 +6,7 @@ import java.util.UUID;
 import org.springframework.modulith.NamedInterface;
 
 /**
- * A market's recovery needs an administrator (D-158): it has run longer than {@code recovery-timeout}, or its data was
+ * A market's recovery needs an administrator (D-159): it has run longer than {@code recovery-timeout}, or its data was
  * lost longer than {@code max-outage-replay} so it cannot all be replayed and the market does not reopen by itself.
  * Published once per incident; trading stays closed.
  *

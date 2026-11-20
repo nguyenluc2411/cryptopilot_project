@@ -19,13 +19,13 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 /**
- * The {@code market_incident} table: one row per period trading on a market was closed (D-158), at most one open per
+ * The {@code market_incident} table: one row per period trading on a market was closed (D-159), at most one open per
  * market.
  *
  * <p>Plain SQL through {@link JdbcClient} rather than a JPA entity, as for {@code dropped_backfill_gap}: operational
  * state written by single statements outside any business transaction (TECHNICAL_DESIGN 5.5).
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Repository
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

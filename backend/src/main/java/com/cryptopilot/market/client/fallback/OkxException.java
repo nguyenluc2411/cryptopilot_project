@@ -1,7 +1,7 @@
 package com.cryptopilot.market.client.fallback;
 
 /**
- * OKX could not be read (D-158): no answer, an HTTP error, an error code in the body, or a body that is not what the
+ * OKX could not be read (D-159): no answer, an HTTP error, an error code in the body, or a body that is not what the
  * API documents. The fallback prices are display only, so the caller shows none and changes nothing else.
  */
 public class OkxException extends RuntimeException {

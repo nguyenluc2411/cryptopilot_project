@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * One OKX one-minute candle, as {@code /api/v5/market/candles} gives it (D-158): display only, never stored.
+ * One OKX one-minute candle, as {@code /api/v5/market/candles} gives it (D-159): display only, never stored.
  *
  * @param openTime when the minute opened
  * @param open the first price

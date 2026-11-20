@@ -22,11 +22,11 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
- * Who of the paper Traders hears of a market incident (D-158): on an announced pause, everyone with something waiting
+ * Who of the paper Traders hears of a market incident (D-159): on an announced pause, everyone with something waiting
  * on the market; on the reopening of an announced incident, the same and whoever the catch-up changed something for,
  * with their counts; on the reopening of an incident never announced, only the latter.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 class PaperIncidentNoticesTest {
 
@@ -43,7 +43,7 @@ class PaperIncidentNoticesTest {
             new PaperIncidentNotices(queries, event -> published.add((PaperIncidentNotice) event));
 
     @Test
-    void D158_anAnnouncedPause_reachesEveryTraderWithSomethingWaiting() {
+    void D159_anAnnouncedPause_reachesEveryTraderWithSomethingWaiting() {
         when(queries.tradersOn(MarketType.FUTURES)).thenReturn(List.of(WAITING, FILLED));
 
         notices.on(new MarketPauseAnnounced(
@@ -63,7 +63,7 @@ class PaperIncidentNoticesTest {
     }
 
     @Test
-    void D158_theReopeningOfAnAnnouncedIncident_tellsEveryone_withWhatTheCatchUpDid() {
+    void D159_theReopeningOfAnAnnouncedIncident_tellsEveryone_withWhatTheCatchUpDid() {
         when(queries.tradersOn(MarketType.FUTURES)).thenReturn(List.of(WAITING, FILLED));
         when(queries.replayedFills(MarketType.FUTURES, LIVE, RESUMED)).thenReturn(Map.of(FILLED, 2L));
         when(queries.liquidations(LIVE, RESUMED)).thenReturn(Map.of(LIQUIDATED, 1L));
@@ -81,7 +81,7 @@ class PaperIncidentNoticesTest {
     }
 
     @Test
-    void D158_theReopeningOfAShortIncident_tellsOnlyWhomTheCatchUpChanged_andSpotHasNoLiquidations() {
+    void D159_theReopeningOfAShortIncident_tellsOnlyWhomTheCatchUpChanged_andSpotHasNoLiquidations() {
         when(queries.replayedFills(MarketType.SPOT, LIVE, RESUMED)).thenReturn(Map.of(FILLED, 1L));
 
         notices.on(new MarketTradingResumed(MarketType.SPOT, INCIDENT, LIVE, RESUMED, false));

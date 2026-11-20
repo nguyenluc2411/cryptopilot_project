@@ -7,15 +7,15 @@ import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 /**
- * The health thresholds must fit together (D-158): a paused market can only recover after its data has flowed longer
+ * The health thresholds must fit together (D-159): a paused market can only recover after its data has flowed longer
  * than a break, or a single gap would both break the run and count as stable.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 class MarketHealthPropertiesTest {
 
     @Test
-    void D158_stableBeforeRecover_mustBeLongerThanReconnectingAfter() {
+    void D159_stableBeforeRecover_mustBeLongerThanReconnectingAfter() {
         assertThatCode(() -> properties(Duration.ofSeconds(11))).doesNotThrowAnyException();
         assertThatThrownBy(() -> properties(Duration.ofSeconds(10)))
                 .isInstanceOf(IllegalArgumentException.class)

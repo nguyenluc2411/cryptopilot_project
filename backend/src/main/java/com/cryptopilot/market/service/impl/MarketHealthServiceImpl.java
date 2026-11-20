@@ -37,7 +37,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * The data health of each market (D-158): the current state in memory, each closed period in
+ * The data health of each market (D-159): the current state in memory, each closed period in
  * {@code market_incident}, and an event when trading closes, when recovery starts and when trading reopens.
  *
  * <ul>
@@ -63,7 +63,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * Addison-Wesley, "Unit of Work"; Spring Framework reference, "Transaction-bound events" and
  * {@code TransactionSynchronization}.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Service
 public class MarketHealthServiceImpl implements MarketHealthService {
@@ -107,7 +107,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             statuses.put(
                     open.market(),
                     Status.closed(state, open.id(), open.lastLiveAt(), open.pausedAt(), announced, lost));
-            log.warn("D-158 {} starts {}: incident {} open since {}", open.market(), state, open.id(), open.pausedAt());
+            log.warn("D-159 {} starts {}: incident {} open since {}", open.market(), state, open.id(), open.pausedAt());
         }
         for (MarketType market : MarketType.values()) {
             if (statuses.get(market).incidentId() == null) {
@@ -178,7 +178,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                     market + " is " + current.state() + ", not recovering: only a recovering market can be reopened");
         }
         resume(market, current);
-        log.warn("D-158 {} reopened by administrator {} before its engines caught up", market, by);
+        log.warn("D-159 {} reopened by administrator {} before its engines caught up", market, by);
         changed(market, MarketHealthState.RECOVERING, MarketHealthState.LIVE);
     }
 
@@ -237,7 +237,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         }
         // Maintenance is decided on purpose: the Traders are told at once, not after notify-after.
         stage(market, announce(market, held, IncidentReason.MAINTENANCE, message));
-        log.warn("D-158 {} under maintenance", market);
+        log.warn("D-159 {} under maintenance", market);
         changed(market, current.state(), MarketHealthState.MAINTENANCE);
     }
 
@@ -253,7 +253,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         } else {
             resume(market, current);
         }
-        log.info("D-158 {} maintenance ended", market);
+        log.info("D-159 {} maintenance ended", market);
         changed(market, MarketHealthState.MAINTENANCE, current(market).state());
     }
 
@@ -270,7 +270,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         }
         boolean beyondReplay = beyondReplay(current);
         if (beyondReplay) {
-            // Not all of the missed data can be replayed: only an administrator reopens the market (D-158).
+            // Not all of the missed data can be replayed: only an administrator reopens the market (D-159).
             signals = signals.withRecoveryDone(false);
         }
         MarketHealthState to =
@@ -291,7 +291,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
             incidents.relapse(current.incidentId());
             stage(market, current.in(to).dataLostNow());
             log.warn(
-                    "D-158 {} lost its data again while recovering; incident {} goes on", market, current.incidentId());
+                    "D-159 {} lost its data again while recovering; incident {} goes on", market, current.incidentId());
         } else {
             Status next = current.in(to);
             stage(market, to == MarketHealthState.PAUSED ? next.dataLostNow() : next);
@@ -308,7 +308,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                 new MarketIncident(id, market, IncidentKind.OUTAGE, reason, lastLiveAt, now, null, null, null, null));
         stage(market, Status.closed(MarketHealthState.PAUSED, id, lastLiveAt, now, false, true));
         events.publishEvent(new MarketTradingPaused(market, id, MarketHealthState.PAUSED, reason, lastLiveAt));
-        log.warn("D-158 {} trading paused ({}): no live data since {}", market, reason, lastLiveAt);
+        log.warn("D-159 {} trading paused ({}): no live data since {}", market, reason, lastLiveAt);
     }
 
     /** Publishes, once per incident, that the Traders should hear of it; returns the status marked announced. */
@@ -327,13 +327,13 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         Status recovering = current.recoveringFrom(now);
         stage(market, recovering);
         events.publishEvent(new MarketRecoveryStarted(market, current.incidentId(), current.since()));
-        log.info("D-158 {} recovering: replaying from {}", market, current.since());
+        log.info("D-159 {} recovering: replaying from {}", market, current.since());
         if (beyondReplay(recovering)) {
             tellOverdue(market, recovering, true);
         }
     }
 
-    /** Whether the incident's data was lost longer than the engines replay (D-158). */
+    /** Whether the incident's data was lost longer than the engines replay (D-159). */
     private boolean beyondReplay(Status current) {
         return current.incidentId() != null
                 && current.since().isBefore(clock.instant().minus(properties.maxOutageReplay()));
@@ -355,7 +355,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
                 market, current.incidentId(), current.since(), current.recoveringAt(), beyondReplay));
         stage(market, current.overdueToldNow());
         log.warn(
-                "D-158 {} recovery of incident {} needs an administrator: {}",
+                "D-159 {} recovery of incident {} needs an administrator: {}",
                 market,
                 current.incidentId(),
                 beyondReplay ? "data lost longer than max-outage-replay" : "running since " + current.recoveringAt());
@@ -368,7 +368,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         stageEnded(market, new Ended(current.since(), now));
         events.publishEvent(
                 new MarketTradingResumed(market, current.incidentId(), current.since(), now, current.announced()));
-        log.info("D-158 {} trading resumed; incident {} closed", market, current.incidentId());
+        log.info("D-159 {} trading resumed; incident {} closed", market, current.incidentId());
     }
 
     private void changed(MarketType market, MarketHealthState from, MarketHealthState to) {
@@ -453,7 +453,7 @@ public class MarketHealthServiceImpl implements MarketHealthService {
         staging.forEach((market, staged) -> {
             if (statuses.get(market) != staged.from) {
                 log.warn(
-                        "D-158 {} health change of a committed transaction skipped: the state moved meanwhile", market);
+                        "D-159 {} health change of a committed transaction skipped: the state moved meanwhile", market);
                 return;
             }
             statuses.put(market, staged.status);

@@ -11,9 +11,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Reads who a market incident's notices reach among the plans' Traders (D-158), through {@link PlanIncidentQueries}.
+ * Reads who a market incident's notices reach among the plans' Traders (D-159), through {@link PlanIncidentQueries}.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

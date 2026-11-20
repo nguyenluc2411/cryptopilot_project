@@ -37,10 +37,10 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.TaskScheduler;
 
 /**
- * The monitor's tick (D-158): the signals it hands the service for each market, the reason it gives for a pause, the
+ * The monitor's tick (D-159): the signals it hands the service for each market, the reason it gives for a pause, the
  * modules it asks only while a market recovers, and the markets it leaves alone when the streams are off.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 class MarketHealthMonitorTest {
 
@@ -65,7 +65,7 @@ class MarketHealthMonitorTest {
     }
 
     @Test
-    void D158_eachTick_handsEachMarketItsStreamAndRestSignals() {
+    void D159_eachTick_handsEachMarketItsStreamAndRestSignals() {
         clock.advance(Duration.ofSeconds(3));
         liveness.record(MarketType.SPOT, clock.instant());
         clock.advance(Duration.ofSeconds(2));
@@ -89,7 +89,7 @@ class MarketHealthMonitorTest {
     }
 
     @Test
-    void D158_anOpenCircuit_isGivenAsTheRestBeingUnavailable() {
+    void D159_anOpenCircuit_isGivenAsTheRestBeingUnavailable() {
         when(exchange.outage(BinanceVenue.SPOT))
                 .thenReturn(
                         Optional.of(new RestOutage(BinanceClientException.Kind.CIRCUIT_OPEN, START.plusSeconds(30))));
@@ -101,7 +101,7 @@ class MarketHealthMonitorTest {
 
     /** I6: a recovering market is recovered only once every module has caught up since its last live data. */
     @Test
-    void D158_aRecoveringMarket_isRecovered_onlyOnceEveryModuleHasCaughtUp() {
+    void D159_aRecoveringMarket_isRecovered_onlyOnceEveryModuleHasCaughtUp() {
         Instant lastLive = START.minusSeconds(600);
         when(health.state(MarketType.FUTURES)).thenReturn(MarketHealthState.RECOVERING);
         when(health.openIncident(MarketType.FUTURES)).thenReturn(Optional.of(incident(lastLive)));
@@ -138,7 +138,7 @@ class MarketHealthMonitorTest {
     }
 
     @Test
-    void D158_aMarketThatFails_doesNotStopTheOther() {
+    void D159_aMarketThatFails_doesNotStopTheOther() {
         when(exchange.outage(BinanceVenue.SPOT)).thenThrow(new IllegalStateException("down"));
 
         monitor(List.of()).tick();
@@ -148,7 +148,7 @@ class MarketHealthMonitorTest {
     }
 
     @Test
-    void D158_theMonitor_runsOnlyWithTheStreams() {
+    void D159_theMonitor_runsOnlyWithTheStreams() {
         when(streams.enabled()).thenReturn(false);
         monitor(List.of()).start();
         verify(scheduler, never()).scheduleWithFixedDelay(any(Runnable.class), any(Duration.class));

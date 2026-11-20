@@ -13,11 +13,11 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 
 /**
- * The transitions of a market's data health (D-158), over every state and the signals that move it: reconnecting after
+ * The transitions of a market's data health (D-159), over every state and the signals that move it: reconnecting after
  * 10 s without data, paused after 30 s or when the REST API is also down, recovering only after 15 s of unbroken data
  * with the REST API up, live only once recovery is done, and maintenance over everything.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 class MarketHealthMachineTest {
 
@@ -64,7 +64,7 @@ class MarketHealthMachineTest {
         "MAINTENANCE,  40,    40, true,  true,  PAUSED",
         "MAINTENANCE,   1,    60, false, true,  PAUSED",
     })
-    void D158_theNextState_followsTheSignals(
+    void D159_theNextState_followsTheSignals(
             MarketHealthState current,
             long silentSeconds,
             long liveRunSeconds,
@@ -85,7 +85,7 @@ class MarketHealthMachineTest {
     /** E13: maintenance closes the market from every state, whatever the data does. */
     @ParameterizedTest
     @EnumSource(MarketHealthState.class)
-    void D158_maintenance_holdsEveryStateClosed(MarketHealthState current) {
+    void D159_maintenance_holdsEveryStateClosed(MarketHealthState current) {
         HealthSignals live = new HealthSignals(NOW, NOW.minusSeconds(600), true, true, true);
         HealthSignals lost = new HealthSignals(NOW.minusSeconds(600), NOW.minusSeconds(600), false, true, false);
 
@@ -95,7 +95,7 @@ class MarketHealthMachineTest {
 
     /** E3: a market flapping between paused and recovering stays in one incident until it is live again. */
     @Test
-    void D158_anIncident_opensOnClosing_andClosesOnlyWhenLiveAgain() {
+    void D159_anIncident_opensOnClosing_andClosesOnlyWhenLiveAgain() {
         assertThat(MarketHealthMachine.opensIncident(MarketHealthState.LIVE, MarketHealthState.PAUSED))
                 .isTrue();
         assertThat(MarketHealthMachine.opensIncident(MarketHealthState.RECONNECTING, MarketHealthState.PAUSED))
@@ -121,7 +121,7 @@ class MarketHealthMachineTest {
 
     /** Trading is open while live or reconnecting only. */
     @Test
-    void D158_tradingIsOpen_onlyLiveOrReconnecting() {
+    void D159_tradingIsOpen_onlyLiveOrReconnecting() {
         assertThat(MarketHealthState.LIVE.tradingOpen()).isTrue();
         assertThat(MarketHealthState.RECONNECTING.tradingOpen()).isTrue();
         assertThat(MarketHealthState.PAUSED.tradingOpen()).isFalse();

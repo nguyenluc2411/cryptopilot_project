@@ -130,7 +130,7 @@ class BaselineSchemaTest {
                         + " folded into the Trader and the ledger, untouched, until a later migration drops them;"
                         + " system_event (V59, the system log of UC-52) is operational state too;"
                         + " verification_resend_attempt (V71, BR-65's resend counter) is a short-lived counter;"
-                        + " market_incident (V74, the periods trading on a market was closed, D-158) is operational"
+                        + " market_incident (V74, the periods trading on a market was closed, D-159) is operational"
                         + " state")
                 .contains(
                         "event_publication",

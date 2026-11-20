@@ -124,7 +124,7 @@ public final class PaperOrderBook {
         return books.containsKey(new BookKey(market, pairId));
     }
 
-    /** The pairs with an order waiting (D-158: what a recovery waits for). */
+    /** The pairs with an order waiting (D-159: what a recovery waits for). */
     public Set<BookKey> pairs() {
         return Set.copyOf(books.keySet());
     }

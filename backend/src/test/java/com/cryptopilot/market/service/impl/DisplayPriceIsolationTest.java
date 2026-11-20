@@ -38,11 +38,11 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
- * M5, the isolation of the fallback prices (D-158, invariant I1): while a market is paused, a fallback price far from
+ * M5, the isolation of the fallback prices (D-159, invariant I1): while a market is paused, a fallback price far from
  * the exchange's is shown, and the price the other modules fill, trigger and liquidate on stays the exchange's last
  * one; nothing of the fallback is stored.
  *
- * <p>Rule: BR-09; D-158.
+ * <p>Rule: BR-09; D-159.
  */
 @SpringBootTest
 @Import(TestcontainersConfig.class)

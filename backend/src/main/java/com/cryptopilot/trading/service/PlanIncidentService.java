@@ -5,9 +5,9 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Who the notices of a market incident reach among the plans' Traders (D-158).
+ * Who the notices of a market incident reach among the plans' Traders (D-159).
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 public interface PlanIncidentService {
 

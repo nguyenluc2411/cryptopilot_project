@@ -8,7 +8,7 @@ import java.util.UUID;
 import org.springframework.modulith.NamedInterface;
 
 /**
- * Trading on a market has just closed (D-158): its data was lost or an administrator started maintenance. Published
+ * Trading on a market has just closed (D-159): its data was lost or an administrator started maintenance. Published
  * once per incident, not again on a relapse while recovering.
  *
  * <p>Exposed in the named interface {@code events}: the Traders' notices and the banner hear it.

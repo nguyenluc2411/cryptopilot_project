@@ -179,7 +179,7 @@ final class BinanceRequestGate {
     /**
      * Why calls to the venue cannot reach it now, when the reason is one that outlasts a reconnecting stream: a ban
      * (418) or an open circuit. A 429 or the weight pause end within a minute and are left out. Read by the market's
-     * health monitor (D-158).
+     * health monitor (D-159).
      */
     synchronized Optional<RestOutage> outage() {
         loadRecordedBanOnce();

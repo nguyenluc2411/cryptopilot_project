@@ -7,13 +7,13 @@ import com.cryptopilot.market.model.enums.MarketType;
 import java.util.List;
 
 /**
- * The display-only fallback prices of a market whose exchange data is lost (D-158): read from the fallback source
+ * The display-only fallback prices of a market whose exchange data is lost (D-159): read from the fallback source
  * while the market is paused or recovering, held in memory, shown labelled with their source.
  *
  * <p>Isolated on purpose (I1): nothing that fills, triggers, liquidates, charges or alerts reads them. They never reach
  * the market's API to the other modules, its price cache or its stored candles; an architecture test keeps it so.
  *
- * <p>Rule: BR-09; NSF-03; D-158.
+ * <p>Rule: BR-09; NSF-03; D-159.
  */
 public interface DisplayPriceService {
 

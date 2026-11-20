@@ -13,9 +13,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Reads what a market incident's notices need from the paper tables (D-158), through {@link PaperIncidentQueries}.
+ * Reads what a market incident's notices need from the paper tables (D-159), through {@link PaperIncidentQueries}.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

@@ -6,7 +6,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * A Trader with paper orders or positions on a market is to be told of an incident on it (D-158): that trading is
+ * A Trader with paper orders or positions on a market is to be told of an incident on it (D-159): that trading is
  * paused, or that it reopened and what the catch-up did to their orders and positions.
  *
  * @param userId the Trader

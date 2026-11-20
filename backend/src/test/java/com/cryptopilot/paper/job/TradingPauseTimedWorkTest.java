@@ -47,14 +47,14 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
 /**
- * M3, the timed work of a paused Futures market (D-158, invariant I5): while the market is closed no funding is settled
+ * M3, the timed work of a paused Futures market (D-159, invariant I5): while the market is closed no funding is settled
  * and no GTD order expires, since the replay that follows may show the position liquidated before the funding time or
  * the order filled before its date; once the market is open again, both run as before, once.
  *
  * <p>Against the replay itself: a position the replay liquidates on a mark before the funding time owes nothing of it,
  * though the liquidation is dated when applied, after the funding time; one liquidated on a later mark still owes it.
  *
- * <p>Rule: TR-24, TR-44; NSF-03; D-158.
+ * <p>Rule: TR-24, TR-44; NSF-03; D-159.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -173,7 +173,7 @@ class TradingPauseTimedWorkTest {
 
     /** TR-24 under I5: a settlement due while Futures is paused is not taken until the market is open again, then once. */
     @Test
-    void D158_noFundingIsSettled_whileFuturesIsPaused_thenOnceWhenOpen() throws Exception {
+    void D159_noFundingIsSettled_whileFuturesIsPaused_thenOnceWhenOpen() throws Exception {
         UUID trader = trader();
         place(trader, """
                         {"symbol": "%s", "side": "BUY", "type": "MARKET", "quantity": "1"}""".formatted(symbol)).andExpect(status().isOk());
@@ -205,7 +205,7 @@ class TradingPauseTimedWorkTest {
 
     /** TR-44 under I5: a GTD order whose date came while Futures is paused waits; once open, it expires. */
     @Test
-    void D158_noGtdOrderExpires_whileFuturesIsPaused_thenItExpiresWhenOpen() throws Exception {
+    void D159_noGtdOrderExpires_whileFuturesIsPaused_thenItExpiresWhenOpen() throws Exception {
         UUID trader = trader();
         String placed = place(trader, """
                         {"symbol": "%s", "side": "BUY", "type": "LIMIT", "timeInForce": "GTD", "price": "90",
@@ -236,7 +236,7 @@ class TradingPauseTimedWorkTest {
      * the funding time on the exchange, so it owes nothing of it, though its close is dated after.
      */
     @Test
-    void D158_aPositionTheReplayLiquidatedOnAMarkBeforeTheFundingTime_owesNothingOfIt() throws Exception {
+    void D159_aPositionTheReplayLiquidatedOnAMarkBeforeTheFundingTime_owesNothingOfIt() throws Exception {
         Instant fundingTime = Instant.now().minus(Duration.ofHours(1));
         UUID position = isolatedLongOpenedBefore(fundingTime);
 
@@ -254,7 +254,7 @@ class TradingPauseTimedWorkTest {
 
     /** The same position liquidated on a mark after the funding time was open then, and pays it. */
     @Test
-    void D158_aPositionTheReplayLiquidatedOnAMarkAfterTheFundingTime_stillOwesIt() throws Exception {
+    void D159_aPositionTheReplayLiquidatedOnAMarkAfterTheFundingTime_stillOwesIt() throws Exception {
         Instant fundingTime = Instant.now().minus(Duration.ofHours(1));
         UUID position = isolatedLongOpenedBefore(fundingTime);
 
@@ -270,7 +270,7 @@ class TradingPauseTimedWorkTest {
      * funding time on the exchange, so it owes it, though it is dated when applied, after the funding time.
      */
     @Test
-    void D158_aPositionTheReplayOpenedOnACandleBeforeTheFundingTime_owesIt() throws Exception {
+    void D159_aPositionTheReplayOpenedOnACandleBeforeTheFundingTime_owesIt() throws Exception {
         Instant fundingTime = Instant.now().minus(Duration.ofHours(1));
         UUID trader = replayOpenedLong(fundingTime.minus(Duration.ofMinutes(30)), fundingTime);
 
@@ -281,7 +281,7 @@ class TradingPauseTimedWorkTest {
 
     /** The same position opened by the replay on a candle after the funding time was not open then, and owes nothing. */
     @Test
-    void D158_aPositionTheReplayOpenedOnACandleAfterTheFundingTime_owesNothing() throws Exception {
+    void D159_aPositionTheReplayOpenedOnACandleAfterTheFundingTime_owesNothing() throws Exception {
         Instant fundingTime = Instant.now().minus(Duration.ofHours(1));
         UUID trader = replayOpenedLong(fundingTime.plus(Duration.ofMinutes(30)), fundingTime);
 
@@ -307,11 +307,11 @@ class TradingPauseTimedWorkTest {
     }
 
     /**
-     * D-158 E2b: a replayed mark from before a position was opened never liquidates it, though the position is open
+     * D-159 E2b: a replayed mark from before a position was opened never liquidates it, though the position is open
      * now; the replay only reaches back to marks the position lived through.
      */
     @Test
-    void D158_aReplayedMarkFromBeforeAPositionOpened_doesNotLiquidateIt() throws Exception {
+    void D159_aReplayedMarkFromBeforeAPositionOpened_doesNotLiquidateIt() throws Exception {
         UUID position = isolatedLongOpenedBefore(Instant.now().minus(Duration.ofHours(1)));
 
         assertThat(replayLiquidation(position, Instant.now().minus(Duration.ofHours(3))))

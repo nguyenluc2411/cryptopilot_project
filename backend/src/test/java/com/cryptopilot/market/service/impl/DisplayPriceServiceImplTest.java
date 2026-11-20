@@ -44,11 +44,11 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
- * The display-only fallback prices of a lost market (D-158): matched to the streamed pairs by symbol or override,
+ * The display-only fallback prices of a lost market (D-159): matched to the streamed pairs by symbol or override,
  * flagged when far from the exchange's last price, shown only while the market is paused or recovering, and a failed
  * read told to the administrators once per incident (E9).
  *
- * <p>Rule: BR-09; D-158.
+ * <p>Rule: BR-09; D-159.
  */
 class DisplayPriceServiceImplTest {
 
@@ -103,7 +103,7 @@ class DisplayPriceServiceImplTest {
      * A price more than 5 % from the exchange's mark is flagged.
      */
     @Test
-    void D158_thePairsMatchTheirInstruments_andAFarPriceIsFlagged() {
+    void D159_thePairsMatchTheirInstruments_andAFarPriceIsFlagged() {
         latest.recordMarkPrice(BTC, mark("BTCUSDT", "65000"));
         latest.recordMarkPrice(PEPE, mark("1000PEPEUSDT", "0.0101"));
 
@@ -134,7 +134,7 @@ class DisplayPriceServiceImplTest {
      * data); live, under maintenance or recovering from a maintenance, the exchange's.
      */
     @Test
-    void D158_theFallback_isShownOnlyWhileTheMarketIsLost() {
+    void D159_theFallback_isShownOnlyWhileTheMarketIsLost() {
         service.refresh(MarketType.FUTURES);
         assertThat(service.source(MarketType.FUTURES)).isEqualTo(DisplaySource.OKX);
 
@@ -150,7 +150,7 @@ class DisplayPriceServiceImplTest {
 
     /** E9: a failed read leaves no price, and the administrators hear of it once per incident. */
     @Test
-    void D158_aFailedRead_leavesNoPrice_andIsToldOncePerIncident() {
+    void D159_aFailedRead_leavesNoPrice_andIsToldOncePerIncident() {
         service.refresh(MarketType.FUTURES);
         when(okx.swapTickers()).thenThrow(new OkxException("OKX answered 503 for tickers", 503, null));
 
@@ -168,7 +168,7 @@ class DisplayPriceServiceImplTest {
 
     /** Without the client, as with the fallback off, a lost market shows no price and nothing is called. */
     @Test
-    void D158_withTheFallbackOff_aLostMarketShowsNoPrice() {
+    void D159_withTheFallbackOff_aLostMarketShowsNoPrice() {
         @SuppressWarnings("unchecked")
         ObjectProvider<OkxClient> none = mock(ObjectProvider.class);
         DisplayPriceServiceImpl off = service(none);
@@ -182,7 +182,7 @@ class DisplayPriceServiceImplTest {
 
     /** The candles of a listed pair come oldest first while the market is lost; a pair not listed has none. */
     @Test
-    void D158_theCandlesOfAListedPair_areRead_whileTheMarketIsLost() {
+    void D159_theCandlesOfAListedPair_areRead_whileTheMarketIsLost() {
         OkxCandle candle = new OkxCandle(
                 NOW, BigDecimal.ONE, BigDecimal.TWO, BigDecimal.ONE, BigDecimal.TWO, BigDecimal.TEN, true);
         when(okx.minuteCandles("BTC-USDT-SWAP", 5)).thenReturn(List.of(candle));
@@ -200,7 +200,7 @@ class DisplayPriceServiceImplTest {
     }
 
     @Test
-    void D158_aSymbol_isSplitBeforeItsQuoteCoin() {
+    void D159_aSymbol_isSplitBeforeItsQuoteCoin() {
         assertThat(service.instrumentOf(MarketType.SPOT, "ETHBTC")).isEqualTo("ETH-BTC");
         assertThat(service.instrumentOf(MarketType.SPOT, "BTCFDUSD")).isEqualTo("BTC-FDUSD");
         assertThat(service.instrumentOf(MarketType.FUTURES, "SOLUSDC")).isEqualTo("SOL-USDC-SWAP");

@@ -194,7 +194,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
         // The account first: a Trader without one is told so (MSG41), whatever the request holds.
         lock.lock(LOCK_SCOPE, userId);
         if (request.from() == WalletType.FUTURES) {
-            // D-158: what may leave the Futures wallet depends on current marks; moving into it does not.
+            // D-159: what may leave the Futures wallet depends on current marks; moving into it does not.
             health.requireTrading(MarketType.FUTURES);
         }
         PaperAccount account = accountOf(userId);

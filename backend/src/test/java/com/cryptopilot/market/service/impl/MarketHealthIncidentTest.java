@@ -45,14 +45,14 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.util.ClassUtils;
 
 /**
- * K2 and K4 (D-158): the incidents of the markets in {@code market_incident}: at most one open per market, a relapse
+ * K2 and K4 (D-159): the incidents of the markets in {@code market_incident}: at most one open per market, a relapse
  * and maintenance during an outage stay the same incident, and a market with an open incident starts closed after a
  * restart (E1), never live; the monitor's ticks walk an incident from the pause to the reopening, announcing each
  * step once (E3).
  *
  * <p>Each test works on a clean table and leaves it clean, so that the shared application's markets stay live.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -78,14 +78,14 @@ class MarketHealthIncidentTest {
 
     /** I6: a recovering market waits on both engines that run on its prices, the paper orders' and the plans'. */
     @Test
-    void D158_theMonitor_asksThePaperEngineAndThePlanFeed() {
+    void D159_theMonitor_asksThePaperEngineAndThePlanFeed() {
         assertThat(recoveryChecks)
                 .extracting(check -> ClassUtils.getUserClass(check).getSimpleName())
                 .contains("PaperMatchingWorker", "MinuteKlineFeed");
     }
 
     @Test
-    void D158_aMarket_hasAtMostOneOpenIncident() {
+    void D159_aMarket_hasAtMostOneOpenIncident() {
         incidents.open(outage(MarketType.FUTURES));
         incidents.open(outage(MarketType.SPOT));
 
@@ -95,7 +95,7 @@ class MarketHealthIncidentTest {
     }
 
     @Test
-    void D158_anIncident_recoversRelapsesAndResumes_asOneRow() {
+    void D159_anIncident_recoversRelapsesAndResumes_asOneRow() {
         MarketIncident opened = outage(MarketType.FUTURES);
         incidents.open(opened);
 
@@ -118,7 +118,7 @@ class MarketHealthIncidentTest {
     }
 
     @Test
-    void D158_maintenanceDuringAnOutage_isTheSameIncident() {
+    void D159_maintenanceDuringAnOutage_isTheSameIncident() {
         MarketIncident opened = outage(MarketType.SPOT);
         incidents.open(opened);
         UUID admin = UUID.randomUUID();
@@ -137,7 +137,7 @@ class MarketHealthIncidentTest {
 
     /** E1: after a restart, an open outage starts paused and open maintenance starts under maintenance. */
     @Test
-    void D158_afterARestart_aMarketWithAnOpenIncident_startsClosed() {
+    void D159_afterARestart_aMarketWithAnOpenIncident_startsClosed() {
         incidents.open(outage(MarketType.FUTURES));
 
         MarketHealthServiceImpl restarted = service(true);
@@ -156,7 +156,7 @@ class MarketHealthIncidentTest {
 
     /** Maintenance records an incident; ending it with the monitor off resumes it at once, with the monitor on recovers. */
     @Test
-    void D158_maintenance_opensAnIncident_andEndingItResumesOrRecovers() {
+    void D159_maintenance_opensAnIncident_andEndingItResumesOrRecovers() {
         MarketHealthServiceImpl off = service(false);
         off.startMaintenance(MarketType.SPOT, "deploy", null);
         assertThat(incidents.findOpen(MarketType.SPOT)).isPresent();
@@ -176,7 +176,7 @@ class MarketHealthIncidentTest {
 
     /** Enabled but with no monitor running (streams off), nothing would end a recovery: ending maintenance reopens. */
     @Test
-    void D158_endingMaintenance_withoutARunningMonitor_reopensAtOnce() {
+    void D159_endingMaintenance_withoutARunningMonitor_reopensAtOnce() {
         MarketHealthServiceImpl unwatched = service(true);
         unwatched.startMaintenance(MarketType.SPOT, null, null);
         unwatched.endMaintenance(MarketType.SPOT);
@@ -190,7 +190,7 @@ class MarketHealthIncidentTest {
      * break without a second announcement, recovering again, live once recovered; the row and the events tell it.
      */
     @Test
-    void D158_theTicks_walkOneIncident_fromThePauseToTheReopening() {
+    void D159_theTicks_walkOneIncident_fromThePauseToTheReopening() {
         MutableTestClock clock = new MutableTestClock(START);
         List<Object> published = new ArrayList<>();
         MarketHealthServiceImpl health =
@@ -246,7 +246,7 @@ class MarketHealthIncidentTest {
 
     /** A stream silent 10 s while the REST API is banned pauses at once, for the ban; a short silence alone does not. */
     @Test
-    void D158_aSilentStream_withTheRestApiBanned_pausesAtOnce() {
+    void D159_aSilentStream_withTheRestApiBanned_pausesAtOnce() {
         MutableTestClock clock = new MutableTestClock(START);
         MarketHealthServiceImpl health = new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock);
         Instant lastLive = START.minusSeconds(12);
@@ -264,7 +264,7 @@ class MarketHealthIncidentTest {
 
     /** E13, E14: maintenance holds a market whatever its data; ended while the data is lost, it pauses, not reopens. */
     @Test
-    void D158_maintenance_holdsTheMarket_andEndingItWhileTheDataIsLost_pauses() {
+    void D159_maintenance_holdsTheMarket_andEndingItWhileTheDataIsLost_pauses() {
         MutableTestClock clock = new MutableTestClock(START);
         List<Object> published = new ArrayList<>();
         MarketHealthServiceImpl health =
@@ -286,12 +286,12 @@ class MarketHealthIncidentTest {
     }
 
     /**
-     * D-158 data-lost matrix: the market's exchange data counts as lost, so the screens show the fallback, only while
+     * D-159 data-lost matrix: the market's exchange data counts as lost, so the screens show the fallback, only while
      * it is paused, or recovering from an incident in which the data really was lost; never live or under
      * maintenance, and never while recovering from a maintenance during which the data kept flowing.
      */
     @Test
-    void D158_dataLost_isTrueOnlyWhileTheExchangeDataIsMissingOrRefilled() {
+    void D159_dataLost_isTrueOnlyWhileTheExchangeDataIsMissingOrRefilled() {
         MutableTestClock clock = new MutableTestClock(START);
         MarketHealthServiceImpl health =
                 watched(new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock));
@@ -372,7 +372,7 @@ class MarketHealthIncidentTest {
      * follow, and its reopening says so; one that ends sooner is never announced.
      */
     @Test
-    void D158_anOutage_isAnnouncedOnceAfterNotifyAfter_andAShortOneNever() {
+    void D159_anOutage_isAnnouncedOnceAfterNotifyAfter_andAShortOneNever() {
         MutableTestClock clock = new MutableTestClock(START);
         List<Object> published = new ArrayList<>();
         MarketHealthServiceImpl health =
@@ -409,11 +409,11 @@ class MarketHealthIncidentTest {
     }
 
     /**
-     * D-158: while an incident is open the engines replay from where its data stopped, however long ago, but never more
+     * D-159: while an incident is open the engines replay from where its data stopped, however long ago, but never more
      * than max-outage-replay (7 days) back; for an hour after it ends too, for the timed work that runs once it is open.
      */
     @Test
-    void D158_theCatchUp_reachesBackToTheIncident_atMostSevenDays() {
+    void D159_theCatchUp_reachesBackToTheIncident_atMostSevenDays() {
         MutableTestClock clock = new MutableTestClock(START);
         MarketHealthServiceImpl health = new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock);
         assertThat(health.catchUpFrom(MarketType.FUTURES)).isEmpty();
@@ -444,11 +444,11 @@ class MarketHealthIncidentTest {
     }
 
     /**
-     * D-158: a recovery that has not ended after recovery-timeout (15 minutes) is told to the administrators, once; it
+     * D-159: a recovery that has not ended after recovery-timeout (15 minutes) is told to the administrators, once; it
      * still reopens by itself once the engines have caught up.
      */
     @Test
-    void D158_aRecoveryLongerThanTheTimeout_isToldOnce_andStillReopens() {
+    void D159_aRecoveryLongerThanTheTimeout_isToldOnce_andStillReopens() {
         MutableTestClock clock = new MutableTestClock(START);
         List<Object> published = new ArrayList<>();
         MarketHealthServiceImpl health =
@@ -480,11 +480,11 @@ class MarketHealthIncidentTest {
     }
 
     /**
-     * D-158: data lost longer than max-outage-replay cannot all be replayed, so the market never reopens by itself: it
+     * D-159: data lost longer than max-outage-replay cannot all be replayed, so the market never reopens by itself: it
      * stays recovering, the administrators are told at once, and only one of them reopens it.
      */
     @Test
-    void D158_anOutageBeyondTheReplay_staysRecovering_untilAnAdministratorReopensIt() {
+    void D159_anOutageBeyondTheReplay_staysRecovering_untilAnAdministratorReopensIt() {
         MutableTestClock clock = new MutableTestClock(START);
         List<Object> published = new ArrayList<>();
         MarketHealthServiceImpl health =
@@ -517,7 +517,7 @@ class MarketHealthIncidentTest {
 
     /** The progress the monitor reads is kept while the market recovers, and only then. */
     @Test
-    void D158_theRecoveryProgress_isKeptWhileRecovering_only() {
+    void D159_theRecoveryProgress_isKeptWhileRecovering_only() {
         MutableTestClock clock = new MutableTestClock(START);
         MarketHealthServiceImpl health = new MarketHealthServiceImpl(properties(true), incidents, event -> {}, clock);
         health.recoveryProgress(MarketType.SPOT, new RecoveryProgress(1, 2));

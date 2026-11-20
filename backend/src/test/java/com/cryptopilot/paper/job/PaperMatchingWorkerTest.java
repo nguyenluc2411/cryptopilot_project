@@ -341,11 +341,11 @@ class PaperMatchingWorkerTest {
     }
 
     /**
-     * D-158: started during an incident, a replay reaches back to where the market's data stopped, beyond its
+     * D-159: started during an incident, a replay reaches back to where the market's data stopped, beyond its
      * window; the other market keeps the window.
      */
     @Test
-    void D158_aStartUpReplayDuringAnIncident_reachesBackToIt_beyondTheWindow() {
+    void D159_aStartUpReplayDuringAnIncident_reachesBackToIt_beyondTheWindow() {
         Instant lastLive = MINUTE_0.minus(Duration.ofDays(2));
         RestingOrder spot = new RestingOrder(
                 UUID.randomUUID(),
@@ -410,11 +410,11 @@ class PaperMatchingWorkerTest {
     }
 
     /**
-     * D-158 E7: minutes the exchange never served, as when it halted, are no hole to wait on: the replay goes on from
+     * D-159 E7: minutes the exchange never served, as when it halted, are no hole to wait on: the replay goes on from
      * the next candle it serves, and fills there.
      */
     @Test
-    void D158_minutesTheExchangeNeverServed_areSkipped_andTheReplayGoesOnFromTheNext() {
+    void D159_minutesTheExchangeNeverServed_areSkipped_andTheReplayGoesOnFromTheNext() {
         Instant minute4 = MINUTE_0.plusSeconds(240);
         when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2))
                 .thenReturn(MinuteKlineBatch.of(List.of(kline(minute4, "99", "110", true))));
@@ -431,11 +431,11 @@ class PaperMatchingWorkerTest {
     }
 
     /**
-     * D-158 E2b: at start, a pair watched only for an isolated position's liquidation replays its marks from after its
+     * D-159 E2b: at start, a pair watched only for an isolated position's liquidation replays its marks from after its
      * mark watermark, so a mark the stream missed while the application was down still liquidates.
      */
     @Test
-    void D158_atStart_aPairWithOnlyALiquidationLevel_replaysItsMarksFromAfterItsWatermark() {
+    void D159_atStart_aPairWithOnlyALiquidationLevel_replaysItsMarksFromAfterItsWatermark() {
         LiquidationLevel level = new LiquidationLevel(
                 UUID.randomUUID(), UUID.randomUUID(), PAIR, PositionDirection.LONG, new BigDecimal("95"));
         when(matching.liquidationLevels()).thenReturn(List.of(level));
@@ -450,9 +450,9 @@ class PaperMatchingWorkerTest {
         verify(matching, timeout(WAIT)).liquidate(eq(level), eq(new BigDecimal("94")), any(), any());
     }
 
-    /** D-158 (K6): an engine that does not run has nothing to catch up on. */
+    /** D-159 (K6): an engine that does not run has nothing to catch up on. */
     @Test
-    void D158_anEngineThatDoesNotRun_isCaughtUp() {
+    void D159_anEngineThatDoesNotRun_isCaughtUp() {
         worker = started(properties(false, true, Duration.ofMinutes(10)));
 
         assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1)).isTrue();
@@ -460,12 +460,12 @@ class PaperMatchingWorkerTest {
     }
 
     /**
-     * D-158 (K6, I6): a pair with an order is caught up once a closed candle of the last two minutes was applied and
+     * D-159 (K6, I6): a pair with an order is caught up once a closed candle of the last two minutes was applied and
      * no replay runs; one whose last closed candle is older is not, unless it went quiet before the incident, as a pair
      * no longer streamed. The other market is not held by it.
      */
     @Test
-    void D158_aPairWithAnOrder_isCaughtUp_onceARecentClosedCandleIsApplied_andNoReplayRuns() throws Exception {
+    void D159_aPairWithAnOrder_isCaughtUp_onceARecentClosedCandleIsApplied_andNoReplayRuns() throws Exception {
         CountDownLatch exchange = new CountDownLatch(1);
         when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2)).thenAnswer(call -> {
             exchange.await();
@@ -503,9 +503,9 @@ class PaperMatchingWorkerTest {
         await().atMost(Duration.ofMillis(WAIT)).until(() -> worker.caughtUp(MarketType.SPOT, MINUTE_2));
     }
 
-    /** D-158 (K6): a Futures pair watched on its marks is caught up once a live mark came within mark-max-age. */
+    /** D-159 (K6): a Futures pair watched on its marks is caught up once a live mark came within mark-max-age. */
     @Test
-    void D158_aPairWatchedOnItsMarks_isCaughtUp_onceALiveMarkCame() {
+    void D159_aPairWatchedOnItsMarks_isCaughtUp_onceALiveMarkCame() {
         UUID trader = UUID.randomUUID();
         when(matching.liquidationLevels(trader, PAIR))
                 .thenReturn(List.of(new LiquidationLevel(
@@ -1064,11 +1064,11 @@ class PaperMatchingWorkerTest {
     }
 
     /**
-     * D-158 (TR-24): a replayed mark that reaches a liquidation level liquidates now, on the state of now, and hands the
+     * D-159 (TR-24): a replayed mark that reaches a liquidation level liquidates now, on the state of now, and hands the
      * liquidation the time of the mark it took, so that the funding reads the position closed from then.
      */
     @Test
-    void D158_aReplayedMark_liquidatesNow_withTheTimeOfTheMarkItTook() {
+    void D159_aReplayedMark_liquidatesNow_withTheTimeOfTheMarkItTook() {
         UUID trader = UUID.randomUUID();
         LiquidationLevel level =
                 new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("95"));

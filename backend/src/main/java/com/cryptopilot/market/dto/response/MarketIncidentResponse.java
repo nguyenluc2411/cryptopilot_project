@@ -7,7 +7,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * One period during which trading on a market was closed, for the administration console (D-158).
+ * One period during which trading on a market was closed, for the administration console (D-159).
  *
  * @param id the incident
  * @param market the market closed

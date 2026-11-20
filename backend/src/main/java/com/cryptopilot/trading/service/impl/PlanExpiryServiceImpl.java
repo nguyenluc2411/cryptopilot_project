@@ -52,7 +52,7 @@ public class PlanExpiryServiceImpl implements PlanExpiryService {
         int expired = 0;
         for (TradingPlan plan : plans.findExpiring(now, Limit.of(batchSize))) {
             if (!health.tradingOpen(plan.getMarket())) {
-                // D-158 (I5): the replay after the pause may still fill or invalidate it before its expiry.
+                // D-159 (I5): the replay after the pause may still fill or invalidate it before its expiry.
                 continue;
             }
             if (replays.isReplaying(plan.getMarket(), plan.getPairId())) {

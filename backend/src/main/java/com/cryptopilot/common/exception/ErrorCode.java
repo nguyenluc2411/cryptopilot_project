@@ -618,7 +618,7 @@ public enum ErrorCode {
 
     /**
      * Trading on the market is paused because its exchange data is lost, being caught up on, or under maintenance
-     * (D-158): nothing that changes an order, a position or a wallet of that market is taken until it is open again.
+     * (D-159): nothing that changes an order, a position or a wallet of that market is taken until it is open again.
      * The body names the market, its state and since when. 503: the same request succeeds once trading reopens. A new
      * message id, MSG57, until the SRS gives it a text.
      */

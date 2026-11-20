@@ -17,7 +17,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Reads OKX's public market API for the display-only fallback prices of a market whose exchange data is lost (D-158).
+ * Reads OKX's public market API for the display-only fallback prices of a market whose exchange data is lost (D-159).
  *
  * <p>Two GETs, no key: {@code /api/v5/market/tickers?instType=SPOT|SWAP}, every ticker of a market in one answer, so a
  * poll costs one request per market whatever the number of pairs; and {@code /api/v5/market/candles}, the latest

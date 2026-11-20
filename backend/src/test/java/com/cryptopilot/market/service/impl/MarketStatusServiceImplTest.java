@@ -31,10 +31,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * What the banner reads of each market (D-158): while a market recovers, how far it has caught up and when the
+ * What the banner reads of each market (D-159): while a market recovers, how far it has caught up and when the
  * exchange takes the calls again; while it is open, the pairs whose data is lost (E5).
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 class MarketStatusServiceImplTest {
 
@@ -75,7 +75,7 @@ class MarketStatusServiceImplTest {
     }
 
     @Test
-    void D158_aRecoveringMarket_showsItsProgressAndWhenTheExchangeTakesCallsAgain() {
+    void D159_aRecoveringMarket_showsItsProgressAndWhenTheExchangeTakesCallsAgain() {
         MarketHealthResponse futures = service.status().markets().get(1);
 
         assertThat(futures.market()).isEqualTo(MarketType.FUTURES);
@@ -88,7 +88,7 @@ class MarketStatusServiceImplTest {
     }
 
     @Test
-    void D158_anOpenMarket_namesItsLostPairs_andNoRetryOrProgress() {
+    void D159_anOpenMarket_namesItsLostPairs_andNoRetryOrProgress() {
         MarketHealthResponse spot = service.status().markets().getFirst();
 
         assertThat(spot.tradingOpen()).isTrue();

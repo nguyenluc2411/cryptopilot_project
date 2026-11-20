@@ -46,7 +46,7 @@ public interface PaperFillRepository extends Repository<PaperFill, UUID> {
     /**
      * The size of a Futures position at an instant: what its fills before it opened, less what they closed (plan 9.4,
      * the quantity a funding settlement is charged on). Every fill of a position on its opening side opened it. A fill a
-     * replay applied counts at the time of the price it took, not when it was applied (D-158).
+     * replay applied counts at the time of the price it took, not when it was applied (D-159).
      */
     @Query("select coalesce(sum(case when f.side = :openingSide then f.fillQuantity else -f.fillQuantity end), 0)"
             + " from PaperFill f where f.positionId = :positionId"
@@ -55,7 +55,7 @@ public interface PaperFillRepository extends Repository<PaperFill, UUID> {
 
     /**
      * When a Futures position opened on the exchange: the earliest of its fills, a replayed one counting at the time of
-     * the price it took (D-158). Empty for a position with no fill.
+     * the price it took (D-159). Empty for a position with no fill.
      */
     @Query("select min(coalesce(f.sourceTime, f.tradedAt)) from PaperFill f where f.positionId = :positionId")
     Optional<Instant> firstFillAt(UUID positionId);

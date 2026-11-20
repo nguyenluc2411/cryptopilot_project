@@ -6,7 +6,7 @@ import java.time.Duration;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * Cleans up after a test that closed a market (D-158): its incidents announce themselves to the Traders and the
+ * Cleans up after a test that closed a market (D-159): its incidents announce themselves to the Traders and the
  * administrators after the commit, so the notices are awaited, then removed with the incidents, before the test's
  * accounts go.
  */

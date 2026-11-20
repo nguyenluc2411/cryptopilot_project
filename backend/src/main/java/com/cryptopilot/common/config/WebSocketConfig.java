@@ -42,7 +42,7 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
  * <h2>What a client may subscribe to</h2>
  *
  * <p>The public market topics — {@code /topic/ticker.*}, {@code /topic/kline.*}, {@code /topic/overview.*}, the
- * trades and depth of the trading screen, and the markets' data health {@code /topic/market.status} (D-158) — open to
+ * trades and depth of the trading screen, and the markets' data health {@code /topic/market.status} (D-159) — open to
  * anyone, as the market data is public (D-50). A signed-in session
  * may also subscribe to its own demo trading queues {@code /user/queue/orders}, {@code /user/queue/fills} and
  * {@code /user/queue/balances} (TR-08), to its paper Futures {@code /user/queue/futures.orders} and

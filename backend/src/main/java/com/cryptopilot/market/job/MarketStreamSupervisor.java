@@ -244,7 +244,7 @@ public class MarketStreamSupervisor {
             MarketType market, List<StreamTarget> targets, Map<String, StreamTarget> bySymbol) {
         BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
         List<BinanceStreamShard> shards = new ArrayList<>();
-        // D-158 E5: each price connection is watched on its own, with its pairs, for the market health.
+        // D-159 E5: each price connection is watched on its own, with its pairs, for the market health.
         Map<String, List<String>> symbolsByConnection = new LinkedHashMap<>();
         pack(targets, target -> streams.streamsFor(venue, target.symbol()), (batch, symbols) -> {
             String name = market + "-" + shards.size();
@@ -309,7 +309,7 @@ public class MarketStreamSupervisor {
 
         @Override
         public void onMessage(StreamMessage message) {
-            // D-158: any message proves the market's stream is live, a pair's or not, and its connection's pairs.
+            // D-159: any message proves the market's stream is live, a pair's or not, and its connection's pairs.
             liveness.record(market, connection, clock.instant());
             StreamTarget target = bySymbol.get(message.symbol());
             if (target == null) {

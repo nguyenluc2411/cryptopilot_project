@@ -27,10 +27,10 @@ import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.scheduling.TaskScheduler;
 
 /**
- * The pushes of the markets' data health to {@code /topic/market.status} (D-158): on every change, every five seconds
+ * The pushes of the markets' data health to {@code /topic/market.status} (D-159): on every change, every five seconds
  * while a market recovers and never otherwise, and a broker that fails stops nothing.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 class MarketStatusPusherTest {
 
@@ -60,7 +60,7 @@ class MarketStatusPusherTest {
 
     /** E5: the pairs whose data is lost on an open market are pushed when they change, and only then. */
     @Test
-    void D158_theLostPairsOfAnOpenMarket_arePushedWhenTheyChange() {
+    void D159_theLostPairsOfAnOpenMarket_arePushedWhenTheyChange() {
         pusher.pushWhileRecovering();
         verify(broker, never()).convertAndSend(anyString(), any(Object.class));
 
@@ -75,14 +75,14 @@ class MarketStatusPusherTest {
     }
 
     @Test
-    void D158_aChange_isPushedToTheTopic() {
+    void D159_aChange_isPushedToTheTopic() {
         pusher.onChanged(new MarketHealthChanged(MarketType.FUTURES, MarketHealthState.LIVE, MarketHealthState.PAUSED));
 
         verify(broker).convertAndSend(MarketStatusPusher.TOPIC, current);
     }
 
     @Test
-    void D158_whileAMarketRecovers_theStatusIsPushedAgain_andNeverOtherwise() {
+    void D159_whileAMarketRecovers_theStatusIsPushedAgain_andNeverOtherwise() {
         pusher.start();
         verify(scheduler).scheduleWithFixedDelay(any(Runnable.class), eq(Duration.ofSeconds(5)));
 
@@ -95,7 +95,7 @@ class MarketStatusPusherTest {
     }
 
     @Test
-    void D158_withoutTheMonitor_nothingIsScheduled() {
+    void D159_withoutTheMonitor_nothingIsScheduled() {
         new MarketStatusPusher(
                         status,
                         health,
@@ -111,7 +111,7 @@ class MarketStatusPusherTest {
     }
 
     @Test
-    void D158_aBrokerThatFails_stopsNothing() {
+    void D159_aBrokerThatFails_stopsNothing() {
         doThrow(new IllegalStateException("broker down")).when(broker).convertAndSend(anyString(), any(Object.class));
 
         pusher.onChanged(

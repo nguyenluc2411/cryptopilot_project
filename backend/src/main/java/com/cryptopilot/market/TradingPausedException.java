@@ -9,10 +9,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * A request refused because trading on its market is paused (D-158). The problem detail carries {@code market},
+ * A request refused because trading on its market is paused (D-159). The problem detail carries {@code market},
  * {@code state} and {@code since}, so the client can show the pause banner rather than an error of one pair.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 public class TradingPausedException extends BusinessException {
 

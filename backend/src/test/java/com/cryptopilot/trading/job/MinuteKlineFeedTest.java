@@ -206,9 +206,9 @@ class MinuteKlineFeedTest {
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(3));
     }
 
-    /** D-158: during an incident the start-up replay reaches back to it, beyond the window, and skips nothing. */
+    /** D-159: during an incident the start-up replay reaches back to it, beyond the window, and skips nothing. */
     @Test
-    void D158_duringAnIncident_aStartOlderThanTheWindow_isReplayedFromTheWatermark() {
+    void D159_duringAnIncident_aStartOlderThanTheWindow_isReplayedFromTheWatermark() {
         activeEntry(PAIR, M0.minus(Duration.ofDays(3)));
         when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0.minus(Duration.ofDays(2))));
         MarketHealth health = mock(MarketHealth.class);
@@ -377,11 +377,11 @@ class MinuteKlineFeedTest {
     }
 
     /**
-     * D-158 E7: minutes the exchange never served, as when it halted, are skipped: the replay goes on from the next
+     * D-159 E7: minutes the exchange never served, as when it halted, are skipped: the replay goes on from the next
      * candle it serves, and the pair goes live.
      */
     @Test
-    void D158_minutesTheExchangeNeverServed_areSkipped_andThePairGoesLive() {
+    void D159_minutesTheExchangeNeverServed_areSkipped_andThePairGoesLive() {
         serveClosed(4, 4);
         feed = feed(replay(true, 3, 1440));
         startAndAwaitIdle();
@@ -403,12 +403,12 @@ class MinuteKlineFeedTest {
     }
 
     /**
-     * D-158 (K6, I6): the plans of a market have caught up once every pair streamed around the incident is live, not
+     * D-159 (K6, I6): the plans of a market have caught up once every pair streamed around the incident is live, not
      * replaying, with a closed candle of the last two minutes handed on; a pair quiet since before the incident is
      * left out, and a feed that does not run has nothing to catch up on.
      */
     @Test
-    void D158_theFeed_isCaughtUp_onceEveryPairStreamedAroundTheIncidentIsLiveAndRecent() {
+    void D159_theFeed_isCaughtUp_onceEveryPairStreamedAroundTheIncidentIsLiveAndRecent() {
         Instant incident = minute(6);
         feed = feed(replay(true, 3, 1440));
         assertThat(feed.caughtUp(MarketType.SPOT, incident)).as("not started").isTrue();

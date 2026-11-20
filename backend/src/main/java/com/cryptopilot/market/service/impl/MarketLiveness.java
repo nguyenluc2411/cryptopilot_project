@@ -14,7 +14,7 @@ import java.util.Map;
 import org.springframework.stereotype.Component;
 
 /**
- * When each market's stream last delivered data, and since when it has delivered without a break (D-158): the two
+ * When each market's stream last delivered data, and since when it has delivered without a break (D-159): the two
  * signals of the health monitor that come from the stream. Written by the stream readers on every message, so a write
  * costs a lock held for two field reads and writes, and finding a message's connection costs none: the registered
  * connections are an immutable map behind a volatile field, replaced whole (copy-on-write). Reference: Goetz, B. et
@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
  * {@link #silentSymbols} once silent {@code pauseAfter}; more than that share silent reads as the market silent, which
  * the monitor pauses. Messages of no registered connection, as the public book streams, count for none of them.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Component
 public class MarketLiveness {

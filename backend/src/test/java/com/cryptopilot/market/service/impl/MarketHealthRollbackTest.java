@@ -44,11 +44,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * D-158, P0: a market's state in memory follows {@code market_incident}. A change is seen by its own transaction,
+ * D-159, P0: a market's state in memory follows {@code market_incident}. A change is seen by its own transaction,
  * lands only once it commits, and leaves nothing behind when it rolls back; a write to an incident that is not open
  * fails instead of changing nothing.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -77,7 +77,7 @@ class MarketHealthRollbackTest {
 
     /** The audit fails inside the maintenance call: the incident rolls back, and so does the state. */
     @Test
-    void D158_aFailedAudit_leavesTheMarketLive_withNoIncidentAndNoEvent() {
+    void D159_aFailedAudit_leavesTheMarketLive_withNoIncidentAndNoEvent() {
         MarketHealthServiceImpl health = health(Clock.systemUTC());
         AdminApi admin = mock(AdminApi.class);
         doThrow(new IllegalStateException("audit down")).when(admin).audit(any());
@@ -103,7 +103,7 @@ class MarketHealthRollbackTest {
 
     /** A committed change lands after the commit; inside its transaction it is seen already, by that one alone. */
     @Test
-    void D158_aCommittedChange_isSeenByItsTransaction_andLandsOnCommit() {
+    void D159_aCommittedChange_isSeenByItsTransaction_andLandsOnCommit() {
         MarketHealthServiceImpl health = health(Clock.systemUTC());
 
         inTransaction().executeWithoutResult(done -> {
@@ -119,7 +119,7 @@ class MarketHealthRollbackTest {
 
     /** A pause the monitor's tick rolls back leaves the market as it was: live, or reconnecting. */
     @Test
-    void D158_aRolledBackPause_leavesTheMarketAsItWas() {
+    void D159_aRolledBackPause_leavesTheMarketAsItWas() {
         MutableTestClock clock = new MutableTestClock(START);
         MarketHealthServiceImpl health = health(clock);
         Instant lastLive = START.minusSeconds(30);
@@ -147,7 +147,7 @@ class MarketHealthRollbackTest {
      * {@link IllegalStateException}, which the repository's translation wraps as a data access exception.
      */
     @Test
-    void D158_aWriteToAnUnknownOrClosedIncident_throws() {
+    void D159_aWriteToAnUnknownOrClosedIncident_throws() {
         UUID unknown = UuidV7.next();
         assertThatThrownBy(() -> incidents.recovering(unknown, START))
                 .isInstanceOf(InvalidDataAccessApiUsageException.class)

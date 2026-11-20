@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * One OKX ticker, as {@code /api/v5/market/tickers} gives it (D-158): display only.
+ * One OKX ticker, as {@code /api/v5/market/tickers} gives it (D-159): display only.
  *
  * @param instrumentId the OKX instrument, e.g. {@code BTC-USDT} or {@code BTC-USDT-SWAP}
  * @param lastPrice the last traded price

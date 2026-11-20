@@ -25,14 +25,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The administration console's maintenance switch of each market and its incidents (D-158): an administrator closes
+ * The administration console's maintenance switch of each market and its incidents (D-159): an administrator closes
  * trading on a market on purpose, before a known exchange maintenance or a deployment, and ends it; trading reopens
  * through recovery, never while the market's data is lost. A recovery that cannot end by itself, after an outage
  * longer than can be replayed, is ended here by hand.
  *
- * <p>Rule: NSF-03; BR-57; D-158.
+ * <p>Rule: NSF-03; BR-57; D-159.
  */
-@Tag(name = "Admin: market health", description = "Maintenance switch and incidents of each market (D-158).")
+@Tag(name = "Admin: market health", description = "Maintenance switch and incidents of each market (D-159).")
 @RestController
 @RequestMapping("/api/v1/admin/market")
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

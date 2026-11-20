@@ -8,7 +8,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * One period during which trading on a market was closed (D-158), a row of {@code market_incident}.
+ * One period during which trading on a market was closed (D-159), a row of {@code market_incident}.
  *
  * @param id the incident
  * @param market the market closed

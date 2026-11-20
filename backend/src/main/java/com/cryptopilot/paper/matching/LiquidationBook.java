@@ -90,7 +90,7 @@ public final class LiquidationBook {
         return levels.containsKey(key(pairId));
     }
 
-    /** The pairs with a level watched (D-158: what a recovery waits for). */
+    /** The pairs with a level watched (D-159: what a recovery waits for). */
     public Set<BookKey> pairs() {
         return Set.copyOf(levels.keySet());
     }

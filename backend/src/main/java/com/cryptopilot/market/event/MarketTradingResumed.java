@@ -6,7 +6,7 @@ import java.util.UUID;
 import org.springframework.modulith.NamedInterface;
 
 /**
- * Trading on a market has reopened after an incident (D-158): everything was replayed and caught up. Published once
+ * Trading on a market has reopened after an incident (D-159): everything was replayed and caught up. Published once
  * per incident.
  *
  * <p>Exposed in the named interface {@code events}: the Traders' summaries hear it.

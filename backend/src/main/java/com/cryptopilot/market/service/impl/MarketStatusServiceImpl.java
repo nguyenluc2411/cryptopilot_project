@@ -37,7 +37,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * The markets' data health as the Traders' banner and the administration console read it (D-158): the state of each
+ * The markets' data health as the Traders' banner and the administration console read it (D-159): the state of each
  * market from {@link MarketHealthService}, the open incident's times, reason and message, and, for ten minutes after
  * an incident ended, when it did, so the banner can say trading is back; while a market is open, the pairs whose data
  * is lost (E5).
@@ -45,7 +45,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Maintenance is audited as a change of a system setting named {@code market.maintenance.<MARKET>}, a reopening
  * by hand as one named {@code market.resume.<MARKET>} (BR-57).
  *
- * <p>Rule: NSF-03; BR-57; D-158.
+ * <p>Rule: NSF-03; BR-57; D-159.
  */
 @Service
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)

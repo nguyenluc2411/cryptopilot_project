@@ -27,13 +27,13 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
 /**
- * Watches the data health of each market every {@link #INTERVAL} (D-158): reads when its stream last delivered and
+ * Watches the data health of each market every {@link #INTERVAL} (D-159): reads when its stream last delivered and
  * whether its REST API is banned or behind an open circuit, asks the modules how far they have caught up while it
  * recovers, records it for the status, and hands the signals to {@link MarketHealthService#evaluate}.
  *
  * <p>Runs only while both the monitor and the streams are enabled: without streams every market would look lost.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Component
 public class MarketHealthMonitor {
@@ -75,12 +75,12 @@ public class MarketHealthMonitor {
             return;
         }
         if (!streams.enabled()) {
-            log.warn("D-158 the market health monitor is on but the streams are off; it does not run");
+            log.warn("D-159 the market health monitor is on but the streams are off; it does not run");
             return;
         }
         scheduler.scheduleWithFixedDelay(this::tick, INTERVAL);
         health.monitorStarted();
-        log.info("D-158 market health watched every {}", INTERVAL);
+        log.info("D-159 market health watched every {}", INTERVAL);
     }
 
     /** One look at every market; one that fails does not stop the other. */
@@ -89,7 +89,7 @@ public class MarketHealthMonitor {
             try {
                 evaluate(market);
             } catch (RuntimeException failure) {
-                log.warn("D-158 {} health not evaluated now: {}", market, failure.toString());
+                log.warn("D-159 {} health not evaluated now: {}", market, failure.toString());
             }
         }
     }

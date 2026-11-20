@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * The OKX client against a stand-in on the loopback address (D-158): the tickers of each market, the candles oldest
+ * The OKX client against a stand-in on the loopback address (D-159): the tickers of each market, the candles oldest
  * first, and every failure, an HTTP error or an error code in the body, an {@link OkxException}.
  */
 class OkxClientTest {
@@ -50,7 +50,7 @@ class OkxClientTest {
     }
 
     @Test
-    void D158_readsTheTickersOfEachMarket_leavingOutOnesWithoutAPrice() {
+    void D159_readsTheTickersOfEachMarket_leavingOutOnesWithoutAPrice() {
         body.set("""
                 {"code": "0", "msg": "", "data": [
                   {"instId": "BTC-USDT", "last": "65000.1", "open24h": "64000", "high24h": "66000", "low24h": "63000",
@@ -76,7 +76,7 @@ class OkxClientTest {
     }
 
     @Test
-    void D158_readsTheMinuteCandles_oldestFirst() {
+    void D159_readsTheMinuteCandles_oldestFirst() {
         body.set("""
                 {"code": "0", "data": [
                   ["1794894060000", "101", "102", "100", "101.5", "3", "300", "300", "0"],
@@ -101,7 +101,7 @@ class OkxClientTest {
     }
 
     @Test
-    void D158_everyFailure_isAnOkxException() {
+    void D159_everyFailure_isAnOkxException() {
         try (OkxClient client = client()) {
             status.set(503);
             body.set("busy");
@@ -137,7 +137,7 @@ class OkxClientTest {
     }
 
     @Test
-    void D158_theOverrides_areKeyedByMarketAndSymbol_inUpperCase() {
+    void D159_theOverrides_areKeyedByMarketAndSymbol_inUpperCase() {
         OkxProperties properties = new OkxProperties(
                 true,
                 URI.create("https://www.okx.com"),

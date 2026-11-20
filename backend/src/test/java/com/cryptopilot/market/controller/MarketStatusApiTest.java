@@ -40,14 +40,14 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
- * K8 (D-158): the markets' data health, public on {@code GET /api/v1/market/status}, and the administration console's
+ * K8 (D-159): the markets' data health, public on {@code GET /api/v1/market/status}, and the administration console's
  * maintenance switch and incidents: maintenance closes a market with the administrator's message and is audited as a
  * system setting; ending it reopens the market, which the status names for a while; only an administrator may switch
  * it.
  *
  * <p>The health monitor is off here: ending maintenance reopens the market at once.
  *
- * <p>Rule: NSF-03; BR-57; D-50; D-158.
+ * <p>Rule: NSF-03; BR-57; D-50; D-159.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -85,7 +85,7 @@ class MarketStatusApiTest {
     }
 
     @Test
-    void D158_theStatus_isPublic_andBothMarketsAreLive() throws Exception {
+    void D159_theStatus_isPublic_andBothMarketsAreLive() throws Exception {
         mvc.perform(get(STATUS))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.markets.length()").value(2))
@@ -102,7 +102,7 @@ class MarketStatusApiTest {
      * it reopens the market, the status names when, and the incident is listed.
      */
     @Test
-    void D158_maintenance_closesAMarket_isAudited_andEndingItReopensIt() throws Exception {
+    void D159_maintenance_closesAMarket_isAudited_andEndingItReopensIt() throws Exception {
         UUID admin = account(UserRole.ADMIN);
 
         as(admin, post(ADMIN + "/maintenance"), """
@@ -142,7 +142,7 @@ class MarketStatusApiTest {
 
     /** Switching maintenance twice the same way records one change. */
     @Test
-    void D158_maintenanceAlreadyOn_isNotAuditedAgain() throws Exception {
+    void D159_maintenanceAlreadyOn_isNotAuditedAgain() throws Exception {
         UUID admin = account(UserRole.ADMIN);
 
         as(admin, post(ADMIN + "/maintenance"), """
@@ -154,7 +154,7 @@ class MarketStatusApiTest {
     }
 
     @Test
-    void D158_onlyAnAdministrator_switchesMaintenance() throws Exception {
+    void D159_onlyAnAdministrator_switchesMaintenance() throws Exception {
         UUID trader = account(UserRole.TRADER);
 
         as(trader, post(ADMIN + "/maintenance"), """
@@ -171,11 +171,11 @@ class MarketStatusApiTest {
     }
 
     /**
-     * D-158: only an administrator reopens a market by hand, and only a recovering one: a live market, or one whose data
+     * D-159: only an administrator reopens a market by hand, and only a recovering one: a live market, or one whose data
      * is lost, is refused, and nothing is audited.
      */
     @Test
-    void D158_reopeningByHand_isForAdministrators_andOnlyForARecoveringMarket() throws Exception {
+    void D159_reopeningByHand_isForAdministrators_andOnlyForARecoveringMarket() throws Exception {
         UUID admin = account(UserRole.ADMIN);
 
         as(account(UserRole.TRADER), post(ADMIN + "/resume"), """
@@ -202,7 +202,7 @@ class MarketStatusApiTest {
      * market has no retry time and no recovery progress.
      */
     @Test
-    void D158_maintenance_mayNameItsExpectedEnd_inTheFuture() throws Exception {
+    void D159_maintenance_mayNameItsExpectedEnd_inTheFuture() throws Exception {
         UUID admin = account(UserRole.ADMIN);
         Instant end = Instant.now().plus(Duration.ofHours(2)).truncatedTo(ChronoUnit.SECONDS);
 
@@ -231,7 +231,7 @@ class MarketStatusApiTest {
      * no candles. A candle limit outside 1 to 300 is refused.
      */
     @Test
-    void D158_theFallbackPrices_arePublic_andNoneWhileLive() throws Exception {
+    void D159_theFallbackPrices_arePublic_andNoneWhileLive() throws Exception {
         mvc.perform(get("/api/v1/market/fallback").param("market", "FUTURES"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.source").value("BINANCE"))
@@ -253,7 +253,7 @@ class MarketStatusApiTest {
 
     /** E5: an open market names the pairs whose data is lost; none here. */
     @Test
-    void D158_anOpenMarket_namesItsLostPairs() throws Exception {
+    void D159_anOpenMarket_namesItsLostPairs() throws Exception {
         mvc.perform(get(STATUS))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.markets[0].pausedPairs").isArray())

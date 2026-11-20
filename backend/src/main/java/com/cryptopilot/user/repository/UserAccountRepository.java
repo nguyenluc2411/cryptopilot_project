@@ -126,7 +126,7 @@ public interface UserAccountRepository extends Repository<UserAccount, UUID> {
 
     /**
      * One page of the keys of the ACTIVE Trader accounts after {@code after}, in key order, at most {@code limit}: a
-     * bounded read, walked page by page by whoever must reach every Trader (D-158).
+     * bounded read, walked page by page by whoever must reach every Trader (D-159).
      */
     @Transactional(readOnly = true)
     @Query("select a.id from UserAccount a where a.role = com.cryptopilot.user.model.enums.Role.TRADER"

@@ -204,13 +204,13 @@ class FuturesSettlementPropertyTest {
     }
 
     /**
-     * M7 (D-158): the same sequences with Futures paused now and then. While paused, every action of the Trader is
+     * M7 (D-159): the same sequences with Futures paused now and then. While paused, every action of the Trader is
      * refused with {@code TRADING_PAUSED} but a transfer into Futures (I2), and the engine goes on as a catch-up does:
      * replayed fills, and liquidations on marks from before they are applied. Every invariant holds throughout.
      */
     @ParameterizedTest(name = "seed {0}")
     @ValueSource(longs = {4, 7, 11, 19, 42})
-    void D158_randomSequencesWithPauses_keepTheMoneyInvariants(long seed) {
+    void D159_randomSequencesWithPauses_keepTheMoneyInvariants(long seed) {
         pauses = true;
         run(seed);
         assertThat(sql.sql("select count(*) from market_incident where market_type = 'FUTURES'")

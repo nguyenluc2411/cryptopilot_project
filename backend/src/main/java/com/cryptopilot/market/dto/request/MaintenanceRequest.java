@@ -6,7 +6,7 @@ import jakarta.validation.constraints.Size;
 import java.time.Instant;
 
 /**
- * An administrator starts or ends maintenance of a market (D-158).
+ * An administrator starts or ends maintenance of a market (D-159).
  *
  * @param market the market
  * @param on {@code true} to close trading on it, {@code false} to end the maintenance

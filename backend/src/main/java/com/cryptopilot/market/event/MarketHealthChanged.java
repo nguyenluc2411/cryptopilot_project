@@ -4,7 +4,7 @@ import com.cryptopilot.market.model.enums.MarketHealthState;
 import com.cryptopilot.market.model.enums.MarketType;
 
 /**
- * A market's data health moved from one state to another (D-158), reconnecting included. Inside the {@code market}
+ * A market's data health moved from one state to another (D-159), reconnecting included. Inside the {@code market}
  * module only: it pushes the status to the Traders' banner. Other modules hear {@link MarketTradingPaused},
  * {@link MarketRecoveryStarted} and {@link MarketTradingResumed}.
  *

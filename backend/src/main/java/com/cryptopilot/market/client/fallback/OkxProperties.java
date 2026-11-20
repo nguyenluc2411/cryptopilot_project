@@ -12,7 +12,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
 
 /**
- * Where the display-only fallback prices come from while a market's exchange data is lost (D-158), under
+ * Where the display-only fallback prices come from while a market's exchange data is lost (D-159), under
  * {@code cryptopilot.market.fallback}: OKX's public market API, which needs no key.
  *
  * <p>A fallback price is shown to the Traders, labelled with its source, and nothing else: it never fills, triggers,

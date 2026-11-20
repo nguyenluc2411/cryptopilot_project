@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * Why a Binance venue cannot be called now, and until when (D-158).
+ * Why a Binance venue cannot be called now, and until when (D-159).
  *
  * @param kind {@code BANNED} for a 418, {@code CIRCUIT_OPEN} after a run of failures
  * @param until when a call may be tried again

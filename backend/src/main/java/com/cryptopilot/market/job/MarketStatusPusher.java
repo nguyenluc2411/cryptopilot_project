@@ -23,11 +23,11 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * Pushes the markets' data health to {@link #TOPIC} (D-158): whenever a market's state changes, once the change is
+ * Pushes the markets' data health to {@link #TOPIC} (D-159): whenever a market's state changes, once the change is
  * committed, every {@link #RECOVERING_EVERY} while a market recovers, so the banner keeps showing it is still catching
  * up, and when the pairs whose data is lost on an open market change (E5). Clients that missed a push read {@code GET /api/v1/market/status}.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 @Component
 public class MarketStatusPusher {
@@ -106,7 +106,7 @@ public class MarketStatusPusher {
         try {
             broker.convertAndSend(TOPIC, status.status());
         } catch (RuntimeException failure) {
-            log.warn("D-158 market status not pushed: {}", failure.toString());
+            log.warn("D-159 market status not pushed: {}", failure.toString());
         }
     }
 }

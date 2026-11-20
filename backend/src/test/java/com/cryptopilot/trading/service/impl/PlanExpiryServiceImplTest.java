@@ -56,9 +56,9 @@ class PlanExpiryServiceImplTest {
         when(health.tradingOpen(any())).thenReturn(true);
     }
 
-    /** D-158 (I5): a due plan of a paused market waits; the replay after the pause may still fill it in time. */
+    /** D-159 (I5): a due plan of a paused market waits; the replay after the pause may still fill it in time. */
     @Test
-    void D158_aDuePlanOfAPausedMarket_isLeftForALaterRun() {
+    void D159_aDuePlanOfAPausedMarket_isLeftForALaterRun() {
         TradingPlan due = plan(PAIR);
         when(plans.findExpiring(STORED_NOW, Limit.of(10))).thenReturn(List.of(due));
         when(health.tradingOpen(MarketType.FUTURES)).thenReturn(false);

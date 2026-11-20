@@ -214,7 +214,7 @@ public class BinanceRestClient implements AutoCloseable {
 
     /**
      * Why the venue cannot be called now, when that outlasts a reconnecting stream: a ban or an open circuit; empty
-     * while calls may go out (D-158).
+     * while calls may go out (D-159).
      */
     public Optional<RestOutage> outage(BinanceVenue venue) {
         return gates.get(Objects.requireNonNull(venue, "venue must not be null"))

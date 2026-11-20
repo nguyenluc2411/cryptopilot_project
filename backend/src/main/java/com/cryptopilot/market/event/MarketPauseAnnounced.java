@@ -8,7 +8,7 @@ import java.util.UUID;
 import org.springframework.modulith.NamedInterface;
 
 /**
- * An incident has closed trading on a market long enough for the Traders to be told (D-158): {@code notify-after} of
+ * An incident has closed trading on a market long enough for the Traders to be told (D-159): {@code notify-after} of
  * an outage, at once for maintenance. Published once per incident; a stream that comes back within
  * {@code notify-after} is never announced, so a short blip writes no notice.
  *

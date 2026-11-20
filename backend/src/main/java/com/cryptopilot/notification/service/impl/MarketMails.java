@@ -8,10 +8,10 @@ import org.springframework.web.util.HtmlUtils;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /**
- * Writes the mail of a market incident to a Trader it affects (D-158): the words of their notice, a link to the market's
+ * Writes the mail of a market incident to a Trader it affects (D-159): the words of their notice, a link to the market's
  * trading screen and how to stop these mails, in plain text and HTML.
  *
- * <p>Rule: NSF-03; NSF-15; D-158.
+ * <p>Rule: NSF-03; NSF-15; D-159.
  */
 @Component
 public class MarketMails {

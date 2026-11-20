@@ -12,10 +12,10 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
- * The stream's signals of a market's health (D-158): the latest live data, and the start of the unbroken run, which a
+ * The stream's signals of a market's health (D-159): the latest live data, and the start of the unbroken run, which a
  * silence of {@code reconnectingAfter} (10 s) restarts.
  *
- * <p>Rule: NSF-03; D-158.
+ * <p>Rule: NSF-03; D-159.
  */
 class MarketLivenessTest {
 
@@ -28,13 +28,13 @@ class MarketLivenessTest {
             clock);
 
     @Test
-    void D158_beforeAnyMessage_bothSignalsReadTheStart() {
+    void D159_beforeAnyMessage_bothSignalsReadTheStart() {
         assertThat(liveness.lastLiveAt(MarketType.SPOT)).isEqualTo(START);
         assertThat(liveness.liveSince(MarketType.FUTURES)).isEqualTo(START);
     }
 
     @Test
-    void D158_aRun_goesOnThroughShortSilences_andRestartsAfterABreak() {
+    void D159_aRun_goesOnThroughShortSilences_andRestartsAfterABreak() {
         liveness.record(MarketType.FUTURES, START.plusSeconds(5));
         liveness.record(MarketType.FUTURES, START.plusSeconds(14));
         assertThat(liveness.liveSince(MarketType.FUTURES)).isEqualTo(START);
@@ -59,7 +59,7 @@ class MarketLivenessTest {
      * pairs of the connections that deliver are not.
      */
     @Test
-    void D158_oneSilentConnectionOfThree_leavesTheMarketLive_andPausesItsPairs() {
+    void D159_oneSilentConnectionOfThree_leavesTheMarketLive_andPausesItsPairs() {
         liveness.connections(
                 MarketType.SPOT,
                 Map.of("SPOT-0", List.of("BTCUSDT"), "SPOT-1", List.of("ETHUSDT"), "SPOT-2", List.of("BNBUSDT")));
@@ -79,7 +79,7 @@ class MarketLivenessTest {
      * majority were last live, so the monitor pauses it; the share counts pairs, not connections.
      */
     @Test
-    void D158_moreThanHalfOfThePairsSilent_readsAsTheMarketSilent() {
+    void D159_moreThanHalfOfThePairsSilent_readsAsTheMarketSilent() {
         liveness.connections(
                 MarketType.FUTURES,
                 Map.of("FUTURES-0", List.of("BTCUSDT", "ETHUSDT", "BNBUSDT"), "FUTURES-1", List.of("SOLUSDT")));
@@ -106,7 +106,7 @@ class MarketLivenessTest {
      * makes the share came back; a message of no registered connection (the public book streams) counts for none.
      */
     @Test
-    void D158_theRunOfAMarket_restartsWhenEnoughOfItsPairsDeliverAgain() {
+    void D159_theRunOfAMarket_restartsWhenEnoughOfItsPairsDeliverAgain() {
         liveness.connections(MarketType.SPOT, Map.of("SPOT-0", List.of("BTCUSDT"), "SPOT-1", List.of("ETHUSDT")));
         clock.advance(Duration.ofSeconds(60));
         liveness.record(MarketType.SPOT, null, clock.instant());

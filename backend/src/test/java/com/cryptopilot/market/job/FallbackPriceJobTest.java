@@ -28,10 +28,10 @@ import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.scheduling.TaskScheduler;
 
 /**
- * The polls of the fallback prices (D-158): read and pushed for a market paused or recovering, forgotten for one live
+ * The polls of the fallback prices (D-159): read and pushed for a market paused or recovering, forgotten for one live
  * or under maintenance, scheduled only with the fallback, the monitor and the streams on.
  *
- * <p>Rule: D-158.
+ * <p>Rule: D-159.
  */
 class FallbackPriceJobTest {
 
@@ -52,7 +52,7 @@ class FallbackPriceJobTest {
     }
 
     @Test
-    void D158_aLostMarket_isReadAndPushed_andAnotherForgotten() {
+    void D159_aLostMarket_isReadAndPushed_andAnotherForgotten() {
         job(true, true).poll();
 
         verify(prices).refresh(MarketType.FUTURES);
@@ -65,7 +65,7 @@ class FallbackPriceJobTest {
     }
 
     @Test
-    void D158_thePolls_runOnlyWithTheFallbackTheMonitorAndTheStreams() {
+    void D159_thePolls_runOnlyWithTheFallbackTheMonitorAndTheStreams() {
         job(false, true).start();
         job(true, false).start();
         when(streams.enabled()).thenReturn(false);
