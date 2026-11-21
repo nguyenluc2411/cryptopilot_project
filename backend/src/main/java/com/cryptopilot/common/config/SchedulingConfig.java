@@ -24,8 +24,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  *       be, the default scheduler keeps its threads.
  * </ul>
  *
- * <p>The candle backfill has a thread of its own besides ({@code CandleBackfillJob}). Both schedulers get the
- * customizers of the application, among them the one that records a job's failure in the system log (UC-52).
+ * <p>{@link #BACKFILL} ({@code candle-backfill-*}), one thread, is the candle backfill's own: a run holds its thread
+ * through many exchange calls. Every scheduler gets the customizers of the application, among them the one that
+ * records a job's failure in the system log (UC-52).
  *
  * <p>Rule: NSF-02, NSF-03; UC-52.
  */
@@ -37,6 +38,9 @@ public class SchedulingConfig {
 
     /** The name of the scheduler of the jobs that wait on another service. */
     public static final String BACKGROUND = "backgroundScheduler";
+
+    /** The name of the candle backfill's scheduler. */
+    public static final String BACKFILL = "backfillScheduler";
 
     /** Threads of the default scheduler: its jobs are short, a few at a time. */
     static final int APP_THREADS = 8;
@@ -53,6 +57,14 @@ public class SchedulingConfig {
     @Bean(BACKGROUND)
     ThreadPoolTaskScheduler backgroundScheduler(ObjectProvider<ThreadPoolTaskSchedulerCustomizer> customizers) {
         return scheduler("background-", BACKGROUND_THREADS, customizers);
+    }
+
+    @Bean(BACKFILL)
+    ThreadPoolTaskScheduler backfillScheduler(ObjectProvider<ThreadPoolTaskSchedulerCustomizer> customizers) {
+        ThreadPoolTaskScheduler scheduler = scheduler("candle-backfill-", 1, customizers);
+        // A replaced continuation leaves the queue at once.
+        scheduler.setRemoveOnCancelPolicy(true);
+        return scheduler;
     }
 
     private static ThreadPoolTaskScheduler scheduler(

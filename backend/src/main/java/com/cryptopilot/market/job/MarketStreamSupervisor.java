@@ -255,11 +255,22 @@ public class MarketStreamSupervisor {
         trading.retainOnly(market, targets.stream().map(StreamTarget::pairId).toList());
         List<Connection> opened = new ArrayList<>();
         boolean addition = current != null;
+        List<Connection> replaced = List.copyOf(closed);
         for (boolean book : new boolean[] {false, true}) {
             Set<StreamTarget> covered = kept.stream()
                     .filter(connection -> connection.book() == book)
                     .flatMap(connection -> connection.targets().stream())
-                    .collect(Collectors.toSet());
+                    .collect(Collectors.toCollection(HashSet::new));
+            // The rest of a connection that lost a pair keeps that connection's start-up or added flag.
+            for (Connection gone : replaced) {
+                if (gone.book() != book) {
+                    continue;
+                }
+                List<StreamTarget> rest =
+                        gone.targets().stream().filter(wanted::contains).toList();
+                opened.addAll(open(market, rest, book, gone.added()));
+                covered.addAll(rest);
+            }
             List<StreamTarget> missing =
                     targets.stream().filter(target -> !covered.contains(target)).toList();
             if (addition && !missing.isEmpty()) {

@@ -79,6 +79,11 @@ class MarketReferenceServiceImplTest {
     }
 
     @Test
+    void noSuppliesRead_hasNoReadTime() {
+        assertThat(service(NOW).suppliesReadAt()).isEmpty();
+    }
+
+    @Test
     void readsTheSuppliesHourly_andKeepsTheLastGoodFiguresOnAFailure() {
         when(client.global()).thenReturn(global("1"));
         when(client.tickers()).thenReturn(List.of(new CoinPaprikaTicker("btc-bitcoin", "BTC", 1, BigDecimal.TEN)));
@@ -115,6 +120,7 @@ class MarketReferenceServiceImplTest {
         verify(client, times(1)).global();
         assertThat(store.supplies().orElseThrow().bySymbol()).containsOnlyKeys("BTC", "AERO");
         assertThat(store.supplies().orElseThrow().readAt()).isEqualTo(later);
+        assertThat(service(later).suppliesReadAt()).contains(later);
     }
 
     private static CoinPaprikaGlobal global(String cap) {

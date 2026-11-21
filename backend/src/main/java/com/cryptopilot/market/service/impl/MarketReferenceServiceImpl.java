@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,6 +72,11 @@ public class MarketReferenceServiceImpl implements MarketReferenceService {
     @Override
     public void refreshSupplies() {
         readSupplies(clock.instant());
+    }
+
+    @Override
+    public Optional<Instant> suppliesReadAt() {
+        return store.supplies().map(MarketReferenceStore.Supplies::readAt);
     }
 
     private void readGlobal() {

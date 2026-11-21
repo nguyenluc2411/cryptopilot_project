@@ -1,5 +1,6 @@
 package com.cryptopilot.market.job;
 
+import com.cryptopilot.common.config.SchedulingConfig;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.GapDetected;
@@ -25,12 +26,10 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Component;
 
@@ -62,10 +61,10 @@ import org.springframework.stereotype.Component;
  * <p>One continuation is pending per market at most; a newer one replaces it. Continuing is always a task
  * handed to the {@link TaskScheduler}; the thread is never held. One instance, no distributed lock (D-39).
  *
- * <p>The runs have a scheduler of their own, one thread ({@link #THREAD_PREFIX}), not the application's: a run holds
- * its thread through many exchange calls, and the runs of both markets wait on one lock, so on the shared scheduler a
- * start-up backfill of a hundred pairs took every thread and the market topics (NSF-03) stopped for minutes. One
- * thread suits the runs, which go one at a time anyway.
+ * <p>The runs have a scheduler of their own, one thread ({@code SchedulingConfig.BACKFILL}), not the application's: a
+ * run holds its thread through many exchange calls, and the runs of both markets wait on one lock, so on the shared
+ * scheduler a start-up backfill of a hundred pairs took every thread and the market topics (NSF-03) stopped for
+ * minutes. One thread suits the runs, which go one at a time anyway.
  *
  * <p>Queued gaps live in memory. One lost with a restart is not lost for good: at start-up the stored series of
  * the recent window ({@code gapScanWindow}, 7 days) are scanned for holes, and each is queued again; a hole behind
@@ -77,7 +76,7 @@ import org.springframework.stereotype.Component;
  * <p>Rule: NSF-02, NSF-03; TECHNICAL_DESIGN 7.1.2 (the caller contract), 7.1 step 4, and 10; D-41, D-42; A-33.
  */
 @Component
-public class CandleBackfillJob implements DisposableBean {
+public class CandleBackfillJob {
 
     private static final Logger log = LoggerFactory.getLogger(CandleBackfillJob.class);
 
@@ -89,9 +88,6 @@ public class CandleBackfillJob implements DisposableBean {
      * request replaces the pending one.
      */
     static final Duration ENABLE_SETTLE = Duration.ofSeconds(5);
-
-    /** The name of the runs' own thread. */
-    static final String THREAD_PREFIX = "candle-backfill-";
 
     /** What one run of one market came to. */
     public enum Outcome {
@@ -117,65 +113,18 @@ public class CandleBackfillJob implements DisposableBean {
     private final Map<GapDetected, Integer> gapFailures = new HashMap<>();
 
     private final ReentrantLock running = new ReentrantLock();
-    /** The scheduler this job built, shut down with it; {@code null} when one was given. */
-    private final ThreadPoolTaskScheduler own;
 
-    /** The application's job: the runs on a scheduler of their own. */
-    @Autowired
     public CandleBackfillJob(
             CandleBackfillService backfill,
             DroppedGapService droppedGaps,
+            @Qualifier(SchedulingConfig.BACKFILL) TaskScheduler scheduler,
             CandleBackfillProperties properties,
             Clock clock) {
-        this(backfill, droppedGaps, ownScheduler(), properties, clock, true);
-    }
-
-    /** The runs on the given scheduler, which stays the caller's. */
-    public CandleBackfillJob(
-            CandleBackfillService backfill,
-            DroppedGapService droppedGaps,
-            TaskScheduler scheduler,
-            CandleBackfillProperties properties,
-            Clock clock) {
-        this(backfill, droppedGaps, scheduler, properties, clock, false);
-    }
-
-    private CandleBackfillJob(
-            CandleBackfillService backfill,
-            DroppedGapService droppedGaps,
-            TaskScheduler scheduler,
-            CandleBackfillProperties properties,
-            Clock clock,
-            boolean owned) {
         this.backfill = backfill;
         this.droppedGaps = droppedGaps;
         this.scheduler = scheduler;
         this.properties = properties;
         this.clock = clock;
-        this.own = owned ? (ThreadPoolTaskScheduler) scheduler : null;
-    }
-
-    static ThreadPoolTaskScheduler ownScheduler() {
-        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
-        scheduler.setPoolSize(1);
-        scheduler.setThreadNamePrefix(THREAD_PREFIX);
-        scheduler.setRemoveOnCancelPolicy(true);
-        scheduler.setErrorHandler(failure -> log.error("NSF-02 a backfill task failed unexpectedly", failure));
-        scheduler.initialize();
-        return scheduler;
-    }
-
-    /** The scheduler this job built, or {@code null} when it was given one. */
-    ThreadPoolTaskScheduler ownedScheduler() {
-        return own;
-    }
-
-    /** Stops the scheduler this job built; a given one is left to its owner. */
-    @Override
-    public void destroy() {
-        if (own != null) {
-            own.shutdown();
-        }
     }
 
     /** The hourly catch-up, when enabled. The start-up run follows the first symbol synchronisation instead. */

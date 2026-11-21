@@ -4,8 +4,12 @@ import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.service.MarketReferenceService;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
@@ -26,12 +30,17 @@ public class MarketReferenceJob {
     /** How often the figures are refreshed. */
     static final Duration EVERY = Duration.ofMinutes(10);
 
+    /** The least time between two reads of the supplies: a batch of pairs never costs more than one. */
+    static final Duration SUPPLIES_FLOOR = Duration.ofMinutes(5);
+
     /** How long after the last pair brought into service the supplies are read. */
     static final Duration SETTLE = Duration.ofSeconds(30);
 
     private final MarketReferenceService reference;
     private final TaskScheduler scheduler;
     private final Clock clock;
+    private static final Logger log = LoggerFactory.getLogger(MarketReferenceJob.class);
+
     private final ReentrantLock running = new ReentrantLock();
     private final Object pendingLock = new Object();
     private ScheduledFuture<?> pending;
@@ -48,10 +57,20 @@ public class MarketReferenceJob {
         scheduler.scheduleAtFixedRate(this::run, clock.instant(), EVERY);
     }
 
-    /** A pair came into service: read the supplies once the pairs of the batch have settled. */
+    /** A pair came into service: read the supplies once the pairs of the batch have settled, after commit. */
     @EventListener
     public void onPairMarketEnabled(PairMarketEnabled event) {
-        scheduleSupplies();
+        AfterCommit.run(() -> {
+            try {
+                scheduleSupplies(clock.instant().plus(SETTLE));
+            } catch (RuntimeException refused) {
+                // Shutting down: the hourly read catches up.
+                log.warn(
+                        "Market reference: could not schedule the supplies for {}: {}",
+                        event.symbol(),
+                        refused.toString());
+            }
+        });
     }
 
     /** One refresh, unless one is in progress. */
@@ -66,25 +85,33 @@ public class MarketReferenceJob {
         }
     }
 
-    /** One read of the supplies, or, when a run is in progress, one put off by {@link #SETTLE}. */
+    /**
+     * One read of the supplies; put off by {@link #SETTLE} while a run is in progress, and until
+     * {@link #SUPPLIES_FLOOR} after the last read when that was sooner.
+     */
     void runSupplies() {
         if (!running.tryLock()) {
-            scheduleSupplies();
+            scheduleSupplies(clock.instant().plus(SETTLE));
             return;
         }
         try {
+            Optional<Instant> last = reference.suppliesReadAt();
+            if (last.isPresent() && last.get().plus(SUPPLIES_FLOOR).isAfter(clock.instant())) {
+                scheduleSupplies(last.get().plus(SUPPLIES_FLOOR));
+                return;
+            }
             reference.refreshSupplies();
         } finally {
             running.unlock();
         }
     }
 
-    private void scheduleSupplies() {
+    private void scheduleSupplies(Instant at) {
         synchronized (pendingLock) {
             if (pending != null) {
                 pending.cancel(false);
             }
-            pending = scheduler.schedule(this::runSupplies, clock.instant().plus(SETTLE));
+            pending = scheduler.schedule(this::runSupplies, at);
         }
     }
 }

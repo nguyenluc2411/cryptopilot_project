@@ -21,6 +21,8 @@ import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.TaskScheduler;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Two market events make one run, put off until both have settled, and so do the pairs of a batch an administrator
@@ -78,6 +80,43 @@ class CoinDescriptionJobTest {
         when(descriptions.describeCoins()).thenThrow(new CoinPaprikaException("slow down", 402, null));
         hourly.getValue().run();
         verify(scheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    /** Inside a transaction: the run is scheduled once it commits, never when it rolls back. */
+    @Test
+    void aPairTurnedOn_waitsForTheCommit_andARollbackSchedulesNothing() {
+        doReturnFuture();
+        PairMarketEnabled enabled = new PairMarketEnabled(UUID.randomUUID(), "AEROUSDT", MarketType.SPOT);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        verify(scheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        verify(scheduler).schedule(any(Runnable.class), eq(NOW.plus(CoinDescriptionJob.SETTLE)));
+    }
+
+    /** A scheduler that refuses (shutting down) is logged, never thrown at the publisher. */
+    @Test
+    void aRefusingScheduler_isNotThrownAtTheEnable() {
+        when(scheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenThrow(new IllegalStateException("shut down"));
+
+        job.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "AEROUSDT", MarketType.SPOT));
+
+        verify(descriptions, never()).describeCoins();
     }
 
     @Test

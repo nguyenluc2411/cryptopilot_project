@@ -1,5 +1,8 @@
 package com.cryptopilot.market.service;
 
+import java.time.Instant;
+import java.util.Optional;
+
 /**
  * The use case of {@link com.cryptopilot.market.service.impl.MarketReferenceServiceImpl}: keep the reference figures of
  * the market list that CoinPaprika gives fresh (D-48).
@@ -19,4 +22,7 @@ public interface MarketReferenceService {
      * A failed read keeps the last good supplies and is logged, never thrown.
      */
     void refreshSupplies();
+
+    /** When the supplies were last read, if they ever were. */
+    Optional<Instant> suppliesReadAt();
 }

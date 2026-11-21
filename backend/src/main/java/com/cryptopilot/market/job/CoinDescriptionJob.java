@@ -73,10 +73,17 @@ public class CoinDescriptionJob {
         schedule(SETTLE, true);
     }
 
-    /** A pair came into service: describe its coin once the pairs of the batch have settled. */
+    /** A pair came into service: describe its coin once the pairs of the batch have settled, after commit. */
     @EventListener
     public void onPairMarketEnabled(PairMarketEnabled event) {
-        schedule(SETTLE, true);
+        AfterCommit.run(() -> {
+            try {
+                schedule(SETTLE, true);
+            } catch (RuntimeException refused) {
+                // Shutting down: the hourly run catches up.
+                log.warn("Coin descriptions: could not schedule a run for {}: {}", event.symbol(), refused.toString());
+            }
+        });
     }
 
     /**

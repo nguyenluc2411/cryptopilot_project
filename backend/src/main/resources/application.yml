@@ -272,6 +272,8 @@ cryptopilot:
       # A coin CoinPaprika had nothing more for (no match, nothing to add) is tried again after this long. Under the
       # daily sync cycle, so a sync that ends a little earlier than the day before still retries it.
       retry-unmatched-after: 23h
+      # The most calls in any hour, every caller together (free plan: 60, then a 402 and an hour's block).
+      calls-per-hour: 55
       # Binance symbol -> CoinPaprika id where the ticker alone picks the wrong coin. CoinPaprika lists Toncoin as
       # GRAM, so TON would match TonToken (checked 2026-11-17). Cross outranks Harmony under ONE and MeMusic outranks
       # Momentum under MMT (checked 2026-11-21).

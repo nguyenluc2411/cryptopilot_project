@@ -2,6 +2,7 @@ package com.cryptopilot.common.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cryptopilot.market.job.CandleBackfillJob;
 import com.cryptopilot.market.job.CoinListJob;
 import com.cryptopilot.market.job.FuturesMetricsJob;
 import com.cryptopilot.market.job.MarketHubJob;
@@ -50,6 +51,13 @@ class SchedulingConfigTest {
     private ThreadPoolTaskScheduler background;
 
     @Autowired
+    @Qualifier(SchedulingConfig.BACKFILL)
+    private ThreadPoolTaskScheduler backfill;
+
+    @Autowired
+    private CandleBackfillJob candleBackfill;
+
+    @Autowired
     @Qualifier("messageBrokerTaskScheduler")
     private TaskScheduler broker;
 
@@ -82,6 +90,36 @@ class SchedulingConfigTest {
         assertThat(primary).isSameAs(app).isNotSameAs(broker);
         assertThat(app.getThreadNamePrefix()).isEqualTo("app-scheduler-");
         assertThat(background.getThreadNamePrefix()).isEqualTo("background-");
+        assertThat(backfill.getThreadNamePrefix()).isEqualTo("candle-backfill-");
+        assertThat(backfill.getPoolSize()).isLessThanOrEqualTo(1);
+        assertThat(backfill.getScheduledThreadPoolExecutor().getCorePoolSize()).isEqualTo(1);
+        assertThat(backfill.getScheduledThreadPoolExecutor().getRemoveOnCancelPolicy())
+                .isTrue();
+        assertThat(ReflectionTestUtils.getField(candleBackfill, "scheduler")).isSameAs(backfill);
+    }
+
+    /** A backfill task that fails reaches the application's error handler (UC-52), as every other job's does. */
+    @Test
+    void aFailedBackfillTask_reachesTheErrorHandler() throws Exception {
+        CompletableFuture<Throwable> handled = new CompletableFuture<>();
+        StaticApplicationContext context = new StaticApplicationContext();
+        context.getBeanFactory().registerSingleton("recordFailures", (ThreadPoolTaskSchedulerCustomizer)
+                scheduler -> scheduler.setErrorHandler(handled::complete));
+        ThreadPoolTaskScheduler ownBackfill = new SchedulingConfig()
+                .backfillScheduler(context.getBeanProvider(ThreadPoolTaskSchedulerCustomizer.class));
+        ownBackfill.initialize();
+        try {
+            ownBackfill.schedule(
+                    () -> {
+                        throw new IllegalStateException("exchange down");
+                    },
+                    Instant.now());
+
+            assertThat(handled.get(5, TimeUnit.SECONDS)).hasMessage("exchange down");
+            assertThat(handled.get().getStackTrace()).isNotEmpty();
+        } finally {
+            ownBackfill.shutdown();
+        }
     }
 
     @Test

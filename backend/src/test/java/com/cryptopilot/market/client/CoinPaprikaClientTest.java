@@ -250,6 +250,32 @@ class CoinPaprikaClientTest {
         }
     }
 
+    /** One budget for every call: once spent, a call fails at once as rate limited; an hour later it is back. */
+    @Test
+    void theCallBudget_isASlidingHour_andSpentCallsAreNotSent() {
+        AtomicInteger hits = new AtomicInteger();
+        server.createContext("/v1/counted", exchange -> {
+            hits.incrementAndGet();
+            send(exchange, 200, "{\"market_cap_usd\": 1, \"last_updated\": 1794893964}");
+        });
+        MutableTestClock clock = new MutableTestClock(Instant.parse("2026-11-22T03:00:00Z"));
+        try (CoinPaprikaClient client = client("/v1/counted/", clock, 2)) {
+            client.global();
+            clock.advance(Duration.ofMinutes(30));
+            client.global();
+
+            assertThatThrownBy(client::global)
+                    .isInstanceOfSatisfying(CoinPaprikaException.class, e -> assertThat(e.rateLimited())
+                            .isTrue());
+            assertThatThrownBy(() -> client.logo("btc-bitcoin")).isInstanceOf(CoinPaprikaException.class);
+            assertThat(hits).as("spent calls are not sent").hasValue(2);
+
+            clock.advance(Duration.ofMinutes(30));
+            client.global();
+            assertThat(hits).as("the first call left the window").hasValue(3);
+        }
+    }
+
     @Test
     void noAnswerIsAFailure() {
         server.stop(0);
@@ -295,6 +321,10 @@ class CoinPaprikaClientTest {
     }
 
     private CoinPaprikaClient client(String path, MutableTestClock clock) {
+        return client(path, clock, 55);
+    }
+
+    private CoinPaprikaClient client(String path, MutableTestClock clock, int callsPerHour) {
         URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + path);
         return new CoinPaprikaClient(
                 new CoinPaprikaProperties(
@@ -305,7 +335,8 @@ class CoinPaprikaClientTest {
                         Duration.ofSeconds(2),
                         Duration.ofSeconds(2),
                         Duration.ofHours(24),
-                        Map.of()),
+                        Map.of(),
+                        callsPerHour),
                 JsonMapper.builder().build(),
                 clock);
     }

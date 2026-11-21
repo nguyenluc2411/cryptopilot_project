@@ -104,34 +104,38 @@ class CoinDescriptionServiceImplTest {
     }
 
     /**
-     * No more than {@code LOGO_CALLS_PER_HOUR} logo calls in any hour, across runs, so the supplies and the market's cap
-     * keep their share of CoinPaprika's 60 calls an hour; the coins left without a logo get it from a later run.
+     * The logo calls stop as soon as the client's shared budget is spent (a rate-limited failure, nothing sent); the
+     * names read so far are kept and the coins left without a logo get it from a later run.
      */
     @Test
-    void theLogoCalls_keepToTheirShareOfAnHour_acrossRuns() {
-        int coinsToDescribe = CoinDescriptionServiceImpl.LOGO_CALLS_PER_HOUR + 5;
-        Coin[] all = new Coin[coinsToDescribe];
-        CoinPaprikaCoin[] known = new CoinPaprikaCoin[coinsToDescribe];
-        for (int i = 0; i < coinsToDescribe; i++) {
-            all[i] = Coin.fromExchange("C" + i);
-            known[i] = paprika("c" + i + "-coin", "C" + i, "Coin " + i, i + 1, true);
-        }
-        undescribed(all);
-        listed(known);
+    void theLogoCalls_stopOnTheClientsRateLimit_andALaterRunGoesOn() {
+        Coin a = Coin.fromExchange("AAA");
+        Coin b = Coin.fromExchange("BBB");
+        Coin c = Coin.fromExchange("CCC");
+        undescribed(a, b, c);
+        listed(
+                paprika("aaa-coin", "AAA", "Coin A", 1, true),
+                paprika("bbb-coin", "BBB", "Coin B", 2, true),
+                paprika("ccc-coin", "CCC", "Coin C", 3, true));
+        when(client.logo("bbb-coin")).thenThrow(new CoinPaprikaException("budget spent", 429, null));
 
         service.describeCoins();
-        verify(client, times(CoinDescriptionServiceImpl.LOGO_CALLS_PER_HOUR)).logo(any());
-        assertThat(java.util.Arrays.stream(all).filter(coin -> coin.getLogoUrl() == null))
-                .hasSize(5);
 
-        clock.advance(Duration.ofMinutes(30));
-        service.describeCoins();
-        verify(client, times(CoinDescriptionServiceImpl.LOGO_CALLS_PER_HOUR)).logo(any());
+        assertThat(a.getLogoUrl()).isEqualTo(logoOf("aaa-coin"));
+        assertThat(b.getLogoUrl()).isNull();
+        assertThat(c.getLogoUrl()).isNull();
+        assertThat(c.getCoinName()).as("names are still written").isEqualTo("Coin C");
+        verify(client, never()).logo("ccc-coin");
 
-        clock.advance(Duration.ofMinutes(31));
+        org.mockito.Mockito.reset(client);
+        listed(
+                paprika("aaa-coin", "AAA", "Coin A", 1, true),
+                paprika("bbb-coin", "BBB", "Coin B", 2, true),
+                paprika("ccc-coin", "CCC", "Coin C", 3, true));
         service.describeCoins();
-        verify(client, times(coinsToDescribe)).logo(any());
-        assertThat(all).allMatch(coin -> coin.getLogoUrl() != null);
+
+        assertThat(b.getLogoUrl()).isEqualTo(logoOf("bbb-coin"));
+        assertThat(c.getLogoUrl()).isEqualTo(logoOf("ccc-coin"));
     }
 
     @Test

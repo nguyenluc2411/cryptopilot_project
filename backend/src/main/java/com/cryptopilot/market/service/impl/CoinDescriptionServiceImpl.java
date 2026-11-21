@@ -11,8 +11,6 @@ import com.cryptopilot.market.service.CoinDescriptionService;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -65,13 +63,6 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
 
     private static final Logger log = LoggerFactory.getLogger(CoinDescriptionServiceImpl.class);
 
-    /**
-     * Logo calls allowed in any hour, across runs: CoinPaprika's free plan allows 60 calls an hour, and the market list
-     * needs a few of them for its supplies and the market's cap (MarketReferenceJob). Coins left without a logo are
-     * described by a later run.
-     */
-    static final int LOGO_CALLS_PER_HOUR = 40;
-
     /** A contract quoted per thousand or per million of its coin, and the coin. */
     private static final Pattern MULTIPLIED = Pattern.compile("^(?:1000000|1000|1M)([A-Z][A-Z0-9]*)$");
 
@@ -87,9 +78,6 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
      * reads nothing.
      */
     private final ConcurrentMap<String, Instant> settled = new ConcurrentHashMap<>();
-
-    /** When the logo calls of the last hour were made, oldest first. */
-    private final Deque<Instant> logoCalls = new ArrayDeque<>();
 
     public CoinDescriptionServiceImpl(
             CoinRepository coins,
@@ -184,14 +172,6 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
             if (stopped) {
                 return null;
             }
-            if (!logoBudgetLeft()) {
-                stopped = true;
-                log.info(
-                        "Coin descriptions: {} logo calls in the last hour, CoinPaprika's share is spent; a later run"
-                                + " goes on",
-                        LOGO_CALLS_PER_HOUR);
-                return null;
-            }
             if (calls++ > 0) {
                 pause(properties.detailDelay());
             }
@@ -211,22 +191,6 @@ public class CoinDescriptionServiceImpl implements CoinDescriptionService {
             }
             read.put(id, logo);
             return logo.orElse(null);
-        }
-
-        /** Whether one more logo call fits in the last hour's share; if so, it is counted. */
-        private boolean logoBudgetLeft() {
-            synchronized (logoCalls) {
-                Instant now = clock.instant();
-                Instant hourAgo = now.minus(Duration.ofHours(1));
-                while (!logoCalls.isEmpty() && !logoCalls.peekFirst().isAfter(hourAgo)) {
-                    logoCalls.removeFirst();
-                }
-                if (logoCalls.size() >= LOGO_CALLS_PER_HOUR) {
-                    return false;
-                }
-                logoCalls.addLast(now);
-                return true;
-            }
         }
 
         /** Whether CoinPaprika answered for this id in this run (a logo or none), rather than the calls stopping. */

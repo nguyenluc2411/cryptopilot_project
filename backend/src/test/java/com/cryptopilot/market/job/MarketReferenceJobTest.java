@@ -13,13 +13,17 @@ import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketReferenceService;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.TaskScheduler;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * A refresh at start-up and every ten minutes, one at a time; the pairs of a batch brought into service make one read
@@ -62,6 +66,61 @@ class MarketReferenceJobTest {
         read.getValue().run();
         verify(reference).refreshSupplies();
         verify(reference, never()).refresh();
+    }
+
+    /** Supplies read less than five minutes ago are not read again: the read waits until five minutes have passed. */
+    @Test
+    void aReadOfTheSupplies_keepsFiveMinutesFromTheLastOne() {
+        doReturnFuture();
+        Instant last = NOW.minus(Duration.ofMinutes(2));
+        when(reference.suppliesReadAt()).thenReturn(Optional.of(last));
+
+        job.runSupplies();
+
+        verify(reference, never()).refreshSupplies();
+        verify(scheduler).schedule(any(Runnable.class), eq(last.plus(MarketReferenceJob.SUPPLIES_FLOOR)));
+
+        when(reference.suppliesReadAt()).thenReturn(Optional.of(NOW.minus(MarketReferenceJob.SUPPLIES_FLOOR)));
+        job.runSupplies();
+        verify(reference).refreshSupplies();
+    }
+
+    /** Inside a transaction: the read is scheduled once it commits, never when it rolls back. */
+    @Test
+    void aPairTurnedOn_waitsForTheCommit_andARollbackSchedulesNothing() {
+        doReturnFuture();
+        PairMarketEnabled enabled = new PairMarketEnabled(UUID.randomUUID(), "AEROUSDT", MarketType.SPOT);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        verify(scheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            verify(scheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        verify(scheduler).schedule(any(Runnable.class), eq(NOW.plus(MarketReferenceJob.SETTLE)));
+    }
+
+    /** A scheduler that refuses (shutting down) is logged, never thrown at the publisher. */
+    @Test
+    void aRefusingScheduler_isNotThrownAtTheEnable() {
+        when(scheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenThrow(new IllegalStateException("shut down"));
+
+        job.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "AEROUSDT", MarketType.SPOT));
+
+        verify(reference, never()).refreshSupplies();
     }
 
     @Test

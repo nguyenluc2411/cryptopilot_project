@@ -12,7 +12,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -46,6 +48,12 @@ import tools.jackson.databind.json.JsonMapper;
  * one), every call fails at once as rate limited and CoinPaprika is not called, since each call made while blocked
  * keeps the block going.
  *
+ * <p>Every call counts against one budget, {@code calls-per-hour} in any hour (a sliding window), whoever makes it:
+ * the market's cap, the supplies, the coin list and the logos. Once spent, a call fails at once as rate limited without
+ * being sent, so no caller can use up the free plan for the others. Reference: Nygard, M. T. (2018). <i>Release It!</i>
+ * (2nd ed.). Pragmatic Bookshelf, "Steady State"; Tanenbaum, A. S. &amp; Van Steen, M. (2017). <i>Distributed
+ * Systems</i> (3rd ed.), rate limiting.
+ *
  * <p>Reference: CoinPaprika API v1, "List coins", "Get coin by ID" and "Tickers" (circulating supply), api.coinpaprika.com.
  * Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf ("Timeouts", "Steady State").
  */
@@ -66,6 +74,9 @@ public class CoinPaprikaClient implements AutoCloseable {
 
     /** A refusal for too many calls being waited out. */
     private record Wait(Instant until, int status) {}
+
+    /** When the calls of the last hour were sent, oldest first. */
+    private final Deque<Instant> sent = new ArrayDeque<>();
 
     public CoinPaprikaClient(CoinPaprikaProperties properties, JsonMapper json) {
         this(properties, json, Clock.systemUTC());
@@ -225,6 +236,13 @@ public class CoinPaprikaClient implements AutoCloseable {
                     wait.status(),
                     null);
         }
+        if (!spend()) {
+            throw new CoinPaprikaException(
+                    "CoinPaprika's budget of " + properties.callsPerHour() + " calls an hour is spent; " + path
+                            + " not called",
+                    429,
+                    null);
+        }
         String base = properties.baseUrl().toString().replaceAll("/+$", "");
         HttpRequest request = HttpRequest.newBuilder(URI.create(base + path))
                 .timeout(properties.readTimeout())
@@ -255,6 +273,22 @@ public class CoinPaprikaClient implements AutoCloseable {
                     "CoinPaprika answered HTTP " + response.statusCode() + " for " + path, response.statusCode(), null);
         }
         return response.body();
+    }
+
+    /** Counts one call against the hour's budget, if any is left. */
+    private boolean spend() {
+        synchronized (sent) {
+            Instant now = clock.instant();
+            Instant hourAgo = now.minus(Duration.ofHours(1));
+            while (!sent.isEmpty() && !sent.peekFirst().isAfter(hourAgo)) {
+                sent.removeFirst();
+            }
+            if (sent.size() >= properties.callsPerHour()) {
+                return false;
+            }
+            sent.addLast(now);
+            return true;
+        }
     }
 
     /** The {@code Retry-After} of an answer in seconds, when it has a usable one. */

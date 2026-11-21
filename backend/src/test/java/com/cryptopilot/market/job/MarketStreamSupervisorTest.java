@@ -596,6 +596,33 @@ class MarketStreamSupervisorTest {
     }
 
     /**
+     * A start-up connection rebuilt after one of its pairs was removed is still a start-up one: a later batch never joins
+     * it, so its remaining pairs are not interrupted again.
+     */
+    @Test
+    void BR07_aStartUpConnectionRebuiltAfterARemoval_isNeverJoined() {
+        data.enable(btc, true, false);
+        UUID eth = data.pair("ETHUSDT", true, false, "TRADING", null, 1);
+        supervisor = supervisor(true, 18);
+        supervisor.refresh(MarketType.SPOT);
+        assertThat(supervisor.shards(MarketType.SPOT)).singleElement();
+
+        data.enable(eth, false, false);
+        supervisor.refresh(MarketType.SPOT);
+        BinanceStreamShard rebuilt = supervisor.shards(MarketType.SPOT).getFirst();
+        assertThat(rebuilt.streams()).hasSize(6).allMatch(s -> s.startsWith("btcusdt@"));
+
+        data.pair("SOLUSDT", true, false, "TRADING", null, 2);
+        supervisor.refresh(MarketType.SPOT);
+
+        assertThat(supervisor.shards(MarketType.SPOT))
+                .as("room for SOL on BTC's connection, but it is a start-up one")
+                .hasSize(2)
+                .first()
+                .isSameAs(rebuilt);
+    }
+
+    /**
      * The Futures book connections (TR-38) carry at most {@code public-streams-per-connection} streams, so the busiest
      * pairs' best bids and asks are spread over several readers; the price connections keep their own limit.
      */
