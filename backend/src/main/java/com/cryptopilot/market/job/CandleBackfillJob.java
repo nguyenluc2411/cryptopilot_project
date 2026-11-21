@@ -12,6 +12,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.CandleBackfillService;
 import com.cryptopilot.market.service.DroppedGapService;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -24,9 +25,12 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Component;
 
@@ -58,6 +62,11 @@ import org.springframework.stereotype.Component;
  * <p>One continuation is pending per market at most; a newer one replaces it. Continuing is always a task
  * handed to the {@link TaskScheduler}; the thread is never held. One instance, no distributed lock (D-39).
  *
+ * <p>The runs have a scheduler of their own, one thread ({@link #THREAD_PREFIX}), not the application's: a run holds
+ * its thread through many exchange calls, and the runs of both markets wait on one lock, so on the shared scheduler a
+ * start-up backfill of a hundred pairs took every thread and the market topics (NSF-03) stopped for minutes. One
+ * thread suits the runs, which go one at a time anyway.
+ *
  * <p>Queued gaps live in memory. One lost with a restart is not lost for good: at start-up the stored series of
  * the recent window ({@code gapScanWindow}, 7 days) are scanned for holes, and each is queued again; a hole behind
  * the latest candle is also reported by the stream's first closed candle of the series.
@@ -68,12 +77,21 @@ import org.springframework.stereotype.Component;
  * <p>Rule: NSF-02, NSF-03; TECHNICAL_DESIGN 7.1.2 (the caller contract), 7.1 step 4, and 10; D-41, D-42; A-33.
  */
 @Component
-public class CandleBackfillJob {
+public class CandleBackfillJob implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(CandleBackfillJob.class);
 
     /** Runs a gap may fail for a reason other than the exchange before it is dropped from the queue. */
     static final int MAX_GAP_ATTEMPTS = 3;
+
+    /**
+     * How long after a pair is turned on its market is backfilled: the pairs of a batch share the run, since each newer
+     * request replaces the pending one.
+     */
+    static final Duration ENABLE_SETTLE = Duration.ofSeconds(5);
+
+    /** The name of the runs' own thread. */
+    static final String THREAD_PREFIX = "candle-backfill-";
 
     /** What one run of one market came to. */
     public enum Outcome {
@@ -99,18 +117,65 @@ public class CandleBackfillJob {
     private final Map<GapDetected, Integer> gapFailures = new HashMap<>();
 
     private final ReentrantLock running = new ReentrantLock();
+    /** The scheduler this job built, shut down with it; {@code null} when one was given. */
+    private final ThreadPoolTaskScheduler own;
 
+    /** The application's job: the runs on a scheduler of their own. */
+    @Autowired
+    public CandleBackfillJob(
+            CandleBackfillService backfill,
+            DroppedGapService droppedGaps,
+            CandleBackfillProperties properties,
+            Clock clock) {
+        this(backfill, droppedGaps, ownScheduler(), properties, clock, true);
+    }
+
+    /** The runs on the given scheduler, which stays the caller's. */
     public CandleBackfillJob(
             CandleBackfillService backfill,
             DroppedGapService droppedGaps,
             TaskScheduler scheduler,
             CandleBackfillProperties properties,
             Clock clock) {
+        this(backfill, droppedGaps, scheduler, properties, clock, false);
+    }
+
+    private CandleBackfillJob(
+            CandleBackfillService backfill,
+            DroppedGapService droppedGaps,
+            TaskScheduler scheduler,
+            CandleBackfillProperties properties,
+            Clock clock,
+            boolean owned) {
         this.backfill = backfill;
         this.droppedGaps = droppedGaps;
         this.scheduler = scheduler;
         this.properties = properties;
         this.clock = clock;
+        this.own = owned ? (ThreadPoolTaskScheduler) scheduler : null;
+    }
+
+    static ThreadPoolTaskScheduler ownScheduler() {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(1);
+        scheduler.setThreadNamePrefix(THREAD_PREFIX);
+        scheduler.setRemoveOnCancelPolicy(true);
+        scheduler.setErrorHandler(failure -> log.error("NSF-02 a backfill task failed unexpectedly", failure));
+        scheduler.initialize();
+        return scheduler;
+    }
+
+    /** The scheduler this job built, or {@code null} when it was given one. */
+    ThreadPoolTaskScheduler ownedScheduler() {
+        return own;
+    }
+
+    /** Stops the scheduler this job built; a given one is left to its owner. */
+    @Override
+    public void destroy() {
+        if (own != null) {
+            own.shutdown();
+        }
     }
 
     /** The hourly catch-up, when enabled. The start-up run follows the first symbol synchronisation instead. */
@@ -158,13 +223,14 @@ public class CandleBackfillJob {
     }
 
     /**
-     * An administrator brought a pair into service: its market is brought up to date at once, not at the next hour.
-     * After commit, so the run reads the pair as saved; the run itself is on the scheduler.
+     * An administrator brought a pair into service: its market is brought up to date within {@link #ENABLE_SETTLE},
+     * not at the next hour, in one run with the pairs turned on meanwhile. After commit, so the run reads the pair as
+     * saved; the run itself is on the scheduler. The run fetches only the series that are behind (the new pair's).
      */
     @EventListener
     public void onPairMarketEnabled(PairMarketEnabled event) {
         if (properties.enabled()) {
-            AfterCommit.run(() -> continueAt(event.market(), clock.instant()));
+            AfterCommit.run(() -> continueAt(event.market(), clock.instant().plus(ENABLE_SETTLE)));
         }
     }
 

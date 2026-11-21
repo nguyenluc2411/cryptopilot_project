@@ -57,15 +57,22 @@ public class MarketLiveness {
     }
 
     /**
-     * The market's price connections now, each with the symbols it streams; replaces those before, each starting as if
-     * it had just delivered.
+     * The market's price connections now, each with the symbols it streams; replaces those before. A connection already
+     * registered with the same symbols keeps what it has delivered (it stayed open); any other starts as if it had just
+     * delivered.
      */
     public synchronized void connections(MarketType market, Map<String, List<String>> symbolsByConnection) {
         Instant now = clock.instant();
+        Map<String, Connection> before = registered(market);
         Map<String, Connection> registered = new LinkedHashMap<>();
         symbolsByConnection.forEach((name, symbols) -> {
             if (!symbols.isEmpty()) {
-                registered.put(name, new Connection(List.copyOf(symbols), new Run(now)));
+                Connection same = before.get(name);
+                registered.put(
+                        name,
+                        same != null && same.symbols().equals(symbols)
+                                ? same
+                                : new Connection(List.copyOf(symbols), new Run(now)));
             }
         });
         Map<MarketType, Map<String, Connection>> next = new EnumMap<>(connections);

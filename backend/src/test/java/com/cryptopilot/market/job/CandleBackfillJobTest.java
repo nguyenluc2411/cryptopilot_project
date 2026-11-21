@@ -459,7 +459,7 @@ class CandleBackfillJobTest {
                 .isEqualTo(NOW));
     }
 
-    /** A pair an administrator turned on: that market is brought up to date at once, not at the next hour. */
+    /** A pair an administrator turned on: that market is brought up to date shortly, not at the next hour. */
     @Test
     void UC45_aPairTurnedOn_triggersThatMarketsBackfill_unlessDisabled() {
         PairMarketEnabled enabled = new PairMarketEnabled(UUID.randomUUID(), "TRXUSDT", MarketType.SPOT);
@@ -469,7 +469,24 @@ class CandleBackfillJobTest {
         job(true).onPairMarketEnabled(enabled);
 
         assertThat(scheduled).singleElement().satisfies(task -> assertThat(task.at())
-                .isEqualTo(NOW));
+                .isEqualTo(NOW.plus(CandleBackfillJob.ENABLE_SETTLE)));
+    }
+
+    /**
+     * Pairs turned on one after the other leave one run pending per market: each newer request replaces the one before,
+     * which never started.
+     */
+    @Test
+    void UC45_pairsTurnedOnTogether_leaveOnePendingRunPerMarket() {
+        CandleBackfillJob job = job(true);
+
+        for (String symbol : List.of("AEROUSDT", "APEUSDT", "APTUSDT", "ARUSDT", "AXSUSDT")) {
+            job.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), symbol, MarketType.SPOT));
+        }
+
+        assertThat(scheduled).hasSize(5);
+        assertThat(cancelled).as("all but the last replaced").hasSize(4);
+        assertThat(scheduled.getLast().at()).isEqualTo(NOW.plus(CandleBackfillJob.ENABLE_SETTLE));
     }
 
     /** Disabled, the stream's signals are ignored. */

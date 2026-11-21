@@ -45,6 +45,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <h2>How a series is filled</h2>
  *
+ * <p>A series whose next candle has not closed yet is current: it is not asked for, so a run over series that are all
+ * current costs no exchange call, only the reads of their latest candles.
+ *
  * <p>From the candle after the latest stored one, or, for an empty series, from the configured depth back
  * (D-41); forward in pages until the exchange has nothing newer. The resume point is the data itself, so an
  * interrupted run continues exactly where it stopped. A pair listed after the start simply begins at the
@@ -126,6 +129,11 @@ public class CandleBackfillServiceImpl implements CandleBackfillService {
         for (CryptoPair pair : targets) {
             for (MarketInterval timeframe : TIMEFRAMES) {
                 String series = market + " " + pair.getSymbol() + " " + timeframe.code();
+                Optional<Instant> latest = candles.latestOpenTime(pair.getId(), market, timeframe.code());
+                if (latest.isPresent() && isCurrent(latest.get(), timeframe, now)) {
+                    completed++;
+                    continue;
+                }
                 try {
                     SeriesResult result = backfillSeries(
                             pair.getId(),
@@ -133,7 +141,7 @@ public class CandleBackfillServiceImpl implements CandleBackfillService {
                             market,
                             venue,
                             timeframe,
-                            resumePoint(pair, market, timeframe, now),
+                            latest.map(open -> open.plusMillis(1)).orElseGet(() -> seriesStart(timeframe, now)),
                             null,
                             now);
                     inserted += result.inserted();
@@ -259,10 +267,12 @@ public class CandleBackfillServiceImpl implements CandleBackfillService {
         return now.minus(depthOf(timeframe));
     }
 
-    private Instant resumePoint(CryptoPair pair, MarketType market, MarketInterval timeframe, Instant now) {
-        return candles.latestOpenTime(pair.getId(), market, timeframe.code())
-                .map(latest -> latest.plusMillis(1))
-                .orElseGet(() -> seriesStart(timeframe, now));
+    /**
+     * Whether a series whose latest stored candle opened at {@code latest} has nothing to fetch: the next candle opens
+     * one timeframe later and closes a timeframe after that, which has not come yet.
+     */
+    public static boolean isCurrent(Instant latest, MarketInterval timeframe, Instant now) {
+        return latest.plus(timeframe.duration()).plus(timeframe.duration()).isAfter(now);
     }
 
     /**

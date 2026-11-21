@@ -144,18 +144,58 @@ class CandleBackfillServiceTest {
                 .isEqualTo(3);
     }
 
-    /** Running again with nothing new inserts nothing and asks for one page per series. */
+    /**
+     * Running again before any next candle has closed inserts nothing and asks the exchange nothing: every series is
+     * current, so a run over a hundred current pairs costs reads of the database only.
+     */
     @Test
-    void NSF02_aSecondRun_insertsNothingAndAsksOncePerSeries() {
+    void NSF02_aSecondRun_withEverySeriesCurrent_insertsNothingAndAsksNothing() {
         UUID btc = pair("BTCUSDT", "TRADING", null);
         service(50, 20, depths()).backfill(MarketType.SPOT);
         long before = rows(btc, "15m");
+        int asked = exchangeKlines.requests();
 
         BackfillRun again = service(50, 20, depths()).backfill(MarketType.SPOT);
 
         assertThat(again.rowsInserted()).isZero();
+        assertThat(again.seriesCompleted()).isEqualTo(4);
         assertThat(rows(btc, "15m")).isEqualTo(before);
-        assertThat(exchangeKlines.requests("BTCUSDT 15m")).isEqualTo(3);
+        assertThat(exchangeKlines.requests()).isEqualTo(asked);
+    }
+
+    /**
+     * Once a next candle has closed, only the series it belongs to is asked for: fifteen minutes on, the 15m series is
+     * behind, the 1h, 4h and 1d ones are still current.
+     */
+    @Test
+    void NSF02_onlyASeriesWhoseNextCandleClosed_isAskedFor() {
+        pair("BTCUSDT", "TRADING", null);
+        service(50, 20, depths()).backfill(MarketType.SPOT);
+        long fifteen = exchangeKlines.requests("BTCUSDT 15m");
+        long hour = exchangeKlines.requests("BTCUSDT 1h");
+        long four = exchangeKlines.requests("BTCUSDT 4h");
+        long day = exchangeKlines.requests("BTCUSDT 1d");
+
+        clock.advance(Duration.ofMinutes(15));
+        service(50, 20, depths()).backfill(MarketType.SPOT);
+
+        assertThat(exchangeKlines.requests("BTCUSDT 15m")).isEqualTo(fifteen + 1);
+        assertThat(exchangeKlines.requests("BTCUSDT 1h")).isEqualTo(hour);
+        assertThat(exchangeKlines.requests("BTCUSDT 4h")).isEqualTo(four);
+        assertThat(exchangeKlines.requests("BTCUSDT 1d")).isEqualTo(day);
+    }
+
+    /** The edge of being current: the next candle closes a timeframe after it opens, a timeframe after the latest. */
+    @Test
+    void NSF02_isCurrent_untilTheNextCandleHasClosed() {
+        Instant latest = Instant.parse("2026-09-24T09:45:00Z");
+
+        assertThat(CandleBackfillServiceImpl.isCurrent(
+                        latest, MarketInterval.FIFTEEN_MINUTES, latest.plusSeconds(1799)))
+                .isTrue();
+        assertThat(CandleBackfillServiceImpl.isCurrent(
+                        latest, MarketInterval.FIFTEEN_MINUTES, latest.plusSeconds(1800)))
+                .isFalse();
     }
 
     /**

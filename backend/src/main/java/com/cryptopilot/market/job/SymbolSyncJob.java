@@ -1,5 +1,6 @@
 package com.cryptopilot.market.job;
 
+import com.cryptopilot.common.config.SchedulingConfig;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.SymbolSyncProperties;
 import com.cryptopilot.market.event.SymbolsSynchronised;
@@ -14,6 +15,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
@@ -85,7 +87,7 @@ public class SymbolSyncJob {
 
     public SymbolSyncJob(
             SymbolSyncService sync,
-            TaskScheduler scheduler,
+            @Qualifier(SchedulingConfig.BACKGROUND) TaskScheduler scheduler,
             SymbolSyncProperties properties,
             Clock clock,
             ApplicationEventPublisher events) {
