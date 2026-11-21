@@ -273,9 +273,12 @@ cryptopilot:
       # daily sync cycle, so a sync that ends a little earlier than the day before still retries it.
       retry-unmatched-after: 23h
       # Binance symbol -> CoinPaprika id where the ticker alone picks the wrong coin. CoinPaprika lists Toncoin as
-      # GRAM, so TON would match TonToken (checked 2026-11-17).
+      # GRAM, so TON would match TonToken (checked 2026-11-17). Cross outranks Harmony under ONE and MeMusic outranks
+      # Momentum under MMT (checked 2026-11-21).
       overrides:
         TON: toncoin-the-open-network
+        ONE: one-harmony
+        MMT: mmt-momentum
     coin-list:
       # SCR-09: the market list of coins is rebuilt in the background and requests read the last one built. Off here
       # and in calibration, on in the dev and prod profiles; without the job a request rebuilds a list older than

@@ -1,6 +1,7 @@
 package com.cryptopilot.market.job;
 
 import com.cryptopilot.market.client.CoinPaprikaException;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.service.CoinDescriptionService;
 import java.time.Clock;
@@ -20,11 +21,15 @@ import org.springframework.scheduling.TaskScheduler;
  * {@link #SETTLE} and a later event replaces a pending run, so both markets are described by one run. The listener
  * only schedules: the HTTP calls happen on the scheduler, never on the thread that synchronised the symbols.
  *
+ * <p>A pair the administrator adds (UC-45) is synchronised on its own, without that event, so a pair brought into
+ * service schedules the run the same way: a batch of pairs makes one run, and a run with every coin described reads
+ * nothing.
+ *
  * <p>A CoinPaprika that asks to slow down (429) is tried once more after {@link #RATE_LIMIT_WAIT}; any other failure
  * waits for the next synchronisation. Either way the coins keep what they have, and nothing about prices or trading
  * depends on this job.
  *
- * <p>Rule: SRS 3.1.5; NSF-01.
+ * <p>Rule: SRS 3.1.5; NSF-01; UC-45.
  */
 public class CoinDescriptionJob {
 
@@ -52,6 +57,12 @@ public class CoinDescriptionJob {
     /** A market was synchronised: describe the coins once both have settled. */
     @EventListener
     public void onSymbolsSynchronised(SymbolsSynchronised event) {
+        schedule(SETTLE, true);
+    }
+
+    /** A pair came into service: describe its coin once the pairs of the batch have settled. */
+    @EventListener
+    public void onPairMarketEnabled(PairMarketEnabled event) {
         schedule(SETTLE, true);
     }
 

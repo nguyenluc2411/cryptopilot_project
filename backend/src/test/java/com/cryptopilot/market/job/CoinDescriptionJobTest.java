@@ -9,19 +9,22 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.client.CoinPaprikaException;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.CoinDescriptionService;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.TaskScheduler;
 
 /**
- * Two market events make one run, put off until both have settled; a 429 is retried once, any other failure waits.
+ * Two market events make one run, put off until both have settled, and so do the pairs of a batch an administrator
+ * brings into service; a 429 is retried once, any other failure waits.
  */
 class CoinDescriptionJobTest {
 
@@ -44,6 +47,23 @@ class CoinDescriptionJobTest {
                 .schedule(any(Runnable.class), eq(NOW.plus(CoinDescriptionJob.SETTLE)));
         verify(future).cancel(false);
         verify(descriptions, never()).describeCoins();
+    }
+
+    @Test
+    void aBatchOfPairsBroughtIntoServiceMakesOneRunAfterTheyHaveSettled() {
+        doReturnFuture();
+
+        job.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "AEROUSDT", MarketType.SPOT));
+        job.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "ZROUSDT", MarketType.SPOT));
+
+        ArgumentCaptor<Runnable> run = ArgumentCaptor.forClass(Runnable.class);
+        verify(scheduler, org.mockito.Mockito.times(2))
+                .schedule(run.capture(), eq(NOW.plus(CoinDescriptionJob.SETTLE)));
+        verify(future).cancel(false);
+        verify(descriptions, never()).describeCoins();
+
+        run.getValue().run();
+        verify(descriptions).describeCoins();
     }
 
     @Test

@@ -25,7 +25,8 @@ import org.slf4j.LoggerFactory;
  * call, and the circulating supply of the listed coins at most every {@link #SUPPLY_EVERY}, matched to the coins the way
  * their names and logos are ({@link CoinPaprikaDirectory}).
  *
- * <p>A failed read keeps the figures of the last good one; the next call tries again.
+ * <p>A failed read keeps the figures of the last good one; the next call tries again. A coin listed between two reads
+ * gets its supply from {@link #refreshSupplies()}, which reads them at once.
  *
  * <p>Rule: SRS 3.3.1.
  */
@@ -65,6 +66,11 @@ public class MarketReferenceServiceImpl implements MarketReferenceService {
         if (stale) {
             readSupplies(now);
         }
+    }
+
+    @Override
+    public void refreshSupplies() {
+        readSupplies(clock.instant());
     }
 
     private void readGlobal() {

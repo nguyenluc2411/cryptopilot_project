@@ -13,4 +13,10 @@ public interface MarketReferenceService {
      * there was none. A failed read keeps the figures of the last good one and is logged, never thrown.
      */
     void refresh();
+
+    /**
+     * Reads the listed coins' supplies now, however recent the last read: a coin just listed has none until then.
+     * A failed read keeps the last good supplies and is logged, never thrown.
+     */
+    void refreshSupplies();
 }
