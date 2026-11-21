@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -23,10 +24,13 @@ import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.journal.FillLearning;
+import com.cryptopilot.journal.FillLearningReader;
 import com.cryptopilot.journal.JournalApi;
 import com.cryptopilot.journal.PerformanceDigest;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairAnalysis;
+import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.model.enums.CapReason;
 import com.cryptopilot.market.model.enums.DominantSide;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -37,8 +41,10 @@ import com.cryptopilot.trading.PlanContext;
 import com.cryptopilot.trading.TradingPlanApi;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
+import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.MarginMode;
 import com.cryptopilot.trading.model.enums.PlanStatus;
+import com.cryptopilot.trading.model.enums.PositionStatus;
 import com.cryptopilot.trading.model.enums.WarningSeverity;
 import com.cryptopilot.trading.model.enums.WarningType;
 import com.cryptopilot.user.TradingProfile;
@@ -50,8 +56,12 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,12 +79,13 @@ class ContextSnapshotBuilderTest {
     private final MarketApi market = mock(MarketApi.class);
     private final TradingPlanApi plans = mock(TradingPlanApi.class);
     private final JournalApi journal = mock(JournalApi.class);
+    private final FillLearningReader learning = mock(FillLearningReader.class);
     private final EntitlementApi entitlements = mock(EntitlementApi.class);
     private final AssistantNewsSource news = mock(AssistantNewsSource.class);
     private final UserApi users = mock(UserApi.class);
     private final JsonMapper json = JsonMapper.builder().build();
     private final ContextSnapshotBuilder builder = new ContextSnapshotBuilder(
-            market, plans, journal, news, users, entitlements, json, Clock.fixed(NOW, ZoneOffset.UTC));
+            market, plans, journal, learning, news, users, entitlements, json, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @BeforeEach
     void noNewsByDefault() {
@@ -237,6 +248,252 @@ class ContextSnapshotBuilderTest {
                 .allSatisfy(field -> assertThat(field.getValue().isContainer()).isFalse());
     }
 
+    @Test
+    void BR51_onPremium_eachRecentTradeCarriesItsDeviationScoresAndExcursions() {
+        UUID btc = UUID.randomUUID();
+        when(journal.performanceDigest(USER)).thenReturn(digest());
+        when(learning.latestClosed(USER, ContextSnapshotBuilder.RECENT_TRADES))
+                .thenReturn(List.of(trade(
+                        btc,
+                        new BigDecimal("0.12500000"),
+                        new BigDecimal("72.50"),
+                        new BigDecimal("64.00"),
+                        new BigDecimal("1.90499999"),
+                        new BigDecimal("-0.61500000"),
+                        new BigDecimal("2.33333333"))));
+        when(market.pairListings(Set.of(btc))).thenReturn(List.of(new PairListing(btc, "BTCUSDT", true, true)));
+
+        ContextSnapshot premium = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        assertThat(premium.performance().recentTrades())
+                .containsExactly(new PerformanceContext.TradeLearning(
+                        "BTCUSDT",
+                        MarketType.FUTURES,
+                        Direction.SHORT,
+                        new BigDecimal("0.13"),
+                        new BigDecimal("72.50"),
+                        new BigDecimal("64.00"),
+                        new BigDecimal("1.90"),
+                        new BigDecimal("-0.62"),
+                        new BigDecimal("2.33")));
+        JsonNode trade = json.readTree(builder.toJson(premium))
+                .path("performance")
+                .path("recentTrades")
+                .get(0);
+        assertThat(trade.propertyNames())
+                .containsExactlyInAnyOrder(
+                        "symbol",
+                        "market",
+                        "direction",
+                        "entryDeviationR",
+                        "setupScoreAtPlan",
+                        "setupScoreAtFill",
+                        "rMultiple",
+                        "maeR",
+                        "mfeR");
+        assertThat(trade.path("symbol").asString()).isEqualTo("BTCUSDT");
+        assertThat(trade.path("maeR").decimalValue()).isEqualByComparingTo("-0.62");
+    }
+
+    @Test
+    void BR51_theRecentTrades_carryNoIdPriceOrAmount() {
+        UUID btc = UUID.randomUUID();
+        FillLearning trade = trade(
+                btc,
+                new BigDecimal("0.1"),
+                new BigDecimal("70"),
+                new BigDecimal("60"),
+                new BigDecimal("1.9"),
+                new BigDecimal("0.5"),
+                new BigDecimal("2.5"));
+        when(journal.performanceDigest(USER)).thenReturn(digest());
+        when(learning.latestClosed(USER, ContextSnapshotBuilder.RECENT_TRADES)).thenReturn(List.of(trade));
+        when(market.pairListings(any())).thenReturn(List.of(new PairListing(btc, "BTCUSDT", true, true)));
+
+        String stored = builder.toJson(builder.build(USER, new AiContextSelection(null, null, null, null, true)));
+
+        assertThat(stored)
+                .doesNotContain(trade.journalId().toString())
+                .doesNotContain(trade.planId().toString())
+                .doesNotContain(btc.toString())
+                .doesNotContain(USER.toString())
+                .doesNotContain(trade.entryPrice().toPlainString())
+                .doesNotContain(trade.plannedEntryPrice().toPlainString())
+                .doesNotContain(trade.maxAdversePrice().toPlainString())
+                .doesNotContain(trade.maxFavorablePrice().toPlainString())
+                .doesNotContain(trade.riskAmount().toPlainString())
+                .doesNotContain(trade.netPnl().toPlainString());
+        assertThat(fieldNames(json.readTree(stored)))
+                .doesNotContain(
+                        "journalId",
+                        "planId",
+                        "pairId",
+                        "entryPrice",
+                        "plannedEntryPrice",
+                        "maxAdversePrice",
+                        "maxFavorablePrice",
+                        "riskAmount",
+                        "netPnl",
+                        "entryTime",
+                        "exitTime",
+                        "entryLiquidity",
+                        "setupScorePreset",
+                        "indicators");
+    }
+
+    @Test
+    void T074b_aSummaryWithoutTradeList_carriesAnEmptyOne_andAGivenListIsCopied() {
+        assertThat(new PerformanceContext(true, null, digest(), null).recentTrades())
+                .isEmpty();
+        List<PerformanceContext.TradeLearning> given = new ArrayList<>();
+        PerformanceContext context = new PerformanceContext(true, null, digest(), given);
+        given.add(new PerformanceContext.TradeLearning(null, null, null, null, null, null, null, null, null));
+        assertThat(context.recentTrades()).isEmpty();
+    }
+
+    @Test
+    void T074b_aTradeBeforeTheLearningData_isSentWithNullFields() {
+        UUID btc = UUID.randomUUID();
+        when(journal.performanceDigest(USER)).thenReturn(digest());
+        when(learning.latestClosed(USER, ContextSnapshotBuilder.RECENT_TRADES))
+                .thenReturn(List.of(trade(btc, null, null, null, null, null, null)));
+        when(market.pairListings(any())).thenReturn(List.of(new PairListing(btc, "BTCUSDT", true, true)));
+
+        ContextSnapshot premium = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        assertThat(premium.performance().recentTrades())
+                .containsExactly(new PerformanceContext.TradeLearning(
+                        "BTCUSDT", MarketType.FUTURES, Direction.SHORT, null, null, null, null, null, null));
+    }
+
+    @Test
+    void T074b_anUnknownPair_givesANullSymbol_andTheQuestionStillBuilds() {
+        when(journal.performanceDigest(USER)).thenReturn(digest());
+        when(learning.latestClosed(USER, ContextSnapshotBuilder.RECENT_TRADES))
+                .thenReturn(List.of(trade(UUID.randomUUID(), null, null, null, BigDecimal.ONE, null, null)));
+        when(market.pairListings(any())).thenReturn(List.of());
+
+        ContextSnapshot premium = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        assertThat(premium.performance().recentTrades()).singleElement().satisfies(trade -> {
+            assertThat(trade.symbol()).isNull();
+            assertThat(trade.rMultiple()).isEqualTo(new BigDecimal("1.00"));
+        });
+        assertThat(builder.toJson(premium)).isNotNull();
+    }
+
+    @Test
+    void T074b_eachPairIsLookedUpOnce() {
+        UUID btc = UUID.randomUUID();
+        UUID eth = UUID.randomUUID();
+        when(journal.performanceDigest(USER)).thenReturn(digest());
+        when(learning.latestClosed(USER, ContextSnapshotBuilder.RECENT_TRADES))
+                .thenReturn(List.of(
+                        trade(btc, null, null, null, null, null, null),
+                        trade(eth, null, null, null, null, null, null),
+                        trade(btc, null, null, null, null, null, null)));
+        when(market.pairListings(any()))
+                .thenReturn(List.of(
+                        new PairListing(btc, "BTCUSDT", true, true), new PairListing(eth, "ETHUSDT", true, false)));
+
+        ContextSnapshot premium = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        verify(market, times(1)).pairListings(any());
+        verify(market).pairListings(Set.of(btc, eth));
+        assertThat(premium.performance().recentTrades())
+                .extracting(PerformanceContext.TradeLearning::symbol)
+                .containsExactly("BTCUSDT", "ETHUSDT", "BTCUSDT");
+    }
+
+    @Test
+    void T074b_withoutAClosedTrade_theTradesAreNotRead() {
+        when(journal.performanceDigest(USER))
+                .thenReturn(new PerformanceDigest(
+                        0,
+                        0,
+                        0,
+                        0,
+                        null,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        0,
+                        null,
+                        null,
+                        0,
+                        null,
+                        null,
+                        null,
+                        null));
+
+        ContextSnapshot premium = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        assertThat(premium.performance().recentTrades()).isEmpty();
+        verifyNoInteractions(learning);
+        verify(market, never()).pairListings(any());
+    }
+
+    @Test
+    void BR62_belowPremium_theTradesAreNotRead() {
+        doThrow(new BusinessException(ErrorCode.PLAN_FEATURE_NOT_INCLUDED, "PREMIUM only"))
+                .when(entitlements)
+                .requireFeature(USER, Feature.AI_PERFORMANCE_CONTEXT);
+
+        assertThatThrownBy(() -> builder.build(USER, new AiContextSelection(null, null, null, null, true)))
+                .isInstanceOf(BusinessException.class);
+        verifyNoInteractions(learning);
+        verify(market, never()).pairListings(any());
+    }
+
+    @Test
+    void T074b_theTradesAreAskedForWithTheContextLimit() {
+        when(journal.performanceDigest(USER)).thenReturn(digest());
+
+        ContextSnapshot premium = builder.build(USER, new AiContextSelection(null, null, null, null, true));
+
+        assertThat(ContextSnapshotBuilder.RECENT_TRADES).isEqualTo(10);
+        verify(learning).latestClosed(USER, 10);
+        assertThat(premium.performance().recentTrades()).isEmpty();
+        verify(market, never()).pairListings(any());
+    }
+
+    /** A closed simulated Futures SHORT with these learning values, and prices and amounts that must not be sent. */
+    private static FillLearning trade(
+            UUID pairId,
+            BigDecimal deviation,
+            BigDecimal atPlan,
+            BigDecimal atFill,
+            BigDecimal rMultiple,
+            BigDecimal mae,
+            BigDecimal mfe) {
+        return new FillLearning(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                pairId,
+                MarketType.FUTURES,
+                Direction.SHORT,
+                PositionStatus.CLOSED,
+                NOW.minusSeconds(7200),
+                NOW.minusSeconds(3600),
+                new BigDecimal("77123.45"),
+                new BigDecimal("77011.22"),
+                deviation,
+                LiquidityRole.TAKER,
+                new BigDecimal("53.17"),
+                "1h",
+                "DAY_TRADING v1",
+                atPlan,
+                atFill,
+                Boolean.FALSE,
+                null,
+                new BigDecimal("78345.67"),
+                new BigDecimal("75432.10"),
+                new BigDecimal("101.29"),
+                rMultiple,
+                mae,
+                mfe);
+    }
+
     private static PerformanceDigest digest() {
         return new PerformanceDigest(
                 12,
@@ -258,7 +515,7 @@ class ContextSnapshotBuilderTest {
     }
 
     private static List<String> fieldNames(JsonNode node) {
-        List<String> names = new java.util.ArrayList<>();
+        List<String> names = new ArrayList<>();
         collect(node, names);
         return names;
     }
@@ -297,7 +554,7 @@ class ContextSnapshotBuilderTest {
 
         ContextSnapshot snapshot = builder.build(USER, new AiContextSelection(PAIR, null, null, null, false));
 
-        assertThat(snapshot.version()).isEqualTo(4);
+        assertThat(snapshot.version()).isEqualTo(ContextSnapshot.VERSION);
         assertThat(snapshot.news().coin()).isEqualTo("BTC");
         assertThat(snapshot.news().checkedUpTo()).isEqualTo(crawled);
         assertThat(snapshot.news().articles())
@@ -368,21 +625,25 @@ class ContextSnapshotBuilderTest {
                 .isNull();
     }
 
-    /** NSF-16 (F1): the largest context the news limits allow still fits the AI Service's 20,000 characters. */
+    /**
+     * NSF-16 (F1): the largest context the news limits allow, with the recent trades the performance summary carries
+     * (T-074b), still fits the AI Service's 20,000 characters.
+     */
     @Test
     void NSF16_theWorstCaseContextAtTheConfiguredLimits_isWithin20000Characters() {
         int atTheLimits = worstCaseContextLength(
                 NewsAssistantProperties.MAX_ARTICLES, 0, NewsAssistantProperties.MAX_SUMMARY_CHARS);
         int atTheDefaults = worstCaseContextLength(5, 3, 400);
 
-        // Measured: 16,866 at the limits, 15,272 at the defaults.
+        // Measured with the 10 recent trades: 19,213 at the limits, 17,619 at the defaults (16,866 / 15,272 without).
         assertThat(atTheLimits).as("worst case at the limits").isLessThanOrEqualTo(20_000);
         assertThat(atTheDefaults).as("worst case at the defaults").isLessThanOrEqualTo(atTheLimits);
     }
 
     /**
      * The context as the application writes it (decimals as strings) with every part at its largest: the market with
-     * every indicator, a plan with every warning, PREMIUM performance, the trader, and the articles at their longest
+     * every indicator, a plan with every warning, PREMIUM performance with {@link ContextSnapshotBuilder#RECENT_TRADES}
+     * trades of a 20-character symbol at the widest values, the trader, and the articles at their longest
      * (headline 200 and link 500, as {@code NewsForAssistant} cuts them; outlet 100, the column's length).
      */
     private int worstCaseContextLength(int coinArticles, int marketArticles, int summaryChars) {
@@ -393,7 +654,7 @@ class ContextSnapshotBuilderTest {
                         override -> override.setFormat(JsonFormat.Value.forShape(JsonFormat.Shape.STRING)))
                 .build();
         ContextSnapshotBuilder worst = new ContextSnapshotBuilder(
-                market, plans, journal, news, users, entitlements, app, Clock.fixed(NOW, ZoneOffset.UTC));
+                market, plans, journal, learning, news, users, entitlements, app, Clock.fixed(NOW, ZoneOffset.UTC));
         BigDecimal wide = new BigDecimal("123456789.123456789012");
         PairAnalysis full = new PairAnalysis(
                 "1000SATSUSDT",
@@ -413,7 +674,7 @@ class ContextSnapshotBuilderTest {
                 CapReason.LOW_ROOM,
                 wide,
                 wide);
-        List<PlanContext.Warning> warnings = java.util.Arrays.stream(WarningType.values())
+        List<PlanContext.Warning> warnings = Arrays.stream(WarningType.values())
                 .map(type -> new PlanContext.Warning(type, type.severity(), "x".repeat(200)))
                 .toList();
         PlanContext plan = new PlanContext(
@@ -446,14 +707,22 @@ class ContextSnapshotBuilderTest {
         when(plans.planContext(USER, PLAN)).thenReturn(plan);
         when(market.pairAnalysis(PAIR, MarketType.FUTURES, "1h", USER)).thenReturn(Optional.of(full));
         when(journal.performanceDigest(USER)).thenReturn(digest());
+        UUID tradedPair = UUID.randomUUID();
+        // A setup score is numeric(5,2) checked to 0..100, so 100.00 is its widest value.
+        BigDecimal widestScore = new BigDecimal("100.00");
+        when(learning.latestClosed(USER, ContextSnapshotBuilder.RECENT_TRADES))
+                .thenReturn(Collections.nCopies(
+                        ContextSnapshotBuilder.RECENT_TRADES,
+                        trade(tradedPair, wide, widestScore, widestScore, wide, wide, wide)));
+        when(market.pairListings(any())).thenReturn(List.of(new PairListing(tradedPair, "S".repeat(20), true, true)));
         when(users.tradingProfileOf(USER))
                 .thenReturn(Optional.of(new TradingProfile(TradingStyle.POSITION, RiskProfile.CONSERVATIVE)));
         when(news.recentNews(PAIR))
                 .thenReturn(new AssistantNews(
                         "1000SATS",
                         NOW,
-                        java.util.Collections.nCopies(coinArticles, longest),
-                        java.util.Collections.nCopies(marketArticles, longest)));
+                        Collections.nCopies(coinArticles, longest),
+                        Collections.nCopies(marketArticles, longest)));
 
         String context = worst.toJson(worst.build(USER, new AiContextSelection(null, null, null, PLAN, true)));
         return context.length();

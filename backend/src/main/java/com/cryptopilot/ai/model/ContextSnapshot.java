@@ -30,11 +30,12 @@ public record ContextSnapshot(
         TraderContext trader) {
 
     /**
-     * 4: the news about the coin and the market, numbered for citations, and the Trader's style (T-074); 3: the market
-     * part carries the side the setup score was computed for and its cap reason (D-146); 2: the
-     * performance summary carries the journal's aggregates (T-074, D-111).
+     * 5: the performance summary carries the learning fields of the latest closed trades (T-074b); 4: the news about
+     * the coin and the market, numbered for citations, and the Trader's style (T-074); 3: the market part carries the
+     * side the setup score was computed for and its cap reason (D-146); 2: the performance summary carries the
+     * journal's aggregates (T-074, D-111).
      */
-    public static final int VERSION = 4;
+    public static final int VERSION = 5;
 
     /** Whether there is nothing to send: a general question carries no snapshot. Not a bean getter, so not serialized. */
     public boolean carriesNothing() {
