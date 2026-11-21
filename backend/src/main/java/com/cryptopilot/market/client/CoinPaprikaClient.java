@@ -9,6 +9,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -20,6 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.JsonParser;
@@ -39,18 +41,40 @@ import tools.jackson.databind.json.JsonMapper;
  * {@code read-timeout} for the others), so a server that stalls mid-body fails the call instead of holding the job.
  * No retry here: the next scheduled run reads again. Not final, so the system log can watch it (UC-52).
  *
+ * <p>A refusal for too many calls (429, or the 402 of the free plan: 60 calls an hour, then blocked for an hour) is
+ * waited out: until its {@code Retry-After} has passed ({@link #RATE_LIMIT_WAIT} or {@link #PLAN_LIMIT_WAIT} without
+ * one), every call fails at once as rate limited and CoinPaprika is not called, since each call made while blocked
+ * keeps the block going.
+ *
  * <p>Reference: CoinPaprika API v1, "List coins", "Get coin by ID" and "Tickers" (circulating supply), api.coinpaprika.com.
  * Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf ("Timeouts", "Steady State").
  */
 public class CoinPaprikaClient implements AutoCloseable {
 
+    /** How long a 429 without {@code Retry-After} is waited out. */
+    static final Duration RATE_LIMIT_WAIT = Duration.ofMinutes(1);
+
+    /** How long a 402 without {@code Retry-After} is waited out: the free plan blocks for an hour. */
+    static final Duration PLAN_LIMIT_WAIT = Duration.ofHours(1);
+
     private final CoinPaprikaProperties properties;
     private final JsonMapper json;
     private final HttpClient http;
+    private final Clock clock;
+    /** Until when CoinPaprika asked not to be called, and with which status; null when it did not. */
+    private final AtomicReference<Wait> waiting = new AtomicReference<>();
+
+    /** A refusal for too many calls being waited out. */
+    private record Wait(Instant until, int status) {}
 
     public CoinPaprikaClient(CoinPaprikaProperties properties, JsonMapper json) {
+        this(properties, json, Clock.systemUTC());
+    }
+
+    public CoinPaprikaClient(CoinPaprikaProperties properties, JsonMapper json, Clock clock) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.json = Objects.requireNonNull(json, "json must not be null");
+        this.clock = Objects.requireNonNull(clock, "clock must not be null");
         this.http = HttpClient.newBuilder()
                 .connectTimeout(properties.connectTimeout())
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -186,8 +210,21 @@ public class CoinPaprikaClient implements AutoCloseable {
         }
     }
 
+    /** Until when CoinPaprika asked not to be called, if it did and that has not passed. */
+    public Optional<Instant> waitingUntil() {
+        Wait wait = waiting.get();
+        return wait == null || !wait.until().isAfter(clock.instant()) ? Optional.empty() : Optional.of(wait.until());
+    }
+
     /** One GET whose answer, body included, must arrive within {@code deadline}; a 200's body, or a refusal. */
     private byte[] get(String path, Duration deadline) {
+        Wait wait = waiting.get();
+        if (wait != null && wait.until().isAfter(clock.instant())) {
+            throw new CoinPaprikaException(
+                    "CoinPaprika asked to wait until " + wait.until() + "; " + path + " not called",
+                    wait.status(),
+                    null);
+        }
         String base = properties.baseUrl().toString().replaceAll("/+$", "");
         HttpRequest request = HttpRequest.newBuilder(URI.create(base + path))
                 .timeout(properties.readTimeout())
@@ -208,11 +245,28 @@ public class CoinPaprikaClient implements AutoCloseable {
             Thread.currentThread().interrupt();
             throw new CoinPaprikaException("interrupted while waiting for CoinPaprika", 0, e);
         }
+        if (response.statusCode() == 429 || response.statusCode() == 402) {
+            Duration pause =
+                    retryAfter(response).orElse(response.statusCode() == 402 ? PLAN_LIMIT_WAIT : RATE_LIMIT_WAIT);
+            waiting.set(new Wait(clock.instant().plus(pause), response.statusCode()));
+        }
         if (response.statusCode() != 200) {
             throw new CoinPaprikaException(
                     "CoinPaprika answered HTTP " + response.statusCode() + " for " + path, response.statusCode(), null);
         }
         return response.body();
+    }
+
+    /** The {@code Retry-After} of an answer in seconds, when it has a usable one. */
+    private static Optional<Duration> retryAfter(HttpResponse<?> response) {
+        return response.headers().firstValue("Retry-After").flatMap(value -> {
+            try {
+                long seconds = Long.parseLong(value.trim());
+                return seconds > 0 ? Optional.of(Duration.ofSeconds(seconds)) : Optional.empty();
+            } catch (NumberFormatException notSeconds) {
+                return Optional.empty();
+            }
+        });
     }
 
     private static String text(JsonNode node, String field) {

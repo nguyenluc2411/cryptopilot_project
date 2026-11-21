@@ -3,6 +3,7 @@ package com.cryptopilot.market.client;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.cryptopilot.support.MutableTestClock;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -12,8 +13,10 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -191,6 +194,62 @@ class CoinPaprikaClientTest {
         }
     }
 
+    /**
+     * A refusal for too many calls is waited out: until its Retry-After has passed, no call reaches CoinPaprika (each one
+     * would keep the free plan's block going), and every call fails at once as rate limited.
+     */
+    @Test
+    void aPlanLimit_isWaitedOutForItsRetryAfter_withoutCallingAgain() {
+        AtomicInteger hits = new AtomicInteger();
+        server.createContext("/v1/limited", exchange -> {
+            hits.incrementAndGet();
+            exchange.getResponseHeaders().add("Retry-After", "120");
+            send(exchange, 402, "{\"type\":\"payment_required\"}");
+        });
+        MutableTestClock clock = new MutableTestClock(Instant.parse("2026-11-21T13:18:25Z"));
+        try (CoinPaprikaClient client = client("/v1/limited/", clock)) {
+            assertThatThrownBy(client::global)
+                    .isInstanceOfSatisfying(CoinPaprikaException.class, e -> assertThat(e.rateLimited())
+                            .isTrue());
+            assertThat(client.waitingUntil()).contains(clock.instant().plusSeconds(120));
+
+            assertThatThrownBy(client::tickers).isInstanceOfSatisfying(CoinPaprikaException.class, e -> {
+                assertThat(e.rateLimited()).isTrue();
+                assertThat(e.status()).isEqualTo(402);
+            });
+            assertThatThrownBy(() -> client.logo("btc-bitcoin")).isInstanceOf(CoinPaprikaException.class);
+            assertThat(hits).as("not called while waiting").hasValue(1);
+
+            clock.advance(Duration.ofSeconds(120));
+            assertThat(client.waitingUntil()).isEmpty();
+            assertThatThrownBy(client::global).isInstanceOf(CoinPaprikaException.class);
+            assertThat(hits).as("called again once the wait is over").hasValue(2);
+        }
+    }
+
+    /** A 429 without a usable Retry-After is waited out for a minute; a 402 without one, for the plan's hour. */
+    @Test
+    void aRateLimitWithoutRetryAfter_isWaitedOutByDefault() {
+        MutableTestClock clock = new MutableTestClock(Instant.parse("2026-11-21T13:18:25Z"));
+        status.set(429);
+        try (CoinPaprikaClient client = client("/v1/", clock)) {
+            assertThatThrownBy(client::global).isInstanceOf(CoinPaprikaException.class);
+            assertThat(client.waitingUntil()).contains(clock.instant().plus(CoinPaprikaClient.RATE_LIMIT_WAIT));
+        }
+        status.set(402);
+        try (CoinPaprikaClient client = client("/v1/", clock)) {
+            assertThatThrownBy(client::global).isInstanceOf(CoinPaprikaException.class);
+            assertThat(client.waitingUntil()).contains(clock.instant().plus(CoinPaprikaClient.PLAN_LIMIT_WAIT));
+        }
+        status.set(503);
+        try (CoinPaprikaClient client = client("/v1/", clock)) {
+            assertThatThrownBy(client::global)
+                    .isInstanceOfSatisfying(CoinPaprikaException.class, e -> assertThat(e.rateLimited())
+                            .isFalse());
+            assertThat(client.waitingUntil()).as("an outage is not waited out").isEmpty();
+        }
+    }
+
     @Test
     void noAnswerIsAFailure() {
         server.stop(0);
@@ -233,6 +292,22 @@ class CoinPaprikaClientTest {
                         Duration.ofHours(24),
                         Map.of()),
                 JsonMapper.builder().build());
+    }
+
+    private CoinPaprikaClient client(String path, MutableTestClock clock) {
+        URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + path);
+        return new CoinPaprikaClient(
+                new CoinPaprikaProperties(
+                        true,
+                        base,
+                        Duration.ZERO,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(2),
+                        Duration.ofHours(24),
+                        Map.of()),
+                JsonMapper.builder().build(),
+                clock);
     }
 
     private static void send(HttpExchange exchange, int status, String body) throws IOException {

@@ -34,8 +34,8 @@ import tools.jackson.databind.json.JsonMapper;
 public class CoinPaprikaConfig {
 
     @Bean(destroyMethod = "close")
-    CoinPaprikaClient coinPaprikaClient(CoinPaprikaProperties properties, JsonMapper json) {
-        return new CoinPaprikaClient(properties, json);
+    CoinPaprikaClient coinPaprikaClient(CoinPaprikaProperties properties, JsonMapper json, Clock clock) {
+        return new CoinPaprikaClient(properties, json, clock);
     }
 
     @Bean

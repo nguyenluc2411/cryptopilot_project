@@ -24,9 +24,12 @@ public class CoinPaprikaException extends RuntimeException implements ExternalAn
         return status;
     }
 
-    /** Whether CoinPaprika asked to slow down. */
+    /**
+     * Whether CoinPaprika asked to slow down: a 429, or the 402 its free plan answers once the hourly or monthly calls
+     * are spent.
+     */
     public boolean rateLimited() {
-        return status == 429;
+        return status == 429 || status == 402;
     }
 
     @Override

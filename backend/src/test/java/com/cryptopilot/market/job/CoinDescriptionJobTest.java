@@ -66,6 +66,20 @@ class CoinDescriptionJobTest {
         verify(descriptions).describeCoins();
     }
 
+    /** Hourly, from an hour after start-up, for the coins a run left without a logo; a 429 there is not retried. */
+    @Test
+    void theHourlyRun_startsAnHourAfterStartUp() {
+        job.start();
+
+        ArgumentCaptor<Runnable> hourly = ArgumentCaptor.forClass(Runnable.class);
+        verify(scheduler)
+                .scheduleAtFixedRate(
+                        hourly.capture(), eq(NOW.plus(CoinDescriptionJob.EVERY)), eq(CoinDescriptionJob.EVERY));
+        when(descriptions.describeCoins()).thenThrow(new CoinPaprikaException("slow down", 402, null));
+        hourly.getValue().run();
+        verify(scheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+    }
+
     @Test
     void aRateLimitIsRetriedOnceAndThenWaits() {
         doReturnFuture();

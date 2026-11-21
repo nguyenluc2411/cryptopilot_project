@@ -10,6 +10,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
 
@@ -25,8 +26,11 @@ import org.springframework.scheduling.TaskScheduler;
  * service schedules the run the same way: a batch of pairs makes one run, and a run with every coin described reads
  * nothing.
  *
- * <p>A CoinPaprika that asks to slow down (429) is tried once more after {@link #RATE_LIMIT_WAIT}; any other failure
- * waits for the next synchronisation. Either way the coins keep what they have, and nothing about prices or trading
+ * <p>Also once an hour ({@link #EVERY}), for the coins a run left without a logo because the hour's share of CoinPaprika
+ * calls was spent; with every coin described, or tried within the day, such a run reads nothing.
+ *
+ * <p>A CoinPaprika that asks to slow down (429, 402) is tried once more after {@link #RATE_LIMIT_WAIT}; any other
+ * failure waits for the next synchronisation. Either way the coins keep what they have, and nothing about prices or trading
  * depends on this job.
  *
  * <p>Rule: SRS 3.1.5; NSF-01; UC-45.
@@ -37,6 +41,9 @@ public class CoinDescriptionJob {
 
     /** How long after the last market's synchronisation the run starts. */
     static final Duration SETTLE = Duration.ofSeconds(30);
+
+    /** How often the coins still without a logo are described again. */
+    static final Duration EVERY = Duration.ofHours(1);
 
     /** How long a 429 of CoinPaprika is waited out before the one retry. */
     static final Duration RATE_LIMIT_WAIT = Duration.ofMinutes(2);
@@ -52,6 +59,12 @@ public class CoinDescriptionJob {
         this.descriptions = descriptions;
         this.scheduler = scheduler;
         this.clock = clock;
+    }
+
+    /** The hourly run, the first an hour from now: the start-up synchronisation describes the coins before. */
+    @EventListener(ApplicationReadyEvent.class)
+    public void start() {
+        scheduler.scheduleAtFixedRate(() -> run(false), clock.instant().plus(EVERY), EVERY);
     }
 
     /** A market was synchronised: describe the coins once both have settled. */

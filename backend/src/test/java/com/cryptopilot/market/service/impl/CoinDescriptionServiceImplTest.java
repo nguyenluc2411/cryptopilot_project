@@ -103,6 +103,37 @@ class CoinDescriptionServiceImplTest {
         assertThat(ton.getLogoUrl()).isEqualTo(logoOf("toncoin-the-open-network"));
     }
 
+    /**
+     * No more than {@code LOGO_CALLS_PER_HOUR} logo calls in any hour, across runs, so the supplies and the market's cap
+     * keep their share of CoinPaprika's 60 calls an hour; the coins left without a logo get it from a later run.
+     */
+    @Test
+    void theLogoCalls_keepToTheirShareOfAnHour_acrossRuns() {
+        int coinsToDescribe = CoinDescriptionServiceImpl.LOGO_CALLS_PER_HOUR + 5;
+        Coin[] all = new Coin[coinsToDescribe];
+        CoinPaprikaCoin[] known = new CoinPaprikaCoin[coinsToDescribe];
+        for (int i = 0; i < coinsToDescribe; i++) {
+            all[i] = Coin.fromExchange("C" + i);
+            known[i] = paprika("c" + i + "-coin", "C" + i, "Coin " + i, i + 1, true);
+        }
+        undescribed(all);
+        listed(known);
+
+        service.describeCoins();
+        verify(client, times(CoinDescriptionServiceImpl.LOGO_CALLS_PER_HOUR)).logo(any());
+        assertThat(java.util.Arrays.stream(all).filter(coin -> coin.getLogoUrl() == null))
+                .hasSize(5);
+
+        clock.advance(Duration.ofMinutes(30));
+        service.describeCoins();
+        verify(client, times(CoinDescriptionServiceImpl.LOGO_CALLS_PER_HOUR)).logo(any());
+
+        clock.advance(Duration.ofMinutes(31));
+        service.describeCoins();
+        verify(client, times(coinsToDescribe)).logo(any());
+        assertThat(all).allMatch(coin -> coin.getLogoUrl() != null);
+    }
+
     @Test
     void aContractInThousandsTakesTheLogoOfItsCoinButKeepsItsNameAndTheLogoIsReadOnce() {
         Coin pepe = Coin.fromExchange("PEPE");
