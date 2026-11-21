@@ -67,7 +67,9 @@ import org.springframework.stereotype.Component;
  * touches only what it must: a connection carrying a pair no longer streamed is replaced by one carrying the rest of
  * its pairs, a pair newly streamed goes on a new connection, and every other connection stays open, so the prices of
  * the other pairs never stop for a change that is not theirs; a pair no longer streamed is dropped from the latest
- * prices (BR-07). A Futures pair's best bid and ask and depth (TR-38) go on connections of their own, on the
+ * prices (BR-07). So that pairs added one batch at a time do not leave a trail of small connections, a batch joins the
+ * connection a previous batch was given when it has room: that connection is replaced by one carrying both, which
+ * interrupts only the pairs added before it, never a connection opened at start-up. A Futures pair's best bid and ask and depth (TR-38) go on connections of their own, on the
  * exchange's {@code /public} route; everything else of the market shares the {@code /market} ones.
  *
  * <p>Pairs an administrator turns on one after the other are opened together, {@link #ENABLE_SETTLE} after the first:
@@ -252,6 +254,7 @@ public class MarketStreamSupervisor {
         latest.retainOnly(market, targets.stream().map(StreamTarget::pairId).toList());
         trading.retainOnly(market, targets.stream().map(StreamTarget::pairId).toList());
         List<Connection> opened = new ArrayList<>();
+        boolean addition = current != null;
         for (boolean book : new boolean[] {false, true}) {
             Set<StreamTarget> covered = kept.stream()
                     .filter(connection -> connection.book() == book)
@@ -259,7 +262,18 @@ public class MarketStreamSupervisor {
                     .collect(Collectors.toSet());
             List<StreamTarget> missing =
                     targets.stream().filter(target -> !covered.contains(target)).toList();
-            opened.addAll(open(market, missing, book));
+            if (addition && !missing.isEmpty()) {
+                Connection joined = joinable(market, kept, missing, book);
+                if (joined != null) {
+                    kept.remove(joined);
+                    closed.add(joined);
+                    joined.shard().close();
+                    List<StreamTarget> both = new ArrayList<>(joined.targets());
+                    both.addAll(missing);
+                    missing = both;
+                }
+            }
+            opened.addAll(open(market, missing, book, addition));
         }
         List<Connection> connections = new ArrayList<>(kept);
         connections.addAll(opened);
@@ -302,17 +316,43 @@ public class MarketStreamSupervisor {
     }
 
     /**
-     * New connections for the targets on one route, not started: the price route, or the book route TR-38 serves under
-     * {@code /public} only.
+     * The connection of a previous addition on this route that has room for the streams of {@code missing}, the
+     * emptiest if several; null when none has. A connection opened at start-up never is.
      */
-    private List<Connection> open(MarketType market, List<StreamTarget> targets, boolean book) {
+    private Connection joinable(MarketType market, List<Connection> kept, List<StreamTarget> missing, boolean book) {
+        int needed = missing.stream()
+                .mapToInt(target -> namesOf(market, target, book).size())
+                .sum();
+        int max = book ? streams.maxPublicStreamsPerConnection() : streams.maxStreamsPerConnection();
+        Connection emptiest = null;
+        for (Connection connection : kept) {
+            int size = connection.shard().streams().size();
+            if (connection.book() == book
+                    && connection.added()
+                    && size + needed <= max
+                    && (emptiest == null || size < emptiest.shard().streams().size())) {
+                emptiest = connection;
+            }
+        }
+        return emptiest;
+    }
+
+    private List<String> namesOf(MarketType market, StreamTarget target, boolean book) {
+        BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
+        return book ? streams.publicStreamsFor(venue, target.symbol()) : streams.streamsFor(venue, target.symbol());
+    }
+
+    /**
+     * New connections for the targets on one route, not started: the price route, or the book route TR-38 serves under
+     * {@code /public} only; {@code added} when they are opened for pairs added after the first opening.
+     */
+    private List<Connection> open(MarketType market, List<StreamTarget> targets, boolean book, boolean added) {
         BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
         List<Connection> opened = new ArrayList<>();
         pack(
                 targets,
-                target -> book
-                        ? streams.publicStreamsFor(venue, target.symbol())
-                        : streams.streamsFor(venue, target.symbol()),
+                target -> namesOf(market, target, book),
+                book ? streams.maxPublicStreamsPerConnection() : streams.maxStreamsPerConnection(),
                 (batch, batchTargets) -> {
                     int number = nextConnection.merge(market, 1, Integer::sum) - 1;
                     String name = market + (book ? "-PUBLIC-" : "-") + number;
@@ -321,7 +361,7 @@ public class MarketStreamSupervisor {
                     BinanceStreamShard shard = book
                             ? streams.publicShard(name, batch, new Router(market, bySymbol, null))
                             : streams.shard(venue, name, batch, new Router(market, bySymbol, name));
-                    opened.add(new Connection(shard, name, List.copyOf(batchTargets), book));
+                    opened.add(new Connection(shard, name, List.copyOf(batchTargets), book, added));
                 });
         return opened;
     }
@@ -333,6 +373,7 @@ public class MarketStreamSupervisor {
     private void pack(
             List<StreamTarget> targets,
             Function<StreamTarget, List<String>> namesOf,
+            int maxStreams,
             BiConsumer<List<String>, List<StreamTarget>> open) {
         List<String> batch = new ArrayList<>();
         List<StreamTarget> batchTargets = new ArrayList<>();
@@ -341,7 +382,7 @@ public class MarketStreamSupervisor {
             if (names.isEmpty()) {
                 continue;
             }
-            if (!batch.isEmpty() && batch.size() + names.size() > streams.maxStreamsPerConnection()) {
+            if (!batch.isEmpty() && batch.size() + names.size() > maxStreams) {
                 open.accept(batch, batchTargets);
                 batch = new ArrayList<>();
                 batchTargets = new ArrayList<>();
@@ -363,8 +404,10 @@ public class MarketStreamSupervisor {
      * @param name its name in the log and the market health
      * @param targets the pairs whose streams it carries
      * @param book whether it is a book connection of TR-38 (no candle on it) rather than a price one
+     * @param added whether it was opened for pairs added after the first opening, so a later addition may join it
      */
-    private record Connection(BinanceStreamShard shard, String name, List<StreamTarget> targets, boolean book) {}
+    private record Connection(
+            BinanceStreamShard shard, String name, List<StreamTarget> targets, boolean book, boolean added) {}
 
     /** Routes the messages of one market's connections; called on the readers' threads, never blocks. */
     private final class Router implements BinanceStreamShard.Listener {

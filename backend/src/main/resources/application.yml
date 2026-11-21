@@ -453,6 +453,9 @@ cryptopilot:
         futures: true
         futures-public-url: wss://fstream.binance.com/public
         depth-levels: 20
+        # The most streams on one /public connection (two a Futures pair, so 10 pairs). Fifty pairs on one connection
+        # (thousands of messages a second) were closed by the exchange (1006) dozens of times a day (2026-11-21).
+        public-streams-per-connection: 20
         # A best bid and ask or depth older than this is not served as current (a lost stream).
         max-age: 10s
         # The latest trades kept per pair for the trades panel.

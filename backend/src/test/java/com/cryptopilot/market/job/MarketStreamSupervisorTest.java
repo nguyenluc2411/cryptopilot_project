@@ -105,6 +105,7 @@ class MarketStreamSupervisorTest {
     private final List<MarkPriceListener> markListeners = new CopyOnWriteArrayList<>(List.of(marks::add));
     private boolean tradingStreams;
     private boolean futuresTradingStreams;
+    private int publicStreamsPerConnection = 20;
     private TradingMarketData trading;
     private MarketUpdateService updates = (market, message) -> {
         realtime.add(message);
@@ -558,6 +559,67 @@ class MarketStreamSupervisorTest {
         assertThat(events).as("no reconnection, none was lost").isEmpty();
     }
 
+    /**
+     * S8: a later batch joins the connection the previous batch was given when it has room, so additions do not leave a
+     * trail of small connections; the connection opened at start-up is never touched.
+     */
+    @Test
+    void UC45_aLaterBatch_joinsThePreviousBatchsConnection_andNeverTheStartUpOne() {
+        data.enable(btc, true, false);
+        supervisor = supervisor(true, 18);
+        supervisor.refresh(MarketType.SPOT);
+        BinanceStreamShard startUp = supervisor.shards(MarketType.SPOT).getFirst();
+
+        data.pair("ETHUSDT", true, false, "TRADING", null, 1);
+        supervisor.refresh(MarketType.SPOT);
+        BinanceStreamShard firstBatch = supervisor.shards(MarketType.SPOT).get(1);
+        assertThat(firstBatch.streams()).hasSize(6);
+
+        data.pair("SOLUSDT", true, false, "TRADING", null, 2);
+        assertThat(supervisor.refresh(MarketType.SPOT)).isTrue();
+
+        assertThat(supervisor.shards(MarketType.SPOT)).hasSize(2).first().isSameAs(startUp);
+        BinanceStreamShard joined = supervisor.shards(MarketType.SPOT).get(1);
+        assertThat(joined).isNotSameAs(firstBatch);
+        assertThat(joined.streams())
+                .hasSize(12)
+                .anyMatch(s -> s.startsWith("ethusdt@"))
+                .anyMatch(s -> s.startsWith("solusdt@"));
+
+        data.pair("XRPUSDT", true, false, "TRADING", null, 3);
+        data.pair("ADAUSDT", true, false, "TRADING", null, 4);
+        supervisor.refresh(MarketType.SPOT);
+        assertThat(supervisor.shards(MarketType.SPOT))
+                .as("no room for two more pairs: a new connection, the others kept")
+                .hasSize(3)
+                .startsWith(startUp, joined);
+    }
+
+    /**
+     * The Futures book connections (TR-38) carry at most {@code public-streams-per-connection} streams, so the busiest
+     * pairs' best bids and asks are spread over several readers; the price connections keep their own limit.
+     */
+    @Test
+    void TR38_bookConnections_keepToTheirOwnLimit() {
+        futuresTradingStreams = true;
+        publicStreamsPerConnection = 2;
+        data.pair("ETHUSDT", false, true, null, "TRADING", 1);
+        data.pair("SOLUSDT", false, true, null, "TRADING", 2);
+        supervisor = supervisor(true, 100);
+
+        supervisor.refresh(MarketType.FUTURES);
+
+        List<BinanceStreamShard> shards = supervisor.shards(MarketType.FUTURES);
+        assertThat(shards.stream().filter(shard -> shard.streams().getFirst().contains("@kline")))
+                .as("one price connection for the three pairs")
+                .singleElement()
+                .satisfies(shard -> assertThat(shard.streams()).hasSize(24));
+        assertThat(shards.stream().filter(shard -> shard.streams().getFirst().contains("@bookTicker")))
+                .as("a book connection per pair")
+                .hasSize(3)
+                .allSatisfy(shard -> assertThat(shard.streams()).hasSize(2));
+    }
+
     /** S3, S4: a pair removed closes only its own connection; the others are untouched. */
     @Test
     void BR07_aPairRemoved_rebuildsOnlyItsConnection() {
@@ -699,7 +761,8 @@ class MarketStreamSupervisorTest {
                         server.baseUrl("/public"),
                         20,
                         Duration.ofSeconds(10),
-                        50));
+                        50,
+                        publicStreamsPerConnection));
         trading = new TradingMarketData(properties, Clock.systemUTC());
         streams = new BinanceStreamClient(properties, JsonMapper.builder().build(), Clock.systemUTC());
         return new MarketStreamSupervisor(

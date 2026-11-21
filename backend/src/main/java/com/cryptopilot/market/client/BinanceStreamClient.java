@@ -126,6 +126,11 @@ public final class BinanceStreamClient implements AutoCloseable {
         return properties.maxStreamsPerConnection();
     }
 
+    /** The most streams on one connection of the Futures {@code /public} route, never more than on any connection. */
+    public int maxPublicStreamsPerConnection() {
+        return Math.min(properties.trading().publicStreamsPerConnection(), properties.maxStreamsPerConnection());
+    }
+
     /** A connection for these streams, not yet started. */
     public BinanceStreamShard shard(
             BinanceVenue venue, String name, List<String> streams, BinanceStreamShard.Listener listener) {

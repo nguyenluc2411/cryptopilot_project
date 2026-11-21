@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
 import java.net.URI;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
 
@@ -76,6 +77,10 @@ public record BinanceStreamProperties(
      * @param maxAge the oldest best bid and ask or depth served as current; Binance pushes them as they change, and
      *     the depth every 100 ms, so an older one means a lost stream
      * @param recentTrades how many of the latest trades of a pair are kept for the trades panel
+     * @param publicStreamsPerConnection the most streams on one Futures {@code /public} connection (two a pair): the
+     *     best bid and ask of the busiest pairs arrive hundreds of times a second each, and a connection carrying fifty
+     *     pairs (thousands of messages a second) was closed by the exchange (1006) dozens of times a day, its reader
+     *     falling behind; smaller connections spread them over more readers
      */
     public record Trading(
             @DefaultValue("true") boolean enabled,
@@ -86,8 +91,21 @@ public record BinanceStreamProperties(
 
             @Min(5) @Max(20) @DefaultValue("20") int depthLevels,
             @NotNull @DefaultValue("10s") Duration maxAge,
-            @Min(1) @Max(1000) @DefaultValue("50") int recentTrades) {
+            @Min(1) @Max(1000) @DefaultValue("50") int recentTrades,
+            @Min(2) @Max(1024) @DefaultValue("20") int publicStreamsPerConnection) {
 
+        /** The settings with the default number of streams on a {@code /public} connection. */
+        public Trading(
+                boolean enabled,
+                boolean futures,
+                URI futuresPublicUrl,
+                int depthLevels,
+                Duration maxAge,
+                int recentTrades) {
+            this(enabled, futures, futuresPublicUrl, depthLevels, maxAge, recentTrades, 20);
+        }
+
+        @ConstructorBinding
         public Trading {
             if (depthLevels != 5 && depthLevels != 10 && depthLevels != 20) {
                 throw new IllegalArgumentException("depthLevels must be 5, 10 or 20, was " + depthLevels);
