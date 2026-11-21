@@ -108,6 +108,27 @@ class CoinMarketRepositoryTest {
         assertThat(closes.get(new Series(futures, MarketType.FUTURES))).hasSize(1);
     }
 
+    /** Q1: one pair asked on both markets is two series, each answered with its own candles. */
+    @Test
+    void bothMarketsOfOnePair_areAnsweredApart() {
+        Instant from = NOW.minus(Duration.ofHours(3));
+        candle(spot, MarketType.SPOT, "1h", from, Duration.ofHours(1), "2");
+        candle(spot, MarketType.FUTURES, "1h", from, Duration.ofHours(1), "20");
+        candle(spot, MarketType.FUTURES, "1h", from.plus(Duration.ofHours(1)), Duration.ofHours(1), "21");
+        Series onSpot = new Series(spot, MarketType.SPOT);
+        Series onFutures = new Series(spot, MarketType.FUTURES);
+
+        Map<Series, List<BigDecimal>> week =
+                figures.closesBetween(List.of(onSpot, onFutures), MarketInterval.ONE_HOUR, from, NOW);
+        Map<Series, BigDecimal> close = figures.closesAt(
+                List.of(onFutures, onSpot), MarketInterval.ONE_HOUR, NOW, from.minus(Duration.ofHours(1)));
+
+        assertThat(week.get(onSpot)).extracting(BigDecimal::intValue).containsExactly(2);
+        assertThat(week.get(onFutures)).extracting(BigDecimal::intValue).containsExactly(20, 21);
+        assertThat(close.get(onSpot)).isEqualByComparingTo("2");
+        assertThat(close.get(onFutures)).isEqualByComparingTo("21");
+    }
+
     @Test
     void aSeriesGivenTwice_isAnsweredOnce() {
         Instant from = NOW.minus(Duration.ofHours(3));
