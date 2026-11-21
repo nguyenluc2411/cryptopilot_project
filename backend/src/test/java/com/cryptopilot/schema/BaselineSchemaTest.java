@@ -129,7 +129,9 @@ class BaselineSchemaTest {
                         + " business entities; legacy_paper_account and legacy_paper_transfer keep the rows V47"
                         + " folded into the Trader and the ledger, untouched, until a later migration drops them;"
                         + " system_event (V59, the system log of UC-52) is operational state too;"
-                        + " verification_resend_attempt (V71, BR-65's resend counter) is a short-lived counter")
+                        + " verification_resend_attempt (V71, BR-65's resend counter) is a short-lived counter;"
+                        + " market_incident (V74, the periods trading on a market was closed, D-159) is operational"
+                        + " state")
                 .contains(
                         "event_publication",
                         "flyway_schema_history",
@@ -140,8 +142,9 @@ class BaselineSchemaTest {
                         "legacy_paper_account",
                         "legacy_paper_transfer",
                         "system_event",
-                        "verification_resend_attempt")
-                .hasSize(BUSINESS_TABLES.size() + 10);
+                        "verification_resend_attempt",
+                        "market_incident")
+                .hasSize(BUSINESS_TABLES.size() + 11);
     }
 
     @Test

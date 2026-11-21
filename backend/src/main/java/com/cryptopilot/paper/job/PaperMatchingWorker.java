@@ -4,12 +4,15 @@ import com.cryptopilot.market.LeverageBracketsReplaced;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarkPriceListener;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
+import com.cryptopilot.market.MarketRecoveryCheck;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MarketTradeListener;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.config.PaperFuturesProperties;
@@ -51,6 +54,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -59,6 +63,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -169,13 +175,26 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * "Aggregator" (the forming updates of a candle merged into one).
  */
 @Component
-public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeListener, MarkPriceListener {
+public class PaperMatchingWorker
+        implements MinuteKlineListener, MarketTradeListener, MarkPriceListener, MarketRecoveryCheck {
 
     private static final Logger log = LoggerFactory.getLogger(PaperMatchingWorker.class);
     private static final Duration MINUTE = Duration.ofMinutes(1);
 
+    /** How long the health monitor waits for the consumer's answer before taking it as not caught up (D-159). */
+    static final Duration CAUGHT_UP_WAIT = Duration.ofMillis(500);
+
+    /**
+     * How far behind the running minute a pair's last closed candle may be and the pair still be caught up; and how
+     * long before an incident a pair may have gone quiet and be left out, as no longer streamed (D-159).
+     */
+    static final Duration CAUGHT_UP_SLACK = Duration.ofMinutes(2);
+
     private final PaperMatchingService matching;
     private final MarketApi market;
+    /** Where an incident makes a start-up replay reach back to (D-159); null in tests that do not need it. */
+    private final MarketHealth health;
+
     private final PaperMatchingProperties properties;
     private final PaperFuturesProperties futures;
     private final Clock clock;
@@ -269,8 +288,9 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             MarketApi market,
             PaperMatchingProperties properties,
             PaperFuturesProperties futures,
-            Clock clock) {
-        this(matching, market, properties, futures, clock, Thread.ofVirtual().factory());
+            Clock clock,
+            MarketHealth health) {
+        this(matching, market, properties, futures, clock, Thread.ofVirtual().factory(), health);
     }
 
     PaperMatchingWorker(
@@ -280,6 +300,18 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             PaperFuturesProperties futures,
             Clock clock,
             ThreadFactory threads) {
+        this(matching, market, properties, futures, clock, threads, null);
+    }
+
+    PaperMatchingWorker(
+            PaperMatchingService matching,
+            MarketApi market,
+            PaperMatchingProperties properties,
+            PaperFuturesProperties futures,
+            Clock clock,
+            ThreadFactory threads,
+            MarketHealth health) {
+        this.health = health;
         this.matching = matching;
         this.market = market;
         this.properties = properties;
@@ -316,10 +348,15 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             oldestOnMark.merge(
                     new BookKey(order.market(), order.pairId()), order.placedAt(), (a, b) -> a.isBefore(b) ? a : b);
         }
-        // A position's level has no time of its own: without a mark watermark only the minute running now is caught up.
+        // A position's level has no time of its own: its marks are caught up from after the pair's mark watermark, so
+        // a mark missed while the application was down still liquidates (D-159 E2b); a replayed mark from before the
+        // position opened liquidates nothing (FuturesLiquidation). Without a watermark, the minute running now.
         for (LiquidationLevel level : matching.liquidationLevels()) {
             liquidations.track(level);
-            oldestOnMark.putIfAbsent(new BookKey(MarketType.FUTURES, level.pairId()), clock.instant());
+            Instant since = matching.markWatermark(level.pairId())
+                    .map(watermark -> watermark.plus(MINUTE))
+                    .orElse(clock.instant());
+            oldestOnMark.merge(new BookKey(MarketType.FUTURES, level.pairId()), since, (a, b) -> a.isBefore(b) ? a : b);
         }
         matching.crossAccounts().forEach(this::trackCross);
         if (properties.replay().enabled()) {
@@ -675,6 +712,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
                     onTrades(tradesKey.key(), waiting.drain());
                 }
             }
+            case Command.CaughtUp asked -> asked.answer().complete(progressOf(asked.market(), asked.lastLiveAt()));
             case Command.ReplayDone done -> {
                 replaying.remove(done.key());
                 lastClosed.merge(done.key(), done.until().minus(MINUTE), (a, b) -> a.isAfter(b) ? a : b);
@@ -839,7 +877,8 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         Instant at = source == FillSource.REPLAY ? clock.instant() : mark.eventTime();
         for (LiquidationLevel level : liquidations.reached(key.pairId(), mark.price())) {
             try {
-                if (!matching.liquidate(level, mark.price(), at)) {
+                Instant markTime = source == FillSource.REPLAY ? mark.eventTime() : null;
+                if (!matching.liquidate(level, mark.price(), at, markTime)) {
                     refreshLevels(level.userId(), level.pairId());
                 }
             } catch (RuntimeException failure) {
@@ -1252,6 +1291,83 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         }
     }
 
+    /**
+     * The health monitor asks, while a market recovers from an incident, whether this engine has caught up (D-159).
+     * Answered by the consumer, which owns the books, in turn with what it was handed before; no answer within
+     * {@link #CAUGHT_UP_WAIT} counts as not caught up. An engine that does not run has nothing to catch up on.
+     */
+    @Override
+    public RecoveryProgress progress(MarketType market, Instant lastLiveAt) {
+        if (!running) {
+            return RecoveryProgress.NOTHING;
+        }
+        CompletableFuture<RecoveryProgress> answer = new CompletableFuture<>();
+        queue.offer(new Command.CaughtUp(market, lastLiveAt, answer));
+        try {
+            return answer.get(CAUGHT_UP_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return RecoveryProgress.NOT_ANSWERED;
+        } catch (ExecutionException | TimeoutException notAnswered) {
+            return RecoveryProgress.NOT_ANSWERED;
+        }
+    }
+
+    /**
+     * How many pairs of the market the engine runs on prices have caught up: no replay or mark catch-up running, the
+     * last closed candle applied within {@link #CAUGHT_UP_SLACK} of the running minute, and, for the marks of a
+     * Futures pair, a live mark within {@code mark-max-age}. A pair that went quiet well before the incident counts as
+     * caught up: it is no longer streamed, and waiting for it would hold the market closed for good.
+     */
+    private RecoveryProgress progressOf(MarketType market, Instant lastLiveAt) {
+        Instant now = clock.instant();
+        Instant recent = minuteOf(now).minus(CAUGHT_UP_SLACK);
+        Instant quietBefore = lastLiveAt.minus(CAUGHT_UP_SLACK);
+        Set<BookKey> onPrices = new HashSet<>();
+        for (BookKey key : book.pairs()) {
+            if (key.market() == market) {
+                onPrices.add(key);
+            }
+        }
+        for (BookKey key : triggers.pairs()) {
+            if (key.market() == market) {
+                onPrices.add(key);
+            }
+        }
+        Set<BookKey> onMarks = new HashSet<>();
+        if (market == MarketType.FUTURES) {
+            onMarks.addAll(markTriggers.pairs());
+            onMarks.addAll(liquidations.pairs());
+        }
+        Set<BookKey> watched = new HashSet<>(onPrices);
+        watched.addAll(onMarks);
+        int done = 0;
+        for (BookKey key : watched) {
+            boolean prices = !onPrices.contains(key) || pricesCaughtUp(key, recent, quietBefore);
+            boolean marks = !onMarks.contains(key) || marksCaughtUp(key, now, quietBefore);
+            if (prices && marks) {
+                done++;
+            }
+        }
+        return new RecoveryProgress(done, watched.size());
+    }
+
+    private boolean pricesCaughtUp(BookKey key, Instant recent, Instant quietBefore) {
+        Instant closed = lastClosed.get(key);
+        if (replaying.contains(key) || closed == null) {
+            return false;
+        }
+        return closed.isBefore(quietBefore) || !closed.isBefore(recent);
+    }
+
+    private boolean marksCaughtUp(BookKey key, Instant now, Instant quietBefore) {
+        Instant mark = lastMark.get(key);
+        if (markCatchUps.containsKey(key) || mark == null) {
+            return false;
+        }
+        return mark.isBefore(quietBefore) || !mark.isBefore(now.minus(futures.markMaxAge()));
+    }
+
     /** Tries again the pair's failed fills whose delay has passed. */
     private void retryDue(BookKey key) {
         List<PendingFill> waiting = retries.get(key);
@@ -1402,7 +1518,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         if (afterWatermark.isAfter(from)) {
             from = afterWatermark;
         }
-        Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
+        Instant oldest = oldestReplayed(key.market());
         if (from.isBefore(oldest)) {
             log.warn(
                     "TR-02 {} {}: candles from {} to {} are beyond the replay window of {} and not replayed",
@@ -1429,7 +1545,7 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
         if (afterWatermark.isAfter(from)) {
             from = afterWatermark;
         }
-        Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
+        Instant oldest = oldestReplayed(MarketType.FUTURES);
         if (from.isBefore(oldest)) {
             log.warn(
                     "TR-42 FUTURES {}: mark candles from {} to {} are beyond the replay window of {} and not replayed",
@@ -1440,6 +1556,21 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
             from = oldest;
         }
         startCatchUp(key, from);
+    }
+
+    /**
+     * The oldest minute a start-up replay of the market reaches back to: the replay window, or further while an
+     * incident is open or just ended, to where its data stopped (D-159).
+     */
+    private Instant oldestReplayed(MarketType market) {
+        Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
+        if (health == null) {
+            return oldest;
+        }
+        return health.catchUpFrom(market)
+                .map(PaperMatchingWorker::minuteOf)
+                .filter(from -> from.isBefore(oldest))
+                .orElse(oldest);
     }
 
     /** The replay thread: one pair at a time, page by page, until it has caught up with the closed candles. */
@@ -1656,6 +1787,10 @@ public class PaperMatchingWorker implements MinuteKlineListener, MarketTradeList
 
         /** A replay of the pair has caught up; {@code until} is the open time of the first candle not replayed. */
         record ReplayDone(BookKey key, Instant until) implements Command {}
+
+        /** Answer whether the market has caught up since {@code lastLiveAt} (D-159). */
+        record CaughtUp(MarketType market, Instant lastLiveAt, CompletableFuture<RecoveryProgress> answer)
+                implements Command {}
 
         /** Wakes the consumer so it sees the stop. */
         record Stop() implements Command {}

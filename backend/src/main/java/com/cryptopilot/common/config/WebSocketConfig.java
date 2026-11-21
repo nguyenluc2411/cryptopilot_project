@@ -41,8 +41,9 @@ import org.springframework.web.socket.config.annotation.WebSocketTransportRegist
  *
  * <h2>What a client may subscribe to</h2>
  *
- * <p>The public market topics — {@code /topic/ticker.*}, {@code /topic/kline.*}, {@code /topic/overview.*}, and the
- * trades and depth of the trading screen — open to anyone, as the market data is public (D-50). A signed-in session
+ * <p>The public market topics — {@code /topic/ticker.*}, {@code /topic/kline.*}, {@code /topic/overview.*}, the
+ * trades and depth of the trading screen, and the markets' data health {@code /topic/market.status} (D-159) — open to
+ * anyone, as the market data is public (D-50). A signed-in session
  * may also subscribe to its own demo trading queues {@code /user/queue/orders}, {@code /user/queue/fills} and
  * {@code /user/queue/balances} (TR-08), to its paper Futures {@code /user/queue/futures.orders} and
  * {@code /user/queue/futures.account} (TR-41), {@code futures.algo}, {@code futures.config} and
@@ -75,7 +76,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     /** The public market destinations of TECHNICAL_DESIGN 9, and the trades and depth of the trading screen (TR-03). */
     static final Pattern PUBLIC_TOPICS =
-            Pattern.compile("/topic/(ticker|kline|overview|trades|depth)\\.[A-Za-z0-9._]+");
+            Pattern.compile("/topic/(ticker|kline|overview|trades|depth|market)\\.[A-Za-z0-9._]+");
 
     /**
      * The queues of the signed-in user: demo trading (TR-08), paper Futures orders and account (TR-41), its algo orders,

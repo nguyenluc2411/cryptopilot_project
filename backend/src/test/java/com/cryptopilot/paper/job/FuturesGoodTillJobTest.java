@@ -6,6 +6,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.service.FuturesOrderService;
 import java.time.Clock;
@@ -25,6 +26,13 @@ class FuturesGoodTillJobTest {
     private final FuturesOrderService orders = mock(FuturesOrderService.class);
     private final TaskScheduler scheduler = mock(TaskScheduler.class);
     private final PaperMatchingProperties matching = mock(PaperMatchingProperties.class);
+    private final MarketHealth health = open();
+
+    private static MarketHealth open() {
+        MarketHealth health = mock(MarketHealth.class);
+        when(health.tradingOpen(any())).thenReturn(true);
+        return health;
+    }
 
     @Test
     void TR44_theRunsAreScheduled_onlyWhileTheEngineIsEnabled() {
@@ -53,6 +61,6 @@ class FuturesGoodTillJobTest {
     }
 
     private FuturesGoodTillJob job() {
-        return new FuturesGoodTillJob(orders, scheduler, matching, Clock.fixed(NOW, ZoneOffset.UTC));
+        return new FuturesGoodTillJob(orders, health, scheduler, matching, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 }

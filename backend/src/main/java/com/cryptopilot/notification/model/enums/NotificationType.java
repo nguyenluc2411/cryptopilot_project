@@ -36,5 +36,7 @@ public enum NotificationType {
     MENTION,
 
     /** A margin call or a liquidation of the recipient's paper Futures positions (TR-43); V53 adds this kind. */
-    FUTURES
+    FUTURES,
+    /** Trading on a market was paused, or reopened after a pause, because its exchange data was lost (D-159). */
+    MARKET
 }

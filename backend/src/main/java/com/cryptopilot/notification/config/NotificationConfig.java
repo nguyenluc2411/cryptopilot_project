@@ -5,5 +5,5 @@ import org.springframework.context.annotation.Configuration;
 
 /** The settings of the in-app notifications: their retention sweep (NSF-17). */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(NotificationSweepProperties.class)
+@EnableConfigurationProperties({NotificationSweepProperties.class, MarketBroadcastProperties.class})
 public class NotificationConfig {}

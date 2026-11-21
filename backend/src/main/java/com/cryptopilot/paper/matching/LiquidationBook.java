@@ -90,6 +90,11 @@ public final class LiquidationBook {
         return levels.containsKey(key(pairId));
     }
 
+    /** The pairs with a level watched (D-159: what a recovery waits for). */
+    public Set<BookKey> pairs() {
+        return Set.copyOf(levels.keySet());
+    }
+
     /** How many levels are watched. */
     public int size() {
         return levels.values().stream().mapToInt(Map::size).sum();

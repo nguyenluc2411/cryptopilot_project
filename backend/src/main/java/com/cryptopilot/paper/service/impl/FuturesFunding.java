@@ -29,6 +29,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,8 +44,8 @@ import org.springframework.transaction.annotation.Transactional;
  * Settles the funding of paper Futures positions from the settlements the market stores (TR-24, plan 9.4):
  *
  * <ul>
- *   <li>A position owes a settlement at {@code t} when it was open then: opened before {@code t}, not closed before
- *       it, as the plan calculator's {@code entry < t ≤ exit}. Its size at {@code t} is what its fills before
+ *   <li>A position owes a settlement at {@code t} when it was open then: opened before {@code t} (a fill a replay
+ *       applied counting at its candle's time, D-159), not closed before it, as the plan calculator's {@code entry < t ≤ exit}. Its size at {@code t} is what its fills before
  *       {@code t} opened less what they closed, so a run on time and a late one charge the same.
  *   <li>The fee is {@code −side × Q × mark × rate} at the settlement's mark: a positive rate makes longs pay and shorts
  *       receive. A fee that rounds to zero is not written.
@@ -91,11 +92,13 @@ public class FuturesFunding {
         candidates.values().forEach(p -> byPair.computeIfAbsent(p.getPairId(), ignored -> new ArrayList<>())
                 .add(p));
         List<Owed> owed = new ArrayList<>();
+        Map<UUID, Instant> openings = new HashMap<>();
         byPair.forEach((pairId, held) -> {
             for (SettledFunding settlement :
                     market.fundingHistory(pairId, from, now).settlements()) {
                 for (FuturesPosition position : held) {
-                    boolean openThen = position.getOpenedAt().isBefore(settlement.fundingTime())
+                    boolean openThen = (position.getOpenedAt().isBefore(settlement.fundingTime())
+                                    || openedAt(position, openings).isBefore(settlement.fundingTime()))
                             && (position.getClosedAt() == null
                                     || !position.getClosedAt().isBefore(settlement.fundingTime()));
                     if (openThen) {
@@ -105,6 +108,16 @@ public class FuturesFunding {
             }
         });
         return owed;
+    }
+
+    /**
+     * When a position opened on the exchange: its stored opening, or the candle of an earlier fill a replay applied
+     * after it (D-159), read once per run and only for a position dated after a settlement it may owe.
+     */
+    private Instant openedAt(FuturesPosition position, Map<UUID, Instant> openings) {
+        return openings.computeIfAbsent(position.getId(), id -> fills.firstFillAt(id)
+                .filter(first -> first.isBefore(position.getOpenedAt()))
+                .orElse(position.getOpenedAt()));
     }
 
     /**

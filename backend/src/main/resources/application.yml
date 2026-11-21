@@ -166,6 +166,11 @@ cryptopilot:
       # T-057: the sender address, and the web application the mailed links open (/verify-email, /reset-password).
       from: ${SMTP_FROM:no-reply@cryptopilot.local}
       public-base-url: ${PUBLIC_BASE_URL:http://localhost:5173}
+    market-broadcast:
+      # D-159: the Traders a market incident does not affect get one general notice in the bell, this long after the
+      # announcement, so whoever was told already is left out. Off here, on in the dev and prod profiles.
+      enabled: false
+      delay: 30s
     sweep:
       # NSF-17, notifications: daily, deletes those older than the retention (90 days, SRS 3.4.5). Off here, on in
       # the dev and prod profiles, so a test context schedules nothing.
@@ -385,6 +390,33 @@ cryptopilot:
       settlement-depth: 30d
       # An older streamed next funding time is read from premiumIndex instead (BR-11).
       mark-price-max-age: 2m
+    health:
+      # D-159: trading on a market is paused while its exchange data is lost, and reopens once the engines have
+      # replayed what was missed. Off here, so a test context closes a market only through maintenance; on in the dev
+      # and prod profiles, with the streams.
+      enabled: false
+      reconnecting-after: 10s
+      pause-after: 30s
+      stable-before-recover: 15s
+      # An outage shorter than this writes no notice; maintenance is announced at once.
+      notify-after: 2m
+      # A recovery running longer than this is told to the administrators; trading stays closed.
+      recovery-timeout: 15m
+      # D-159: the engines replay an incident's data at most this far back; a market whose data was lost longer stays
+      # recovering until an administrator reopens it.
+      max-outage-replay: 7d
+      # E5: while at most this share of a market's pairs have silent connections, the market stays open and only
+      # those pairs are named lost; more pauses it.
+      pause-ratio: 0.5
+    fallback:
+      # D-159: display-only reference prices while a market's exchange data is lost, from OKX's public API (no key),
+      # labelled with their source; they never fill, trigger, liquidate or charge anything and are never stored
+      # (BR-09). Read only while a market is paused or recovering. Off here, on in the dev and prod profiles.
+      enabled: false
+      base-url: https://www.okx.com
+      poll-interval: 3s
+      # A reference price further than this fraction from the exchange's last price is flagged on the banner.
+      divergence: 0.05
     stream:
       # NSF-03: the public market streams of the enabled pairs. Off here, on in the dev and prod profiles, so a
       # test context never connects to the exchange. Hosts verified 2026-09-24 (TECHNICAL_DESIGN 7.1.1): futures

@@ -338,6 +338,8 @@ class UserAccountRepositoryTest {
      * concurrency: it reads one row by its key, as {@code findById} does, and only adds the row lock.
      * {@code findIdsOfActiveAdministrators} joined it with the notice about a failing news source: it reads the keys
      * of the administrators only, a list as short as the staff, and takes no role a caller could widen to Traders.
+     * {@code findIdsOfActiveTradersAfter} joined it with the notice of a market incident to every Trader (D-159): it
+     * reads one bounded page of keys after a key, never the table at once.
      */
     @Test
     void theRepository_offersNoUnboundedReadOfATableThatGrowsWithUsers() {
@@ -349,6 +351,7 @@ class UserAccountRepositoryTest {
                         "findById",
                         "findByIdForUpdate",
                         "findIdsOfActiveAdministrators",
+                        "findIdsOfActiveTradersAfter",
                         "save",
                         "flush");
 

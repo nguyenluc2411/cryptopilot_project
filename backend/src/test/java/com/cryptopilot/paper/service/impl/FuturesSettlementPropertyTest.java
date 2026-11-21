@@ -1,14 +1,17 @@
 package com.cryptopilot.paper.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.OrderBookDepth;
 import com.cryptopilot.market.OrderBookDepth.PriceLevel;
+import com.cryptopilot.market.TradingPausedException;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.dto.request.FuturesClosePositionRequest;
@@ -31,6 +34,7 @@ import com.cryptopilot.paper.service.FuturesOrderService;
 import com.cryptopilot.paper.service.FuturesPositionService;
 import com.cryptopilot.paper.service.PaperAccountService;
 import com.cryptopilot.paper.service.PaperMatchingService;
+import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -104,12 +108,20 @@ class FuturesSettlementPropertyTest {
     @Autowired
     private PaperMatchingService matching;
 
+    @Autowired
+    private MarketHealthService health;
+
     private final List<UUID> pairs = new ArrayList<>();
     private final List<String> symbols = new ArrayList<>();
     private final List<BigDecimal> marks = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
     private UUID trader;
     private Random random;
+
+    /** Whether the sequence pauses Futures now and then (M7), and whether it is paused now. */
+    private boolean pauses;
+
+    private boolean paused;
 
     @BeforeEach
     void insertPairs() {
@@ -134,6 +146,8 @@ class FuturesSettlementPropertyTest {
 
     @AfterEach
     void removeRows() {
+        health.endMaintenance(MarketType.FUTURES);
+        MarketIncidents.removeAll(sql);
         if (trader != null) {
             // The liquidation notices (TR-43) are written after the commit: wait for them before the Trader goes.
             await().atMost(Duration.ofSeconds(10))
@@ -186,6 +200,27 @@ class FuturesSettlementPropertyTest {
     @ParameterizedTest(name = "seed {0}")
     @ValueSource(longs = {1, 2, 3, 5, 8, 13, 21, 34, 55, 89})
     void TR16_randomSequences_keepTheMoneyInvariants_onTheDatabase(long seed) {
+        run(seed);
+    }
+
+    /**
+     * M7 (D-159): the same sequences with Futures paused now and then. While paused, every action of the Trader is
+     * refused with {@code TRADING_PAUSED} but a transfer into Futures (I2), and the engine goes on as a catch-up does:
+     * replayed fills, and liquidations on marks from before they are applied. Every invariant holds throughout.
+     */
+    @ParameterizedTest(name = "seed {0}")
+    @ValueSource(longs = {4, 7, 11, 19, 42})
+    void D159_randomSequencesWithPauses_keepTheMoneyInvariants(long seed) {
+        pauses = true;
+        run(seed);
+        assertThat(sql.sql("select count(*) from market_incident where market_type = 'FUTURES'")
+                        .query(Long.class)
+                        .single())
+                .as("seed %d pauses", seed)
+                .isPositive();
+    }
+
+    private void run(long seed) {
         random = new Random(seed);
         trader = trader();
         for (int i = 0; i < pairs.size(); i++) {
@@ -208,45 +243,62 @@ class FuturesSettlementPropertyTest {
     }
 
     private void randomStep() {
+        if (pauses && random.nextInt(100) < 6) {
+            if (paused) {
+                health.endMaintenance(MarketType.FUTURES);
+            } else {
+                health.startMaintenance(MarketType.FUTURES, null, null);
+            }
+            paused = !paused;
+        }
         int pair = random.nextInt(pairs.size());
         String symbol = symbols.get(pair);
         int action = random.nextInt(100);
         if (action < 20) {
             move(pair);
         } else if (action < 45) {
-            attempt(() ->
-                    orders.place(trader, order(symbol, side(), OrderType.MARKET, null, quantity(), reduceOnly())));
+            user(() -> orders.place(trader, order(symbol, side(), OrderType.MARKET, null, quantity(), reduceOnly())));
         } else if (action < 60) {
             BigDecimal price = marks.get(pair)
                     .multiply(BigDecimal.valueOf(0.97 + random.nextDouble() * 0.06))
                     .setScale(2, RoundingMode.HALF_UP);
-            attempt(() ->
-                    orders.place(trader, order(symbol, side(), OrderType.LIMIT, price, quantity(), reduceOnly())));
+            user(() -> orders.place(trader, order(symbol, side(), OrderType.LIMIT, price, quantity(), reduceOnly())));
         } else if (action < 70) {
             fillResting();
         } else if (action < 78) {
             BigDecimal amount = BigDecimal.valueOf(1 + random.nextInt(200));
-            attempt(() -> positions.changeMargin(
+            user(() -> positions.changeMargin(
                     trader, new FuturesPositionMarginRequest(symbol, null, amount, 1 + random.nextInt(2))));
         } else if (action < 85) {
             BigDecimal percent = BigDecimal.valueOf(1 + random.nextInt(100));
-            attempt(() -> positions.close(
+            user(() -> positions.close(
                     trader, new FuturesClosePositionRequest(symbol, OrderType.MARKET, null, percent, null)));
         } else if (action < 90) {
             int leverage = 1 + random.nextInt(100);
-            attempt(() -> config.changeLeverage(trader, new FuturesLeverageRequest(symbol, leverage)));
+            user(() -> config.changeLeverage(trader, new FuturesLeverageRequest(symbol, leverage)));
             MarginType type = random.nextBoolean() ? MarginType.ISOLATED : MarginType.CROSSED;
-            attempt(() -> config.changeMarginType(trader, new FuturesMarginTypeRequest(symbol, type)));
+            user(() -> config.changeMarginType(trader, new FuturesMarginTypeRequest(symbol, type)));
         } else if (action < 95) {
             WalletType from = random.nextBoolean() ? WalletType.FUTURES : WalletType.SPOT;
             BigDecimal amount = BigDecimal.valueOf(1 + random.nextInt(3000));
-            attempt(() -> paper.transfer(trader, new TransferRequest("USDT", from, amount, null)));
+            Runnable transfer = () -> paper.transfer(trader, new TransferRequest("USDT", from, amount, null));
+            if (from == WalletType.SPOT) {
+                attempt(transfer);
+            } else {
+                user(transfer);
+            }
         } else if (action < 97) {
-            attempt(() -> orders.cancelAll(trader, symbol));
+            user(() -> orders.cancelAll(trader, symbol));
         } else {
             // The engine's check at the current mark: liquidates what that mark reaches, nothing else.
             for (LiquidationLevel level : matching.liquidationLevels(trader, pairs.get(pair))) {
-                attempt(() -> matching.liquidate(level, marks.get(pair), Instant.now()));
+                if (paused) {
+                    // A catch-up: the mark that reached the level is a minute older than its applying.
+                    attempt(() -> matching.liquidate(
+                            level, marks.get(pair), Instant.now(), Instant.now().minusSeconds(60)));
+                } else {
+                    attempt(() -> matching.liquidate(level, marks.get(pair), Instant.now()));
+                }
             }
         }
     }
@@ -283,7 +335,7 @@ class FuturesSettlementPropertyTest {
                         (BigDecimal) chosen.get("limit_price"),
                         Instant.now().minusSeconds(1)),
                 Instant.now(),
-                FillSource.LIVE));
+                paused ? FillSource.REPLAY : FillSource.LIVE));
     }
 
     private void assertInvariants(String at) {
@@ -349,6 +401,20 @@ class FuturesSettlementPropertyTest {
         assertThat(mismatched)
                 .as("%s: an order's executed quantity = its fills'", at)
                 .isEmpty();
+    }
+
+    /**
+     * Runs one action of the Trader that changes Futures: refused with {@code TRADING_PAUSED} while Futures is paused
+     * (I2), otherwise as {@link #attempt}.
+     */
+    private void user(Runnable action) {
+        if (!paused) {
+            attempt(action);
+            return;
+        }
+        assertThatThrownBy(action::run)
+                .as("I2: refused while Futures is paused")
+                .isInstanceOf(TradingPausedException.class);
     }
 
     /** Runs one action of the Trader; a refusal by the rules is a valid outcome, anything else is not. */

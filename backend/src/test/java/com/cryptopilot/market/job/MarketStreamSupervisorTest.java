@@ -20,6 +20,7 @@ import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.client.StubStreamServer;
 import com.cryptopilot.market.client.StubStreamServer.Connection;
 import com.cryptopilot.market.config.CandleBackfillProperties;
+import com.cryptopilot.market.config.MarketHealthProperties;
 import com.cryptopilot.market.event.MarketStreamReconnected;
 import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
@@ -33,6 +34,7 @@ import com.cryptopilot.market.service.MarketUpdateService;
 import com.cryptopilot.market.service.StreamCandleService;
 import com.cryptopilot.market.service.impl.CandleBackfillServiceImpl;
 import com.cryptopilot.market.service.impl.LatestMarketData;
+import com.cryptopilot.market.service.impl.MarketLiveness;
 import com.cryptopilot.market.service.impl.StreamCandleServiceImpl;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.support.TestcontainersConfig;
@@ -89,6 +91,9 @@ class MarketStreamSupervisorTest {
     private final List<Duration> refreshes = new CopyOnWriteArrayList<>();
     private final List<Runnable> runs = new CopyOnWriteArrayList<>();
     private final LatestMarketData latest = new LatestMarketData();
+    private final MarketLiveness liveness = new MarketLiveness(
+            new MarketHealthProperties(false, Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(15)),
+            Clock.systemUTC());
     private final List<StreamMessage> realtime = new CopyOnWriteArrayList<>();
     private final List<MinuteKline> minutes = new CopyOnWriteArrayList<>();
     private final List<MinuteKlineListener> minuteListeners = new CopyOnWriteArrayList<>(List.of(minutes::add));
@@ -286,6 +291,23 @@ class MarketStreamSupervisorTest {
         assertThat(minutes).allSatisfy(kline -> assertThat(kline.close()).isEqualByComparingTo("101.20"));
         assertThat(realtime).noneMatch(message -> message instanceof StreamMessage.KlineMessage);
         assertThat(storedCandles()).isZero();
+    }
+
+    /** D-159: every message of a market's stream, of a streamed pair or not, tells the health monitor it is live. */
+    @Test
+    void D159_everyMessage_marksItsMarketLive() {
+        supervisor = supervisor(true, 100);
+        supervisor.start();
+        server.awaitConnection(2);
+        Instant spotBefore = liveness.lastLiveAt(MarketType.SPOT);
+        Instant futuresBefore = liveness.lastLiveAt(MarketType.FUTURES);
+
+        connection("/stream").send(StreamFrames.kline("DOGEUSDT", MarketInterval.ONE_MINUTE, AT, true));
+        connection("/stream").send(StreamFrames.ticker("BTCUSDT", AT));
+
+        await(() -> latest.ticker(btc).isPresent(), "the ticker");
+        assertThat(liveness.lastLiveAt(MarketType.SPOT)).isAfter(spotBefore);
+        assertThat(liveness.lastLiveAt(MarketType.FUTURES)).isEqualTo(futuresBefore);
     }
 
     /**
@@ -572,7 +594,8 @@ class MarketStreamSupervisorTest {
                 trading,
                 tradeListeners,
                 markListeners,
-                Clock.systemUTC());
+                Clock.systemUTC(),
+                liveness);
     }
 
     private CandleBackfillService backfill() {

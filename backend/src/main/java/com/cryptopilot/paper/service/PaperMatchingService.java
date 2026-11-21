@@ -45,6 +45,15 @@ public interface PaperMatchingService {
     boolean liquidate(LiquidationLevel level, BigDecimal mark, Instant at);
 
     /**
+     * As {@link #liquidate(LiquidationLevel, BigDecimal, Instant)}, for a mark a replay applies: the liquidation is
+     * dated {@code at}, when applied, and its closing fill keeps {@code markTime}, the time of the mark it took, so
+     * that what was open at an instant reads as on the exchange (D-159, TR-24).
+     *
+     * @param markTime the time of the replayed mark, or {@code null} for a live one
+     */
+    boolean liquidate(LiquidationLevel level, BigDecimal mark, Instant at, Instant markTime);
+
+    /**
      * One step of the Trader's cross liquidation under their lock (TR-23): judged on the database at the latest marks;
      * when due, the account is marked as liquidating, its orders cancelled, and the cross position losing most is
      * closed if it is on {@code pairId}.

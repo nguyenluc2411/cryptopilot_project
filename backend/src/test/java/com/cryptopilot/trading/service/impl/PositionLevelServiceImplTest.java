@@ -19,6 +19,7 @@ import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -92,6 +93,7 @@ class PositionLevelServiceImplTest {
             plans,
             journal,
             market,
+            mock(MarketHealth.class),
             riskProfiles,
             lock,
             new PositionViews(journal, market, new FeeRates(settings), funding, settings),

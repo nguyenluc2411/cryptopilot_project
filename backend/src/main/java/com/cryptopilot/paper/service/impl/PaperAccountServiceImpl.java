@@ -12,6 +12,7 @@ import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.common.web.Paging;
 import com.cryptopilot.market.CoinListing;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperAccountProperties;
 import com.cryptopilot.paper.dto.request.TransferRequest;
@@ -105,6 +106,7 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     private final ApplicationEventPublisher events;
     private final PaperUserFeed feed;
     private final UserLock lock;
+    private final MarketHealth health;
     private final PaperAccountProperties properties;
     private final MarketApi market;
     private final PaperEquity equity;
@@ -191,6 +193,10 @@ public class PaperAccountServiceImpl implements PaperAccountService {
     public RecordedTransfer transfer(UUID userId, TransferRequest request) {
         // The account first: a Trader without one is told so (MSG41), whatever the request holds.
         lock.lock(LOCK_SCOPE, userId);
+        if (request.from() == WalletType.FUTURES) {
+            // D-159: what may leave the Futures wallet depends on current marks; moving into it does not.
+            health.requireTrading(MarketType.FUTURES);
+        }
         PaperAccount account = accountOf(userId);
         // Only USDT moves either way: the Futures wallet is USD-M and holds nothing else.
         String asset = request.asset().strip().toUpperCase(Locale.ROOT);

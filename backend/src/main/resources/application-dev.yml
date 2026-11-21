@@ -55,6 +55,9 @@ cryptopilot:
       # The leaning per coin of the market list is recomputed every minute (application.yml).
       enabled: true
   notification:
+    market-broadcast:
+      # D-159 runs in this profile: every other Trader hears of a market incident in the bell.
+      enabled: true
     sweep:
       # NSF-17 runs in this profile: notifications older than 90 days are deleted daily.
       enabled: true
@@ -63,6 +66,9 @@ cryptopilot:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
       enabled: true
   market:
+    fallback:
+      # D-159: display-only reference prices while a market's exchange data is lost (application.yml).
+      enabled: true
     coinpaprika:
       # Coin names, logos and supplies and the whole market's cap (application.yml).
       enabled: true
@@ -95,6 +101,9 @@ cryptopilot:
     backfill:
       # NSF-02 runs in this profile: after each symbol synchronisation and on the hourly schedule of
       # application.yml, within half of each venue's weight budget.
+      enabled: true
+    health:
+      # D-159: trading pauses while a market's exchange data is lost.
       enabled: true
     stream:
       # NSF-03 runs in this profile: the streams of the pairs an administrator enabled (BR-07).

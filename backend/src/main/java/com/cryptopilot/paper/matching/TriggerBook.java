@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -82,6 +83,11 @@ public final class TriggerBook {
     /** Whether any order of the pair waits for a trigger. */
     public boolean hasOrders(MarketType market, UUID pairId) {
         return books.containsKey(new BookKey(market, pairId));
+    }
+
+    /** The pairs with an order waiting for a trigger (D-159: what a recovery waits for). */
+    public Set<BookKey> pairs() {
+        return Set.copyOf(books.keySet());
     }
 
     /** How many orders are watched. */

@@ -1,9 +1,11 @@
 package com.cryptopilot.paper.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.doThrow;
@@ -22,10 +24,12 @@ import com.cryptopilot.market.LeverageBracketsReplaced;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperFuturesProperties;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
@@ -54,10 +58,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -334,6 +340,48 @@ class PaperMatchingWorkerTest {
                 .closedMinuteKlines(MarketType.SPOT, old.pairId(), MINUTE_2.minus(Duration.ofHours(24)));
     }
 
+    /**
+     * D-159: started during an incident, a replay reaches back to where the market's data stopped, beyond its
+     * window; the other market keeps the window.
+     */
+    @Test
+    void D159_aStartUpReplayDuringAnIncident_reachesBackToIt_beyondTheWindow() {
+        Instant lastLive = MINUTE_0.minus(Duration.ofDays(2));
+        RestingOrder spot = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.SPOT,
+                UUID.randomUUID(),
+                OrderSide.SELL,
+                new BigDecimal("100"),
+                MINUTE_0.minus(Duration.ofDays(3)));
+        RestingOrder futures = new RestingOrder(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                MarketType.FUTURES,
+                UUID.randomUUID(),
+                OrderSide.SELL,
+                new BigDecimal("100"),
+                MINUTE_0.minus(Duration.ofDays(3)));
+        when(matching.restingOrders()).thenReturn(List.of(spot, futures));
+        MarketHealth health = mock(MarketHealth.class);
+        when(health.catchUpFrom(MarketType.SPOT)).thenReturn(Optional.of(lastLive.plusSeconds(25)));
+        when(health.catchUpFrom(MarketType.FUTURES)).thenReturn(Optional.empty());
+        worker = new PaperMatchingWorker(
+                matching,
+                market,
+                properties(true, true, Duration.ofMinutes(10)),
+                FUTURES_PROPERTIES,
+                clock,
+                recording,
+                health);
+        worker.start();
+
+        verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, spot.pairId(), lastLive);
+        verify(market, timeout(WAIT))
+                .closedMinuteKlines(MarketType.FUTURES, futures.pairId(), MINUTE_2.minus(Duration.ofHours(24)));
+    }
+
     @Test
     void QT6_aReplayTheExchangeRefusedOrThatFailed_isTriedAgain() {
         RestingOrder order = buy("100");
@@ -359,6 +407,124 @@ class PaperMatchingWorkerTest {
         verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2);
         verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_5);
+    }
+
+    /**
+     * D-159 E7: minutes the exchange never served, as when it halted, are no hole to wait on: the replay goes on from
+     * the next candle it serves, and fills there.
+     */
+    @Test
+    void D159_minutesTheExchangeNeverServed_areSkipped_andTheReplayGoesOnFromTheNext() {
+        Instant minute4 = MINUTE_0.plusSeconds(240);
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2))
+                .thenReturn(MinuteKlineBatch.of(List.of(kline(minute4, "99", "110", true))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        RestingOrder order = buy("100");
+        worker.onRested(new PaperOrderRested(order));
+
+        worker.onMinuteKline(kline(MINUTE_1, "101", "110", true));
+        worker.onMinuteKline(kline(MINUTE_5, "101", "110", true));
+
+        verify(matching, timeout(WAIT)).fill(eq(order), eq(minute4), eq(FillSource.REPLAY), any());
+        verify(matching, timeout(WAIT)).advanceWatermark(MarketType.SPOT, PAIR, minute4);
+        verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_5);
+    }
+
+    /**
+     * D-159 E2b: at start, a pair watched only for an isolated position's liquidation replays its marks from after its
+     * mark watermark, so a mark the stream missed while the application was down still liquidates.
+     */
+    @Test
+    void D159_atStart_aPairWithOnlyALiquidationLevel_replaysItsMarksFromAfterItsWatermark() {
+        LiquidationLevel level = new LiquidationLevel(
+                UUID.randomUUID(), UUID.randomUUID(), PAIR, PositionDirection.LONG, new BigDecimal("95"));
+        when(matching.liquidationLevels()).thenReturn(List.of(level));
+        when(matching.markWatermark(PAIR)).thenReturn(Optional.of(MINUTE_0));
+        when(matching.liquidate(any(), any(), any(), any())).thenReturn(true);
+        when(market.closedMarkPriceKlines(PAIR, MINUTE_1))
+                .thenReturn(MinuteKlineBatch.of(List.of(markKline(MINUTE_1, "100", "100.5", "94", "96"))));
+
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+
+        verify(market, timeout(WAIT)).closedMarkPriceKlines(PAIR, MINUTE_1);
+        verify(matching, timeout(WAIT)).liquidate(eq(level), eq(new BigDecimal("94")), any(), any());
+    }
+
+    /** D-159 (K6): an engine that does not run has nothing to catch up on. */
+    @Test
+    void D159_anEngineThatDoesNotRun_isCaughtUp() {
+        worker = started(properties(false, true, Duration.ofMinutes(10)));
+
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1)).isTrue();
+        assertThat(worker.caughtUp(MarketType.FUTURES, MINUTE_1)).isTrue();
+    }
+
+    /**
+     * D-159 (K6, I6): a pair with an order is caught up once a closed candle of the last two minutes was applied and
+     * no replay runs; one whose last closed candle is older is not, unless it went quiet before the incident, as a pair
+     * no longer streamed. The other market is not held by it.
+     */
+    @Test
+    void D159_aPairWithAnOrder_isCaughtUp_onceARecentClosedCandleIsApplied_andNoReplayRuns() throws Exception {
+        CountDownLatch exchange = new CountDownLatch(1);
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2)).thenAnswer(call -> {
+            exchange.await();
+            return MinuteKlineBatch.of(List.of());
+        });
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        worker.onRested(new PaperOrderRested(buy("50")));
+
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1))
+                .as("no closed candle yet")
+                .isFalse();
+        assertThat(worker.progress(MarketType.SPOT, MINUTE_1)).isEqualTo(new RecoveryProgress(0, 1));
+        assertThat(worker.caughtUp(MarketType.FUTURES, MINUTE_1)).isTrue();
+        assertThat(worker.progress(MarketType.FUTURES, MINUTE_1)).isEqualTo(RecoveryProgress.NOTHING);
+
+        worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1)).isTrue();
+        assertThat(worker.progress(MarketType.SPOT, MINUTE_1)).isEqualTo(new RecoveryProgress(1, 1));
+
+        clock.set(MINUTE_5.plusSeconds(10));
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_2))
+                .as("its last candle is old")
+                .isFalse();
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_5))
+                .as("quiet since before the incident")
+                .isTrue();
+
+        worker.onMinuteKline(kline(MINUTE_5, "99", "110", true));
+        verify(market, timeout(WAIT)).closedMinuteKlines(MarketType.SPOT, PAIR, MINUTE_2);
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_2))
+                .as("replaying the hole")
+                .isFalse();
+
+        exchange.countDown();
+        await().atMost(Duration.ofMillis(WAIT)).until(() -> worker.caughtUp(MarketType.SPOT, MINUTE_2));
+    }
+
+    /** D-159 (K6): a Futures pair watched on its marks is caught up once a live mark came within mark-max-age. */
+    @Test
+    void D159_aPairWatchedOnItsMarks_isCaughtUp_onceALiveMarkCame() {
+        UUID trader = UUID.randomUUID();
+        when(matching.liquidationLevels(trader, PAIR))
+                .thenReturn(List.of(new LiquidationLevel(
+                        UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("95"))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        worker.onAccountChanged(new FuturesAccountChanged(trader, PAIR));
+
+        assertThat(worker.caughtUp(MarketType.FUTURES, MINUTE_1))
+                .as("no mark yet")
+                .isFalse();
+
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), clock.instant()));
+        assertThat(worker.caughtUp(MarketType.FUTURES, MINUTE_1)).isTrue();
+        assertThat(worker.caughtUp(MarketType.SPOT, MINUTE_1)).isTrue();
+
+        clock.set(clock.instant().plusSeconds(30));
+        assertThat(worker.caughtUp(MarketType.FUTURES, clock.instant().minusSeconds(40)))
+                .as("its last mark is stale")
+                .isFalse();
     }
 
     @Test
@@ -772,14 +938,14 @@ class PaperMatchingWorkerTest {
         LiquidationLevel short_ =
                 new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.SHORT, new BigDecimal("120"));
         when(matching.liquidationLevels()).thenReturn(List.of(reached, short_));
-        when(matching.liquidate(any(), any(), any())).thenReturn(false);
+        when(matching.liquidate(any(), any(), any(), any())).thenReturn(false);
         worker = started(properties(true, false, Duration.ofMinutes(10)));
 
         worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("94"), MINUTE_1));
 
-        verify(matching, timeout(WAIT)).liquidate(reached, new BigDecimal("94"), MINUTE_1);
+        verify(matching, timeout(WAIT)).liquidate(reached, new BigDecimal("94"), MINUTE_1, null);
         verify(matching, timeout(WAIT)).liquidationLevels(trader, PAIR);
-        verify(matching, never()).liquidate(eq(short_), any(), any());
+        verify(matching, never()).liquidate(eq(short_), any(), any(), any());
     }
 
     /** TR-21: a trailing stop on the mark follows the peak and triggers on the pull-back of its callback. */
@@ -892,9 +1058,37 @@ class PaperMatchingWorkerTest {
 
         verify(matching, timeout(WAIT)).markCatchingUp(PAIR, true);
         verify(market, timeout(WAIT).atLeastOnce()).closedMarkPriceKlines(PAIR, MINUTE_1);
-        verify(matching, after(200).never()).liquidate(any(), any(), any());
+        verify(matching, after(200).never()).liquidate(any(), any(), any(), any());
         // The candle of that minute is not out yet: asked for again only when a live mark comes.
         verify(market, atMost(1)).closedMarkPriceKlines(PAIR, MINUTE_1);
+    }
+
+    /**
+     * D-159 (TR-24): a replayed mark that reaches a liquidation level liquidates now, on the state of now, and hands the
+     * liquidation the time of the mark it took, so that the funding reads the position closed from then.
+     */
+    @Test
+    void D159_aReplayedMark_liquidatesNow_withTheTimeOfTheMarkItTook() {
+        UUID trader = UUID.randomUUID();
+        LiquidationLevel level =
+                new LiquidationLevel(UUID.randomUUID(), trader, PAIR, PositionDirection.LONG, new BigDecimal("95"));
+        when(matching.liquidationLevels(trader, PAIR)).thenReturn(List.of(level));
+        when(matching.liquidate(any(), any(), any(), any())).thenReturn(true);
+        when(market.closedMarkPriceKlines(PAIR, MINUTE_1))
+                .thenReturn(MinuteKlineBatch.of(List.of(markKline(MINUTE_1, "100", "100.5", "94", "96"))));
+        worker = started(properties(true, true, Duration.ofMinutes(10)));
+        worker.onAccountChanged(new FuturesAccountChanged(trader, PAIR));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1.minusSeconds(1)));
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("100"), MINUTE_1));
+        verify(matching, timeout(WAIT)).advanceMarkWatermark(PAIR, MINUTE_0);
+
+        // The stream was lost: the next mark comes late, and the minute it missed is replayed from its candle.
+        worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("96"), MINUTE_1.plusSeconds(50)));
+
+        ArgumentCaptor<Instant> markTime = ArgumentCaptor.forClass(Instant.class);
+        verify(matching, timeout(WAIT))
+                .liquidate(eq(level), eq(new BigDecimal("94")), eq(clock.instant()), markTime.capture());
+        assertThat(markTime.getValue()).isAfterOrEqualTo(MINUTE_1).isBefore(MINUTE_2);
     }
 
     /** TR-42: a mark candle runs open, the extreme nearer the open, the other extreme, close. */
@@ -982,7 +1176,7 @@ class PaperMatchingWorkerTest {
         verify(matching, timeout(WAIT).times(2)).marginCall(any(), any(), any(), any());
 
         worker.onMarkPrice(new MarkPrice(PAIR, new BigDecimal("93"), MINUTE_2.plus(Duration.ofMinutes(40))));
-        verify(matching, timeout(WAIT)).liquidate(eq(level), any(), any());
+        verify(matching, timeout(WAIT)).liquidate(eq(level), any(), any(), isNull());
         verify(matching, after(200).times(2)).marginCall(any(), any(), any(), any());
     }
 

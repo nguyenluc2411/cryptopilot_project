@@ -3,9 +3,12 @@ package com.cryptopilot.trading.job;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarkPriceListener;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
+import com.cryptopilot.market.MarketRecoveryCheck;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
 import com.cryptopilot.market.MinuteKlineListener;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
@@ -77,7 +80,7 @@ import org.springframework.stereotype.Component;
  * state by replaying a stream from a recorded offset gives the same result as processing it live).
  */
 @Component
-public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
+public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener, MarketRecoveryCheck {
 
     private static final Logger log = LoggerFactory.getLogger(MinuteKlineFeed.class);
     private static final Duration MINUTE = Duration.ofMinutes(1);
@@ -85,6 +88,9 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
     private final MatchingWorker worker;
     private final MatchingService matching;
     private final MarketApi market;
+    /** Where an incident makes a start-up replay reach back to (D-159); null in tests that do not need it. */
+    private final MarketHealth health;
+
     private final MatchingProperties properties;
     private final Clock clock;
     private final ThreadFactory threads;
@@ -111,8 +117,9 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
             MarketApi market,
             MatchingProperties properties,
             Clock clock,
-            ReplayLockService locks) {
-        this(worker, matching, market, properties, clock, Thread.ofVirtual().factory(), locks);
+            ReplayLockService locks,
+            MarketHealth health) {
+        this(worker, matching, market, properties, clock, Thread.ofVirtual().factory(), locks, health);
     }
 
     MinuteKlineFeed(
@@ -123,6 +130,19 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
             Clock clock,
             ThreadFactory threads,
             ReplayLockService locks) {
+        this(worker, matching, market, properties, clock, threads, locks, null);
+    }
+
+    MinuteKlineFeed(
+            MatchingWorker worker,
+            MatchingService matching,
+            MarketApi market,
+            MatchingProperties properties,
+            Clock clock,
+            ThreadFactory threads,
+            ReplayLockService locks,
+            MarketHealth health) {
+        this.health = health;
         this.worker = worker;
         this.matching = matching;
         this.market = market;
@@ -230,9 +250,9 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
             firstActivation.merge(
                     new PairKey(position.market(), position.pairId()), position.entryTime(), MinuteKlineFeed::earlier);
         }
-        Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
         List<Replay> startup = new ArrayList<>();
         firstActivation.forEach((key, activated) -> {
+            Instant oldest = oldestReplayed(key.market());
             Instant from = minuteOf(activated);
             Instant afterWatermark = matching.watermark(key.market(), key.pairId())
                     .map(watermark -> watermark.plus(MINUTE))
@@ -486,6 +506,38 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
         return instant.truncatedTo(ChronoUnit.MINUTES);
     }
 
+    /**
+     * How far behind the running minute a pair's last closed candle may be and the pair still be caught up; and how
+     * long before an incident a pair may have gone quiet and be left out, as no longer streamed (D-159).
+     */
+    static final Duration CAUGHT_UP_SLACK = Duration.ofMinutes(2);
+
+    /**
+     * The health monitor asks, while a market recovers from an incident, how far the plans have caught up (D-159):
+     * every pair of the market streamed around the incident is live again, not replaying, with its last closed candle
+     * handed on within {@link #CAUGHT_UP_SLACK} of the running minute. A feed that does not run has nothing to catch
+     * up on.
+     */
+    @Override
+    public RecoveryProgress progress(MarketType market, Instant lastLiveAt) {
+        if (!started) {
+            return RecoveryProgress.NOTHING;
+        }
+        Instant recent = minuteOf(clock.instant()).minus(CAUGHT_UP_SLACK);
+        Instant quietBefore = lastLiveAt.minus(CAUGHT_UP_SLACK);
+        int total = 0;
+        int done = 0;
+        for (Map.Entry<PairKey, PairFeed> entry : feeds.entrySet()) {
+            if (entry.getKey().market() == market) {
+                total++;
+                if (entry.getValue().caughtUp(recent, quietBefore)) {
+                    done++;
+                }
+            }
+        }
+        return new RecoveryProgress(done, total);
+    }
+
     /** One pair's updates: held while it waits or replays, handed to the engine in order once live. */
     private final class PairFeed {
 
@@ -504,11 +556,17 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
         /** The open time of the last closed candle handed to the engine; the next live one must follow it. */
         private Instant lastClosed;
 
+        /** Up to when the latest update the stream sent for the pair reached; {@code null} before the first. */
+        private Instant lastSeen;
+
         PairFeed(PairKey key) {
             this.key = key;
         }
 
         synchronized void accept(PriceRange range) {
+            if (lastSeen == null || range.at().isAfter(lastSeen)) {
+                lastSeen = range.at();
+            }
             if (state == State.WAITING && started) {
                 goLive();
             }
@@ -529,6 +587,17 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
             } else {
                 holdMark(marks);
             }
+        }
+
+        /**
+         * Whether the pair has caught up: live with a closed candle handed on since {@code recent}; or no longer
+         * streamed, its last update from before {@code quietBefore}.
+         */
+        synchronized boolean caughtUp(Instant recent, Instant quietBefore) {
+            if (lastSeen == null || lastSeen.isBefore(quietBefore)) {
+                return true;
+            }
+            return state == State.LIVE && lastClosed != null && !lastClosed.isBefore(recent);
         }
 
         synchronized void replayFrom(Instant from) {
@@ -649,6 +718,21 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener {
         REPLAYING,
         /** Updates go to the engine as they come. */
         LIVE
+    }
+
+    /**
+     * The oldest minute a start-up replay of the market reaches back to: the replay window, or further while an
+     * incident is open or just ended, to where its data stopped (D-159).
+     */
+    private Instant oldestReplayed(MarketType market) {
+        Instant oldest = minuteOf(clock.instant()).minus(properties.replay().maxWindow());
+        if (health == null) {
+            return oldest;
+        }
+        return health.catchUpFrom(market)
+                .map(MinuteKlineFeed::minuteOf)
+                .filter(from -> from.isBefore(oldest))
+                .orElse(oldest);
     }
 
     private record PairKey(MarketType market, UUID pairId) {}

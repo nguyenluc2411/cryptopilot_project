@@ -1,5 +1,7 @@
 package com.cryptopilot.paper.job;
 
+import com.cryptopilot.market.MarketHealth;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperFundingProperties;
 import com.cryptopilot.paper.service.impl.FuturesFunding;
 import java.time.Clock;
@@ -24,13 +26,19 @@ public class FuturesFundingJob {
     private static final Logger log = LoggerFactory.getLogger(FuturesFundingJob.class);
 
     private final FuturesFunding funding;
+    private final MarketHealth health;
     private final TaskScheduler scheduler;
     private final PaperFundingProperties properties;
     private final Clock clock;
 
     public FuturesFundingJob(
-            FuturesFunding funding, TaskScheduler scheduler, PaperFundingProperties properties, Clock clock) {
+            FuturesFunding funding,
+            MarketHealth health,
+            TaskScheduler scheduler,
+            PaperFundingProperties properties,
+            Clock clock) {
         this.funding = funding;
+        this.health = health;
         this.scheduler = scheduler;
         this.properties = properties;
         this.clock = clock;
@@ -48,15 +56,30 @@ public class FuturesFundingJob {
     }
 
     /**
-     * One run.
+     * Where a run looks back from: the lookback, or further while an incident just ended, to where its data stopped,
+     * so the settlements that fell due while the market was closed are taken (D-159).
+     */
+    private Instant from(Instant now) {
+        Instant lookback = now.minus(properties.lookback());
+        return health.catchUpFrom(MarketType.FUTURES)
+                .filter(from -> from.isBefore(lookback))
+                .orElse(lookback);
+    }
+
+    /**
+     * One run; none while Futures trading is paused (D-159, I5): the replay that follows may show a position closed
+     * before a funding time, so the settlements wait for it, and the next run reaches back to them.
      *
      * @return how many fees it wrote
      */
     public int run() {
+        if (!health.tradingOpen(MarketType.FUTURES)) {
+            return 0;
+        }
         Instant now = clock.instant();
         int written = 0;
         try {
-            for (FuturesFunding.Owed owed : funding.owed(now.minus(properties.lookback()), now)) {
+            for (FuturesFunding.Owed owed : funding.owed(from(now), now)) {
                 try {
                     if (funding.settle(owed)) {
                         written++;

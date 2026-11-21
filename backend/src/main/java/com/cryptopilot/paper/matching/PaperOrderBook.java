@@ -124,6 +124,11 @@ public final class PaperOrderBook {
         return books.containsKey(new BookKey(market, pairId));
     }
 
+    /** The pairs with an order waiting (D-159: what a recovery waits for). */
+    public Set<BookKey> pairs() {
+        return Set.copyOf(books.keySet());
+    }
+
     /** The quantity still ahead of an order at its price, when known; for tests. */
     Optional<BigDecimal> queueAhead(UUID orderId) {
         return Optional.ofNullable(ahead.get(orderId));

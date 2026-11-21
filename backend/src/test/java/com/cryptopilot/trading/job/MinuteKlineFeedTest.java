@@ -21,8 +21,10 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.MinuteKline;
 import com.cryptopilot.market.MinuteKlineBatch;
+import com.cryptopilot.market.RecoveryProgress;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
@@ -204,6 +206,40 @@ class MinuteKlineFeedTest {
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(3));
     }
 
+    /** D-159: during an incident the start-up replay reaches back to it, beyond the window, and skips nothing. */
+    @Test
+    void D159_duringAnIncident_aStartOlderThanTheWindow_isReplayedFromTheWatermark() {
+        activeEntry(PAIR, M0.minus(Duration.ofDays(3)));
+        when(matching.watermark(MarketType.SPOT, PAIR)).thenReturn(Optional.of(M0.minus(Duration.ofDays(2))));
+        MarketHealth health = mock(MarketHealth.class);
+        when(health.catchUpFrom(MarketType.SPOT))
+                .thenReturn(Optional.of(M0.minus(Duration.ofDays(2).plusHours(1))));
+        feed = new MinuteKlineFeed(
+                worker,
+                matching,
+                market,
+                new MatchingProperties(
+                        true,
+                        1,
+                        100,
+                        SLOW_RETRY,
+                        60,
+                        Duration.ofSeconds(5),
+                        new MatchingProperties.Replay(true, Duration.ofHours(24), Duration.ZERO, 0, 1440)),
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                recording,
+                locks,
+                health);
+
+        startAndAwaitIdle();
+
+        verify(market)
+                .closedMinuteKlines(
+                        MarketType.SPOT, PAIR, M0.minus(Duration.ofDays(2)).plusSeconds(60));
+        assertThat(logged())
+                .noneSatisfy(event -> assertThat(event.getFormattedMessage()).contains("beyond the replay window"));
+    }
+
     @Test
     void Q34_aStartOlderThanTheWindow_isMovedToTheWindow_andTheSkippedCandlesAreLogged() {
         activeEntry(PAIR, M0.minus(Duration.ofDays(3)));
@@ -338,6 +374,60 @@ class MinuteKlineFeedTest {
                         tuple(minute(4), false),
                         tuple(minute(4), true));
         verify(market).closedMinuteKlines(MarketType.SPOT, PAIR, minute(2));
+    }
+
+    /**
+     * D-159 E7: minutes the exchange never served, as when it halted, are skipped: the replay goes on from the next
+     * candle it serves, and the pair goes live.
+     */
+    @Test
+    void D159_minutesTheExchangeNeverServed_areSkipped_andThePairGoesLive() {
+        serveClosed(4, 4);
+        feed = feed(replay(true, 3, 1440));
+        startAndAwaitIdle();
+        feed.onMinuteKline(update(minute(1), "1", "2", false, 30));
+        feed.onMinuteKline(update(minute(1), "1", "2", true, 60));
+
+        feed.onMinuteKline(update(minute(5), "1", "2", false, 5));
+        awaitIdle();
+        feed.onMinuteKline(update(minute(5), "1", "2", true, 60));
+
+        assertThat(submitted)
+                .extracting(PriceRange::from, PriceRange::closed)
+                .containsExactly(
+                        tuple(minute(1), false),
+                        tuple(minute(1), true),
+                        tuple(minute(4), true),
+                        tuple(minute(5), false),
+                        tuple(minute(5), true));
+    }
+
+    /**
+     * D-159 (K6, I6): the plans of a market have caught up once every pair streamed around the incident is live, not
+     * replaying, with a closed candle of the last two minutes handed on; a pair quiet since before the incident is
+     * left out, and a feed that does not run has nothing to catch up on.
+     */
+    @Test
+    void D159_theFeed_isCaughtUp_onceEveryPairStreamedAroundTheIncidentIsLiveAndRecent() {
+        Instant incident = minute(6);
+        feed = feed(replay(true, 3, 1440));
+        assertThat(feed.caughtUp(MarketType.SPOT, incident)).as("not started").isTrue();
+        startAndAwaitIdle();
+
+        feed.onMinuteKline(update(minute(9), "1", "2", true, 60));
+        awaitIdle();
+        assertThat(feed.caughtUp(MarketType.SPOT, incident)).isTrue();
+        assertThat(feed.caughtUp(MarketType.FUTURES, incident)).isTrue();
+
+        feed.onMinuteKline(otherPairUpdate(minute(5), true, 60));
+        awaitIdle();
+        assertThat(feed.caughtUp(MarketType.SPOT, incident))
+                .as("another pair seen around the incident, its last candle old")
+                .isFalse();
+        assertThat(feed.progress(MarketType.SPOT, incident)).isEqualTo(new RecoveryProgress(1, 2));
+        assertThat(feed.caughtUp(MarketType.SPOT, NOW.plus(Duration.ofMinutes(5))))
+                .as("quiet since before a later incident")
+                .isTrue();
     }
 
     /** R1: a minute whose closed update never comes is replayed once the next minute's updates show it is missing. */
@@ -1020,6 +1110,18 @@ class MinuteKlineFeedTest {
                 new BigDecimal(low),
                 new BigDecimal(high),
                 new BigDecimal(high),
+                closed,
+                open.plusSeconds(seconds).minusMillis(closed ? 1 : 0));
+    }
+
+    private static MinuteKline otherPairUpdate(Instant open, boolean closed, long seconds) {
+        return new MinuteKline(
+                MarketType.SPOT,
+                OTHER_PAIR,
+                open,
+                BigDecimal.ONE,
+                BigDecimal.TWO,
+                BigDecimal.TWO,
                 closed,
                 open.plusSeconds(seconds).minusMillis(closed ? 1 : 0));
     }

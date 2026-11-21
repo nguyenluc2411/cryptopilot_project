@@ -1,5 +1,7 @@
 package com.cryptopilot.paper.job;
 
+import com.cryptopilot.market.MarketHealth;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.config.PaperMatchingProperties;
 import com.cryptopilot.paper.service.FuturesOrderService;
 import java.time.Clock;
@@ -28,13 +30,19 @@ public class FuturesGoodTillJob {
     private static final Logger log = LoggerFactory.getLogger(FuturesGoodTillJob.class);
 
     private final FuturesOrderService orders;
+    private final MarketHealth health;
     private final TaskScheduler scheduler;
     private final PaperMatchingProperties matching;
     private final Clock clock;
 
     public FuturesGoodTillJob(
-            FuturesOrderService orders, TaskScheduler scheduler, PaperMatchingProperties matching, Clock clock) {
+            FuturesOrderService orders,
+            MarketHealth health,
+            TaskScheduler scheduler,
+            PaperMatchingProperties matching,
+            Clock clock) {
         this.orders = orders;
+        this.health = health;
         this.scheduler = scheduler;
         this.matching = matching;
         this.clock = clock;
@@ -50,8 +58,14 @@ public class FuturesGoodTillJob {
         log.info("TR-44 GTD Futures orders expired every {}", INTERVAL);
     }
 
-    /** One run: every due order, earliest first. */
+    /**
+     * One run: every due order, earliest first; none while Futures trading is paused (D-159, I5), as the replay that
+     * follows may fill an order on a candle before its date.
+     */
     void run() {
+        if (!health.tradingOpen(MarketType.FUTURES)) {
+            return;
+        }
         Instant at = clock.instant();
         int expired = 0;
         for (UUID orderId : orders.dueGoodTill(at)) {

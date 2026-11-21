@@ -5,6 +5,7 @@ import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.market.LeverageTier;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairListing;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
@@ -73,6 +74,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     private final PaperOrderRepository orders;
     private final FuturesMargins margins;
     private final UserLock lock;
+    private final MarketHealth health;
     private final MarketApi market;
     private final PaperUserFeed feed;
     private final Clock clock;
@@ -116,6 +118,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     public FuturesPositionModeResponse changePositionMode(UUID userId, FuturesPositionModeRequest request) {
         requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         requireNotLiquidating(userId);
         FuturesAccountConfig config = margins.accountConfig(userId);
         if (config.isDualSidePosition() == request.dualSidePosition()) {
@@ -169,6 +172,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     public FuturesLeverageResponse changeLeverage(UUID userId, FuturesLeverageRequest request) {
         PaperAccount trader = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         FuturesAccountConfig account = requireNotLiquidating(userId);
         FuturesPair pair = margins.pair(request.symbol());
         int leverage = request.leverage();
@@ -203,6 +207,7 @@ public class FuturesConfigServiceImpl implements FuturesConfigService {
     public FuturesSymbolConfigResponse changeMarginType(UUID userId, FuturesMarginTypeRequest request) {
         requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         requireNotLiquidating(userId);
         FuturesPair pair = margins.pair(request.symbol());
         FuturesSymbolConfig config = configOf(userId, pair);

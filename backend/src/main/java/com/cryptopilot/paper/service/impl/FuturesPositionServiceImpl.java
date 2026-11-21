@@ -7,7 +7,9 @@ import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.common.lock.UserLock;
 import com.cryptopilot.common.util.TimeBounds;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairListing;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.calculator.FuturesMarginMath;
 import com.cryptopilot.paper.dto.request.FuturesClosePositionRequest;
 import com.cryptopilot.paper.dto.request.FuturesOrderRequest;
@@ -98,6 +100,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     private final FuturesOrderService orders;
     private final TransactionTemplate transactions;
     private final UserLock lock;
+    private final MarketHealth health;
     private final MarketApi market;
     private final PaperUserFeed feed;
     private final ApplicationEventPublisher events;
@@ -107,6 +110,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     public FuturesPositionMarginResponse changeMargin(UUID userId, FuturesPositionMarginRequest request) {
         PaperAccount trader = requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         FuturesAccountConfig account = margins.accountConfig(userId);
         if (account.liquidating()) {
             throw new FuturesRejection(ErrorCode.PAPER_USER_IN_LIQUIDATION, -2023, "User in liquidation mode now.");
@@ -221,6 +225,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     @Override
     public List<FuturesOrderResponse> close(UUID userId, FuturesClosePositionRequest request) {
         requireShape(request);
+        health.requireTrading(MarketType.FUTURES);
         if (request.symbol() == null) {
             return closeAll(userId);
         }
@@ -230,6 +235,7 @@ public class FuturesPositionServiceImpl implements FuturesPositionService {
     private List<FuturesOrderResponse> closeOnPair(UUID userId, FuturesClosePositionRequest request) {
         requireFutures(userId);
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.FUTURES);
         FuturesPair pair = margins.pair(request.symbol());
         FuturesAccountConfig account = margins.accountConfig(userId);
         List<FuturesPosition> closed;

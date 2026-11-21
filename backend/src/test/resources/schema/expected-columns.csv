@@ -321,6 +321,18 @@ leverage_bracket,notional_floor,numeric,28,8,NO
 leverage_bracket,pair_id,uuid,,,NO
 leverage_bracket,updated_at,timestamp with time zone,,,NO
 leverage_bracket,updated_by,uuid,,,YES
+market_incident,created_by,uuid,,,YES
+market_incident,expected_end_at,timestamp with time zone,,,YES
+market_incident,incident_kind,character varying,,,NO
+market_incident,last_live_at,timestamp with time zone,,,NO
+market_incident,market_incident_id,uuid,,,NO
+market_incident,market_type,character varying,,,NO
+market_incident,message,character varying,,,YES
+market_incident,paused_at,timestamp with time zone,,,NO
+market_incident,reason,character varying,,,NO
+market_incident,recovery_started_at,timestamp with time zone,,,YES
+market_incident,resumed_at,timestamp with time zone,,,YES
+market_incident,version,integer,32,0,NO
 matching_watermark,last_candle_open_time,timestamp with time zone,,,NO
 matching_watermark,market_type,character varying,,,NO
 matching_watermark,pair_id,uuid,,,NO

@@ -13,6 +13,7 @@ import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
@@ -68,8 +69,8 @@ class PositionServiceImplTest {
     private final TradingPlanService tradingPlans = mock(TradingPlanService.class);
     private final PositionCloser closer = new PositionCloser(
             journal, new FeeRates(settings), funding, new TakerSlippage(settings, market), market, events);
-    private final PositionServiceImpl service =
-            new PositionServiceImpl(plans, journal, closer, market, tradingPlans, Clock.fixed(NOW, ZoneOffset.UTC));
+    private final PositionServiceImpl service = new PositionServiceImpl(
+            plans, journal, closer, market, mock(MarketHealth.class), tradingPlans, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @BeforeEach
     void setUp() {

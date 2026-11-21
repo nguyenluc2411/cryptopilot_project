@@ -19,6 +19,7 @@ import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.PositionStatus;
 import com.cryptopilot.paper.repository.FuturesPositionRepository;
+import com.cryptopilot.paper.repository.PaperFillRepository;
 import com.cryptopilot.paper.repository.PaperOrderRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -86,6 +87,7 @@ class FuturesLiquidation {
     private static final Logger log = LoggerFactory.getLogger(FuturesLiquidation.class);
 
     private final FuturesPositionRepository positions;
+    private final PaperFillRepository fills;
     private final PaperOrderRepository orders;
     private final FuturesSettlement settlement;
     private final PaperUserFeed feed;
@@ -112,18 +114,31 @@ class FuturesLiquidation {
                 .toList();
     }
 
+    /** Whether the position held anything at {@code at}, each fill counted at the time of the price it took. */
+    private boolean openAt(FuturesPosition position, Instant at) {
+        OrderSide opening = position.getDirection().closingSide() == OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
+        return fills.sizeBefore(position.getId(), opening, at).signum() > 0;
+    }
+
     /**
      * Liquidates the position if the mark still reaches it; see the class comment.
+     *
+     * <p>Known limitation (D-159): a replayed mark is checked against the position being open at {@code markTime},
+     * but its margin and quantity are the current ones, not those it had then.
      *
      * @return whether it was liquidated
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    boolean liquidate(PaperAccount account, UUID positionId, BigDecimal mark, Instant at) {
+    boolean liquidate(PaperAccount account, UUID positionId, BigDecimal mark, Instant at, Instant markTime) {
         Optional<FuturesPosition> found = positions.findById(positionId);
         if (found.isEmpty() || !found.get().isOpen() || found.get().getMarginType() != MarginType.ISOLATED) {
             return false;
         }
         FuturesPosition position = found.get();
+        if (markTime != null && !openAt(position, markTime)) {
+            // D-159 E2b: a replayed mark from before the position was open is not one it lived through.
+            return false;
+        }
         List<LeverageTier> tiers = market.leverageBrackets(position.getPairId());
         BigDecimal notional = position.getQuantity().multiply(mark);
         BigDecimal marginBalance = position.getIsolatedWalletAmount()
@@ -145,7 +160,7 @@ class FuturesLiquidation {
                 position.getPositionSide(),
                 position.getQuantity(),
                 true));
-        settlement.liquidate(account, order, position, mark, settings.decimal(CLEARANCE_FEE), at);
+        settlement.liquidate(account, order, position, mark, settings.decimal(CLEARANCE_FEE), at, markTime);
         events.publishEvent(new FuturesRiskNotice(
                 account.userId(),
                 FuturesRiskNotice.Kind.LIQUIDATION,

@@ -81,6 +81,17 @@ class WebSocketTopicGuardsTest {
         }
     }
 
+    /** D-159: the markets' data health is public like the market data; a send to it is still refused. */
+    @Test
+    void D159_theMarketStatus_isOpenToAnyone_andCannotBeSentTo() {
+        assertThatNoException()
+                .isThrownBy(() -> WebSocketConfig.requireAllowed(
+                        StompCommand.SUBSCRIBE, "/topic/market.status", null, List.of()));
+        assertThatThrownBy(() ->
+                        WebSocketConfig.requireAllowed(StompCommand.SEND, "/topic/market.status", TRADER, List.of()))
+                .hasMessageContaining("no application destination");
+    }
+
     @Test
     void D126_aSendToAGovernedTopic_isStillRefused() {
         assertThatThrownBy(() ->
