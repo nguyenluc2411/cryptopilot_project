@@ -27,6 +27,8 @@ import org.springframework.scheduling.TaskScheduler;
  */
 public class MarketReferenceJob {
 
+    private static final Logger log = LoggerFactory.getLogger(MarketReferenceJob.class);
+
     /** How often the figures are refreshed. */
     static final Duration EVERY = Duration.ofMinutes(10);
 
@@ -39,7 +41,6 @@ public class MarketReferenceJob {
     private final MarketReferenceService reference;
     private final TaskScheduler scheduler;
     private final Clock clock;
-    private static final Logger log = LoggerFactory.getLogger(MarketReferenceJob.class);
 
     private final ReentrantLock running = new ReentrantLock();
     private final Object pendingLock = new Object();
@@ -60,17 +61,8 @@ public class MarketReferenceJob {
     /** A pair came into service: read the supplies once the pairs of the batch have settled, after commit. */
     @EventListener
     public void onPairMarketEnabled(PairMarketEnabled event) {
-        AfterCommit.run(() -> {
-            try {
-                scheduleSupplies(clock.instant().plus(SETTLE));
-            } catch (RuntimeException refused) {
-                // Shutting down: the hourly read catches up.
-                log.warn(
-                        "Market reference: could not schedule the supplies for {}: {}",
-                        event.symbol(),
-                        refused.toString());
-            }
-        });
+        // AfterCommit logs a refused schedule (shutting down); the hourly read catches up.
+        AfterCommit.run(() -> scheduleSupplies(clock.instant().plus(SETTLE)));
     }
 
     /** One refresh, unless one is in progress. */

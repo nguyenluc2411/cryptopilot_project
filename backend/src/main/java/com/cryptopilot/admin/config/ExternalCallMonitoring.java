@@ -158,6 +158,10 @@ public class ExternalCallMonitoring implements BeanPostProcessor, SmartInitializ
             } catch (IllegalArgumentException | IllegalStateException | NullPointerException misuse) {
                 throw misuse;
             } catch (RuntimeException failure) {
+                // Refused by the client itself: nothing reached the service.
+                if (failure instanceof ExternalAnswer answer && answer.notSent()) {
+                    throw failure;
+                }
                 if (failure instanceof ExternalAnswer answer && answer.serviceAnswered()) {
                     answered();
                     throw failure;

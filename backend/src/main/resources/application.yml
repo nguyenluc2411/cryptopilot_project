@@ -274,6 +274,8 @@ cryptopilot:
       retry-unmatched-after: 23h
       # The most calls in any hour, every caller together (free plan: 60, then a 402 and an hour's block).
       calls-per-hour: 55
+      # Kept for the market's cap, the supplies and the coin list: logos stop while only these remain.
+      reserved-calls: 10
       # Binance symbol -> CoinPaprika id where the ticker alone picks the wrong coin. CoinPaprika lists Toncoin as
       # GRAM, so TON would match TonToken (checked 2026-11-17). Cross outranks Harmony under ONE and MeMusic outranks
       # Momentum under MMT (checked 2026-11-21).

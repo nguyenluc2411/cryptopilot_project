@@ -33,6 +33,8 @@ import org.springframework.validation.annotation.Validated;
  * @param overrides CoinPaprika ids by Binance symbol, for a coin CoinPaprika lists under another ticker or whose ticker
  *     a larger coin also uses, e.g. {@code TON: toncoin-the-open-network} (CoinPaprika spells Toncoin {@code GRAM})
  * @param callsPerHour the most calls made in any hour, every caller together; under the free plan's 60
+ * @param reservedCalls the calls of the hour kept for the market figures (cap, supplies, coin list): a logo call is
+ *     sent only while more than these remain; less than {@code callsPerHour}
  */
 @Validated
 @ConfigurationProperties("cryptopilot.market.coinpaprika")
@@ -48,7 +50,8 @@ public record CoinPaprikaProperties(
         @NotNull @DefaultValue("120s") Duration bodyTimeout,
         @NotNull @DefaultValue("23h") Duration retryUnmatchedAfter,
         @DefaultValue Map<String, String> overrides,
-        @Min(1) @DefaultValue("55") int callsPerHour) {
+        @Min(1) @DefaultValue("55") int callsPerHour,
+        @Min(0) @DefaultValue("10") int reservedCalls) {
 
     /** The settings with the default budget of calls. */
     public CoinPaprikaProperties(
@@ -69,11 +72,16 @@ public record CoinPaprikaProperties(
                 bodyTimeout,
                 retryUnmatchedAfter,
                 overrides,
-                55);
+                55,
+                10);
     }
 
     @ConstructorBinding
     public CoinPaprikaProperties {
+        if (reservedCalls >= callsPerHour) {
+            throw new IllegalArgumentException(
+                    "reservedCalls must be less than callsPerHour, was " + reservedCalls + " of " + callsPerHour);
+        }
         Map<String, String> bySymbol = new TreeMap<>();
         if (overrides != null) {
             overrides.forEach((symbol, id) -> {

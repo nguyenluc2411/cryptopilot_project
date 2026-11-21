@@ -65,15 +65,26 @@ class ExternalCallMonitoringTest {
         private static final long serialVersionUID = 1L;
 
         private final boolean answered;
+        private final boolean notSent;
 
         Refusal(String message, boolean answered) {
+            this(message, answered, false);
+        }
+
+        Refusal(String message, boolean answered, boolean notSent) {
             super(message);
             this.answered = answered;
+            this.notSent = notSent;
         }
 
         @Override
         public boolean serviceAnswered() {
             return answered;
+        }
+
+        @Override
+        public boolean notSent() {
+            return notSent;
         }
     }
 
@@ -129,6 +140,20 @@ class ExternalCallMonitoringTest {
     }
 
     /** Binance answers 403 when its WAF blocks this server: every call fails, so it is a failure, not an answer. */
+    /**
+     * A call the client refused itself (its budget, or a wait the service asked for) reached nothing: it is rethrown
+     * without being counted as an answer or recorded as a failure, even when it carries the service's 4xx status.
+     */
+    @Test
+    void aCallRefusedByTheClient_isNeitherAnAnswerNorAFailure() {
+        Refusal budgetSpent = new Refusal("CoinPaprika's budget of 55 calls an hour is spent", true, true);
+
+        assertThatThrownBy(() -> client.refuse(budgetSpent)).isSameAs(budgetSpent);
+
+        verifyNoInteractions(tracker);
+        verifyNoInteractions(recorder);
+    }
+
     @Test
     void aBinanceForbidden_isAFailure_notAnAnswer() throws Exception {
         java.lang.reflect.Constructor<BinanceClientException> create =

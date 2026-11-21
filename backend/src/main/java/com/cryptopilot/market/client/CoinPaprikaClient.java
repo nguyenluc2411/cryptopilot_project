@@ -50,7 +50,8 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * <p>Every call counts against one budget, {@code calls-per-hour} in any hour (a sliding window), whoever makes it:
  * the market's cap, the supplies, the coin list and the logos. Once spent, a call fails at once as rate limited without
- * being sent, so no caller can use up the free plan for the others. Reference: Nygard, M. T. (2018). <i>Release It!</i>
+ * being sent. A logo call is low priority: it is sent only while more than {@code reserved-calls} remain, so the logos
+ * of a large batch never take the calls the market figures need. Reference: Nygard, M. T. (2018). <i>Release It!</i>
  * (2nd ed.). Pragmatic Bookshelf, "Steady State"; Tanenbaum, A. S. &amp; Van Steen, M. (2017). <i>Distributed
  * Systems</i> (3rd ed.), rate limiting.
  *
@@ -211,7 +212,8 @@ public class CoinPaprikaClient implements AutoCloseable {
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("id must not be blank");
         }
-        byte[] body = get("/coins/" + URLEncoder.encode(id.strip(), StandardCharsets.UTF_8), properties.readTimeout());
+        byte[] body =
+                get("/coins/" + URLEncoder.encode(id.strip(), StandardCharsets.UTF_8), properties.readTimeout(), true);
         try {
             JsonNode node = json.readTree(body);
             String logo = node == null ? null : text(node, "logo");
@@ -229,19 +231,26 @@ public class CoinPaprikaClient implements AutoCloseable {
 
     /** One GET whose answer, body included, must arrive within {@code deadline}; a 200's body, or a refusal. */
     private byte[] get(String path, Duration deadline) {
+        return get(path, deadline, false);
+    }
+
+    /** As {@link #get(String, Duration)}; a {@code lowPriority} call keeps out of the reserved calls. */
+    private byte[] get(String path, Duration deadline, boolean lowPriority) {
         Wait wait = waiting.get();
         if (wait != null && wait.until().isAfter(clock.instant())) {
             throw new CoinPaprikaException(
                     "CoinPaprika asked to wait until " + wait.until() + "; " + path + " not called",
                     wait.status(),
-                    null);
+                    null,
+                    true);
         }
-        if (!spend()) {
+        if (!spend(lowPriority)) {
             throw new CoinPaprikaException(
-                    "CoinPaprika's budget of " + properties.callsPerHour() + " calls an hour is spent; " + path
-                            + " not called",
+                    "CoinPaprika's budget of " + properties.callsPerHour() + " calls an hour is spent"
+                            + (lowPriority ? " for logos" : "") + "; " + path + " not called",
                     429,
-                    null);
+                    null,
+                    true);
         }
         String base = properties.baseUrl().toString().replaceAll("/+$", "");
         HttpRequest request = HttpRequest.newBuilder(URI.create(base + path))
@@ -275,15 +284,19 @@ public class CoinPaprikaClient implements AutoCloseable {
         return response.body();
     }
 
-    /** Counts one call against the hour's budget, if any is left. */
-    private boolean spend() {
+    /**
+     * Counts one call against the hour's budget, if any is left; a low-priority call only while more than the reserve
+     * is left.
+     */
+    private boolean spend(boolean lowPriority) {
         synchronized (sent) {
             Instant now = clock.instant();
             Instant hourAgo = now.minus(Duration.ofHours(1));
             while (!sent.isEmpty() && !sent.peekFirst().isAfter(hourAgo)) {
                 sent.removeFirst();
             }
-            if (sent.size() >= properties.callsPerHour()) {
+            int limit = properties.callsPerHour() - (lowPriority ? properties.reservedCalls() : 0);
+            if (sent.size() >= limit) {
                 return false;
             }
             sent.addLast(now);
