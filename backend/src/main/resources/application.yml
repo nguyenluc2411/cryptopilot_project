@@ -54,6 +54,13 @@ spring:
   threads:
     virtual:
       enabled: true
+  task:
+    scheduling:
+      # The default scheduler of the jobs (SchedulingConfig): its jobs are short, a few at a time. The background and
+      # backfill schedulers keep these settings but set their own size and prefix.
+      pool:
+        size: 8
+      thread-name-prefix: app-scheduler-
   jpa:
     hibernate:
       # Flyway owns the schema; Hibernate only checks that the entities match it, and refuses to

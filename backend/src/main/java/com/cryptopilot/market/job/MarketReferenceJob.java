@@ -8,8 +8,6 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
@@ -26,8 +24,6 @@ import org.springframework.scheduling.TaskScheduler;
  * <p>Rule: SRS 3.3.1; UC-45.
  */
 public class MarketReferenceJob {
-
-    private static final Logger log = LoggerFactory.getLogger(MarketReferenceJob.class);
 
     /** How often the figures are refreshed. */
     static final Duration EVERY = Duration.ofMinutes(10);

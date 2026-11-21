@@ -1,8 +1,6 @@
 package com.cryptopilot.common.config;
 
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.task.ThreadPoolTaskSchedulerBuilder;
-import org.springframework.boot.task.ThreadPoolTaskSchedulerCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -25,8 +23,12 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * </ul>
  *
  * <p>{@link #BACKFILL} ({@code candle-backfill-*}), one thread, is the candle backfill's own: a run holds its thread
- * through many exchange calls. Every scheduler gets the customizers of the application, among them the one that
- * records a job's failure in the system log (UC-52).
+ * through many exchange calls.
+ *
+ * <p>All three come from Spring Boot's {@link ThreadPoolTaskSchedulerBuilder}, so {@code spring.task.scheduling.*}, the
+ * task decorator and the customizers apply to each (among them the one that records a job's failure in the system log,
+ * UC-52). The default scheduler is that configuration as it is (8 threads, {@code app-scheduler-}, set in
+ * application.yml); the other two keep it but set their own size and prefix.
  *
  * <p>Rule: NSF-02, NSF-03; UC-52.
  */
@@ -42,37 +44,28 @@ public class SchedulingConfig {
     /** The name of the candle backfill's scheduler. */
     public static final String BACKFILL = "backfillScheduler";
 
-    /** Threads of the default scheduler: its jobs are short, a few at a time. */
-    static final int APP_THREADS = 8;
-
     /** Threads of the background scheduler: a few jobs waiting on the network at once. */
     static final int BACKGROUND_THREADS = 4;
 
     @Bean(APP)
     @Primary
-    ThreadPoolTaskScheduler taskScheduler(ObjectProvider<ThreadPoolTaskSchedulerCustomizer> customizers) {
-        return scheduler("app-scheduler-", APP_THREADS, customizers);
+    ThreadPoolTaskScheduler taskScheduler(ThreadPoolTaskSchedulerBuilder builder) {
+        return builder.build();
     }
 
     @Bean(BACKGROUND)
-    ThreadPoolTaskScheduler backgroundScheduler(ObjectProvider<ThreadPoolTaskSchedulerCustomizer> customizers) {
-        return scheduler("background-", BACKGROUND_THREADS, customizers);
+    ThreadPoolTaskScheduler backgroundScheduler(ThreadPoolTaskSchedulerBuilder builder) {
+        return builder.poolSize(BACKGROUND_THREADS)
+                .threadNamePrefix("background-")
+                .build();
     }
 
     @Bean(BACKFILL)
-    ThreadPoolTaskScheduler backfillScheduler(ObjectProvider<ThreadPoolTaskSchedulerCustomizer> customizers) {
-        ThreadPoolTaskScheduler scheduler = scheduler("candle-backfill-", 1, customizers);
+    ThreadPoolTaskScheduler backfillScheduler(ThreadPoolTaskSchedulerBuilder builder) {
+        ThreadPoolTaskScheduler scheduler =
+                builder.poolSize(1).threadNamePrefix("candle-backfill-").build();
         // A replaced continuation leaves the queue at once.
         scheduler.setRemoveOnCancelPolicy(true);
         return scheduler;
-    }
-
-    private static ThreadPoolTaskScheduler scheduler(
-            String prefix, int threads, ObjectProvider<ThreadPoolTaskSchedulerCustomizer> customizers) {
-        return new ThreadPoolTaskSchedulerBuilder()
-                .poolSize(threads)
-                .threadNamePrefix(prefix)
-                .customizers(customizers.orderedStream().toList())
-                .build();
     }
 }
