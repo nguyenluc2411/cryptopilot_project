@@ -281,7 +281,7 @@ class PaperTradingSchemaTest {
                         .update());
     }
 
-    /** TR-28 (V76): a Spot sale records what it realised against the average cost; a Spot fill has no position side. */
+    /** TR-28 (V75): a Spot sale records what it realised against the average cost; a Spot fill has no position side. */
     @Test
     void TR28_aSpotFill_mayRecordWhatItRealised_butHasNoPositionSide() {
         UUID orderId = insertMarketOrder("SPOT", null, false);
