@@ -19,7 +19,7 @@ import java.util.List;
  *     worth there is not above 0
  * @param complete whether every coin held has a current price; when not, today's figures leave the unpriced coins out
  * @param daily each day with a PnL, oldest first: a day without its snapshot, or without the next day's, is left out
- * @param trades the closed Futures positions of the period; {@code null} for {@code SPOT}
+ * @param trades the trades closed in the period: the Spot sale orders, the Futures positions, or both
  */
 public record PnlAnalysisResponse(
         String market,
@@ -42,8 +42,9 @@ public record PnlAnalysisResponse(
     public record Day(LocalDate date, BigDecimal pnl, BigDecimal cumulativePnl) {}
 
     /**
-     * The Futures positions closed in the period, each counted once by its net result (realised PnL with funding,
-     * less the liquidation fee and the fees of its fills).
+     * The trades closed in the period, each counted once by its net result: a Futures position (realised PnL with
+     * funding, less the liquidation fee and the fees of its fills) and a Spot sale order (what it netted less the share
+     * of the average cost it took).
      *
      * @param closed how many closed
      * @param wins how many closed with a result above 0

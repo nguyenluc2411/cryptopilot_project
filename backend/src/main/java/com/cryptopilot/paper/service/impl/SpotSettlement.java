@@ -112,8 +112,14 @@ public class SpotSettlement {
         } else {
             out = wallets.debit(account, WalletType.SPOT, paid, paidAmount, LedgerEntryType.TRADE, ref);
         }
+        BigDecimal costBefore = out.getCostBasisAmount();
         if (!QuoteUsdtRate.isUsdt(paid)) {
             out.reduceCost(paidAmount);
+        }
+        // TR-28: a sale realises what it netted, in USDT, less the share of the average cost it took (BR-73).
+        if (!buy && costBefore != null && out.getCostBasisAmount() != null && quoteUsdt.known()) {
+            BigDecimal costTaken = costBefore.subtract(out.getCostBasisAmount());
+            fill.realisedOnSale(quoteUsdt.valueOf(receivedAmount.subtract(fee)).subtract(costTaken));
         }
         PaperBalance in =
                 wallets.credit(account, WalletType.SPOT, received, receivedAmount, LedgerEntryType.TRADE, ref);

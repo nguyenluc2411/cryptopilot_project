@@ -118,6 +118,9 @@ class PaperUserQueueTest {
     @Autowired
     private PaperAccountProperties grants;
 
+    @Autowired
+    private io.micrometer.core.instrument.MeterRegistry meters;
+
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
     private final List<WebSocketStompClient> clients = new ArrayList<>();
@@ -278,6 +281,25 @@ class PaperUserQueueTest {
         await(() -> otherQueues.orders.size() == 1, "the other Trader's order");
         assertThat((String) JsonPath.read(otherQueues.orders.get(0), "$.orderId"))
                 .isEqualTo(own);
+    }
+
+    /** TR-36: a live fill is timed from its trade to its commit, under its market. */
+    @Test
+    void TR36_aLiveFill_isTimed() throws Exception {
+        UUID trader = trader();
+        price("100");
+        long before = fillsTimed();
+
+        place(trader, market("BUY", "1")).andExpect(status().isCreated());
+
+        assertThat(fillsTimed()).isEqualTo(before + 1);
+    }
+
+    private long fillsTimed() {
+        io.micrometer.core.instrument.Timer timer = meters.find("cryptopilot.paper.fill.latency")
+                .tag("market", "SPOT")
+                .timer();
+        return timer == null ? 0 : timer.count();
     }
 
     /** TR-29: a MARKET buy that fills is told to its Trader as a MARKET notification that opens the order. */

@@ -67,6 +67,7 @@ class PaperPnlAnalysisServiceImplTest {
                         .toList());
         when(queries.transfersIn(any(), any(), any())).thenReturn(Map.of());
         when(queries.closedPositions(any(), any())).thenReturn(List.of());
+        when(queries.spotSales(any(), any())).thenReturn(List.of());
         now("10000", "5000");
     }
 
@@ -123,7 +124,7 @@ class PaperPnlAnalysisServiceImplTest {
         assertThat(spot.todayPnl()).isNull();
         assertThat(spot.cumulativePnl()).isEqualByComparingTo("0");
         assertThat(spot.maxDrawdownPercent()).isNull();
-        assertThat(spot.trades()).as("Spot has no Futures record").isNull();
+        assertThat(spot.trades().closed()).as("no Spot sale realised").isZero();
     }
 
     @Test
@@ -174,6 +175,24 @@ class PaperPnlAnalysisServiceImplTest {
         assertThat(onlyWins.winRate()).isEqualByComparingTo("100.00");
         assertThat(onlyWins.averageLoss()).isNull();
         assertThat(onlyWins.profitFactor()).isNull();
+    }
+
+    @Test
+    void TR28_theSpotRecord_countsTheSales_andBothWallets_countEverything() {
+        when(queries.spotSales(eq(TRADER), any())).thenReturn(List.of(trade("12"), trade("-4")));
+        when(queries.closedPositions(eq(TRADER), any())).thenReturn(List.of(trade("30")));
+
+        PnlAnalysisResponse.Trades spot =
+                service.analysis(TRADER, MarketType.SPOT, 7).trades();
+        PnlAnalysisResponse.Trades futures =
+                service.analysis(TRADER, MarketType.FUTURES, 7).trades();
+        PnlAnalysisResponse.Trades all = service.analysis(TRADER, null, 7).trades();
+
+        assertThat(spot.closed()).isEqualTo(2);
+        assertThat(spot.profitFactor()).isEqualByComparingTo("3.00");
+        assertThat(futures.closed()).isEqualTo(1);
+        assertThat(all.closed()).isEqualTo(3);
+        assertThat(all.totalPnl()).isEqualByComparingTo("38");
     }
 
     @ParameterizedTest(name = "{0} days")

@@ -1053,6 +1053,35 @@ class PaperOrderApiTest {
     }
 
     /**
+     * TR-28: a sale realises what it netted less the share of the average cost it took, recorded on its fill; a buy
+     * realises nothing.
+     */
+    @Test
+    void TR28_aSale_recordsWhatItRealised_againstTheAverageCost() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String bought = id(place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated()));
+        price("110");
+        String sold = id(place(trader, market("SELL", "\"quantity\": 1")).andExpect(status().isCreated()));
+
+        // 1 sold at 110 nets 110 less the 0.11 fee; it takes 1 / 1.998 of the 200 cost, 100.1001001.
+        assertThat(sql.sql("select realized_pnl_amount from order_fill where order_id = ?")
+                        .param(UUID.fromString(sold))
+                        .query(BigDecimal.class)
+                        .single())
+                .isEqualByComparingTo("9.7898999");
+        assertThat(sql.sql("select realized_pnl_amount from order_fill where order_id = ?")
+                        .param(UUID.fromString(bought))
+                        .query(BigDecimal.class)
+                        .list())
+                .containsOnlyNulls();
+        as(trader, get(PAPER + "/pnl/analysis").param("market", "SPOT").param("days", "7"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.trades.closed").value(1))
+                .andExpect(jsonPath("$.trades.wins").value(1));
+    }
+
+    /**
      * TR-13: the account's worth is snapshotted when it opens; today's PnL is the worth now less that snapshot, and a
      * second snapshot of the same day is never taken.
      */

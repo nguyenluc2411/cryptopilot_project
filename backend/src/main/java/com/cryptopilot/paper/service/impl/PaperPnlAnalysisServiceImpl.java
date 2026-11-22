@@ -14,6 +14,7 @@ import com.cryptopilot.paper.repository.PaperPnlQueries;
 import com.cryptopilot.paper.service.PaperPnlAnalysisService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -41,8 +42,9 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li><b>The running total</b> adds the days' PnL in order; <b>the deepest fall</b> is the largest drop of the
  *       running total below its highest point so far (0 at the period's start), and its percent is of the worth at
  *       that point.
- *   <li><b>The record</b> counts each Futures position closed in the period once, by its net result; a result of 0 is
- *       neither a win nor a loss.
+ *   <li><b>The record</b> counts each trade closed in the period once, by its net result: a Futures position (realised
+ *       PnL with funding, less the liquidation fee and its fills' fees) and a Spot sale order (what it netted less the
+ *       share of the average cost it took); a result of 0 is neither a win nor a loss.
  * </ul>
  *
  * <p>Rule: TR-28; plan section 8.
@@ -135,7 +137,7 @@ public class PaperPnlAnalysisServiceImpl implements PaperPnlAnalysisService {
                 drawdownPercent,
                 now.complete(),
                 List.copyOf(daily),
-                market == MarketType.SPOT ? null : trades(account.userId(), first));
+                trades(account.userId(), market, first));
     }
 
     private static Function<PaperEquitySnapshot, BigDecimal> worthOf(MarketType market) {
@@ -155,9 +157,16 @@ public class PaperPnlAnalysisServiceImpl implements PaperPnlAnalysisService {
         return queries.transfersIn(userId, market == MarketType.SPOT ? WalletType.SPOT : WalletType.FUTURES, first);
     }
 
-    private PnlAnalysisResponse.Trades trades(UUID userId, LocalDate first) {
-        List<PaperPnlQueries.ClosedTrade> closed =
-                queries.closedPositions(userId, first.atStartOfDay().toInstant(ZoneOffset.UTC));
+    /** The trades of the wallet asked for: Spot sale orders, Futures positions, or both. */
+    private PnlAnalysisResponse.Trades trades(UUID userId, MarketType market, LocalDate first) {
+        Instant from = first.atStartOfDay().toInstant(ZoneOffset.UTC);
+        List<PaperPnlQueries.ClosedTrade> closed = new ArrayList<>();
+        if (market != MarketType.FUTURES) {
+            closed.addAll(queries.spotSales(userId, from));
+        }
+        if (market != MarketType.SPOT) {
+            closed.addAll(queries.closedPositions(userId, from));
+        }
         BigDecimal won = BigDecimal.ZERO;
         BigDecimal lost = BigDecimal.ZERO;
         BigDecimal total = BigDecimal.ZERO;

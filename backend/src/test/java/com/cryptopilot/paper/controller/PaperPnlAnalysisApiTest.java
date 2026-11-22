@@ -127,7 +127,7 @@ class PaperPnlAnalysisApiTest {
                 .andExpect(jsonPath("$.trades.closed").value(0));
         as(trader, get(PAPER + "/pnl/analysis").param("market", "SPOT").param("days", "7"), null)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.trades").doesNotExist());
+                .andExpect(jsonPath("$.trades.closed").value(0));
     }
 
     @Test

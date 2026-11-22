@@ -250,10 +250,11 @@ public class PaperUserFeed {
     }
 
     private void measure(String market, PaperFill fill) {
-        if (fill.getFillSource() != FillSource.LIVE || fill.getSourceTime() == null) {
+        // A live fill is dated at the exchange's trade (its source time is a replay's candle only).
+        if (fill.getFillSource() != FillSource.LIVE || fill.getTradedAt() == null) {
             return;
         }
-        Duration took = Duration.between(fill.getSourceTime(), clock.instant());
+        Duration took = Duration.between(fill.getTradedAt(), clock.instant());
         if (!took.isNegative()) {
             Timer.builder(FILL_LATENCY)
                     .description("From the exchange's trade to the commit of the paper fill it made (TR-36)")

@@ -17,7 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * The figures of the PnL analysis (TR-28) the entities do not hold as such: the transfers between the wallets by day,
- * and the net result of each Futures position closed. Plain SQL through {@link JdbcClient}: read-only aggregates.
+ * the net result of each Futures position closed, and what each Spot sale realised. Plain SQL through {@link JdbcClient}: read-only aggregates.
  *
  * <p>Rule: TR-28; plan section 8.
  */
@@ -77,11 +77,34 @@ public class PaperPnlQueries {
     }
 
     /**
-     * A Futures position closed.
+     * The Spot sale orders that realised from {@code from} on, oldest first, each with what its fills realised
+     * together against the average cost (TR-28): a sale whose cost was not known realised nothing known and is left
+     * out.
+     */
+    @Transactional(readOnly = true)
+    public List<ClosedTrade> spotSales(UUID userId, Instant from) {
+        return sql.sql("""
+                        select f.order_id, max(f.traded_at) as closed_at, sum(f.realized_pnl_amount) as net
+                          from order_fill f
+                         where f.user_id = :userId and f.market_type = 'SPOT' and f.side = 'SELL'
+                           and f.realized_pnl_amount is not null and f.traded_at >= :from
+                         group by f.order_id
+                         order by closed_at, f.order_id""")
+                .param("userId", userId)
+                .param("from", Timestamp.from(from))
+                .query((row, n) -> new ClosedTrade(
+                        row.getObject("order_id", UUID.class),
+                        row.getTimestamp("closed_at").toInstant(),
+                        row.getBigDecimal("net")))
+                .list();
+    }
+
+    /**
+     * A trade closed: a Futures position, or a Spot sale order.
      *
-     * @param positionId the position
-     * @param closedAt when it closed
+     * @param id the position or the order
+     * @param closedAt when it closed, or the sale's last fill
      * @param net its net result in USDT
      */
-    public record ClosedTrade(UUID positionId, Instant closedAt, BigDecimal net) {}
+    public record ClosedTrade(UUID id, Instant closedAt, BigDecimal net) {}
 }
