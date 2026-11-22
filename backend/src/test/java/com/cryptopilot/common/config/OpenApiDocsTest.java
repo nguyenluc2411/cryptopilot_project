@@ -244,9 +244,13 @@ class OpenApiDocsTest {
             "/api/v1/admin/orders",
             "/api/v1/admin/orders/{orderCode}",
             "/api/v1/admin/orders/{orderCode}/reconcile",
-            "/api/v1/admin/orders/{orderCode}/handled");
+            "/api/v1/admin/orders/{orderCode}/handled",
+            "/api/v1/admin/packages",
+            "/api/v1/admin/packages/{packageId}",
+            "/api/v1/admin/packages/{packageId}/active",
+            "/api/v1/admin/packages/tiers/{tier}/limits");
 
-    private static final int OPERATIONS = 263;
+    private static final int OPERATIONS = 270;
 
     @Autowired
     private MockMvc mvc;

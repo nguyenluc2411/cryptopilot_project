@@ -2,10 +2,12 @@ package com.cryptopilot.billing.repository;
 
 import com.cryptopilot.billing.entity.SubscriptionPackage;
 import com.cryptopilot.billing.model.enums.PlanTier;
+import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
@@ -22,6 +24,23 @@ public interface SubscriptionPackageRepository extends Repository<SubscriptionPa
 
     @Transactional(readOnly = true)
     Optional<SubscriptionPackage> findById(UUID packageId);
+
+    /** Removes a package that no order references (SRS 3.11.5). */
+    void delete(SubscriptionPackage subscriptionPackage);
+
+    /** The package, its row locked until the transaction ends, so two administrators edit it one after the other. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from SubscriptionPackage p where p.id = :packageId")
+    Optional<SubscriptionPackage> lockById(@Param("packageId") UUID packageId);
+
+    /** The packages of a tier, their rows locked: the tier's limits are saved to all of them at once (BR-62). */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from SubscriptionPackage p where p.tier = :tier order by p.id")
+    List<SubscriptionPackage> lockByTier(@Param("tier") PlanTier tier);
+
+    /** Whether a package already has this code. */
+    @Transactional(readOnly = true)
+    boolean existsByPackageCode(String packageCode);
 
     /** The package with this code, e.g. {@code PRO_MONTHLY}, or empty. */
     @Transactional(readOnly = true)

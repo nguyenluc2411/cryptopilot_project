@@ -584,6 +584,21 @@ public enum ErrorCode {
      */
     PACKAGE_NOT_ON_SALE(HttpStatus.CONFLICT, "MSG43"),
 
+    /** Another package already has this code (SRS 3.11.5, UC-42). Borrows MSG43 (A-38). 409: the code is taken. */
+    PACKAGE_CODE_TAKEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A package that orders were placed for cannot be deleted, only deactivated (SRS 3.11.5), so the orders and the
+     * subscriptions they opened keep their package. Borrows MSG43 (A-38). 409: the orders refuse it.
+     */
+    PACKAGE_IN_USE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The FREE package cannot be purchased, deactivated or deleted, and there is exactly one (SRS 3.11.5, BR-62).
+     * Borrows MSG43 (A-38). 409: the package's tier refuses it.
+     */
+    FREE_PACKAGE_FIXED(HttpStatus.CONFLICT, "MSG43"),
+
     /**
      * The package is of a lower tier than the paid subscription the Trader holds, which may only be renewed or
      * upgraded (D-147, replacing BR-55's downgrade). Borrows MSG43 (A-38); messageArgs are the plan held and its end

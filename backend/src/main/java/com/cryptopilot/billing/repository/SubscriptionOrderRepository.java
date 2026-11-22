@@ -46,6 +46,10 @@ public interface SubscriptionOrderRepository
     @Transactional(readOnly = true)
     boolean existsByUserIdAndOrderStatus(UUID userId, OrderStatus status);
 
+    /** Whether any order, in any status, was placed for this package: such a package is never deleted (SRS 3.11.5). */
+    @Transactional(readOnly = true)
+    boolean existsByPackageId(UUID packageId);
+
     /** Whether an order already has this code. */
     @Transactional(readOnly = true)
     boolean existsByOrderCode(String orderCode);

@@ -193,6 +193,56 @@ public class SubscriptionPackage extends BaseEntity {
                 canPostVideo);
     }
 
+    /** Whether this is the single FREE package, which is never sold, switched off or deleted (SRS 3.11.5). */
+    public boolean isFree() {
+        return tier == PlanTier.FREE;
+    }
+
+    /** A new name; the code and the tier never change (SRS 3.11.5). */
+    public void rename(String name) {
+        this.packageName = requireText(name, "name", NAME_LENGTH);
+    }
+
+    /**
+     * A new price, duration and sale flag of a paid package (SRS 3.11.5, BR-63): the price above 0 VND, 1–366 days.
+     * Orders already placed keep the amount they were created with.
+     *
+     * @throws IllegalStateException on the FREE package, whose offer is fixed
+     */
+    public void changeOffer(BigDecimal price, int durationDays, boolean purchasable) {
+        if (isFree()) {
+            throw new IllegalStateException("the FREE package's price, duration and sale flag are fixed");
+        }
+        if (Objects.requireNonNull(price, "price must not be null").signum() <= 0) {
+            throw new IllegalArgumentException("a paid package is priced above 0 VND, was " + price);
+        }
+        if (durationDays < MIN_DURATION_DAYS || durationDays > MAX_DURATION_DAYS) {
+            throw new IllegalArgumentException("a paid package lasts " + MIN_DURATION_DAYS + "–" + MAX_DURATION_DAYS
+                    + " days, was " + durationDays);
+        }
+        this.priceAmount = price;
+        this.durationDays = durationDays;
+        this.purchasable = purchasable;
+    }
+
+    /**
+     * Puts the package on offer or takes it off. An inactive package is no longer listed or sold; the subscriptions it
+     * opened run to their end.
+     *
+     * @throws IllegalStateException when the FREE package would be switched off
+     */
+    public void changeActive(boolean active) {
+        if (isFree() && !active) {
+            throw new IllegalStateException("the FREE package cannot be deactivated");
+        }
+        this.active = active;
+    }
+
+    /** The limits of the package's tier, which the administrator saves to every package of that tier (BR-62). */
+    public void applyLimits(PlanEntitlements entitlements) {
+        apply(Objects.requireNonNull(entitlements, "entitlements must not be null"));
+    }
+
     private void apply(PlanEntitlements e) {
         this.futuresAnalysis = e.futuresAnalysis();
         this.scoreComponents = e.scoreComponents();
