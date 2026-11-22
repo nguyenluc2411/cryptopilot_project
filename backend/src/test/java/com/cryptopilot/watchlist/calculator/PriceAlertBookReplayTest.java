@@ -25,7 +25,8 @@ import org.junit.jupiter.params.provider.CsvSource;
  * <p>Invariants: (1) a replayed path fires what a live run over the same closes would have fired, at most once per
  * alert; (2) the first price only seeds the path; (3) no price at or before an alert's last trigger fires it; (4) the
  * trigger mode is judged at the price's own time; (5) an alert expired now never fires; (6) hits are recorded at the
- * clock's now; (7) the replay never moves the book's previous price back behind a newer one.
+ * clock's now; (7) the replay never moves the book's previous price back behind a newer one; (8) no price at or before
+ * the time an alert was armed (created, edited, resumed) fires it.
  *
  * <p>Rule: NSF-06, BR-19, BR-20; D-87.
  */
@@ -106,7 +107,8 @@ class PriceAlertBookReplayTest {
                 1,
                 GAP.minus(Duration.ofMinutes(30)),
                 GAP.minus(Duration.ofHours(1)).truncatedTo(java.time.temporal.ChronoUnit.HOURS),
-                3);
+                3,
+                Instant.EPOCH);
         book.put(alert);
 
         assertThat(book.replay(path("99 101"))).singleElement().satisfies(hit -> assertThat(hit.barOpenTime())
@@ -133,7 +135,8 @@ class PriceAlertBookReplayTest {
                 0,
                 null,
                 null,
-                0);
+                0,
+                Instant.EPOCH);
         book.put(alert);
 
         assertThat(book.replay(path("99 101 102"))).isEmpty();
@@ -195,6 +198,102 @@ class PriceAlertBookReplayTest {
                 .hasSize(1);
     }
 
+    @Test
+    void T111_anAlertArmedAfterTheCrossingCandle_doesNotFire() {
+        // 99 at minute 1, 101 at minute 2: the cross closes at minute 2, the alert is armed at minute 3.
+        book.put(armed(alert(ConditionOperator.CROSS_ABOVE, "100", TriggerMode.EVERY_TIME, null), minute(3)));
+
+        assertThat(book.replay(path("99 101 101"))).isEmpty();
+    }
+
+    @Test
+    void T111_anAlertArmedAtTheCrossingCandlesClose_doesNotFire() {
+        book.put(armed(alert(ConditionOperator.CROSS_ABOVE, "100", TriggerMode.EVERY_TIME, null), minute(2)));
+
+        assertThat(book.replay(path("99 101"))).isEmpty();
+    }
+
+    @Test
+    void T111_anAlertArmedBeforeTheCrossingCandle_firesOnce() {
+        PriceAlert alert = armed(alert(ConditionOperator.CROSS_ABOVE, "100", TriggerMode.EVERY_TIME, null), minute(1));
+        book.put(alert);
+
+        assertThat(book.replay(path("99 101 99 101")))
+                .singleElement()
+                .satisfies(hit -> assertThat(hit.alert().alertId()).isEqualTo(alert.alertId()));
+    }
+
+    @Test
+    void T111_anEditedThreshold_isJudgedOnlyOnPricesAfterTheEdit() {
+        PriceAlert before = armed(alert(ConditionOperator.GREATER_THAN, "200", TriggerMode.EVERY_TIME, null), GAP);
+        book.put(before);
+        // Edited at minute 3 to "above 100": the 101 of minutes 1 to 3 came before the rule, 99 after it.
+        PriceAlert edited = new PriceAlert(
+                before.alertId(),
+                before.userId(),
+                before.watchlistId(),
+                PAIR,
+                "BTCUSDT",
+                MarketType.SPOT,
+                ConditionOperator.GREATER_THAN,
+                new BigDecimal("100"),
+                TriggerMode.EVERY_TIME,
+                5,
+                null,
+                true,
+                false,
+                false,
+                0,
+                null,
+                null,
+                1,
+                minute(3));
+        book.put(edited);
+
+        assertThat(book.replay(path("101 101 101 99 99"))).isEmpty();
+        PriceAlertBook again = new PriceAlertBook(clock, Duration.ofSeconds(1), Duration.ofMinutes(5));
+        again.put(edited);
+        assertThat(again.replay(path("101 101 101 99 102")))
+                .as("102 at minute 5 comes after the edit")
+                .singleElement()
+                .satisfies(hit -> assertThat(hit.observedValue()).isEqualByComparingTo("102"));
+    }
+
+    @Test
+    void T111_aTrigger_movesTheArmTimeForward_neverBack() {
+        PriceAlert alert = armed(alert(ConditionOperator.GREATER_THAN, "100", TriggerMode.EVERY_TIME, null), minute(3));
+
+        assertThat(alert.triggeredAt(minute(5), null).armedAt()).isEqualTo(minute(5));
+        assertThat(alert.triggeredAt(minute(1), null).armedAt()).isEqualTo(minute(3));
+    }
+
+    private static Instant minute(long n) {
+        return GAP.plus(Duration.ofMinutes(n));
+    }
+
+    private static PriceAlert armed(PriceAlert alert, Instant armedAt) {
+        return new PriceAlert(
+                alert.alertId(),
+                alert.userId(),
+                alert.watchlistId(),
+                alert.pairId(),
+                alert.symbol(),
+                alert.market(),
+                alert.condition(),
+                alert.threshold(),
+                alert.triggerMode(),
+                alert.cooldownMinutes(),
+                alert.expiresAt(),
+                alert.notifyInApp(),
+                alert.notifyEmail(),
+                alert.notifyPush(),
+                alert.triggerCount(),
+                alert.lastTriggeredAt(),
+                alert.lastBarOpenTime(),
+                alert.version(),
+                armedAt);
+    }
+
     /** Closes one minute apart; the first closes one minute after {@link #GAP}. */
     private static List<ReplayedPrice> path(String closes) {
         List<ReplayedPrice> path = new ArrayList<>();
@@ -225,6 +324,7 @@ class PriceAlertBookReplayTest {
                 lastTriggeredAt == null ? 0 : 1,
                 lastTriggeredAt,
                 null,
-                0);
+                0,
+                Instant.EPOCH);
     }
 }

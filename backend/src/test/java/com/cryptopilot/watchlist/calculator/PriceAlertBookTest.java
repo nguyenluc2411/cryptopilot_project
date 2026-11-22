@@ -453,7 +453,8 @@ class PriceAlertBookTest {
                 0,
                 null,
                 null,
-                0);
+                0,
+                Instant.EPOCH);
     }
 
     private static PriceAlert withExpiry(PriceAlert alert, Instant expiresAt) {
@@ -475,7 +476,8 @@ class PriceAlertBookTest {
                 0,
                 null,
                 null,
-                0);
+                0,
+                Instant.EPOCH);
     }
 
     private static PriceAlert atVersion(PriceAlert alert, long version) {
@@ -505,6 +507,7 @@ class PriceAlertBookTest {
                 alert.triggerCount(),
                 alert.lastTriggeredAt(),
                 alert.lastBarOpenTime(),
-                version);
+                version,
+                Instant.EPOCH);
     }
 }

@@ -12,6 +12,7 @@ import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.notification.client.PushMessage;
+import com.cryptopilot.notification.client.PushResult;
 import com.cryptopilot.notification.client.PushSender;
 import com.cryptopilot.notification.config.PushProperties;
 import com.cryptopilot.notification.model.enums.NotificationReference;
@@ -36,7 +37,9 @@ import org.mockito.ArgumentCaptor;
  * <p>Invariants: (1) only the tokens the user module gives (active account, push on, active devices) are sent to; (2)
  * a delivered message is sent once; (3) an invalid token deactivates its device and is not sent again; (4) a failure is
  * sent {@code attempts} times in all, each wait twice the one before; (5) one device's failure does not stop the
- * others; (6) an alert is pushed only when it asked for a push and the plan has external alert channels.
+ * others; (6) an alert is pushed only when it asked for a push and the plan has external alert channels; (7) a refusal
+ * that is not retryable is sent once and keeps the device; (8) a {@code Retry-After} within the back-off bound is the
+ * wait, one beyond it gives the device up.
  *
  * <p>Rule: NSF-15, BR-62.
  */
@@ -66,7 +69,7 @@ class PushDispatcherTest {
     @Test
     void NSF15_eachActiveDevice_isSentTheNotification_withItsData() {
         when(users.pushTokens(TRADER)).thenReturn(List.of("t1", "t2"));
-        when(sender.send(any())).thenReturn(PushOutcome.DELIVERED);
+        when(sender.send(any())).thenReturn(PushResult.of(PushOutcome.DELIVERED));
 
         assertThat(push()).isEqualTo(2);
 
@@ -88,8 +91,8 @@ class PushDispatcherTest {
         when(users.pushTokens(TRADER)).thenReturn(List.of("stale", "fresh"));
         when(sender.send(any()))
                 .thenAnswer(call -> ((PushMessage) call.getArgument(0)).token().equals("stale")
-                        ? PushOutcome.INVALID_TOKEN
-                        : PushOutcome.DELIVERED);
+                        ? PushResult.of(PushOutcome.INVALID_TOKEN)
+                        : PushResult.of(PushOutcome.DELIVERED));
 
         assertThat(push()).isEqualTo(1);
 
@@ -101,7 +104,7 @@ class PushDispatcherTest {
     @Test
     void NSF15_aFailedDelivery_isRetriedThreeTimes_withGrowingWaits_thenGivenUp() {
         when(users.pushTokens(TRADER)).thenReturn(List.of("t1"));
-        when(sender.send(any())).thenReturn(PushOutcome.FAILED);
+        when(sender.send(any())).thenReturn(PushResult.of(PushOutcome.FAILED));
 
         assertThat(push()).isZero();
 
@@ -111,9 +114,47 @@ class PushDispatcherTest {
     }
 
     @Test
+    void NSF15_aRefusalThatIsNotRetryable_isSentOnce_andKeepsTheDevice() {
+        when(users.pushTokens(TRADER)).thenReturn(List.of("t1"));
+        when(sender.send(any())).thenReturn(PushResult.of(PushOutcome.NON_RETRYABLE));
+
+        assertThat(push()).isZero();
+
+        verify(sender, times(1)).send(any());
+        assertThat(waits).isEmpty();
+        verify(users, never()).deactivateInvalidPushToken(any());
+    }
+
+    @Test
+    void NSF15_aRetryAfterWithinTheBound_isTheWait() {
+        when(users.pushTokens(TRADER)).thenReturn(List.of("t1"));
+        when(sender.send(any()))
+                .thenReturn(
+                        new PushResult(PushOutcome.FAILED, Duration.ofMillis(200)),
+                        new PushResult(PushOutcome.FAILED, Duration.ofMillis(1000)),
+                        PushResult.of(PushOutcome.DELIVERED));
+
+        assertThat(push()).isEqualTo(1);
+
+        assertThat(waits).containsExactly(Duration.ofMillis(200), Duration.ofSeconds(1));
+    }
+
+    @Test
+    void NSF15_aRetryAfterBeyondTheBound_givesTheDeviceUp() {
+        when(users.pushTokens(TRADER)).thenReturn(List.of("t1"));
+        when(sender.send(any())).thenReturn(new PushResult(PushOutcome.FAILED, Duration.ofSeconds(30)));
+
+        assertThat(push()).isZero();
+
+        verify(sender, times(1)).send(any());
+        assertThat(waits).isEmpty();
+        verify(users, never()).deactivateInvalidPushToken(any());
+    }
+
+    @Test
     void NSF15_aFailureThatRecovers_isDeliveredOnTheRetry() {
         when(users.pushTokens(TRADER)).thenReturn(List.of("t1"));
-        when(sender.send(any())).thenReturn(PushOutcome.FAILED, PushOutcome.DELIVERED);
+        when(sender.send(any())).thenReturn(PushResult.of(PushOutcome.FAILED), PushResult.of(PushOutcome.DELIVERED));
 
         assertThat(push()).isEqualTo(1);
         verify(sender, times(2)).send(any());
@@ -130,7 +171,7 @@ class PushDispatcherTest {
                     throw new InterruptedException();
                 });
         when(users.pushTokens(TRADER)).thenReturn(List.of("t1"));
-        when(sender.send(any())).thenReturn(PushOutcome.FAILED);
+        when(sender.send(any())).thenReturn(PushResult.of(PushOutcome.FAILED));
 
         try {
             assertThat(interrupted.push(TRADER, null, NotificationType.SYSTEM, "t", "c", null, null))
@@ -145,7 +186,7 @@ class PushDispatcherTest {
     @Test
     void NSF15_anAlert_isPushedOnlyWhenItAskedForIt_andThePlanAllowsIt() {
         when(users.pushTokens(TRADER)).thenReturn(List.of("t1"));
-        when(sender.send(any())).thenReturn(PushOutcome.DELIVERED);
+        when(sender.send(any())).thenReturn(PushResult.of(PushOutcome.DELIVERED));
         when(entitlements.hasFeature(TRADER, Feature.EXTERNAL_ALERT_CHANNELS)).thenReturn(true, false);
 
         assertThat(dispatcher.pushAlert(alert(false))).as("no push wanted").isZero();

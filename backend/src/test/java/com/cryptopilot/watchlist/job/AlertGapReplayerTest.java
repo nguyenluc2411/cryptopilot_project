@@ -39,7 +39,8 @@ import org.mockito.ArgumentCaptor;
  * <p>Invariants: (1) a reconnection replays each pair with alerts from the minute of its newest price; (2) a restart
  * replays the whole window; (3) nothing older than the window is fetched; (4) a refusal of the exchange fires nothing
  * and stops that pair; (5) the pages are walked oldest first until the exchange has nothing newer; (6) a pair whose
- * book holds no alert is never fetched; (7) switched off, nothing is fetched.
+ * book holds no alert is never fetched; (7) switched off, nothing is fetched; (8) on both paths, an alert armed after
+ * a missed cross is not fired by it.
  *
  * <p>Rule: NSF-06, BR-20; D-87.
  */
@@ -185,6 +186,53 @@ class AlertGapReplayerTest {
         verify(triggers, never()).tryTrigger(any());
     }
 
+    @Test
+    void T111_aRestart_doesNotFireAnAlertArmedAfterTheMissedCross() {
+        clock.set(T0.plus(Duration.ofHours(1)));
+        Instant windowStart =
+                clock.instant().minus(Duration.ofMinutes(15)).truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
+        // The cross closes at windowStart + 2 min; the alert is created a minute later.
+        startEngine(crossAbove("100", windowStart.plusSeconds(180)));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, windowStart))
+                .thenReturn(MinuteKlineBatch.of(List.of(
+                        closed(windowStart, "98"),
+                        closed(windowStart.plusSeconds(60), "102"),
+                        closed(windowStart.plusSeconds(120), "103"),
+                        closed(windowStart.plusSeconds(180), "104"))));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, windowStart.plusSeconds(240)))
+                .thenReturn(MinuteKlineBatch.of(List.of()));
+
+        replayer(true).replayMarket(MarketType.SPOT, true);
+
+        verify(triggers, never()).tryTrigger(any());
+    }
+
+    @Test
+    void T111_aReconnection_doesNotFireAnAlertArmedAfterTheMissedCross_butFiresOnALaterOne() {
+        Instant gapMinute = T0.truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
+        PriceAlert alert = crossAbove("100", gapMinute.plusSeconds(150));
+        startEngine(alert);
+        engine.onMinuteKline(live("99", T0));
+        clock.set(T0.plus(Duration.ofMinutes(6)));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, gapMinute))
+                .thenReturn(MinuteKlineBatch.of(List.of(
+                        closed(gapMinute, "99"),
+                        closed(gapMinute.plusSeconds(60), "101"),
+                        closed(gapMinute.plusSeconds(120), "99"),
+                        closed(gapMinute.plusSeconds(180), "101.5"))));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, gapMinute.plusSeconds(240)))
+                .thenReturn(MinuteKlineBatch.of(List.of()));
+        when(triggers.tryTrigger(any())).thenReturn(true);
+
+        replayer(true).onStreamReconnected(new MarketStreamReconnected(MarketType.SPOT));
+
+        ArgumentCaptor<PriceAlertHit> hit = ArgumentCaptor.forClass(PriceAlertHit.class);
+        verify(triggers, times(1)).tryTrigger(hit.capture());
+        assertThat(hit.getValue().observedValue())
+                .as("the cross at minute 2 came before the alert; the one at minute 4 after it")
+                .isEqualByComparingTo("101.5");
+    }
+
     private void startEngine(PriceAlert... alerts) {
         when(triggers.activePriceAlerts()).thenReturn(List.of(alerts));
         engine = new AlertEngine(triggers, engineProperties(), clock, idleThreads());
@@ -252,6 +300,10 @@ class AlertGapReplayerTest {
     }
 
     private static PriceAlert crossAbove(String threshold) {
+        return crossAbove(threshold, Instant.EPOCH);
+    }
+
+    private static PriceAlert crossAbove(String threshold, Instant armedAt) {
         return new PriceAlert(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
@@ -270,6 +322,7 @@ class AlertGapReplayerTest {
                 0,
                 null,
                 null,
-                1);
+                1,
+                armedAt);
     }
 }

@@ -959,6 +959,7 @@ class AlertEngineTest {
                 0,
                 null,
                 null,
-                version);
+                version,
+                Instant.EPOCH);
     }
 }

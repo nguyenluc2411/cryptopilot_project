@@ -1,7 +1,5 @@
 package com.cryptopilot.notification.client;
 
-import com.cryptopilot.notification.model.enums.PushOutcome;
-
 /**
  * Sends one push notification (T-058, NSF-15). {@code PushConfig} picks the adapter: Firebase Cloud Messaging when a
  * service account is configured, otherwise a log line.
@@ -17,5 +15,5 @@ public interface PushSender {
      * @param message what to send
      * @return what the service answered
      */
-    PushOutcome send(PushMessage message);
+    PushResult send(PushMessage message);
 }

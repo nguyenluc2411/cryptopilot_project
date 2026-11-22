@@ -36,8 +36,11 @@ import org.springframework.web.client.RestClient;
  * account, and the message send.
  *
  * <p>Invariants: (1) the assertion is signed RS256 by the service account's key and names the messaging scope; (2) an
- * access token is reused until a minute before it expires; (3) 2xx is delivered, an unknown or malformed token is
- * {@code INVALID_TOKEN}, anything else {@code FAILED}; (4) a 401 forgets the access token.
+ * access token is reused until a minute before it expires; (3) 2xx is delivered; only {@code UNREGISTERED} or an
+ * {@code INVALID_ARGUMENT} naming {@code message.token} is {@code INVALID_TOKEN}, so a bare 404 or a 403 never
+ * deactivates a device; network, 401, 429, 500 and 503 are {@code FAILED} (retried), any other refusal
+ * {@code NON_RETRYABLE}; (4) a 401 forgets the access token; (5) a {@code Retry-After} in seconds or as a date travels
+ * with a retryable failure.
  *
  * <p>Rule: NSF-15.
  */
@@ -73,9 +76,9 @@ class FcmPushSenderTest {
         expectSend("at-1", withSuccess("{\"name\":\"projects/x/messages/1\"}", MediaType.APPLICATION_JSON));
         expectSend("at-1", withSuccess());
 
-        assertThat(sender.send(message())).isEqualTo(PushOutcome.DELIVERED);
+        assertThat(sender.send(message()).outcome()).isEqualTo(PushOutcome.DELIVERED);
         clock.set(T0.plus(Duration.ofMinutes(58)));
-        assertThat(sender.send(message())).isEqualTo(PushOutcome.DELIVERED);
+        assertThat(sender.send(message()).outcome()).isEqualTo(PushOutcome.DELIVERED);
 
         server.verify();
     }
@@ -99,8 +102,14 @@ class FcmPushSenderTest {
             delimiter = ';',
             value = {
                 "404; {\"error\":{\"status\":\"NOT_FOUND\",\"details\":[{\"errorCode\":\"UNREGISTERED\"}]}}; INVALID_TOKEN",
-                "400; {\"error\":{\"status\":\"INVALID_ARGUMENT\",\"message\":\"The registration token is not a valid FCM registration token\"}}; INVALID_TOKEN",
-                "400; {\"error\":{\"status\":\"INVALID_ARGUMENT\",\"message\":\"Invalid JSON payload\"}}; FAILED",
+                "400; {\"error\":{\"status\":\"INVALID_ARGUMENT\",\"details\":[{\"errorCode\":\"INVALID_ARGUMENT\"},{\"fieldViolations\":[{\"field\":\"message.token\"}]}]}}; INVALID_TOKEN",
+                "400; {\"error\":{\"status\":\"INVALID_ARGUMENT\",\"message\":\"The registration token is not a valid FCM registration token\"}}; NON_RETRYABLE",
+                "400; {\"error\":{\"status\":\"INVALID_ARGUMENT\",\"details\":[{\"fieldViolations\":[{\"field\":\"message.data[0].value\"}]}]}}; NON_RETRYABLE",
+                "400; {\"error\":{\"status\":\"INVALID_ARGUMENT\",\"message\":\"Invalid JSON payload\"}}; NON_RETRYABLE",
+                "404; {\"error\":{\"status\":\"NOT_FOUND\",\"message\":\"Requested entity was not found.\"}}; NON_RETRYABLE",
+                "404; not json; NON_RETRYABLE",
+                "403; {\"error\":{\"status\":\"PERMISSION_DENIED\",\"details\":[{\"errorCode\":\"SENDER_ID_MISMATCH\"}]}}; NON_RETRYABLE",
+                "502; {\"error\":{\"status\":\"UNAVAILABLE\"}}; NON_RETRYABLE",
                 "500; {\"error\":{\"status\":\"INTERNAL\"}}; FAILED",
                 "503; not json; FAILED",
                 "429; {\"error\":{\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"errorCode\":\"QUOTA_EXCEEDED\"}]}}; FAILED"
@@ -109,7 +118,41 @@ class FcmPushSenderTest {
         expectToken("at-1", 3600);
         expectSend("at-1", withStatus(HttpStatus.valueOf(status)).body(body).contentType(MediaType.APPLICATION_JSON));
 
-        assertThat(sender.send(message())).isEqualTo(outcome);
+        assertThat(sender.send(message()).outcome()).isEqualTo(outcome);
+    }
+
+    @ParameterizedTest(name = "Retry-After {0} is {1}s")
+    @CsvSource(
+            delimiter = ';',
+            value = {"7; 7", "'Sun, 22 Nov 2026 08:00:30 GMT'; 30", "'Sun, 22 Nov 2026 07:59:00 GMT'; 0"})
+    void NSF15_aRetryAfter_travelsWithARetryableFailure(String header, long seconds) {
+        expectToken("at-1", 3600);
+        expectSend("at-1", withStatus(HttpStatus.SERVICE_UNAVAILABLE).header("Retry-After", header));
+
+        PushResult result = sender.send(message());
+
+        assertThat(result.outcome()).isEqualTo(PushOutcome.FAILED);
+        assertThat(result.retryAfterHint()).contains(Duration.ofSeconds(seconds));
+    }
+
+    @ParameterizedTest(name = "Retry-After ''{0}'' is ignored")
+    @CsvSource(value = {"soon", "-3", "' '"})
+    void NSF15_anUnreadableRetryAfter_isIgnored(String header) {
+        expectToken("at-1", 3600);
+        expectSend("at-1", withStatus(HttpStatus.TOO_MANY_REQUESTS).header("Retry-After", header));
+
+        PushResult result = sender.send(message());
+
+        assertThat(result.outcome()).isEqualTo(PushOutcome.FAILED);
+        assertThat(result.retryAfterHint()).isEmpty();
+    }
+
+    @Test
+    void NSF15_aFailureWithoutRetryAfter_namesNoWait() {
+        expectToken("at-1", 3600);
+        expectSend("at-1", withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+
+        assertThat(sender.send(message()).retryAfterHint()).isEmpty();
     }
 
     @Test
@@ -119,8 +162,8 @@ class FcmPushSenderTest {
         expectToken("at-2", 3600);
         expectSend("at-2", withSuccess());
 
-        assertThat(sender.send(message())).isEqualTo(PushOutcome.FAILED);
-        assertThat(sender.send(message())).isEqualTo(PushOutcome.DELIVERED);
+        assertThat(sender.send(message()).outcome()).isEqualTo(PushOutcome.FAILED);
+        assertThat(sender.send(message()).outcome()).isEqualTo(PushOutcome.DELIVERED);
 
         server.verify();
     }
@@ -130,7 +173,7 @@ class FcmPushSenderTest {
         server.expect(ExpectedCount.once(), requestTo(TOKEN_URI))
                 .andRespond(withStatus(HttpStatus.BAD_REQUEST).body("{\"error\":\"invalid_grant\"}"));
 
-        assertThat(sender.send(message())).isEqualTo(PushOutcome.FAILED);
+        assertThat(sender.send(message()).outcome()).isEqualTo(PushOutcome.FAILED);
     }
 
     @Test

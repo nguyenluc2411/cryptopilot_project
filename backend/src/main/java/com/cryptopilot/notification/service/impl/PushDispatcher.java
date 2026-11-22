@@ -3,11 +3,11 @@ package com.cryptopilot.notification.service.impl;
 import com.cryptopilot.billing.EntitlementApi;
 import com.cryptopilot.billing.model.enums.Feature;
 import com.cryptopilot.notification.client.PushMessage;
+import com.cryptopilot.notification.client.PushResult;
 import com.cryptopilot.notification.client.PushSender;
 import com.cryptopilot.notification.config.PushProperties;
 import com.cryptopilot.notification.model.enums.NotificationReference;
 import com.cryptopilot.notification.model.enums.NotificationType;
-import com.cryptopilot.notification.model.enums.PushOutcome;
 import com.cryptopilot.user.UserApi;
 import com.cryptopilot.watchlist.event.AlertTriggered;
 import java.time.Duration;
@@ -27,14 +27,20 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>delivered — done;
  *   <li>the token is invalid — the device is deactivated (NSF-15) and nothing more is sent to it;
- *   <li>failed — sent again, up to {@code attempts} times in all (NSF-15: a failed delivery is retried 3 times), each
- *       retry waiting twice as long as the one before; then given up with a warning. The notification stays in the
- *       app either way.
+ *   <li>failed for a passing reason (network, 429, 500, 503, 401) — sent again, up to {@code attempts} times in all
+ *       (NSF-15: a failed delivery is retried 3 times), the n-th retry waiting {@code retryDelay * 2^(n-1)}, or the
+ *       service's {@code Retry-After} when it names one within that bound; a {@code Retry-After} beyond the bound gives
+ *       the device up, since retrying sooner than asked would be refused again. Then given up with a warning;
+ *   <li>not retryable (a malformed message, a wrong project) — given up at once, the device kept.
  * </ul>
  *
- * <p>Called by the outbox listeners after the notification committed; no transaction is held while the service answers.
+ * <p>The notification stays in the app either way. Called by the outbox listeners after the notification committed;
+ * no transaction is held while the service answers.
  *
  * <p>Rule: NSF-15; SRS 3.2.5, 3.4.5.
+ *
+ * <p>Reference: Google. <i>Firebase Cloud Messaging HTTP v1 API</i>, "ErrorCode" (which errors to retry, with
+ * exponential back-off). Fielding, R. et al. (2022). <i>RFC 9110: HTTP Semantics</i>, §10.2.3 "Retry-After".
  */
 @Component
 public class PushDispatcher {
@@ -121,10 +127,10 @@ public class PushDispatcher {
     }
 
     private boolean deliver(PushMessage message, UUID recipientId) {
-        Duration wait = properties.retryDelay();
+        Duration backoff = properties.retryDelay();
         for (int attempt = 1; attempt <= properties.attempts(); attempt++) {
-            PushOutcome outcome = sender.send(message);
-            switch (outcome) {
+            PushResult result = sender.send(message);
+            switch (result.outcome()) {
                 case DELIVERED -> {
                     return true;
                 }
@@ -132,11 +138,26 @@ public class PushDispatcher {
                     users.deactivateInvalidPushToken(message.token());
                     return false;
                 }
+                case NON_RETRYABLE -> {
+                    return false;
+                }
                 case FAILED -> {
-                    if (attempt < properties.attempts() && !sleep(wait)) {
+                    if (attempt == properties.attempts()) {
+                        break;
+                    }
+                    Duration asked = result.retryAfterHint().orElse(backoff);
+                    if (asked.compareTo(backoff) > 0) {
+                        log.warn(
+                                "Push of '{}' to a device of {} given up: the service asked to wait {}",
+                                message.title(),
+                                recipientId,
+                                asked);
                         return false;
                     }
-                    wait = wait.multipliedBy(2);
+                    if (!sleep(asked)) {
+                        return false;
+                    }
+                    backoff = backoff.multipliedBy(2);
                 }
             }
         }

@@ -245,11 +245,16 @@ public final class PriceAlertBook {
      * Replays the prices a lost stream or a restart left unseen, oldest first (T-111, D-87). The first price only
      * seeds the path; each next one is measured against the one before it, as live prices are, without the throttle,
      * since they are history. An alert fires at most once per replay, on the first price that meets it, and only on a
-     * price the exchange produced after its last trigger, so a trigger recorded before the gap is never repeated. The
+     * price the exchange produced after its last trigger, so a trigger recorded before the gap is never repeated, and
+     * after it was armed (created, edited or resumed), so a rule is never judged on prices from before it existed. The
      * trigger mode is judged at the price's own time: ONCE_PER_BAR by its 1h candle, the EVERY_TIME cooldown from it.
      * An alert past its expiry now is not fired. The hits are recorded at {@code now}: they fire late, never with a
      * back-dated trigger time. Afterwards the last replayed price becomes the previous price, unless a newer one is
      * already held, so the next live price is measured from where the replay ended.
+     *
+     * <p>Reference: Kleppmann, M. (2017). <i>Designing Data-Intensive Applications</i>. O'Reilly, ch. 8–9 (event
+     * time vs processing time: a replayed price is judged by when the exchange produced it, and only against the rule
+     * that was in force at that time).
      *
      * @param path the closes of the missed 1-minute candles with their close times, oldest first
      * @return the hits, in path order
@@ -273,6 +278,7 @@ public final class PriceAlertBook {
                         alert.lastTriggeredAt() == null || to.at().isAfter(alert.lastTriggeredAt());
                 if (!expired
                         && afterLastTrigger
+                        && to.at().isAfter(alert.armedAt())
                         && !hits.containsKey(alert.alertId())
                         && TriggerPolicy.allows(alert, to.at(), bar)) {
                     hits.put(alert.alertId(), new PriceAlertHit(alert, to.price(), bar, now));

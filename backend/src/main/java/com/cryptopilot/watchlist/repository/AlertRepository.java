@@ -33,7 +33,7 @@ public interface AlertRepository extends Repository<Alert, UUID> {
     String PRICE_ROW = "select new com.cryptopilot.watchlist.model.PriceAlertRow(a.id, a.userId, a.watchlistId,"
             + " w.pairId, a.market, a.condition, a.threshold, a.triggerMode, a.cooldownMinutes, a.expiresAt,"
             + " a.notifyInApp, a.notifyEmail, a.notifyPush, a.triggerCount, a.lastTriggeredAt, a.lastBarOpenTime,"
-            + " a.version) from Alert a join Watchlist w on w.id = a.watchlistId";
+            + " a.version, a.updatedAt) from Alert a join Watchlist w on w.id = a.watchlistId";
 
     /** The Trader's alert with this key, or empty when there is none or it belongs to someone else. */
     @Transactional(readOnly = true)

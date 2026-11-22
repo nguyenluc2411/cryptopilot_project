@@ -7,12 +7,16 @@ import java.security.Signature;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.util.LinkedMultiValueMap;
@@ -22,18 +26,30 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.MissingNode;
 
 /**
  * Sends push notifications through the HTTP v1 API of Firebase Cloud Messaging (T-058, NSF-15), with an access token
  * of the configured service account, obtained by a signed JWT bearer assertion and kept until a minute before it
  * expires. No Firebase library: the two calls are plain HTTPS, so the dependency set does not grow.
  *
- * <p>The service's answer becomes an outcome: 2xx is delivered; {@code UNREGISTERED} (404) or an
- * {@code INVALID_ARGUMENT} about the token (400) means the token is invalid and its device is deactivated; anything
- * else, a network failure included, is a failure the dispatcher retries. A 401 also forgets the access token, so the
- * retry signs a new one.
+ * <p>The service's answer becomes an outcome:
  *
- * <p>Reference: Google. <i>Firebase Cloud Messaging HTTP v1 API</i>, "projects.messages.send" and "ErrorCode". Google.
+ * <ul>
+ *   <li>2xx is delivered;
+ *   <li>only the error code {@code UNREGISTERED}, or {@code INVALID_ARGUMENT} whose field violation names
+ *       {@code message.token}, means the token is invalid and its device is deactivated. A bare 404 or a 403
+ *       ({@code SENDER_ID_MISMATCH} included) says the project or the API address is wrong, not the device: it is
+ *       logged as a configuration problem and no device is touched, so a wrong {@code FCM_PROJECT_ID} cannot
+ *       deactivate every device on the first push;
+ *   <li>a network failure, 429, 500 or 503 is a failure the dispatcher retries, after the {@code Retry-After} the
+ *       service named, if any; a 401 too, after forgetting the access token so the retry signs a new one;
+ *   <li>any other refusal (400 not about the token, 403, 404, ...) is not retryable: a retry would be refused alike.
+ * </ul>
+ *
+ * <p>Reference: Google. <i>Firebase Cloud Messaging HTTP v1 API</i>, "projects.messages.send" and "ErrorCode".
+ * Fielding, R. et al. (2022). <i>RFC 9110: HTTP Semantics</i>, §10.2.3 "Retry-After". Nottingham, M. &amp; Fielding, R.
+ * (2012). <i>RFC 6585: Additional HTTP Status Codes</i>, §4 "429 Too Many Requests". Google.
  * <i>Using OAuth 2.0 for Server to Server Applications</i>. Jones, M. et al. (2015). <i>RFC 7523: JSON Web Token (JWT)
  * Profile for OAuth 2.0 Client Authentication and Authorization Grants</i>.
  */
@@ -65,13 +81,13 @@ public class FcmPushSender implements PushSender {
     }
 
     @Override
-    public PushOutcome send(PushMessage message) {
+    public PushResult send(PushMessage message) {
         String bearer;
         try {
             bearer = accessToken();
         } catch (RuntimeException failure) {
             log.warn("FCM access token not obtained: {}", failure.toString());
-            return PushOutcome.FAILED;
+            return PushResult.of(PushOutcome.FAILED);
         }
         Map<String, Object> body = Map.of(
                 "message",
@@ -90,45 +106,101 @@ public class FcmPushSender implements PushSender {
                     .body(json.writeValueAsString(body))
                     .retrieve()
                     .toBodilessEntity();
-            return PushOutcome.DELIVERED;
+            return PushResult.of(PushOutcome.DELIVERED);
         } catch (RestClientResponseException refused) {
-            return outcomeOf(refused.getStatusCode(), refused.getResponseBodyAsString());
+            HttpHeaders headers = refused.getResponseHeaders();
+            return outcomeOf(
+                    refused.getStatusCode(),
+                    refused.getResponseBodyAsString(),
+                    headers == null ? null : headers.getFirst(HttpHeaders.RETRY_AFTER));
         } catch (RestClientException unreachable) {
             log.warn("FCM not reached: {}", unreachable.toString());
-            return PushOutcome.FAILED;
+            return PushResult.of(PushOutcome.FAILED);
         }
     }
 
-    private PushOutcome outcomeOf(HttpStatusCode status, String body) {
-        String code = errorCode(body);
-        if (status.value() == 404 || "UNREGISTERED".equals(code)) {
-            return PushOutcome.INVALID_TOKEN;
+    private PushResult outcomeOf(HttpStatusCode status, String body, String retryAfter) {
+        JsonNode error = errorOf(body);
+        String code = errorCode(error);
+        if ("UNREGISTERED".equals(code) || ("INVALID_ARGUMENT".equals(code) && namesTheToken(error))) {
+            return PushResult.of(PushOutcome.INVALID_TOKEN);
         }
-        if (status.value() == 400 && "INVALID_ARGUMENT".equals(code) && body.contains("token")) {
-            return PushOutcome.INVALID_TOKEN;
-        }
-        if (status.value() == 401) {
+        int value = status.value();
+        if (value == HttpStatus.UNAUTHORIZED.value()) {
             synchronized (this) {
                 accessToken = null;
                 accessTokenExpiresAt = Instant.MIN;
             }
+            log.warn("FCM refused the access token: 401 {}", code);
+            return PushResult.of(PushOutcome.FAILED);
         }
-        log.warn("FCM refused a message: {} {}", status.value(), code);
-        return PushOutcome.FAILED;
+        if (value == HttpStatus.TOO_MANY_REQUESTS.value()
+                || value == HttpStatus.INTERNAL_SERVER_ERROR.value()
+                || value == HttpStatus.SERVICE_UNAVAILABLE.value()) {
+            log.warn("FCM is unavailable for now: {} {}", value, code);
+            return new PushResult(PushOutcome.FAILED, retryAfter(retryAfter));
+        }
+        if (value == HttpStatus.NOT_FOUND.value() || value == HttpStatus.FORBIDDEN.value()) {
+            log.error(
+                    "FCM configuration problem: {} {} for project {} at {}; check FCM_PROJECT_ID and"
+                            + " cryptopilot.push.api-url; no device was deactivated",
+                    value,
+                    code,
+                    credentials.projectId(),
+                    apiUrl);
+        } else {
+            log.warn("FCM refused a message, not retried: {} {}", value, code);
+        }
+        return PushResult.of(PushOutcome.NON_RETRYABLE);
     }
 
-    /** The FCM error code of an error body: the {@code errorCode} of its details, else its status. */
-    private String errorCode(String body) {
+    private JsonNode errorOf(String body) {
         try {
-            JsonNode error = json.readTree(body).path("error");
-            for (JsonNode detail : error.path("details")) {
-                if (detail.hasNonNull("errorCode")) {
-                    return detail.get("errorCode").asString();
+            return json.readTree(body).path("error");
+        } catch (RuntimeException notJson) {
+            return MissingNode.getInstance();
+        }
+    }
+
+    /** The FCM error code of an error: the {@code errorCode} of its details, else its status. */
+    private static String errorCode(JsonNode error) {
+        for (JsonNode detail : error.path("details")) {
+            if (detail.hasNonNull("errorCode")) {
+                return detail.get("errorCode").asString();
+            }
+        }
+        return error.path("status").asString("");
+    }
+
+    /** Whether a {@code google.rpc.BadRequest} detail of the error names the message's token field. */
+    private static boolean namesTheToken(JsonNode error) {
+        for (JsonNode detail : error.path("details")) {
+            for (JsonNode violation : detail.path("fieldViolations")) {
+                if ("message.token".equals(violation.path("field").asString(""))) {
+                    return true;
                 }
             }
-            return error.path("status").asString("");
-        } catch (RuntimeException notJson) {
-            return "";
+        }
+        return false;
+    }
+
+    /** A {@code Retry-After} in seconds or as an HTTP date; {@code null} when absent or unreadable (RFC 9110). */
+    private Duration retryAfter(String header) {
+        if (header == null || header.isBlank()) {
+            return null;
+        }
+        String value = header.trim();
+        try {
+            long seconds = Long.parseLong(value);
+            return seconds < 0 ? null : Duration.ofSeconds(seconds);
+        } catch (NumberFormatException notSeconds) {
+            try {
+                Duration until = Duration.between(
+                        clock.instant(), ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME));
+                return until.isNegative() ? Duration.ZERO : until;
+            } catch (DateTimeParseException notADate) {
+                return null;
+            }
         }
     }
 

@@ -14,8 +14,8 @@ public class LoggingPushSender implements PushSender {
     private static final Logger log = LoggerFactory.getLogger(LoggingPushSender.class);
 
     @Override
-    public PushOutcome send(PushMessage message) {
+    public PushResult send(PushMessage message) {
         log.info("FCM not configured, push not sent: title='{}' data={}", message.title(), message.data());
-        return PushOutcome.DELIVERED;
+        return PushResult.of(PushOutcome.DELIVERED);
     }
 }
