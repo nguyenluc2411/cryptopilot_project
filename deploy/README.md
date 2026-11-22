@@ -6,6 +6,7 @@
 | `.env.example` | The environment template; copy it to `deploy/.env` (never committed) |
 | `run-backend.ps1` | Loads `deploy/.env` and starts the backend locally (Windows) |
 | `demo/load-wf01.ps1`, `demo/wf01.json` | The WF-01 demonstration data loader (DEMO-01), below |
+| `demo/load-paper.ps1` | The demo trading data of the defence (TR-33): demo.pro's paper account with Spot and Futures activity; run after `load-wf01.ps1` with `DEMO_PASSWORD` set |
 
 ## WF-01 demonstration data
 

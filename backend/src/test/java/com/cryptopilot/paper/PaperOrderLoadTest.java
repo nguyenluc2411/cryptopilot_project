@@ -4,9 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.MarketTrade;
+import com.cryptopilot.market.OrderBookDepth;
+import com.cryptopilot.market.OrderBookDepth.PriceLevel;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.market.service.impl.TradingMarketData;
+import com.cryptopilot.paper.job.PaperMatchingWorker;
 import com.cryptopilot.paper.service.PaperAccountService;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -52,7 +57,12 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
  * {@code ./mvnw test -Dtest=PaperOrderLoadTest -Dsurefire.excludedGroups=none}. It writes rows into the throw-away
  * test database and does not remove them.
  *
- * <p>Rule: TR-02.
+ * <p>{@link #restingOrdersFilledByOneTrade} is TR-32's case: {@code load.resting.traders} Traders (500) each rest
+ * {@code load.resting.orders} LIMIT buys (20) over real HTTP, then one market trade through every price fills them all
+ * through the matching worker. It prints the placement latency end to end and, from the rows, each fill's latency from
+ * the trade to its commit, against plan section 12's targets: placement p95 under 300 ms, fill p95 under 1 s.
+ *
+ * <p>Rule: TR-02, TR-32.
  */
 @Tag("load")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -83,6 +93,12 @@ class PaperOrderLoadTest {
     @Autowired
     private PaperAccountService accounts;
 
+    @Autowired
+    private PaperMatchingWorker worker;
+
+    @Autowired
+    private TradingMarketData trading;
+
     private final HttpClient http = HttpClient.newBuilder()
             .executor(Executors.newVirtualThreadPerTaskExecutor())
             .connectTimeout(Duration.ofSeconds(30))
@@ -90,6 +106,9 @@ class PaperOrderLoadTest {
 
     private UUID pair;
     private String symbol;
+
+    /** What the refused requests answered, by status and code, for the report. */
+    private final java.util.Map<String, Long> refusals = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Test
     void howManyTradersCanPlaceAtOnce() throws Exception {
@@ -119,6 +138,135 @@ class PaperOrderLoadTest {
                         .query(Long.class)
                         .single())
                 .isPositive();
+    }
+
+    /** TR-32: many resting orders, then one trade through all of them; placement and fill latency. */
+    @Test
+    void restingOrdersFilledByOneTrade() throws Exception {
+        int traderCount = Integer.getInteger("load.resting.traders", 500);
+        int perTrader = Integer.getInteger("load.resting.orders", 20);
+        symbol = "LR" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
+        pair = new MarketTestData(sql, Instant.now()).pair(symbol, true, false, "TRADING", null, 0);
+        sql.sql("""
+                        update crypto_pair set spot_tick_size = 0.01, spot_step_size = 0.001, spot_min_notional = 5
+                         where pair_id = ?""").param(pair).update();
+        // The book a LIMIT buy is checked against on arrival (BR-71): asks above every resting price, so each rests.
+        AtomicLong depthId = new AtomicLong();
+        Thread ticker = Thread.ofVirtual().start(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                price("100");
+                trading.recordDepth(new OrderBookDepth(
+                        MarketType.SPOT,
+                        pair,
+                        depthId.incrementAndGet(),
+                        List.of(new PriceLevel(new BigDecimal("89"), new BigDecimal("1000"))),
+                        List.of(new PriceLevel(new BigDecimal("100"), new BigDecimal("1000"))),
+                        Instant.now()));
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException stopped) {
+                    return;
+                }
+            }
+        });
+        try {
+            System.out.printf("%nPreparing %d Traders with opened accounts...%n", traderCount);
+            // The first opening stores the coins of the grant; the others then open side by side without racing for
+            // them.
+            List<String> tokens = new ArrayList<>(traders(1));
+            tokens.addAll(traders(traderCount - 1));
+            List<Long> latencies = Collections.synchronizedList(new ArrayList<>());
+            AtomicLong failures = new AtomicLong();
+            long wallStart = System.nanoTime();
+            try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                for (String token : tokens) {
+                    pool.submit(() -> {
+                        for (int i = 0; i < perTrader; i++) {
+                            String price = new BigDecimal("90")
+                                    .add(new BigDecimal("0.5").multiply(BigDecimal.valueOf(i)))
+                                    .toPlainString();
+                            send(
+                                    token,
+                                    "\"type\": \"LIMIT\", \"timeInForce\": \"GTC\", \"price\": " + price
+                                            + ", \"side\": \"BUY\", \"quantity\": 0.06",
+                                    latencies,
+                                    failures);
+                        }
+                        return null;
+                    });
+                }
+            }
+            Result placed = new Result(latencies, failures.get(), (System.nanoTime() - wallStart) / 1_000_000);
+            long resting = sql.sql("select count(*) from trade_order where pair_id = ? and order_status = 'NEW'")
+                    .param(pair)
+                    .query(Long.class)
+                    .single();
+            System.out.println();
+            System.out.println("TR-32 RESTING: " + traderCount + " Traders x " + perTrader + " LIMIT buys over HTTP");
+            System.out.println(" orders | fail | resting |  p50 ms |  p95 ms |  p99 ms |  max ms | all placed in ms");
+            System.out.printf(
+                    "%7d | %4d | %7d | %7d | %7d | %7d | %7d | %d%n",
+                    latencies.size(),
+                    placed.failures(),
+                    resting,
+                    placed.percentile(50),
+                    placed.percentile(95),
+                    placed.percentile(99),
+                    placed.percentile(100),
+                    placed.wallMillis());
+
+            // Give the worker the time to track every order the commits published.
+            Thread.sleep(2_000);
+            Instant traded = Instant.now();
+            long fillStart = System.nanoTime();
+            worker.onTrade(new MarketTrade(
+                    MarketType.SPOT,
+                    pair,
+                    1,
+                    new BigDecimal("89.99"),
+                    new BigDecimal("1000000"),
+                    traded,
+                    false,
+                    traded));
+            // Each fill's latency, from the trade to the moment its commit is seen: the count of FILLED orders is read
+            // every 20 ms, and each newly filled order is timed at the read that first saw it.
+            List<Long> fillLatencies = new ArrayList<>();
+            long filled = 0;
+            long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(3);
+            while (System.nanoTime() < deadline && filled < resting) {
+                long now = sql.sql("select count(*) from trade_order where pair_id = ? and order_status = 'FILLED'")
+                        .param(pair)
+                        .query(Long.class)
+                        .single();
+                long elapsed = (System.nanoTime() - fillStart) / 1_000_000;
+                for (long seen = filled; seen < now; seen++) {
+                    fillLatencies.add(elapsed);
+                }
+                filled = now;
+                Thread.sleep(20);
+            }
+            long allFilledMillis = (System.nanoTime() - fillStart) / 1_000_000;
+            Result fills = new Result(fillLatencies, resting - filled, allFilledMillis);
+            System.out.println("refused: " + refusals);
+            System.out.println();
+            System.out.println("TR-32 FILL: one trade at 89.99 through every resting buy (latency seen every 20 ms)");
+            System.out.println(" filled | left |  p50 ms |  p95 ms |  p99 ms |  max ms | all filled in ms");
+            System.out.printf(
+                    "%7d | %4d | %7d | %7d | %7d | %7d | %d%n",
+                    filled,
+                    fills.failures(),
+                    fills.percentile(50),
+                    fills.percentile(95),
+                    fills.percentile(99),
+                    fills.percentile(100),
+                    allFilledMillis);
+            System.out.printf(
+                    "Targets (plan 12): placement p95 < 300 ms: %s; fill p95 < 1000 ms: %s%n%n",
+                    placed.percentile(95) < 300 ? "met" : "NOT met", fills.percentile(95) < 1000 ? "met" : "NOT met");
+            assertThat(filled).isEqualTo(resting);
+        } finally {
+            ticker.interrupt();
+        }
     }
 
     private void measure() throws Exception {
@@ -221,7 +369,9 @@ class PaperOrderLoadTest {
     }
 
     private void send(String token, String order, List<Long> latencies, AtomicLong failures) {
-        String body = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"MARKET\", " + order + "}";
+        String body = order.contains("\"type\"")
+                ? "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", " + order + "}"
+                : "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"MARKET\", " + order + "}";
         HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/paper/orders"))
                 .timeout(Duration.ofSeconds(60))
                 .header("Authorization", token)
@@ -234,11 +384,19 @@ class PaperOrderLoadTest {
             latencies.add((System.nanoTime() - start) / 1_000_000);
             if (response.statusCode() != 201) {
                 failures.incrementAndGet();
+                refusals.merge(response.statusCode() + " " + code(response.body()), 1L, Long::sum);
             }
         } catch (Exception failed) {
             latencies.add((System.nanoTime() - start) / 1_000_000);
             failures.incrementAndGet();
+            refusals.merge(failed.getClass().getSimpleName(), 1L, Long::sum);
         }
+    }
+
+    /** The {@code code} of a problem detail, or nothing. */
+    private static String code(String body) {
+        int at = body == null ? -1 : body.indexOf("\"code\":\"");
+        return at < 0 ? "" : body.substring(at + 8, Math.max(at + 8, body.indexOf('"', at + 8)));
     }
 
     /** Traders with opened accounts, as bearer tokens. */

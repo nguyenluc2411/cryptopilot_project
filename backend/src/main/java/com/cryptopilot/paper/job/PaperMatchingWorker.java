@@ -72,8 +72,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
@@ -529,28 +528,27 @@ public class PaperMatchingWorker
     @EventListener
     public void onRestedPublished(PaperOrderRested event) {
         expect(keyOf(event.order()));
+        onCompletion(() -> onRested(event), () -> onRestedRolledBack(event));
     }
 
     /** As {@link #onRestedPublished}, for a stop published to wait for its trigger. */
     @EventListener
     public void onAwaitingTriggerPublished(PaperOrderAwaitingTrigger event) {
         expect(new BookKey(event.order().market(), event.order().pairId()));
+        onCompletion(() -> onAwaitingTrigger(event), () -> onAwaitingTriggerRolledBack(event));
     }
 
     /** A placement that rolled back tracks nothing. */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
     public void onRestedRolledBack(PaperOrderRested event) {
         tracked(keyOf(event.order()));
     }
 
     /** As {@link #onRestedRolledBack}, for a stop. */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
     public void onAwaitingTriggerRolledBack(PaperOrderAwaitingTrigger event) {
         tracked(new BookKey(event.order().market(), event.order().pairId()));
     }
 
     /** A LIMIT order that did not execute on arrival waits in the book. */
-    @TransactionalEventListener
     public void onRested(PaperOrderRested event) {
         if (running) {
             queue.offer(new Command.Track(event.order()));
@@ -560,7 +558,6 @@ public class PaperMatchingWorker
     }
 
     /** A stop limit or a trailing stop waits for its trigger. */
-    @TransactionalEventListener
     public void onAwaitingTrigger(PaperOrderAwaitingTrigger event) {
         if (running) {
             queue.offer(new Command.TrackTrigger(event.order()));
@@ -582,7 +579,12 @@ public class PaperMatchingWorker
     }
 
     /** A Futures conditional order on the mark price waits for its trigger (TR-20). */
-    @TransactionalEventListener
+    @EventListener
+    public void onAwaitingMarkTriggerPublished(PaperOrderAwaitingMarkTrigger event) {
+        onCompletion(() -> onAwaitingMarkTrigger(event), () -> {});
+    }
+
+    /** As the transactional hand-off it was: called once the publishing transaction committed. */
     public void onAwaitingMarkTrigger(PaperOrderAwaitingMarkTrigger event) {
         if (running) {
             queue.offer(new Command.TrackMarkTrigger(event.order()));
@@ -593,7 +595,12 @@ public class PaperMatchingWorker
      * A committed change of a Trader's position or isolated wallet on a pair: its liquidation levels are read again on
      * the consumer thread, which alone owns the book (TR-22, plan 9.6).
      */
-    @TransactionalEventListener
+    @EventListener
+    public void onAccountChangedPublished(FuturesAccountChanged event) {
+        onCompletion(() -> onAccountChanged(event), () -> {});
+    }
+
+    /** As the transactional hand-off it was: called once the publishing transaction committed. */
     public void onAccountChanged(FuturesAccountChanged event) {
         if (running && accountChanges.add(event)) {
             queue.offer(new Command.AccountChanged(event.userId(), event.pairId()));
@@ -604,7 +611,12 @@ public class PaperMatchingWorker
      * A pair's leverage brackets were replaced (TR-46, plan 9.7): the liquidation levels and cross snapshots of every
      * Trader the engine watches on the pair are read again on the consumer thread, on the new brackets.
      */
-    @TransactionalEventListener
+    @EventListener
+    public void onBracketsReplacedPublished(LeverageBracketsReplaced event) {
+        onCompletion(() -> onBracketsReplaced(event), () -> {});
+    }
+
+    /** As the transactional hand-off it was: called once the publishing transaction committed. */
     public void onBracketsReplaced(LeverageBracketsReplaced event) {
         if (running) {
             queue.offer(new Command.BracketsReplaced(event.pairId()));
@@ -612,11 +624,39 @@ public class PaperMatchingWorker
     }
 
     /** A cancelled order leaves the book. */
-    @TransactionalEventListener
+    @EventListener
+    public void onCanceledPublished(PaperOrderCanceled event) {
+        onCompletion(() -> onCanceled(event), () -> {});
+    }
+
+    /** As the transactional hand-off it was: called once the publishing transaction committed. */
     public void onCanceled(PaperOrderCanceled event) {
         if (running) {
             queue.offer(new Command.Untrack(event.orderId()));
         }
+    }
+
+    /**
+     * Runs {@code committed} once the current transaction commits, {@code rolledBack} once it rolls back; nothing
+     * outside a transaction, as a {@code @TransactionalEventListener} does without a fallback. Registered by hand rather
+     * than through {@code @TransactionalEventListener}: Spring Modulith wraps every after-commit transactional listener
+     * to look up an event publication, in a new transaction, while the publishing request still holds its connection,
+     * which under concurrent placements starved the pool for its whole timeout (TR-32).
+     */
+    private static void onCompletion(Runnable committed, Runnable rolledBack) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == STATUS_COMMITTED) {
+                    committed.run();
+                } else if (status == STATUS_ROLLED_BACK) {
+                    rolledBack.run();
+                }
+            }
+        });
     }
 
     // ------------------------------------------------------------------------------------------
