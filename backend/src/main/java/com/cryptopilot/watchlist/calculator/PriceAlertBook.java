@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -74,6 +75,12 @@ public final class PriceAlertBook {
 
     /** When the last evaluation ran, by the engine's clock. */
     private Instant evaluatedAt;
+
+    /**
+     * When the exchange produced the newest price this book received, live or replayed; kept when a reconnection
+     * forgets the previous price, so the replay of the gap knows where the gap began (T-111).
+     */
+    private Instant lastSeenAt;
 
     /**
      * @param tombstoneTtl how long a removed alert's version blocks a stale read of it; a read in flight takes far
@@ -190,7 +197,13 @@ public final class PriceAlertBook {
         }
         latest = price;
         latestAt = at;
+        lastSeenAt = at;
         return true;
+    }
+
+    /** When the exchange produced the newest price received, live or replayed; empty until there is one (T-111). */
+    public synchronized Optional<Instant> lastPriceAt() {
+        return Optional.ofNullable(lastSeenAt);
     }
 
     /** Whether a price is waiting for its evaluation. */
@@ -218,6 +231,70 @@ public final class PriceAlertBook {
         latestAt = null;
         evaluatedAt = now;
 
+        List<PriceAlertHit> hits = new ArrayList<>();
+        for (PriceAlert alert : met(p0, p1)) {
+            boolean expired = alert.expiresAt() != null && !now.isBefore(alert.expiresAt());
+            if (!expired && TriggerPolicy.allows(alert, now, bar)) {
+                hits.add(new PriceAlertHit(alert, p1, bar, now));
+            }
+        }
+        return hits;
+    }
+
+    /**
+     * Replays the prices a lost stream or a restart left unseen, oldest first (T-111, D-87). The first price only
+     * seeds the path; each next one is measured against the one before it, as live prices are, without the throttle,
+     * since they are history. An alert fires at most once per replay, on the first price that meets it, and only on a
+     * price the exchange produced after its last trigger, so a trigger recorded before the gap is never repeated. The
+     * trigger mode is judged at the price's own time: ONCE_PER_BAR by its 1h candle, the EVERY_TIME cooldown from it.
+     * An alert past its expiry now is not fired. The hits are recorded at {@code now}: they fire late, never with a
+     * back-dated trigger time. Afterwards the last replayed price becomes the previous price, unless a newer one is
+     * already held, so the next live price is measured from where the replay ended.
+     *
+     * @param path the closes of the missed 1-minute candles with their close times, oldest first
+     * @return the hits, in path order
+     */
+    public synchronized List<PriceAlertHit> replay(List<ReplayedPrice> path) {
+        if (path.size() < 2) {
+            return List.of();
+        }
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Map<UUID, PriceAlertHit> hits = new LinkedHashMap<>();
+        ReplayedPrice from = path.getFirst();
+        for (ReplayedPrice to : path.subList(1, path.size())) {
+            // A price not after the last one taken is out of order: skipped, the path goes on from the last taken.
+            if (!to.at().isAfter(from.at())) {
+                continue;
+            }
+            Instant bar = TriggerPolicy.barOpenTime(to.at());
+            for (PriceAlert alert : met(from.price(), to.price())) {
+                boolean expired = alert.expiresAt() != null && !now.isBefore(alert.expiresAt());
+                boolean afterLastTrigger =
+                        alert.lastTriggeredAt() == null || to.at().isAfter(alert.lastTriggeredAt());
+                if (!expired
+                        && afterLastTrigger
+                        && !hits.containsKey(alert.alertId())
+                        && TriggerPolicy.allows(alert, to.at(), bar)) {
+                    hits.put(alert.alertId(), new PriceAlertHit(alert, to.price(), bar, now));
+                }
+            }
+            from = to;
+        }
+        ReplayedPrice last = from;
+        boolean newerHeld = (latestAt != null && !latestAt.isBefore(last.at()))
+                || (previousAt != null && !previousAt.isBefore(last.at()));
+        if (!newerHeld) {
+            previous = last.price();
+            previousAt = last.at();
+        }
+        if (lastSeenAt == null || last.at().isAfter(lastSeenAt)) {
+            lastSeenAt = last.at();
+        }
+        return List.copyOf(hits.values());
+    }
+
+    /** The alerts a move from {@code p0} to {@code p1} meets: crosses between them, levels at {@code p1}. */
+    private List<PriceAlert> met(BigDecimal p0, BigDecimal p1) {
         List<PriceAlert> met = new ArrayList<>();
         if (p0 != null && p1.compareTo(p0) > 0) {
             crossAbove.subMap(p0, false, p1, true).values().forEach(at -> met.addAll(at.values()));
@@ -227,15 +304,21 @@ public final class PriceAlertBook {
         }
         greaterThan.headMap(p1, false).values().forEach(at -> met.addAll(at.values()));
         lessThan.tailMap(p1, false).descendingMap().values().forEach(at -> met.addAll(at.values()));
+        return met;
+    }
 
-        List<PriceAlertHit> hits = new ArrayList<>();
-        for (PriceAlert alert : met) {
-            boolean expired = alert.expiresAt() != null && !now.isBefore(alert.expiresAt());
-            if (!expired && TriggerPolicy.allows(alert, now, bar)) {
-                hits.add(new PriceAlertHit(alert, p1, bar, now));
-            }
+    /**
+     * A price of a replayed path: a missed 1-minute candle's close and when it closed (T-111).
+     *
+     * @param price the close
+     * @param at when the exchange produced it, the candle's close time
+     */
+    public record ReplayedPrice(BigDecimal price, Instant at) {
+
+        public ReplayedPrice {
+            Objects.requireNonNull(price, "price");
+            Objects.requireNonNull(at, "at");
         }
-        return hits;
     }
 
     /**

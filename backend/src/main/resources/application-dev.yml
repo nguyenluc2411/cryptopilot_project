@@ -157,6 +157,9 @@ cryptopilot:
     enabled: true
     expiry-sweep:
       enabled: true
+    replay:
+      # T-111: the 1-minute prices missed while a stream was lost or the application was down, replayed (15 min).
+      enabled: true
   news:
     crawl:
       # NSF-10 runs in this profile: the active sources whose interval has elapsed, every 5 minutes.
