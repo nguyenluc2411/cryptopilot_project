@@ -22,6 +22,9 @@ import org.springframework.validation.annotation.Validated;
  * @param paperOrdersWindow the length of the window of {@code paperOrders}
  * @param guest every request under {@code /api/v1/} without an account (the public market data and forum reads,
  *     D-99), per client address; higher than {@code api} because the Guests behind one address share it
+ * @param chartCandles {@code GET /api/v1/market/{market}/{symbol}/chart-candles}, per client address, signed in or
+ *     not, instead of {@code api} or {@code guest}: a page the cache does not hold costs the exchange weight the
+ *     backfill and the alert replay share (TR-35)
  */
 @Validated
 @ConfigurationProperties("cryptopilot.web.rate-limit")
@@ -33,7 +36,8 @@ public record RateLimitProperties(
         @Min(1) @DefaultValue("120") int api,
         @Min(1) @DefaultValue("50") int paperOrders,
         @NotNull @DefaultValue("10s") Duration paperOrdersWindow,
-        @Min(1) @DefaultValue("300") int guest) {
+        @Min(1) @DefaultValue("300") int guest,
+        @Min(1) @DefaultValue("60") int chartCandles) {
 
     public RateLimitProperties {
         if (window != null && window.toSeconds() < 1) {

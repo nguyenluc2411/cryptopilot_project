@@ -26,6 +26,12 @@ public class PushConfig {
 
     private static final Logger log = LoggerFactory.getLogger(PushConfig.class);
 
+    /** The push bulkhead; closed with the context. */
+    @Bean
+    PushExecutor pushExecutor(PushProperties properties) {
+        return new PushExecutor(properties.poolSize(), properties.queueCapacity());
+    }
+
     @Bean
     PushSender pushSender(PushProperties properties, Clock clock) {
         if (properties.credentialsFile().isBlank()) {

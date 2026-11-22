@@ -37,7 +37,8 @@ class TopicSubscriptionsAndLatencyTest {
     private static final String BTC = "/topic/ticker.SPOT.BTCUSDT";
     private static final String ETH = "/topic/ticker.SPOT.ETHUSDT";
 
-    private final TopicSubscriptionServiceImpl subscriptions = new TopicSubscriptionServiceImpl();
+    private final TopicSubscriptionServiceImpl subscriptions =
+            new TopicSubscriptionServiceImpl(java.time.Clock.systemUTC());
 
     @Test
     void TR34_eachSubscription_isCountedOnce_andTakenBackByItsUnsubscribeOrDisconnect() {

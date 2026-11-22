@@ -40,7 +40,8 @@ public class WebEdgeConfig {
                         properties.auth(),
                         properties.api(),
                         properties.paperOrders(),
-                        properties.guest()),
+                        properties.guest(),
+                        properties.chartCandles()),
                 new FixedWindowRateLimiter(redis, clock, properties.window()),
                 new FixedWindowRateLimiter(redis, clock, properties.paperOrdersWindow()),
                 json);

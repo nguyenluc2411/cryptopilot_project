@@ -21,6 +21,9 @@ import org.springframework.validation.annotation.Validated;
  * @param maxCandles the most candles one request may return, and the longest range it may ask for, in candles
  * @param defaultMetricsRange the metrics range when the request names no start
  * @param maxMetricsRange the longest metrics range one request may ask for
+ * @param chartWeightPercent the share of a venue's weight budget, in percent, past which a chart page the cache does
+ *     not hold is refused (TR-35); below the client's pause share, so the band between them stays for the backfill
+ *     and the alert replay
  */
 @Validated
 @ConfigurationProperties("cryptopilot.market.api")
@@ -28,4 +31,5 @@ public record MarketApiProperties(
         @Min(1) @Max(1000) @DefaultValue("500") int defaultCandles,
         @Min(1) @Max(1000) @DefaultValue("1000") int maxCandles,
         @NotNull @DefaultValue("1d") Duration defaultMetricsRange,
-        @NotNull @DefaultValue("7d") Duration maxMetricsRange) {}
+        @NotNull @DefaultValue("7d") Duration maxMetricsRange,
+        @Min(1) @Max(100) @DefaultValue("60") int chartWeightPercent) {}

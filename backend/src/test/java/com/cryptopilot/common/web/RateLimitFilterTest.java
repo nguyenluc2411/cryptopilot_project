@@ -49,7 +49,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
             "cryptopilot.web.rate-limit.auth=3",
             "cryptopilot.web.rate-limit.api=2",
             "cryptopilot.web.rate-limit.paper-orders=3",
-            "cryptopilot.web.rate-limit.guest=2"
+            "cryptopilot.web.rate-limit.guest=2",
+            "cryptopilot.web.rate-limit.chart-candles=2"
         })
 @AutoConfigureMockMvc
 @Import({TestcontainersConfig.class, RateLimitFilterTest.TestClock.class})
@@ -189,6 +190,26 @@ class RateLimitFilterTest {
         watchlist(bearer(UUID.randomUUID())).andExpect(status().isOk());
     }
 
+    /** A chart page the cache misses costs exchange weight: its own limit, per address, signed in or not (TR-35). */
+    @Test
+    void TR35_chartPages_areLimitedPerClientAddress_signedInOrNot() throws Exception {
+        String trader = bearer(UUID.randomUUID());
+        chartPage("203.0.113.7", null).andExpect(status().is(not(429)));
+        chartPage("203.0.113.7", trader).andExpect(status().is(not(429)));
+
+        chartPage("203.0.113.7", null)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string(HttpHeaders.RETRY_AFTER, "45"))
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
+                .andExpect(jsonPath("$.messageCode").value("MSG50"));
+        chartPage("203.0.113.7", bearer(UUID.randomUUID())).andExpect(status().isTooManyRequests());
+
+        chartPage("203.0.113.8", null).andExpect(status().is(not(429)));
+        guestRead("203.0.113.7").andExpect(status().isOk());
+        watchlist(trader).andExpect(status().isOk());
+    }
+
     @Test
     void TD53_healthChecksAndRefusedCalls_areNotCounted() throws Exception {
         for (int i = 0; i < 5; i++) {
@@ -205,6 +226,12 @@ class RateLimitFilterTest {
 
     private ResultActions guestRead(String peer) throws Exception {
         return mvc.perform(withPeer(get("/api/v1/posts/pinned"), peer));
+    }
+
+    private ResultActions chartPage(String peer, String bearer) throws Exception {
+        MockHttpServletRequestBuilder request =
+                withPeer(get("/api/v1/market/spot/NOPAIRUSDT/chart-candles").param("tf", "5m"), peer);
+        return mvc.perform(bearer == null ? request : request.header(HttpHeaders.AUTHORIZATION, bearer));
     }
 
     private ResultActions refresh(String peer) throws Exception {

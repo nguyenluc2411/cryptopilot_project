@@ -1,6 +1,8 @@
 package com.cryptopilot.market.service;
 
+import java.util.Collection;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Who listens to which market topic (TR-34): the subscriptions of every session to each {@code /topic/...}
@@ -18,6 +20,15 @@ public interface TopicSubscriptionService {
 
     /** A session ended: all its subscriptions go. */
     void disconnected(String sessionId);
+
+    /**
+     * Drops the subscriptions counted for a while that the broker no longer holds: a safety net for an unsubscribe or
+     * a disconnect whose event never came.
+     *
+     * @param brokerSubscriptions for a destination, the broker's subscriptions to it: session id to subscription ids
+     * @return how many subscriptions were dropped
+     */
+    int reconcile(Function<String, Map<String, ? extends Collection<String>>> brokerSubscriptions);
 
     /** Whether any session listens to the destination. */
     boolean hasSubscribers(String destination);

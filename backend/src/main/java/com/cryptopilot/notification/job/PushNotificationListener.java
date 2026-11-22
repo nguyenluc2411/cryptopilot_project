@@ -1,5 +1,6 @@
 package com.cryptopilot.notification.job;
 
+import com.cryptopilot.notification.config.PushExecutor;
 import com.cryptopilot.notification.model.NotificationWritten;
 import com.cryptopilot.notification.model.enums.NotificationType;
 import com.cryptopilot.notification.service.impl.PushDispatcher;
@@ -20,7 +21,9 @@ import org.springframework.transaction.annotation.Propagation;
  *       lapse while the alert stays active.
  * </ul>
  *
- * <p>The account's push switch and status are checked by {@link PushDispatcher} for both.
+ * <p>The account's push switch and status are checked by {@link PushDispatcher} for both. The dispatch runs on the
+ * push pool ({@link PushExecutor}), so retries waiting on an unavailable service never take the threads of the other
+ * module listeners; each listener waits for its dispatch, so its publication completes only after the push was tried.
  *
  * <p>Rule: NSF-06, NSF-15, BR-62; SRS 3.2.5, 3.4.4.
  */
@@ -28,9 +31,11 @@ import org.springframework.transaction.annotation.Propagation;
 public class PushNotificationListener {
 
     private final PushDispatcher dispatcher;
+    private final PushExecutor pool;
 
-    public PushNotificationListener(PushDispatcher dispatcher) {
+    public PushNotificationListener(PushDispatcher dispatcher, PushExecutor pool) {
         this.dispatcher = dispatcher;
+        this.pool = pool;
     }
 
     @ApplicationModuleListener(propagation = Propagation.NOT_SUPPORTED)
@@ -38,18 +43,18 @@ public class PushNotificationListener {
         if (written.type() == NotificationType.ALERT) {
             return;
         }
-        dispatcher.push(
+        pool.run(() -> dispatcher.push(
                 written.recipientId(),
                 written.notificationId(),
                 written.type(),
                 written.title(),
                 written.content(),
                 written.referenceType(),
-                written.referenceId());
+                written.referenceId()));
     }
 
     @ApplicationModuleListener(propagation = Propagation.NOT_SUPPORTED)
     public void pushAlert(AlertTriggered triggered) {
-        dispatcher.pushAlert(triggered);
+        pool.run(() -> dispatcher.pushAlert(triggered));
     }
 }

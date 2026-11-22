@@ -55,7 +55,8 @@ class PushDispatcherTest {
             users,
             entitlements,
             sender,
-            new PushProperties("", "", "https://fcm.example.test", 4, Duration.ofMillis(500), Duration.ofSeconds(1)),
+            new PushProperties(
+                    "", "", "https://fcm.example.test", 4, Duration.ofMillis(500), Duration.ofSeconds(1), 2, 10),
             waits::add);
 
     @Test
@@ -166,7 +167,8 @@ class PushDispatcherTest {
                 users,
                 entitlements,
                 sender,
-                new PushProperties("", "", "https://fcm.example.test", 4, Duration.ofMillis(1), Duration.ofSeconds(1)),
+                new PushProperties(
+                        "", "", "https://fcm.example.test", 4, Duration.ofMillis(1), Duration.ofSeconds(1), 2, 10),
                 ignored -> {
                     throw new InterruptedException();
                 });

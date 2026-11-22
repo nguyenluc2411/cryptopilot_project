@@ -33,6 +33,8 @@ cryptopilot:
       api: ${RATE_LIMIT_API:1200}
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:500}
       guest: ${RATE_LIMIT_GUEST:3000}
+      # TR-35 chart pages, per client address, signed in or not: a page the cache misses costs exchange weight.
+      chart-candles: ${RATE_LIMIT_CHART_CANDLES:600}
   billing:
     # The gateways' test environments; production names its own addresses.
     sepay:

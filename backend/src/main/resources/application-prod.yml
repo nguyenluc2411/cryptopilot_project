@@ -57,6 +57,8 @@ cryptopilot:
       api: ${RATE_LIMIT_API:120}
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:50}
       guest: ${RATE_LIMIT_GUEST:300}
+      # TR-35 chart pages, per client address, signed in or not: a page the cache misses costs exchange weight.
+      chart-candles: ${RATE_LIMIT_CHART_CANDLES:60}
   auth:
     token-sweep:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
