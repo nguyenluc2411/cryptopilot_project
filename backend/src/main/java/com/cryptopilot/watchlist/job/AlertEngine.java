@@ -386,12 +386,46 @@ public class AlertEngine implements MinuteKlineListener {
         });
     }
 
+    /**
+     * Replays the missed prices of a pair through its book, oldest first, and records what they trigger like a live
+     * evaluation does (T-111). Called by {@link AlertGapReplayer} off the stream threads.
+     */
+    void replay(MarketType market, UUID pairId, List<PriceAlertBook.ReplayedPrice> path) {
+        if (!running) {
+            return;
+        }
+        PairKey key = new PairKey(market, pairId);
+        PriceAlertBook book = books.get(key);
+        if (book != null) {
+            record(key, book, book.replay(path));
+        }
+    }
+
+    /**
+     * The pairs whose books hold alerts, with when their newest price was produced, empty when none arrived yet; of
+     * one market, or of both when {@code market} is {@code null}.
+     */
+    Map<PairKey, Optional<Instant>> replayTargets(MarketType market) {
+        Map<PairKey, Optional<Instant>> targets = new HashMap<>();
+        books.forEach((key, book) -> {
+            if ((market == null || key.market() == market) && book.size() > 0) {
+                targets.put(key, book.lastPriceAt());
+            }
+        });
+        return targets;
+    }
+
     private void evaluate(PairKey key) {
         PriceAlertBook book = books.get(key);
         if (book == null) {
             return;
         }
-        for (PriceAlertHit hit : book.evaluate()) {
+        record(key, book, book.evaluate());
+    }
+
+    /** Records the hits of one book; a refused trigger drops the rule and reads the alert again. */
+    private void record(PairKey key, PriceAlertBook book, List<PriceAlertHit> hits) {
+        for (PriceAlertHit hit : hits) {
             try {
                 UUID alertId = hit.alert().alertId();
                 if (triggers.tryTrigger(hit)) {

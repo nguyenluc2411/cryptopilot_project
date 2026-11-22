@@ -11,7 +11,7 @@ import org.springframework.core.env.Environment;
  * <p>Rule: NSF-06; TECHNICAL_DESIGN 7.9.
  */
 @Configuration
-@EnableConfigurationProperties(AlertEngineProperties.class)
+@EnableConfigurationProperties({AlertEngineProperties.class, AlertReplayProperties.class})
 public class AlertEngineConfig {
 
     /**
