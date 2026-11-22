@@ -1347,6 +1347,40 @@ class PaperOrderApiTest {
     // Idempotency, refusals, ownership
     // ------------------------------------------------------------------------------------------
 
+    /**
+     * TR-31: one clientOrderId sent twice at once, as a double click does, is one order: the first is created, the other
+     * answers that same order, and only its funds are locked.
+     */
+    @Test
+    void TR31_theSameClientOrderId_twiceAtOnce_isOneOrder_andLocksOnce() throws Exception {
+        UUID trader = trader();
+        price("100");
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 10; i++) {
+                String body = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\","
+                        + " \"type\": \"LIMIT\", \"price\": 90, \"quantity\": 1, \"clientOrderId\": \"dbl-" + i + "\"}";
+                CyclicBarrier start = new CyclicBarrier(2);
+                List<Future<String>> answers = new ArrayList<>();
+                for (int n = 0; n < 2; n++) {
+                    answers.add(pool.submit(() -> {
+                        start.await();
+                        return place(trader, body).andReturn().getResponse().getContentAsString();
+                    }));
+                }
+                String first = JsonPath.read(answers.get(0).get(30, TimeUnit.SECONDS), "$.orderId");
+                String second = JsonPath.read(answers.get(1).get(30, TimeUnit.SECONDS), "$.orderId");
+
+                assertThat(second).as("iteration %s", i).isEqualTo(first);
+                assertThat(orderCount(trader)).isEqualTo(i + 1L);
+                assertThat(locked(trader, "USDT")).isEqualByComparingTo(BigDecimal.valueOf(90L * (i + 1)));
+            }
+            PaperLedgerInvariant.assertHolds(sql, accountOf(trader));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     @Test
     void TR02_theSameClientOrderId_isTheSameOrder_andReusedForAnotherOrderIsAConflict() throws Exception {
         UUID trader = trader();

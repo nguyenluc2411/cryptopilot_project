@@ -25,6 +25,7 @@ import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
+import com.cryptopilot.paper.PaperLedgerInvariant;
 import com.cryptopilot.paper.dto.response.FuturesAccountResponse;
 import com.cryptopilot.paper.dto.response.FuturesAlgoOrderResponse;
 import com.cryptopilot.paper.dto.response.FuturesConfigUpdateResponse;
@@ -61,6 +62,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.hamcrest.CustomMatcher;
 import org.hamcrest.Matcher;
@@ -3729,6 +3735,152 @@ class FuturesOrderApiTest {
     private String hedge(String side, String positionSide, String quantity) {
         return """
                 {"symbol": "%s", "side": "%s", "positionSide": "%s", "type": "MARKET", "quantity": "%s"}""".formatted(symbol, side, positionSide, quantity);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // TR-31: races. Invariants: (1) a waiting order is either filled or cancelled, never both and never neither; (2)
+    // one client order id is one order however many requests carry it at once; (3) two closes of one position close
+    // it once and never open the other side; (4) after each race the ledger adds up to every balance and no balance
+    // is negative (PaperLedgerInvariant).
+
+    /** TR-31: a cancel and a fill of the same waiting Futures order at once: exactly one wins, every time. */
+    @Test
+    void TR31_aCancelAndAFillOfTheSameFuturesOrder_atOnce_exactlyOneWins() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        int fills = 0;
+        try {
+            for (int i = 0; i < 30; i++) {
+                String id = id(place(trader, limit("BUY", "GTC", "98", "0.1")).andExpect(status().isOk()));
+                RestingOrder resting = new RestingOrder(
+                        UUID.fromString(id),
+                        trader,
+                        MarketType.FUTURES,
+                        pair,
+                        OrderSide.BUY,
+                        new BigDecimal("98"),
+                        Instant.now().minusSeconds(1));
+                CyclicBarrier start = new CyclicBarrier(2);
+                Future<Integer> cancel = pool.submit(() -> {
+                    start.await();
+                    return as(
+                                    trader,
+                                    delete(FUTURES + "/order")
+                                            .param("symbol", symbol)
+                                            .param("orderId", id),
+                                    null)
+                            .andReturn()
+                            .getResponse()
+                            .getStatus();
+                });
+                Future<Boolean> fill = pool.submit(() -> {
+                    start.await();
+                    return matching.fill(resting, Instant.now(), FillSource.LIVE);
+                });
+                boolean filled = fill.get(30, TimeUnit.SECONDS);
+                int cancelled = cancel.get(30, TimeUnit.SECONDS);
+
+                assertThat(filled)
+                        .as("iteration %s: the cancel answered %s", i, cancelled)
+                        .isEqualTo(cancelled != 200);
+                assertThat(sql.sql("select order_status from trade_order where order_id = ?")
+                                .param(UUID.fromString(id))
+                                .query(String.class)
+                                .single())
+                        .isEqualTo(filled ? "FILLED" : "CANCELED");
+                fills += filled ? 1 : 0;
+                PaperLedgerInvariant.assertHolds(sql, trader);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        if (fills > 0) {
+            assertThat((BigDecimal) position(trader).get("quantity"))
+                    .isEqualByComparingTo(new BigDecimal("0.1").multiply(BigDecimal.valueOf(fills)));
+        } else {
+            assertThat(openPositions(trader)).isZero();
+        }
+    }
+
+    /** TR-31: one newClientOrderId sent twice at once, as a double click does, places one order, answered to both. */
+    @Test
+    void TR31_theSameClientOrderId_twiceAtOnce_isOneOrder() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 10; i++) {
+                String body = """
+                        {"symbol": "%s", "side": "BUY", "type": "LIMIT", "timeInForce": "GTC", "price": "95",
+                         "quantity": "0.1", "newClientOrderId": "dbl-%d"}""".formatted(symbol, i);
+                CyclicBarrier start = new CyclicBarrier(2);
+                List<Future<String>> answers = new ArrayList<>();
+                for (int n = 0; n < 2; n++) {
+                    answers.add(pool.submit(() -> {
+                        start.await();
+                        return place(trader, body)
+                                .andExpect(status().isOk())
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString();
+                    }));
+                }
+                String first = JsonPath.read(answers.get(0).get(30, TimeUnit.SECONDS), "$.orderId");
+                String second = JsonPath.read(answers.get(1).get(30, TimeUnit.SECONDS), "$.orderId");
+
+                assertThat(second).as("iteration %s", i).isEqualTo(first);
+                assertThat(sql.sql("select count(*) from trade_order where user_id = ? and client_order_id = ?")
+                                .params(trader, "dbl-" + i)
+                                .query(Long.class)
+                                .single())
+                        .isEqualTo(1);
+            }
+            PaperLedgerInvariant.assertHolds(sql, trader);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** TR-31: two market closes of one position at once close it once; the other side is never opened. */
+    @Test
+    void TR31_twoClosesOfOnePositionAtOnce_closeItOnce() throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "50")), List.of(level("99.9", "50")));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 10; i++) {
+                place(trader, market("BUY", "1")).andExpect(status().isOk());
+                CyclicBarrier start = new CyclicBarrier(2);
+                List<Future<Integer>> closes = new ArrayList<>();
+                for (int n = 0; n < 2; n++) {
+                    closes.add(pool.submit(() -> {
+                        start.await();
+                        return close(trader, """
+                                        {"symbol": "%s", "type": "MARKET"}""".formatted(symbol))
+                                .andReturn()
+                                .getResponse()
+                                .getStatus();
+                    }));
+                }
+                int a = closes.get(0).get(30, TimeUnit.SECONDS);
+                int b = closes.get(1).get(30, TimeUnit.SECONDS);
+
+                assertThat(List.of(a, b)).as("iteration %s", i).contains(200);
+                assertThat(openPositions(trader))
+                        .as("iteration %s: %s and %s", i, a, b)
+                        .isZero();
+                assertThat(sql.sql("select count(*) from futures_position where user_id = ? and direction = 'SHORT'")
+                                .param(trader)
+                                .query(Long.class)
+                                .single())
+                        .as("a close never opens a short")
+                        .isZero();
+                PaperLedgerInvariant.assertHolds(sql, trader);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     private String market(String side, String quantity) {
