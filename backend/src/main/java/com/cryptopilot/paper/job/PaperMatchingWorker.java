@@ -72,8 +72,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Runs the paper matching engine: one consumer thread owns a {@link PaperOrderBook} and applies to it, in arrival
@@ -280,6 +282,9 @@ public class PaperMatchingWorker
 
     /** Guarded by {@code this}. */
     private final List<Thread> workers = new ArrayList<>();
+
+    /** Stores a Trader's fills of one range in one transaction (TR-32); none when built by hand, as in unit tests. */
+    private TransactionTemplate together;
 
     @Autowired
     public PaperMatchingWorker(
@@ -1481,15 +1486,45 @@ public class PaperMatchingWorker
         failures.forEach(failure -> failed(key, failure));
     }
 
-    /** Stores one Trader's fills in order; a fill that fails does not stop the ones after it. */
+    /** Lets a Trader's fills of one range be stored in one transaction (TR-32). */
+    @Autowired(required = false)
+    void storeTogether(PlatformTransactionManager transactions) {
+        this.together = new TransactionTemplate(transactions);
+    }
+
+    /**
+     * Stores one Trader's fills in order. Several are stored in one transaction: one lock, one account read and one
+     * commit for all of them, so the last does not wait on a commit per fill before it (TR-32). Should any fail, that
+     * transaction rolls back whole and they are stored one by one, each in its own: a fill that fails does not stop
+     * the ones after it.
+     */
     private List<Failure> store(List<Fill> fills) {
+        if (together != null && fills.size() > 1) {
+            try {
+                together.executeWithoutResult(status -> fills.forEach(this::storeOne));
+                return List.of();
+            } catch (RuntimeException failed) {
+                log.debug(
+                        "TR-32 {} paper fills stored together failed, stored one by one: {}",
+                        fills.size(),
+                        failed.toString());
+            }
+        }
+        return storeEach(fills);
+    }
+
+    private void storeOne(Fill fill) {
+        if (!matching.fill(fill.order(), fill.tradedAt(), fill.source(), fill.candle())) {
+            log.debug("TR-02 paper order {} no longer works", fill.order().orderId());
+        }
+    }
+
+    /** Stores one Trader's fills in order, each in its own transaction; one that fails does not stop the others. */
+    private List<Failure> storeEach(List<Fill> fills) {
         List<Failure> failures = new ArrayList<>();
         for (Fill fill : fills) {
             try {
-                if (!matching.fill(fill.order(), fill.tradedAt(), fill.source(), fill.candle())) {
-                    log.debug(
-                            "TR-02 paper order {} no longer works", fill.order().orderId());
-                }
+                storeOne(fill);
             } catch (RuntimeException failure) {
                 failures.add(new Failure(fill, failure));
             }

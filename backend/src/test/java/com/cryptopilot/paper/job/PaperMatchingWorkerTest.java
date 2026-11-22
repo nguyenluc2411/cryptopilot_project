@@ -66,6 +66,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.slf4j.LoggerFactory;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
@@ -208,6 +210,58 @@ class PaperMatchingWorkerTest {
 
         verify(matching, timeout(WAIT).times(2)).fill(order, MINUTE_1, FillSource.LIVE, null);
         verify(matching, never()).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
+    }
+
+    /** TR-32: a Trader's fills of one range share one transaction: one commit for all of them. */
+    @Test
+    void TR32_aTradersFillsOfOneRange_areStoredInOneTransaction() {
+        UUID trader = UUID.randomUUID();
+        RestingOrder first = buyOf(trader, "100");
+        RestingOrder second = buyOf(trader, "101");
+        when(matching.restingOrders()).thenReturn(List.of(first, second));
+        PlatformTransactionManager transactions = transactions();
+        worker = worker(properties(true, false, Duration.ofMinutes(10)));
+        worker.storeTogether(transactions);
+        worker.start();
+
+        worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
+
+        verify(matching, timeout(WAIT)).fill(first, MINUTE_1, FillSource.LIVE, null);
+        verify(matching, timeout(WAIT)).fill(second, MINUTE_1, FillSource.LIVE, null);
+        verify(transactions, timeout(WAIT)).commit(any());
+        verify(transactions).getTransaction(any());
+        verify(transactions, never()).rollback(any());
+    }
+
+    /**
+     * TR-32: should one of them fail, the shared transaction rolls back whole and each is stored again in its own, so
+     * the others are kept and only the failing one waits for its retry.
+     */
+    @Test
+    void TR32_aFailureAmongThemTogether_rollsAllBack_andEachIsStoredAlone() {
+        UUID trader = UUID.randomUUID();
+        RestingOrder kept = buyOf(trader, "101");
+        RestingOrder failing = buyOf(trader, "100");
+        when(matching.restingOrders()).thenReturn(List.of(kept, failing));
+        when(matching.fill(failing, MINUTE_1, FillSource.LIVE, null))
+                .thenThrow(new IllegalStateException("database down"));
+        PlatformTransactionManager transactions = transactions();
+        worker = worker(properties(true, false, Duration.ofMinutes(10)));
+        worker.storeTogether(transactions);
+        worker.start();
+
+        worker.onMinuteKline(kline(MINUTE_1, "99", "110", true));
+
+        verify(transactions, timeout(WAIT)).rollback(any());
+        verify(matching, timeout(WAIT).times(2)).fill(kept, MINUTE_1, FillSource.LIVE, null);
+        verify(matching, timeout(WAIT).times(2)).fill(failing, MINUTE_1, FillSource.LIVE, null);
+        verify(matching, after(200).never()).advanceWatermark(MarketType.SPOT, PAIR, MINUTE_1);
+    }
+
+    private static PlatformTransactionManager transactions() {
+        PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
+        when(transactions.getTransaction(any())).thenAnswer(ignored -> new SimpleTransactionStatus());
+        return transactions;
     }
 
     @Test
@@ -1337,6 +1391,11 @@ class PaperMatchingWorkerTest {
                 OrderSide.BUY,
                 new BigDecimal(price),
                 PLACED);
+    }
+
+    private static RestingOrder buyOf(UUID trader, String price) {
+        return new RestingOrder(
+                UUID.randomUUID(), trader, MarketType.SPOT, PAIR, OrderSide.BUY, new BigDecimal(price), PLACED);
     }
 
     private static RestingOrder sell(String price) {

@@ -145,6 +145,13 @@ class PaperOrderLoadTest {
     void restingOrdersFilledByOneTrade() throws Exception {
         int traderCount = Integer.getInteger("load.resting.traders", 500);
         int perTrader = Integer.getInteger("load.resting.orders", 20);
+        // A first, small round warms the JIT, the pool and the prepared statements: a cold JVM spends most of a
+        // fill's time interpreting.
+        restingRound(Math.min(10, traderCount), perTrader, "WARM-UP");
+        restingRound(traderCount, perTrader, "MEASURED");
+    }
+
+    private void restingRound(int traderCount, int perTrader, String label) throws Exception {
         symbol = "LR" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
         pair = new MarketTestData(sql, Instant.now()).pair(symbol, true, false, "TRADING", null, 0);
         sql.sql("""
@@ -202,7 +209,8 @@ class PaperOrderLoadTest {
                     .query(Long.class)
                     .single();
             System.out.println();
-            System.out.println("TR-32 RESTING: " + traderCount + " Traders x " + perTrader + " LIMIT buys over HTTP");
+            System.out.println("TR-32 RESTING (" + label + "): " + traderCount + " Traders x " + perTrader
+                    + " LIMIT buys over HTTP");
             System.out.println(" orders | fail | resting |  p50 ms |  p95 ms |  p99 ms |  max ms | all placed in ms");
             System.out.printf(
                     "%7d | %4d | %7d | %7d | %7d | %7d | %7d | %d%n",
@@ -249,7 +257,8 @@ class PaperOrderLoadTest {
             Result fills = new Result(fillLatencies, resting - filled, allFilledMillis);
             System.out.println("refused: " + refusals);
             System.out.println();
-            System.out.println("TR-32 FILL: one trade at 89.99 through every resting buy (latency seen every 20 ms)");
+            System.out.println("TR-32 FILL (" + label
+                    + "): one trade at 89.99 through every resting buy (latency seen every 20 ms)");
             System.out.println(" filled | left |  p50 ms |  p95 ms |  p99 ms |  max ms | all filled in ms");
             System.out.printf(
                     "%7d | %4d | %7d | %7d | %7d | %7d | %d%n",
