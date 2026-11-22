@@ -178,6 +178,10 @@ cryptopilot:
       cron: "0 30 0 * * *"
       zone: UTC
       retention: 90d
+  push:
+    # T-058, NSF-15: the Firebase service account key file; empty, pushes are logged instead of sent.
+    credentials-file: ${FCM_CREDENTIALS_FILE:}
+    project-id: ${FCM_PROJECT_ID:}
   web:
     # Reverse proxies whose X-Forwarded-For is believed: addresses or CIDR ranges, comma-separated. Empty trusts none,
     # so the direct peer is the client. Set wherever Nginx sits in front.
