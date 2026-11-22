@@ -1,5 +1,6 @@
 package com.cryptopilot.market.job;
 
+import com.cryptopilot.common.config.SchedulingConfig;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.CandleBackfillProperties;
 import com.cryptopilot.market.event.GapDetected;
@@ -12,6 +13,7 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.CandleBackfillService;
 import com.cryptopilot.market.service.DroppedGapService;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -24,6 +26,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
@@ -58,6 +61,11 @@ import org.springframework.stereotype.Component;
  * <p>One continuation is pending per market at most; a newer one replaces it. Continuing is always a task
  * handed to the {@link TaskScheduler}; the thread is never held. One instance, no distributed lock (D-39).
  *
+ * <p>The runs have a scheduler of their own, one thread ({@code SchedulingConfig.BACKFILL}), not the application's: a
+ * run holds its thread through many exchange calls, and the runs of both markets wait on one lock, so on the shared
+ * scheduler a start-up backfill of a hundred pairs took every thread and the market topics (NSF-03) stopped for
+ * minutes. One thread suits the runs, which go one at a time anyway.
+ *
  * <p>Queued gaps live in memory. One lost with a restart is not lost for good: at start-up the stored series of
  * the recent window ({@code gapScanWindow}, 7 days) are scanned for holes, and each is queued again; a hole behind
  * the latest candle is also reported by the stream's first closed candle of the series.
@@ -74,6 +82,12 @@ public class CandleBackfillJob {
 
     /** Runs a gap may fail for a reason other than the exchange before it is dropped from the queue. */
     static final int MAX_GAP_ATTEMPTS = 3;
+
+    /**
+     * How long after a pair is turned on its market is backfilled: the pairs of a batch share the run, since each newer
+     * request replaces the pending one.
+     */
+    static final Duration ENABLE_SETTLE = Duration.ofSeconds(5);
 
     /** What one run of one market came to. */
     public enum Outcome {
@@ -103,7 +117,7 @@ public class CandleBackfillJob {
     public CandleBackfillJob(
             CandleBackfillService backfill,
             DroppedGapService droppedGaps,
-            TaskScheduler scheduler,
+            @Qualifier(SchedulingConfig.BACKFILL) TaskScheduler scheduler,
             CandleBackfillProperties properties,
             Clock clock) {
         this.backfill = backfill;
@@ -158,13 +172,14 @@ public class CandleBackfillJob {
     }
 
     /**
-     * An administrator brought a pair into service: its market is brought up to date at once, not at the next hour.
-     * After commit, so the run reads the pair as saved; the run itself is on the scheduler.
+     * An administrator brought a pair into service: its market is brought up to date within {@link #ENABLE_SETTLE},
+     * not at the next hour, in one run with the pairs turned on meanwhile. After commit, so the run reads the pair as
+     * saved; the run itself is on the scheduler. The run fetches only the series that are behind (the new pair's).
      */
     @EventListener
     public void onPairMarketEnabled(PairMarketEnabled event) {
         if (properties.enabled()) {
-            AfterCommit.run(() -> continueAt(event.market(), clock.instant()));
+            AfterCommit.run(() -> continueAt(event.market(), clock.instant().plus(ENABLE_SETTLE)));
         }
     }
 

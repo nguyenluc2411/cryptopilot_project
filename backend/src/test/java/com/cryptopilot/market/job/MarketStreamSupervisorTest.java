@@ -15,6 +15,7 @@ import com.cryptopilot.market.MinuteKlineListener;
 import com.cryptopilot.market.client.BinanceRestClient;
 import com.cryptopilot.market.client.BinanceStreamClient;
 import com.cryptopilot.market.client.BinanceStreamProperties;
+import com.cryptopilot.market.client.BinanceStreamShard;
 import com.cryptopilot.market.client.StreamFrames;
 import com.cryptopilot.market.client.StreamMessage;
 import com.cryptopilot.market.client.StubStreamServer;
@@ -90,6 +91,7 @@ class MarketStreamSupervisorTest {
     private final List<Object> events = new CopyOnWriteArrayList<>();
     private final List<Duration> refreshes = new CopyOnWriteArrayList<>();
     private final List<Runnable> runs = new CopyOnWriteArrayList<>();
+    private final List<Instant> runAts = new CopyOnWriteArrayList<>();
     private final LatestMarketData latest = new LatestMarketData();
     private final MarketLiveness liveness = new MarketLiveness(
             new MarketHealthProperties(false, Duration.ofSeconds(10), Duration.ofSeconds(30), Duration.ofSeconds(15)),
@@ -103,6 +105,7 @@ class MarketStreamSupervisorTest {
     private final List<MarkPriceListener> markListeners = new CopyOnWriteArrayList<>(List.of(marks::add));
     private boolean tradingStreams;
     private boolean futuresTradingStreams;
+    private int publicStreamsPerConnection = 20;
     private TradingMarketData trading;
     private MarketUpdateService updates = (market, message) -> {
         realtime.add(message);
@@ -195,6 +198,31 @@ class MarketStreamSupervisorTest {
 
         assertThat(supervisor.shards(MarketType.SPOT)).isNotEmpty();
         assertThat(supervisor.shards(MarketType.FUTURES)).isEmpty();
+    }
+
+    /**
+     * Pairs turned on one after the other share one refresh, {@code ENABLE_SETTLE} after the first; a pair turned on
+     * once that refresh has started gets one of its own.
+     */
+    @Test
+    void UC45_pairsTurnedOnTogether_makeOneRefresh() {
+        supervisor = supervisor(true, 100);
+        Instant before = Instant.now();
+
+        for (String symbol : List.of("ETHUSDT", "SOLUSDT", "XRPUSDT")) {
+            supervisor.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), symbol, MarketType.SPOT));
+        }
+        supervisor.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "BTCUSDT", MarketType.FUTURES));
+
+        assertThat(runs).as("one per market").hasSize(2);
+        assertThat(runAts.getFirst())
+                .isAfterOrEqualTo(before.plus(MarketStreamSupervisor.ENABLE_SETTLE))
+                .isBefore(
+                        Instant.now().plus(MarketStreamSupervisor.ENABLE_SETTLE).plusSeconds(1));
+        runs.removeFirst().run();
+
+        supervisor.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "ADAUSDT", MarketType.SPOT));
+        assertThat(runs).as("the Futures one still pending, and a new Spot one").hasSize(2);
     }
 
     /** Inside a transaction: nothing until it commits, and nothing at all when it rolls back. */
@@ -490,6 +518,188 @@ class MarketStreamSupervisorTest {
         assertThat(eth).isNotNull();
     }
 
+    /** S1: refreshing an unchanged set of pairs opens and closes nothing. */
+    @Test
+    void NSF03_anUnchangedSet_touchesNoConnection() {
+        data.pair("ETHUSDT", true, false, "TRADING", null, 1);
+        supervisor = supervisor(true, 6);
+        supervisor.refresh(MarketType.SPOT);
+        List<BinanceStreamShard> before = supervisor.shards(MarketType.SPOT);
+
+        assertThat(supervisor.refresh(MarketType.SPOT)).isFalse();
+        supervisor.onSymbolsSynchronised(new SymbolsSynchronised(MarketType.SPOT));
+
+        assertThat(supervisor.shards(MarketType.SPOT)).containsExactlyElementsOf(before);
+    }
+
+    /**
+     * S2, S4, S7: a pair added goes on a new connection; the connection of the pairs already streamed stays open, keeps
+     * its prices flowing and its place in the market health.
+     */
+    @Test
+    void UC45_aPairAdded_opensANewConnection_andKeepsTheOthers() {
+        data.enable(btc, true, false);
+        supervisor = supervisor(true, 100);
+        supervisor.start();
+        Connection first = server.awaitConnection(1);
+        await(() -> supervisor.shards(MarketType.SPOT).getFirst().isConnected(), "the first connection");
+        BinanceStreamShard btcShard = supervisor.shards(MarketType.SPOT).getFirst();
+
+        UUID eth = data.pair("ETHUSDT", true, false, "TRADING", null, 1);
+        assertThat(supervisor.refresh(MarketType.SPOT)).isTrue();
+
+        Connection second = server.awaitConnection(2);
+        assertThat(second.path()).startsWith("/stream?streams=ethusdt@kline_1m").doesNotContain("btcusdt");
+        assertThat(supervisor.shards(MarketType.SPOT)).hasSize(2).first().isSameAs(btcShard);
+        first.send(StreamFrames.ticker("BTCUSDT", AT));
+        second.send(StreamFrames.ticker("ETHUSDT", AT));
+        await(() -> latest.ticker(btc).isPresent() && latest.ticker(eth).isPresent(), "both prices");
+        assertThat(first.closeCode()).as("never closed").isNull();
+        assertThat(btcShard.isConnected()).isTrue();
+        assertThat(events).as("no reconnection, none was lost").isEmpty();
+    }
+
+    /**
+     * S8: a later batch joins the connection the previous batch was given when it has room, so additions do not leave a
+     * trail of small connections; the connection opened at start-up is never touched.
+     */
+    @Test
+    void UC45_aLaterBatch_joinsThePreviousBatchsConnection_andNeverTheStartUpOne() {
+        data.enable(btc, true, false);
+        supervisor = supervisor(true, 18);
+        supervisor.refresh(MarketType.SPOT);
+        BinanceStreamShard startUp = supervisor.shards(MarketType.SPOT).getFirst();
+
+        data.pair("ETHUSDT", true, false, "TRADING", null, 1);
+        supervisor.refresh(MarketType.SPOT);
+        BinanceStreamShard firstBatch = supervisor.shards(MarketType.SPOT).get(1);
+        assertThat(firstBatch.streams()).hasSize(6);
+
+        data.pair("SOLUSDT", true, false, "TRADING", null, 2);
+        assertThat(supervisor.refresh(MarketType.SPOT)).isTrue();
+
+        assertThat(supervisor.shards(MarketType.SPOT)).hasSize(2).first().isSameAs(startUp);
+        BinanceStreamShard joined = supervisor.shards(MarketType.SPOT).get(1);
+        assertThat(joined).isNotSameAs(firstBatch);
+        assertThat(joined.streams())
+                .hasSize(12)
+                .anyMatch(s -> s.startsWith("ethusdt@"))
+                .anyMatch(s -> s.startsWith("solusdt@"));
+
+        data.pair("XRPUSDT", true, false, "TRADING", null, 3);
+        data.pair("ADAUSDT", true, false, "TRADING", null, 4);
+        supervisor.refresh(MarketType.SPOT);
+        assertThat(supervisor.shards(MarketType.SPOT))
+                .as("no room for two more pairs: a new connection, the others kept")
+                .hasSize(3)
+                .startsWith(startUp, joined);
+    }
+
+    /**
+     * A start-up connection rebuilt after one of its pairs was removed is still a start-up one: a later batch never joins
+     * it, so its remaining pairs are not interrupted again.
+     */
+    @Test
+    void BR07_aStartUpConnectionRebuiltAfterARemoval_isNeverJoined() {
+        data.enable(btc, true, false);
+        UUID eth = data.pair("ETHUSDT", true, false, "TRADING", null, 1);
+        supervisor = supervisor(true, 18);
+        supervisor.refresh(MarketType.SPOT);
+        assertThat(supervisor.shards(MarketType.SPOT)).singleElement();
+
+        data.enable(eth, false, false);
+        supervisor.refresh(MarketType.SPOT);
+        BinanceStreamShard rebuilt = supervisor.shards(MarketType.SPOT).getFirst();
+        assertThat(rebuilt.streams()).hasSize(6).allMatch(s -> s.startsWith("btcusdt@"));
+
+        data.pair("SOLUSDT", true, false, "TRADING", null, 2);
+        supervisor.refresh(MarketType.SPOT);
+
+        assertThat(supervisor.shards(MarketType.SPOT))
+                .as("room for SOL on BTC's connection, but it is a start-up one")
+                .hasSize(2)
+                .first()
+                .isSameAs(rebuilt);
+    }
+
+    /**
+     * The Futures book connections (TR-38) carry at most {@code public-streams-per-connection} streams, so the busiest
+     * pairs' best bids and asks are spread over several readers; the price connections keep their own limit.
+     */
+    @Test
+    void TR38_bookConnections_keepToTheirOwnLimit() {
+        futuresTradingStreams = true;
+        publicStreamsPerConnection = 2;
+        data.pair("ETHUSDT", false, true, null, "TRADING", 1);
+        data.pair("SOLUSDT", false, true, null, "TRADING", 2);
+        supervisor = supervisor(true, 100);
+
+        supervisor.refresh(MarketType.FUTURES);
+
+        List<BinanceStreamShard> shards = supervisor.shards(MarketType.FUTURES);
+        assertThat(shards.stream().filter(shard -> shard.streams().getFirst().contains("@kline")))
+                .as("one price connection for the three pairs")
+                .singleElement()
+                .satisfies(shard -> assertThat(shard.streams()).hasSize(24));
+        assertThat(shards.stream().filter(shard -> shard.streams().getFirst().contains("@bookTicker")))
+                .as("a book connection per pair")
+                .hasSize(3)
+                .allSatisfy(shard -> assertThat(shard.streams()).hasSize(2));
+    }
+
+    /** S3, S4: a pair removed closes only its own connection; the others are untouched. */
+    @Test
+    void BR07_aPairRemoved_rebuildsOnlyItsConnection() {
+        data.enable(btc, true, false);
+        UUID eth = data.pair("ETHUSDT", true, false, "TRADING", null, 1);
+        data.pair("SOLUSDT", true, false, "TRADING", null, 2);
+        supervisor = supervisor(true, 6);
+        supervisor.refresh(MarketType.SPOT);
+        server.awaitConnection(3);
+        List<BinanceStreamShard> before = supervisor.shards(MarketType.SPOT);
+        assertThat(before).hasSize(3);
+        BinanceStreamShard ethShard = before.stream()
+                .filter(shard -> shard.streams().getFirst().startsWith("ethusdt@"))
+                .findFirst()
+                .orElseThrow();
+
+        data.enable(eth, false, false);
+        assertThat(supervisor.refresh(MarketType.SPOT)).isTrue();
+
+        Connection ethConnection = server.connections().stream()
+                .filter(c -> c.path().startsWith("/stream?streams=ethusdt@"))
+                .findFirst()
+                .orElseThrow();
+        await(() -> ethConnection.closeCode() != null, "the ETH connection to be closed");
+        List<BinanceStreamShard> after = supervisor.shards(MarketType.SPOT);
+        assertThat(after).hasSize(2).doesNotContain(ethShard);
+        assertThat(before).containsAll(after);
+        assertThat(server.connections()).as("nothing reopened").hasSize(3);
+        assertThat(server.connections().stream().filter(c -> c.closeCode() != null))
+                .singleElement()
+                .isSameAs(ethConnection);
+    }
+
+    /**
+     * S6: a book connection of TR-38 back after a loss announces nothing, since it carries no candle for NSF-02 to
+     * fetch; the exchange drops those often.
+     */
+    @Test
+    void TR38_aBookConnectionBackAfterALoss_isNotAnnounced() {
+        futuresTradingStreams = true;
+        supervisor = supervisor(true, 100);
+        supervisor.refresh(MarketType.FUTURES);
+        server.awaitConnection(2);
+        Connection book = connection("/public/stream");
+        await(() -> supervisor.shards(MarketType.FUTURES).stream().allMatch(BinanceStreamShard::isConnected), "both");
+
+        book.drop();
+        server.awaitConnection(3);
+        await(() -> supervisor.shards(MarketType.FUTURES).stream().allMatch(BinanceStreamShard::isConnected), "back");
+
+        assertThat(events).noneMatch(MarketStreamReconnected.class::isInstance);
+    }
+
     /** A market whose pairs cannot be read keeps its connections; the other market is refreshed regardless. */
     @Test
     void NSF03_aFailedRefresh_leavesTheStreamsAsTheyAre() {
@@ -578,7 +788,8 @@ class MarketStreamSupervisorTest {
                         server.baseUrl("/public"),
                         20,
                         Duration.ofSeconds(10),
-                        50));
+                        50,
+                        publicStreamsPerConnection));
         trading = new TradingMarketData(properties, Clock.systemUTC());
         streams = new BinanceStreamClient(properties, JsonMapper.builder().build(), Clock.systemUTC());
         return new MarketStreamSupervisor(
@@ -623,8 +834,9 @@ class MarketStreamSupervisorTest {
                         refreshes.add(delay);
                         return null;
                     }
-                    if (method.getName().equals("schedule") && args[1] instanceof Instant) {
+                    if (method.getName().equals("schedule") && args[1] instanceof Instant at) {
                         runs.add((Runnable) args[0]);
+                        runAts.add(at);
                         return null;
                     }
                     throw new UnsupportedOperationException(method.getName());

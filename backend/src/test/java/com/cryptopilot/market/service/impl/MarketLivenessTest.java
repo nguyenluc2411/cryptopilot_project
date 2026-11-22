@@ -102,6 +102,28 @@ class MarketLivenessTest {
     }
 
     /**
+     * NSF-03: a connection kept open through a change of the pairs keeps what it has delivered, so a silent one stays
+     * silent; a new one, or one whose pairs changed, starts as if it had just delivered.
+     */
+    @Test
+    void D159_aConnectionKeptThroughAChange_keepsItsSilence() {
+        liveness.connections(MarketType.SPOT, Map.of("SPOT-0", List.of("BTCUSDT")));
+        clock.advance(Duration.ofSeconds(40));
+        assertThat(liveness.silentSymbols(MarketType.SPOT)).containsExactly("BTCUSDT");
+
+        liveness.connections(MarketType.SPOT, Map.of("SPOT-0", List.of("BTCUSDT"), "SPOT-1", List.of("ETHUSDT")));
+        assertThat(liveness.silentSymbols(MarketType.SPOT))
+                .as("kept, still silent")
+                .containsExactly("BTCUSDT");
+
+        liveness.connections(
+                MarketType.SPOT, Map.of("SPOT-0", List.of("BTCUSDT", "SOLUSDT"), "SPOT-1", List.of("ETHUSDT")));
+        assertThat(liveness.silentSymbols(MarketType.SPOT))
+                .as("its pairs changed: a new connection")
+                .isEmpty();
+    }
+
+    /**
      * E5: after a break the market's run restarts once enough pairs deliver again, from when the last of them that
      * makes the share came back; a message of no registered connection (the public book streams) counts for none.
      */

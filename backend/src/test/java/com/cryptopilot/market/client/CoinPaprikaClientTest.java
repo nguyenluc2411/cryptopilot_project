@@ -3,6 +3,7 @@ package com.cryptopilot.market.client;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.cryptopilot.support.MutableTestClock;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -12,8 +13,10 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -191,6 +194,143 @@ class CoinPaprikaClientTest {
         }
     }
 
+    /**
+     * A refusal for too many calls is waited out: until its Retry-After has passed, no call reaches CoinPaprika (each one
+     * would keep the free plan's block going), and every call fails at once as rate limited.
+     */
+    @Test
+    void aPlanLimit_isWaitedOutForItsRetryAfter_withoutCallingAgain() {
+        AtomicInteger hits = new AtomicInteger();
+        server.createContext("/v1/limited", exchange -> {
+            hits.incrementAndGet();
+            exchange.getResponseHeaders().add("Retry-After", "120");
+            send(exchange, 402, "{\"type\":\"payment_required\"}");
+        });
+        MutableTestClock clock = new MutableTestClock(Instant.parse("2026-11-21T13:18:25Z"));
+        try (CoinPaprikaClient client = client("/v1/limited/", clock)) {
+            assertThatThrownBy(client::global).isInstanceOfSatisfying(CoinPaprikaException.class, e -> {
+                assertThat(e.rateLimited()).isTrue();
+                assertThat(e.notSent()).as("CoinPaprika's own 402 was sent").isFalse();
+            });
+            assertThat(client.waitingUntil()).contains(clock.instant().plusSeconds(120));
+
+            assertThatThrownBy(client::tickers).isInstanceOfSatisfying(CoinPaprikaException.class, e -> {
+                assertThat(e.rateLimited()).isTrue();
+                assertThat(e.status()).isEqualTo(402);
+                assertThat(e.notSent()).as("waited out, not sent").isTrue();
+            });
+            assertThatThrownBy(() -> client.logo("btc-bitcoin")).isInstanceOf(CoinPaprikaException.class);
+            assertThat(hits).as("not called while waiting").hasValue(1);
+
+            clock.advance(Duration.ofSeconds(120));
+            assertThat(client.waitingUntil()).isEmpty();
+            assertThatThrownBy(client::global).isInstanceOf(CoinPaprikaException.class);
+            assertThat(hits).as("called again once the wait is over").hasValue(2);
+        }
+    }
+
+    /** A 429 without a usable Retry-After is waited out for a minute; a 402 without one, for the plan's hour. */
+    @Test
+    void aRateLimitWithoutRetryAfter_isWaitedOutByDefault() {
+        MutableTestClock clock = new MutableTestClock(Instant.parse("2026-11-21T13:18:25Z"));
+        status.set(429);
+        try (CoinPaprikaClient client = client("/v1/", clock)) {
+            assertThatThrownBy(client::global).isInstanceOf(CoinPaprikaException.class);
+            assertThat(client.waitingUntil()).contains(clock.instant().plus(CoinPaprikaClient.RATE_LIMIT_WAIT));
+        }
+        status.set(402);
+        try (CoinPaprikaClient client = client("/v1/", clock)) {
+            assertThatThrownBy(client::global).isInstanceOf(CoinPaprikaException.class);
+            assertThat(client.waitingUntil()).contains(clock.instant().plus(CoinPaprikaClient.PLAN_LIMIT_WAIT));
+        }
+        status.set(503);
+        try (CoinPaprikaClient client = client("/v1/", clock)) {
+            assertThatThrownBy(client::global)
+                    .isInstanceOfSatisfying(CoinPaprikaException.class, e -> assertThat(e.rateLimited())
+                            .isFalse());
+            assertThat(client.waitingUntil()).as("an outage is not waited out").isEmpty();
+        }
+    }
+
+    /** One budget for every call: once spent, a call fails at once as rate limited; an hour later it is back. */
+    @Test
+    void theCallBudget_isASlidingHour_andSpentCallsAreNotSent() {
+        AtomicInteger hits = new AtomicInteger();
+        server.createContext("/v1/counted", exchange -> {
+            hits.incrementAndGet();
+            send(exchange, 200, "{\"market_cap_usd\": 1, \"last_updated\": 1794893964}");
+        });
+        MutableTestClock clock = new MutableTestClock(Instant.parse("2026-11-22T03:00:00Z"));
+        try (CoinPaprikaClient client = client("/v1/counted/", clock, 2, 0)) {
+            client.global();
+            clock.advance(Duration.ofMinutes(30));
+            client.global();
+
+            assertThatThrownBy(client::global)
+                    .isInstanceOfSatisfying(CoinPaprikaException.class, e -> assertThat(e.rateLimited())
+                            .isTrue());
+            assertThatThrownBy(() -> client.logo("btc-bitcoin")).isInstanceOf(CoinPaprikaException.class);
+            assertThat(hits).as("spent calls are not sent").hasValue(2);
+
+            clock.advance(Duration.ofMinutes(30));
+            client.global();
+            assertThat(hits).as("the first call left the window").hasValue(3);
+        }
+    }
+
+    /**
+     * Logos are low priority: they stop while only the reserved calls are left, and the market's cap still goes
+     * through; a full budget then refuses the cap too. Neither refusal is sent.
+     */
+    @Test
+    void logosStopAtTheReserve_whileTheMarketFiguresStillGoThrough() {
+        AtomicInteger hits = new AtomicInteger();
+        server.createContext("/v1/reserve", exchange -> {
+            hits.incrementAndGet();
+            send(
+                    exchange,
+                    200,
+                    exchange.getRequestURI().getPath().endsWith("/global")
+                            ? "{\"market_cap_usd\": 1, \"last_updated\": 1794893964}"
+                            : "{\"id\":\"btc-bitcoin\",\"logo\":\"https://static.coinpaprika.com/coin/btc-bitcoin/logo.png\"}");
+        });
+        MutableTestClock clock = new MutableTestClock(Instant.parse("2026-11-22T03:00:00Z"));
+        try (CoinPaprikaClient client = client("/v1/reserve/", clock, 3, 1)) {
+            client.logo("btc-bitcoin");
+            client.logo("btc-bitcoin");
+            assertThatThrownBy(() -> client.logo("btc-bitcoin"))
+                    .isInstanceOfSatisfying(CoinPaprikaException.class, e -> {
+                        assertThat(e.rateLimited()).isTrue();
+                        assertThat(e.notSent()).isTrue();
+                    });
+
+            client.global();
+            assertThat(hits).as("the cap used the reserved call").hasValue(3);
+
+            assertThatThrownBy(client::global)
+                    .isInstanceOfSatisfying(CoinPaprikaException.class, e -> assertThat(e.notSent())
+                            .isTrue());
+            assertThat(hits).as("a full budget refuses the cap too").hasValue(3);
+        }
+    }
+
+    /** The reserve must leave room for the logos. */
+    @Test
+    void aReserveAsLargeAsTheBudget_isRefused() {
+        assertThatThrownBy(() -> new CoinPaprikaProperties(
+                        true,
+                        URI.create("https://api.coinpaprika.com/v1"),
+                        Duration.ZERO,
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        Duration.ofHours(24),
+                        Map.of(),
+                        10,
+                        10))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void noAnswerIsAFailure() {
         server.stop(0);
@@ -233,6 +373,28 @@ class CoinPaprikaClientTest {
                         Duration.ofHours(24),
                         Map.of()),
                 JsonMapper.builder().build());
+    }
+
+    private CoinPaprikaClient client(String path, MutableTestClock clock) {
+        return client(path, clock, 55, 10);
+    }
+
+    private CoinPaprikaClient client(String path, MutableTestClock clock, int callsPerHour, int reservedCalls) {
+        URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + path);
+        return new CoinPaprikaClient(
+                new CoinPaprikaProperties(
+                        true,
+                        base,
+                        Duration.ZERO,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(2),
+                        Duration.ofHours(24),
+                        Map.of(),
+                        callsPerHour,
+                        reservedCalls),
+                JsonMapper.builder().build(),
+                clock);
     }
 
     private static void send(HttpExchange exchange, int status, String body) throws IOException {

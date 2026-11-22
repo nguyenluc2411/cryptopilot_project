@@ -9,19 +9,24 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.cryptopilot.market.client.CoinPaprikaException;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.CoinDescriptionService;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.TaskScheduler;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * Two market events make one run, put off until both have settled; a 429 is retried once, any other failure waits.
+ * Two market events make one run, put off until both have settled, and so do the pairs of a batch an administrator
+ * brings into service; a 429 is retried once, any other failure waits.
  */
 class CoinDescriptionJobTest {
 
@@ -43,6 +48,74 @@ class CoinDescriptionJobTest {
         verify(scheduler, org.mockito.Mockito.times(2))
                 .schedule(any(Runnable.class), eq(NOW.plus(CoinDescriptionJob.SETTLE)));
         verify(future).cancel(false);
+        verify(descriptions, never()).describeCoins();
+    }
+
+    @Test
+    void aBatchOfPairsBroughtIntoServiceMakesOneRunAfterTheyHaveSettled() {
+        doReturnFuture();
+
+        job.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "AEROUSDT", MarketType.SPOT));
+        job.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "ZROUSDT", MarketType.SPOT));
+
+        ArgumentCaptor<Runnable> run = ArgumentCaptor.forClass(Runnable.class);
+        verify(scheduler, org.mockito.Mockito.times(2))
+                .schedule(run.capture(), eq(NOW.plus(CoinDescriptionJob.SETTLE)));
+        verify(future).cancel(false);
+        verify(descriptions, never()).describeCoins();
+
+        run.getValue().run();
+        verify(descriptions).describeCoins();
+    }
+
+    /** Hourly, from an hour after start-up, for the coins a run left without a logo; a 429 there is not retried. */
+    @Test
+    void theHourlyRun_startsAnHourAfterStartUp() {
+        job.start();
+
+        ArgumentCaptor<Runnable> hourly = ArgumentCaptor.forClass(Runnable.class);
+        verify(scheduler)
+                .scheduleAtFixedRate(
+                        hourly.capture(), eq(NOW.plus(CoinDescriptionJob.EVERY)), eq(CoinDescriptionJob.EVERY));
+        when(descriptions.describeCoins()).thenThrow(new CoinPaprikaException("slow down", 402, null));
+        hourly.getValue().run();
+        verify(scheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    /** Inside a transaction: the run is scheduled once it commits, never when it rolls back. */
+    @Test
+    void aPairTurnedOn_waitsForTheCommit_andARollbackSchedulesNothing() {
+        doReturnFuture();
+        PairMarketEnabled enabled = new PairMarketEnabled(UUID.randomUUID(), "AEROUSDT", MarketType.SPOT);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        verify(scheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            job.onPairMarketEnabled(enabled);
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+        verify(scheduler).schedule(any(Runnable.class), eq(NOW.plus(CoinDescriptionJob.SETTLE)));
+    }
+
+    /** A scheduler that refuses (shutting down) is logged, never thrown at the publisher. */
+    @Test
+    void aRefusingScheduler_isNotThrownAtTheEnable() {
+        when(scheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenThrow(new IllegalStateException("shut down"));
+
+        job.onPairMarketEnabled(new PairMarketEnabled(UUID.randomUUID(), "AEROUSDT", MarketType.SPOT));
+
         verify(descriptions, never()).describeCoins();
     }
 

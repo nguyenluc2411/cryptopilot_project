@@ -1,11 +1,13 @@
 package com.cryptopilot.news.job;
 
+import com.cryptopilot.common.config.SchedulingConfig;
 import com.cryptopilot.news.config.NewsSummaryProperties;
 import com.cryptopilot.news.model.SummaryRun;
 import com.cryptopilot.news.service.NewsSummaryService;
 import java.time.Clock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
@@ -29,7 +31,10 @@ public class NewsSummaryJob {
     private final Clock clock;
 
     public NewsSummaryJob(
-            NewsSummaryService summaries, TaskScheduler scheduler, NewsSummaryProperties properties, Clock clock) {
+            NewsSummaryService summaries,
+            @Qualifier(SchedulingConfig.BACKGROUND) TaskScheduler scheduler,
+            NewsSummaryProperties properties,
+            Clock clock) {
         this.summaries = summaries;
         this.scheduler = scheduler;
         this.properties = properties;

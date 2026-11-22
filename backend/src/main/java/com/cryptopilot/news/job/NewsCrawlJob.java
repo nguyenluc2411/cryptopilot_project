@@ -1,11 +1,13 @@
 package com.cryptopilot.news.job;
 
+import com.cryptopilot.common.config.SchedulingConfig;
 import com.cryptopilot.news.config.NewsCrawlProperties;
 import com.cryptopilot.news.model.CrawlRun;
 import com.cryptopilot.news.service.CrawlService;
 import java.time.Clock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
@@ -28,7 +30,11 @@ public class NewsCrawlJob {
     private final NewsCrawlProperties properties;
     private final Clock clock;
 
-    public NewsCrawlJob(CrawlService crawl, TaskScheduler scheduler, NewsCrawlProperties properties, Clock clock) {
+    public NewsCrawlJob(
+            CrawlService crawl,
+            @Qualifier(SchedulingConfig.BACKGROUND) TaskScheduler scheduler,
+            NewsCrawlProperties properties,
+            Clock clock) {
         this.crawl = crawl;
         this.scheduler = scheduler;
         this.properties = properties;

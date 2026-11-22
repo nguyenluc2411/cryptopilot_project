@@ -33,12 +33,16 @@ import com.cryptopilot.market.service.impl.MarketLiveness;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import jakarta.annotation.PreDestroy;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -59,10 +63,17 @@ import org.springframework.stereotype.Component;
  * <p>The pairs of {@link StreamCandleService#targets} — enabled by an administrator and trading — each with its
  * six streams, packed into connections of at most {@code maxStreamsPerConnection} streams (100; TECHNICAL_DESIGN
  * 7.1 step 1), a pair's streams never split across two. The pairs are read again after every symbol
- * synchronisation of the market and every {@code refreshInterval}; when the set has changed, that market's
- * connections are replaced, and a pair no longer streamed is dropped from the latest prices (BR-07). An unchanged
- * set touches nothing. A Futures pair's best bid and ask and depth (TR-38) go on connections of their own, on the
+ * synchronisation of the market and every {@code refreshInterval}. An unchanged set touches nothing. A changed one
+ * touches only what it must: a connection carrying a pair no longer streamed is replaced by one carrying the rest of
+ * its pairs, a pair newly streamed goes on a new connection, and every other connection stays open, so the prices of
+ * the other pairs never stop for a change that is not theirs; a pair no longer streamed is dropped from the latest
+ * prices (BR-07). So that pairs added one batch at a time do not leave a trail of small connections, a batch joins the
+ * connection a previous batch was given when it has room: that connection is replaced by one carrying both, which
+ * interrupts only the pairs added before it, never a connection opened at start-up. A Futures pair's best bid and ask and depth (TR-38) go on connections of their own, on the
  * exchange's {@code /public} route; everything else of the market shares the {@code /market} ones.
+ *
+ * <p>Pairs an administrator turns on one after the other are opened together, {@link #ENABLE_SETTLE} after the first:
+ * one refresh, one new connection, rather than one of each per pair.
  *
  * <h2>Routing, without blocking a reader</h2>
  *
@@ -76,8 +87,9 @@ import org.springframework.stereotype.Component;
  *   <li>A Spot ticker or a futures mark price overwrites the pair's entry in {@link LatestMarketData}.
  *   <li>A trade, a best bid and ask or a depth snapshot of the trading streams (TR-03) overwrites the pair's entry in
  *       {@link TradingMarketData}; a trade also goes to every {@link MarketTradeListener} (the paper engine).
- *   <li>A connection that opens again after a loss publishes {@link MarketStreamReconnected}, and NSF-02
- *       fetches whatever closed meanwhile.
+ *   <li>A price connection that opens again after a loss publishes {@link MarketStreamReconnected}, and NSF-02
+ *       fetches whatever closed meanwhile. A book connection (TR-38) carries no candle, so its losses, which the
+ *       exchange causes often, announce nothing.
  * </ul>
  *
  * <p>Off unless {@code cryptopilot.market.stream.enabled}; on in the {@code dev} and {@code prod} profiles.
@@ -88,6 +100,9 @@ import org.springframework.stereotype.Component;
 public class MarketStreamSupervisor {
 
     private static final Logger log = LoggerFactory.getLogger(MarketStreamSupervisor.class);
+
+    /** How long after a pair is turned on its market is refreshed, so the pairs of a batch share the refresh. */
+    static final Duration ENABLE_SETTLE = Duration.ofSeconds(2);
 
     private final BinanceStreamClient streams;
     private final StreamCandleService candles;
@@ -104,6 +119,10 @@ public class MarketStreamSupervisor {
     private final Clock clock;
     private final MarketLiveness liveness;
     private final Map<MarketType, MarketStreams> running = new EnumMap<>(MarketType.class);
+    /** Per market, the number of the next connection opened; names are never reused while the process runs. */
+    private final Map<MarketType, Integer> nextConnection = new EnumMap<>(MarketType.class);
+    /** Per market, whether a refresh for pairs turned on is scheduled and not yet started. */
+    private final Map<MarketType, AtomicBoolean> enableQueued = new EnumMap<>(MarketType.class);
 
     public MarketStreamSupervisor(
             BinanceStreamClient streams,
@@ -134,6 +153,10 @@ public class MarketStreamSupervisor {
         this.markListeners = List.copyOf(markListeners);
         this.clock = clock;
         this.liveness = liveness;
+        for (MarketType market : MarketType.values()) {
+            nextConnection.put(market, 0);
+            enableQueued.put(market, new AtomicBoolean(false));
+        }
     }
 
     /** Opens the streams of both markets and schedules the refresh, when enabled. */
@@ -160,8 +183,9 @@ public class MarketStreamSupervisor {
     }
 
     /**
-     * An administrator brought a pair into service: its streams open now, not at the next refresh. After commit, so the
-     * pair is read as saved, and on the scheduler, so the administrator's answer does not wait for the reconnection.
+     * An administrator brought a pair into service: its streams open within {@link #ENABLE_SETTLE}, not at the next
+     * refresh, together with the pairs turned on meanwhile. After commit, so the pair is read as saved, and on the
+     * scheduler, so the administrator's answer does not wait for the connection.
      */
     @EventListener
     public void onPairMarketEnabled(PairMarketEnabled event) {
@@ -169,24 +193,30 @@ public class MarketStreamSupervisor {
             return;
         }
         AfterCommit.run(() -> {
+            AtomicBoolean queued = enableQueued.get(event.market());
+            if (!queued.compareAndSet(false, true)) {
+                return;
+            }
             try {
-                scheduler.schedule(() -> refreshFor(event), clock.instant());
+                scheduler.schedule(
+                        () -> {
+                            queued.set(false);
+                            refreshFor(event.market());
+                        },
+                        clock.instant().plus(ENABLE_SETTLE));
             } catch (RuntimeException refused) {
+                queued.set(false);
                 // Shutting down: the next refresh opens the streams anyway.
                 log.warn("NSF-03 {} could not schedule {}: {}", event.market(), event.symbol(), refused.toString());
             }
         });
     }
 
-    private void refreshFor(PairMarketEnabled event) {
+    private void refreshFor(MarketType market) {
         try {
-            refresh(event.market());
+            refresh(market);
         } catch (RuntimeException failure) {
-            log.error(
-                    "NSF-03 {} could not open {}; the next refresh tries again",
-                    event.market(),
-                    event.symbol(),
-                    failure);
+            log.error("NSF-03 {} could not open the pairs turned on; the next refresh tries again", market, failure);
         }
     }
 
@@ -202,96 +232,193 @@ public class MarketStreamSupervisor {
     }
 
     /**
-     * Makes the market's connections match its pairs: replaced when the set changed, untouched otherwise.
+     * Makes the market's connections match its pairs, touching only the connections the change concerns: one carrying a
+     * pair no longer streamed is replaced by one carrying the rest of its pairs, the pairs newly streamed go on new
+     * connections, and every other connection stays open. An unchanged set touches nothing.
      *
-     * @return whether the connections were replaced
+     * @return whether any connection was opened or closed
      */
     public synchronized boolean refresh(MarketType market) {
         List<StreamTarget> targets = candles.targets(market);
         MarketStreams current = running.get(market);
-        if (current != null && new HashSet<>(current.targets()).equals(new HashSet<>(targets))) {
+        Set<StreamTarget> wanted = new LinkedHashSet<>(targets);
+        if (current != null && new HashSet<>(current.targets()).equals(wanted)) {
             return false;
         }
-        if (current != null) {
-            current.shards().forEach(BinanceStreamShard::close);
+        List<Connection> kept = new ArrayList<>();
+        List<Connection> closed = new ArrayList<>();
+        for (Connection connection : current == null ? List.<Connection>of() : current.connections()) {
+            (wanted.containsAll(connection.targets()) ? kept : closed).add(connection);
         }
+        closed.forEach(connection -> connection.shard().close());
         latest.retainOnly(market, targets.stream().map(StreamTarget::pairId).toList());
         trading.retainOnly(market, targets.stream().map(StreamTarget::pairId).toList());
-        Map<String, StreamTarget> bySymbol =
-                targets.stream().collect(Collectors.toMap(StreamTarget::symbol, Function.identity()));
-        List<BinanceStreamShard> shards = shardsFor(market, targets, bySymbol);
-        running.put(market, new MarketStreams(targets, shards));
-        shards.forEach(BinanceStreamShard::start);
-        log.info("NSF-03 {}: {} pairs on {} connections", market, targets.size(), shards.size());
-        return true;
+        List<Connection> opened = new ArrayList<>();
+        boolean addition = current != null;
+        List<Connection> replaced = List.copyOf(closed);
+        for (boolean book : new boolean[] {false, true}) {
+            Set<StreamTarget> covered = kept.stream()
+                    .filter(connection -> connection.book() == book)
+                    .flatMap(connection -> connection.targets().stream())
+                    .collect(Collectors.toCollection(HashSet::new));
+            // The rest of a connection that lost a pair keeps that connection's start-up or added flag.
+            for (Connection gone : replaced) {
+                if (gone.book() != book) {
+                    continue;
+                }
+                List<StreamTarget> rest =
+                        gone.targets().stream().filter(wanted::contains).toList();
+                opened.addAll(open(market, rest, book, gone.added()));
+                covered.addAll(rest);
+            }
+            List<StreamTarget> missing =
+                    targets.stream().filter(target -> !covered.contains(target)).toList();
+            if (addition && !missing.isEmpty()) {
+                Connection joined = joinable(market, kept, missing, book);
+                if (joined != null) {
+                    kept.remove(joined);
+                    closed.add(joined);
+                    joined.shard().close();
+                    List<StreamTarget> both = new ArrayList<>(joined.targets());
+                    both.addAll(missing);
+                    missing = both;
+                }
+            }
+            opened.addAll(open(market, missing, book, addition));
+        }
+        List<Connection> connections = new ArrayList<>(kept);
+        connections.addAll(opened);
+        running.put(market, new MarketStreams(targets, List.copyOf(connections)));
+        // D-159 E5: each price connection is watched on its own, with its pairs, for the market health.
+        Map<String, List<String>> symbolsByConnection = new LinkedHashMap<>();
+        connections.stream()
+                .filter(connection -> !connection.book())
+                .forEach(connection -> symbolsByConnection.put(
+                        connection.name(),
+                        connection.targets().stream().map(StreamTarget::symbol).toList()));
+        liveness.connections(market, symbolsByConnection);
+        opened.forEach(connection -> connection.shard().start());
+        log.info(
+                "NSF-03 {}: {} pairs on {} connections ({} kept, {} closed, {} opened)",
+                market,
+                targets.size(),
+                connections.size(),
+                kept.size(),
+                closed.size(),
+                opened.size());
+        return !closed.isEmpty() || !opened.isEmpty();
     }
 
     /** The connections open now for a market. */
     public synchronized List<BinanceStreamShard> shards(MarketType market) {
         MarketStreams current = running.get(market);
-        return current == null ? List.of() : current.shards();
+        return current == null
+                ? List.of()
+                : current.connections().stream().map(Connection::shard).toList();
     }
 
     /** Closes every connection and stops the pipeline. */
     @PreDestroy
     public synchronized void stop() {
-        running.values().forEach(market -> market.shards().forEach(BinanceStreamShard::close));
+        running.values().forEach(market -> market.connections()
+                .forEach(connection -> connection.shard().close()));
         running.clear();
         pipeline.stop();
     }
 
-    private List<BinanceStreamShard> shardsFor(
-            MarketType market, List<StreamTarget> targets, Map<String, StreamTarget> bySymbol) {
+    /**
+     * The connection of a previous addition on this route that has room for the streams of {@code missing}, the
+     * emptiest if several; null when none has. A connection opened at start-up never is.
+     */
+    private Connection joinable(MarketType market, List<Connection> kept, List<StreamTarget> missing, boolean book) {
+        int needed = missing.stream()
+                .mapToInt(target -> namesOf(market, target, book).size())
+                .sum();
+        int max = book ? streams.maxPublicStreamsPerConnection() : streams.maxStreamsPerConnection();
+        Connection emptiest = null;
+        for (Connection connection : kept) {
+            int size = connection.shard().streams().size();
+            if (connection.book() == book
+                    && connection.added()
+                    && size + needed <= max
+                    && (emptiest == null || size < emptiest.shard().streams().size())) {
+                emptiest = connection;
+            }
+        }
+        return emptiest;
+    }
+
+    private List<String> namesOf(MarketType market, StreamTarget target, boolean book) {
         BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
-        List<BinanceStreamShard> shards = new ArrayList<>();
-        // D-159 E5: each price connection is watched on its own, with its pairs, for the market health.
-        Map<String, List<String>> symbolsByConnection = new LinkedHashMap<>();
-        pack(targets, target -> streams.streamsFor(venue, target.symbol()), (batch, symbols) -> {
-            String name = market + "-" + shards.size();
-            symbolsByConnection.put(name, symbols);
-            shards.add(streams.shard(venue, name, batch, new Router(market, bySymbol, name)));
-        });
-        liveness.connections(market, symbolsByConnection);
-        // TR-38: the Futures best bid and ask and depth are served under /public only, on connections of their own.
-        BinanceStreamShard.Listener publicListener = new Router(market, bySymbol, null);
+        return book ? streams.publicStreamsFor(venue, target.symbol()) : streams.streamsFor(venue, target.symbol());
+    }
+
+    /**
+     * New connections for the targets on one route, not started: the price route, or the book route TR-38 serves under
+     * {@code /public} only; {@code added} when they are opened for pairs added after the first opening.
+     */
+    private List<Connection> open(MarketType market, List<StreamTarget> targets, boolean book, boolean added) {
+        BinanceVenue venue = market == MarketType.SPOT ? BinanceVenue.SPOT : BinanceVenue.USD_M_FUTURES;
+        List<Connection> opened = new ArrayList<>();
         pack(
                 targets,
-                target -> streams.publicStreamsFor(venue, target.symbol()),
-                (batch, symbols) ->
-                        shards.add(streams.publicShard(market + "-PUBLIC-" + shards.size(), batch, publicListener)));
-        return shards;
+                target -> namesOf(market, target, book),
+                book ? streams.maxPublicStreamsPerConnection() : streams.maxStreamsPerConnection(),
+                (batch, batchTargets) -> {
+                    int number = nextConnection.merge(market, 1, Integer::sum) - 1;
+                    String name = market + (book ? "-PUBLIC-" : "-") + number;
+                    Map<String, StreamTarget> bySymbol =
+                            batchTargets.stream().collect(Collectors.toMap(StreamTarget::symbol, Function.identity()));
+                    BinanceStreamShard shard = book
+                            ? streams.publicShard(name, batch, new Router(market, bySymbol, null))
+                            : streams.shard(venue, name, batch, new Router(market, bySymbol, name));
+                    opened.add(new Connection(shard, name, List.copyOf(batchTargets), book, added));
+                });
+        return opened;
     }
 
     /**
      * Packs the streams of the targets into batches of at most one connection's, a pair's never split; each batch is
-     * opened with the symbols of its pairs.
+     * opened with its pairs.
      */
     private void pack(
             List<StreamTarget> targets,
             Function<StreamTarget, List<String>> namesOf,
-            BiConsumer<List<String>, List<String>> open) {
+            int maxStreams,
+            BiConsumer<List<String>, List<StreamTarget>> open) {
         List<String> batch = new ArrayList<>();
-        List<String> symbols = new ArrayList<>();
+        List<StreamTarget> batchTargets = new ArrayList<>();
         for (StreamTarget target : targets) {
             List<String> names = namesOf.apply(target);
             if (names.isEmpty()) {
                 continue;
             }
-            if (!batch.isEmpty() && batch.size() + names.size() > streams.maxStreamsPerConnection()) {
-                open.accept(batch, symbols);
+            if (!batch.isEmpty() && batch.size() + names.size() > maxStreams) {
+                open.accept(batch, batchTargets);
                 batch = new ArrayList<>();
-                symbols = new ArrayList<>();
+                batchTargets = new ArrayList<>();
             }
             batch.addAll(names);
-            symbols.add(target.symbol());
+            batchTargets.add(target);
         }
         if (!batch.isEmpty()) {
-            open.accept(batch, symbols);
+            open.accept(batch, batchTargets);
         }
     }
 
     /** What one market streams now. */
-    private record MarketStreams(List<StreamTarget> targets, List<BinanceStreamShard> shards) {}
+    private record MarketStreams(List<StreamTarget> targets, List<Connection> connections) {}
+
+    /**
+     * One connection of a market.
+     *
+     * @param name its name in the log and the market health
+     * @param targets the pairs whose streams it carries
+     * @param book whether it is a book connection of TR-38 (no candle on it) rather than a price one
+     * @param added whether it was opened for pairs added after the first opening, so a later addition may join it
+     */
+    private record Connection(
+            BinanceStreamShard shard, String name, List<StreamTarget> targets, boolean book, boolean added) {}
 
     /** Routes the messages of one market's connections; called on the readers' threads, never blocks. */
     private final class Router implements BinanceStreamShard.Listener {
@@ -429,9 +556,10 @@ public class MarketStreamSupervisor {
             }
         }
 
+        /** A price connection back after a loss announces it, for NSF-02; a book one carries no candle to fetch. */
         @Override
         public void onConnected(BinanceStreamShard shard, boolean afterLoss) {
-            if (afterLoss) {
+            if (afterLoss && connection != null) {
                 events.publishEvent(new MarketStreamReconnected(market));
             }
         }

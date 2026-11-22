@@ -54,6 +54,13 @@ spring:
   threads:
     virtual:
       enabled: true
+  task:
+    scheduling:
+      # The default scheduler of the jobs (SchedulingConfig): its jobs are short, a few at a time. The background and
+      # backfill schedulers keep these settings but set their own size and prefix.
+      pool:
+        size: 8
+      thread-name-prefix: app-scheduler-
   jpa:
     hibernate:
       # Flyway owns the schema; Hibernate only checks that the entities match it, and refuses to
@@ -272,10 +279,17 @@ cryptopilot:
       # A coin CoinPaprika had nothing more for (no match, nothing to add) is tried again after this long. Under the
       # daily sync cycle, so a sync that ends a little earlier than the day before still retries it.
       retry-unmatched-after: 23h
+      # The most calls in any hour, every caller together (free plan: 60, then a 402 and an hour's block).
+      calls-per-hour: 55
+      # Kept for the market's cap, the supplies and the coin list: logos stop while only these remain.
+      reserved-calls: 10
       # Binance symbol -> CoinPaprika id where the ticker alone picks the wrong coin. CoinPaprika lists Toncoin as
-      # GRAM, so TON would match TonToken (checked 2026-11-17).
+      # GRAM, so TON would match TonToken (checked 2026-11-17). Cross outranks Harmony under ONE and MeMusic outranks
+      # Momentum under MMT (checked 2026-11-21).
       overrides:
         TON: toncoin-the-open-network
+        ONE: one-harmony
+        MMT: mmt-momentum
     coin-list:
       # SCR-09: the market list of coins is rebuilt in the background and requests read the last one built. Off here
       # and in calibration, on in the dev and prod profiles; without the job a request rebuilds a list older than
@@ -450,6 +464,9 @@ cryptopilot:
         futures: true
         futures-public-url: wss://fstream.binance.com/public
         depth-levels: 20
+        # The most streams on one /public connection (two a Futures pair, so 10 pairs). Fifty pairs on one connection
+        # (thousands of messages a second) were closed by the exchange (1006) dozens of times a day (2026-11-21).
+        public-streams-per-connection: 20
         # A best bid and ask or depth older than this is not served as current (a lost stream).
         max-age: 10s
         # The latest trades kept per pair for the trades panel.

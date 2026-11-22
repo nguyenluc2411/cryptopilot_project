@@ -11,4 +11,9 @@ public interface ExternalAnswer {
 
     /** Whether the service answered and refused this request, rather than failing to answer. */
     boolean serviceAnswered();
+
+    /** Whether the client refused the call itself and sent nothing, so the service neither answered nor failed. */
+    default boolean notSent() {
+        return false;
+    }
 }

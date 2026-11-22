@@ -8,9 +8,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.AccessLevel;
@@ -23,10 +26,14 @@ import org.springframework.stereotype.Repository;
  * The stored figures the market list of coins derives from, read for all its series at once: closes of the stored
  * candles at a past instant, the hourly closes of a week, and the open interest of the Futures pairs.
  *
- * <p>Each read is one statement whatever the number of coins. The series are passed as two arrays joined through
- * {@code unnest} rather than a list of row values: one bind each instead of two per series, and the plan probes the
- * chunk's time index once and hash-joins the series instead of OR-ing one primary key probe per series (checked with
- * 400 series over four chunks: planning about 1 ms instead of 60 to 220 ms). Every read of {@code ohlcv} bounds
+ * <p>Each read is one statement per market whatever the number of coins. The pairs of a market are passed as one array
+ * joined through {@code unnest} rather than a list of values: one bind instead of one per pair, and the plan probes the
+ * chunk's time index once and hash-joins the pairs instead of OR-ing one primary key probe per pair (checked with 400
+ * series over four chunks: planning about 1 ms instead of 60 to 220 ms). The market is a constant of the statement,
+ * never joined to nor sorted on: {@code ohlcv.market_type} is a {@code varchar} and a segment-by column of the
+ * compressed chunks, and a join of it with a {@code text[]} and a sort on it ended, while the chunks were partly
+ * compressed, in {@code ERROR: missing operator 1(1043,1043) in opfamily 1994} (2026-11-21, TimescaleDB 2.30.1 on
+ * PostgreSQL 16.15; not reproduced afterwards). Every read of {@code ohlcv} bounds
  * {@code open_time}, the column the hypertable is partitioned on, so only the chunks of the window are scanned; the open
  * interest read bounds {@code snapshot_time} the same way. Every stored candle is closed (BR-08).
  *
@@ -56,57 +63,47 @@ public class CoinMarketRepository {
      */
     public Map<Series, BigDecimal> closesAt(
             Collection<Series> series, MarketInterval interval, Instant at, Instant notBefore) {
-        if (series.isEmpty()) {
-            return Map.of();
-        }
         Map<Series, BigDecimal> closes = new HashMap<>();
-        // A join, unlike IN, would answer a series given twice twice.
-        List<Series> unique = series.stream().distinct().toList();
-        sql.sql("""
-                        select distinct on (o.pair_id, o.market_type) o.pair_id, o.market_type, o.close_price
-                          from unnest(cast(:pairIds as uuid[]), cast(:markets as text[])) as s(pair_id, market_type)
-                          join ohlcv o on o.pair_id = s.pair_id and o.market_type = s.market_type
-                         where o.timeframe = :timeframe
+        byMarket(series).forEach((market, pairIds) -> sql.sql("""
+                        select distinct on (o.pair_id) o.pair_id, o.close_price
+                          from unnest(cast(:pairIds as uuid[])) as s(pair_id)
+                          join ohlcv o on o.pair_id = s.pair_id
+                         where o.market_type = :market
+                           and o.timeframe = :timeframe
                            and o.open_time > :openFloor and o.open_time <= :at
                            and o.close_time > :notBefore and o.close_time <= :at
-                         order by o.pair_id, o.market_type, o.open_time desc""")
-                .param("pairIds", pairIds(unique))
-                .param("markets", markets(unique))
+                         order by o.pair_id, o.open_time desc""")
+                .param("pairIds", array(pairIds))
+                .param("market", market.name())
                 .param("timeframe", interval.code())
                 .param("openFloor", Timestamp.from(notBefore.minus(interval.duration())))
                 .param("notBefore", Timestamp.from(notBefore))
                 .param("at", Timestamp.from(at))
                 .query((RowCallbackHandler) row -> closes.put(
-                        series(row.getObject("pair_id", UUID.class), row.getString("market_type")),
-                        row.getBigDecimal("close_price")));
+                        new Series(row.getObject("pair_id", UUID.class), market), row.getBigDecimal("close_price"))));
         return closes;
     }
 
     /** Per series, the closes of its candles of {@code interval} opened in {@code [from, to]}, oldest first. */
     public Map<Series, List<BigDecimal>> closesBetween(
             Collection<Series> series, MarketInterval interval, Instant from, Instant to) {
-        if (series.isEmpty()) {
-            return Map.of();
-        }
         Map<Series, List<BigDecimal>> closes = new HashMap<>();
-        // A join, unlike IN, would answer a series given twice twice.
-        List<Series> unique = series.stream().distinct().toList();
-        sql.sql("""
-                        select o.pair_id, o.market_type, o.close_price
-                          from unnest(cast(:pairIds as uuid[]), cast(:markets as text[])) as s(pair_id, market_type)
-                          join ohlcv o on o.pair_id = s.pair_id and o.market_type = s.market_type
-                         where o.timeframe = :timeframe
+        byMarket(series).forEach((market, pairIds) -> sql.sql("""
+                        select o.pair_id, o.close_price
+                          from unnest(cast(:pairIds as uuid[])) as s(pair_id)
+                          join ohlcv o on o.pair_id = s.pair_id
+                         where o.market_type = :market
+                           and o.timeframe = :timeframe
                            and o.open_time >= :from and o.open_time <= :to
-                         order by o.pair_id, o.market_type, o.open_time""")
-                .param("pairIds", pairIds(unique))
-                .param("markets", markets(unique))
+                         order by o.pair_id, o.open_time""")
+                .param("pairIds", array(pairIds))
+                .param("market", market.name())
                 .param("timeframe", interval.code())
                 .param("from", Timestamp.from(from))
                 .param("to", Timestamp.from(to))
                 .query((RowCallbackHandler) row -> closes.computeIfAbsent(
-                                series(row.getObject("pair_id", UUID.class), row.getString("market_type")),
-                                key -> new ArrayList<>())
-                        .add(row.getBigDecimal("close_price")));
+                                new Series(row.getObject("pair_id", UUID.class), market), key -> new ArrayList<>())
+                        .add(row.getBigDecimal("close_price"))));
         return closes;
     }
 
@@ -155,17 +152,18 @@ public class CoinMarketRepository {
                 .list();
     }
 
-    /** The pairs of the series as one array literal, in the order of {@link #markets}. */
-    private static String pairIds(Collection<Series> series) {
-        return series.stream().map(one -> one.pairId().toString()).collect(Collectors.joining(",", "{", "}"));
+    /**
+     * The pairs of the series by market, each once: a join, unlike IN, would answer a pair given twice twice.
+     */
+    private static Map<MarketType, Set<UUID>> byMarket(Collection<Series> series) {
+        Map<MarketType, Set<UUID>> pairs = new EnumMap<>(MarketType.class);
+        series.forEach(one -> pairs.computeIfAbsent(one.market(), market -> new LinkedHashSet<>())
+                .add(one.pairId()));
+        return pairs;
     }
 
-    /** The markets of the series as one array literal; enum names need no quoting. */
-    private static String markets(Collection<Series> series) {
-        return series.stream().map(one -> one.market().name()).collect(Collectors.joining(",", "{", "}"));
-    }
-
-    private static Series series(UUID pairId, String market) {
-        return new Series(pairId, MarketType.valueOf(market));
+    /** Pair ids as one array literal. */
+    private static String array(Collection<UUID> pairIds) {
+        return pairIds.stream().map(UUID::toString).collect(Collectors.joining(",", "{", "}"));
     }
 }

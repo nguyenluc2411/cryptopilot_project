@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The cap on every refresh, the supplies hourly and matched like the names and logos (best rank, or the configured
- * id), and a failed read that keeps the last good figures.
+ * id), a read of the supplies at once when a coin is listed, and a failed read that keeps the last good figures.
  *
  * <p>Rule: SRS 3.3.1.
  */
@@ -79,6 +79,11 @@ class MarketReferenceServiceImplTest {
     }
 
     @Test
+    void noSuppliesRead_hasNoReadTime() {
+        assertThat(service(NOW).suppliesReadAt()).isEmpty();
+    }
+
+    @Test
     void readsTheSuppliesHourly_andKeepsTheLastGoodFiguresOnAFailure() {
         when(client.global()).thenReturn(global("1"));
         when(client.tickers()).thenReturn(List.of(new CoinPaprikaTicker("btc-bitcoin", "BTC", 1, BigDecimal.TEN)));
@@ -94,6 +99,28 @@ class MarketReferenceServiceImplTest {
         service(NOW.plus(Duration.ofHours(1))).refresh();
         verify(client, times(2)).tickers();
         assertThat(store.supplies().orElseThrow().readAt()).isEqualTo(NOW);
+    }
+
+    @Test
+    void refreshSupplies_readsThemAtOnce_withinTheHour_andWithoutTheCap() {
+        when(client.global()).thenReturn(global("1"));
+        when(client.tickers()).thenReturn(List.of(new CoinPaprikaTicker("btc-bitcoin", "BTC", 1, BigDecimal.TEN)));
+        when(coins.findListed()).thenReturn(List.of(Coin.fromExchange("BTC")));
+        service(NOW).refresh();
+
+        when(client.tickers())
+                .thenReturn(List.of(
+                        new CoinPaprikaTicker("btc-bitcoin", "BTC", 1, BigDecimal.TEN),
+                        new CoinPaprikaTicker("aero-aerodrome-finance", "AERO", 234, new BigDecimal("900"))));
+        when(coins.findListed()).thenReturn(List.of(Coin.fromExchange("BTC"), Coin.fromExchange("AERO")));
+        Instant later = NOW.plus(Duration.ofMinutes(5));
+        service(later).refreshSupplies();
+
+        verify(client, times(2)).tickers();
+        verify(client, times(1)).global();
+        assertThat(store.supplies().orElseThrow().bySymbol()).containsOnlyKeys("BTC", "AERO");
+        assertThat(store.supplies().orElseThrow().readAt()).isEqualTo(later);
+        assertThat(service(later).suppliesReadAt()).contains(later);
     }
 
     private static CoinPaprikaGlobal global(String cap) {

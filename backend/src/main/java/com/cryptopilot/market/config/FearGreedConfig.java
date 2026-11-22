@@ -1,10 +1,12 @@
 package com.cryptopilot.market.config;
 
+import com.cryptopilot.common.config.SchedulingConfig;
 import com.cryptopilot.market.client.FearGreedClient;
 import com.cryptopilot.market.client.FearGreedProperties;
 import com.cryptopilot.market.job.FearGreedJob;
 import com.cryptopilot.market.model.MarketReferenceStore;
 import java.time.Clock;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -30,7 +32,10 @@ public class FearGreedConfig {
 
     @Bean
     FearGreedJob fearGreedJob(
-            FearGreedClient client, MarketReferenceStore store, TaskScheduler scheduler, Clock clock) {
+            FearGreedClient client,
+            MarketReferenceStore store,
+            @Qualifier(SchedulingConfig.BACKGROUND) TaskScheduler scheduler,
+            Clock clock) {
         return new FearGreedJob(client, store, scheduler, clock);
     }
 }

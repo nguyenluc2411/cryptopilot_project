@@ -1,5 +1,6 @@
 package com.cryptopilot.market.job;
 
+import com.cryptopilot.common.config.SchedulingConfig;
 import com.cryptopilot.market.client.BinanceClientException;
 import com.cryptopilot.market.config.FuturesMetricsProperties;
 import com.cryptopilot.market.model.MetricsRun;
@@ -10,6 +11,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
@@ -64,7 +66,9 @@ public class FuturesMetricsJob {
     private ScheduledFuture<?> pending;
 
     public FuturesMetricsJob(
-            FuturesMetricsService metrics, TaskScheduler scheduler, FuturesMetricsProperties properties) {
+            FuturesMetricsService metrics,
+            @Qualifier(SchedulingConfig.BACKGROUND) TaskScheduler scheduler,
+            FuturesMetricsProperties properties) {
         this.metrics = metrics;
         this.scheduler = scheduler;
         this.properties = properties;

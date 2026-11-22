@@ -9,9 +9,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -20,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.JsonParser;
@@ -39,18 +43,50 @@ import tools.jackson.databind.json.JsonMapper;
  * {@code read-timeout} for the others), so a server that stalls mid-body fails the call instead of holding the job.
  * No retry here: the next scheduled run reads again. Not final, so the system log can watch it (UC-52).
  *
+ * <p>A refusal for too many calls (429, or the 402 of the free plan: 60 calls an hour, then blocked for an hour) is
+ * waited out: until its {@code Retry-After} has passed ({@link #RATE_LIMIT_WAIT} or {@link #PLAN_LIMIT_WAIT} without
+ * one), every call fails at once as rate limited and CoinPaprika is not called, since each call made while blocked
+ * keeps the block going.
+ *
+ * <p>Every call counts against one budget, {@code calls-per-hour} in any hour (a sliding window), whoever makes it:
+ * the market's cap, the supplies, the coin list and the logos. Once spent, a call fails at once as rate limited without
+ * being sent. A logo call is low priority: it is sent only while more than {@code reserved-calls} remain, so the logos
+ * of a large batch never take the calls the market figures need. Reference: Nygard, M. T. (2018). <i>Release It!</i>
+ * (2nd ed.). Pragmatic Bookshelf, "Steady State"; Tanenbaum, A. S. &amp; Van Steen, M. (2017). <i>Distributed
+ * Systems</i> (3rd ed.), rate limiting.
+ *
  * <p>Reference: CoinPaprika API v1, "List coins", "Get coin by ID" and "Tickers" (circulating supply), api.coinpaprika.com.
  * Nygard, M. T. (2018). <i>Release It!</i> (2nd ed.). Pragmatic Bookshelf ("Timeouts", "Steady State").
  */
 public class CoinPaprikaClient implements AutoCloseable {
 
+    /** How long a 429 without {@code Retry-After} is waited out. */
+    static final Duration RATE_LIMIT_WAIT = Duration.ofMinutes(1);
+
+    /** How long a 402 without {@code Retry-After} is waited out: the free plan blocks for an hour. */
+    static final Duration PLAN_LIMIT_WAIT = Duration.ofHours(1);
+
     private final CoinPaprikaProperties properties;
     private final JsonMapper json;
     private final HttpClient http;
+    private final Clock clock;
+    /** Until when CoinPaprika asked not to be called, and with which status; null when it did not. */
+    private final AtomicReference<Wait> waiting = new AtomicReference<>();
+
+    /** A refusal for too many calls being waited out. */
+    private record Wait(Instant until, int status) {}
+
+    /** When the calls of the last hour were sent, oldest first. */
+    private final Deque<Instant> sent = new ArrayDeque<>();
 
     public CoinPaprikaClient(CoinPaprikaProperties properties, JsonMapper json) {
+        this(properties, json, Clock.systemUTC());
+    }
+
+    public CoinPaprikaClient(CoinPaprikaProperties properties, JsonMapper json, Clock clock) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.json = Objects.requireNonNull(json, "json must not be null");
+        this.clock = Objects.requireNonNull(clock, "clock must not be null");
         this.http = HttpClient.newBuilder()
                 .connectTimeout(properties.connectTimeout())
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -176,7 +212,8 @@ public class CoinPaprikaClient implements AutoCloseable {
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("id must not be blank");
         }
-        byte[] body = get("/coins/" + URLEncoder.encode(id.strip(), StandardCharsets.UTF_8), properties.readTimeout());
+        byte[] body =
+                get("/coins/" + URLEncoder.encode(id.strip(), StandardCharsets.UTF_8), properties.readTimeout(), true);
         try {
             JsonNode node = json.readTree(body);
             String logo = node == null ? null : text(node, "logo");
@@ -186,8 +223,35 @@ public class CoinPaprikaClient implements AutoCloseable {
         }
     }
 
+    /** Until when CoinPaprika asked not to be called, if it did and that has not passed. */
+    public Optional<Instant> waitingUntil() {
+        Wait wait = waiting.get();
+        return wait == null || !wait.until().isAfter(clock.instant()) ? Optional.empty() : Optional.of(wait.until());
+    }
+
     /** One GET whose answer, body included, must arrive within {@code deadline}; a 200's body, or a refusal. */
     private byte[] get(String path, Duration deadline) {
+        return get(path, deadline, false);
+    }
+
+    /** As {@link #get(String, Duration)}; a {@code lowPriority} call keeps out of the reserved calls. */
+    private byte[] get(String path, Duration deadline, boolean lowPriority) {
+        Wait wait = waiting.get();
+        if (wait != null && wait.until().isAfter(clock.instant())) {
+            throw new CoinPaprikaException(
+                    "CoinPaprika asked to wait until " + wait.until() + "; " + path + " not called",
+                    wait.status(),
+                    null,
+                    true);
+        }
+        if (!spend(lowPriority)) {
+            throw new CoinPaprikaException(
+                    "CoinPaprika's budget of " + properties.callsPerHour() + " calls an hour is spent"
+                            + (lowPriority ? " for logos" : "") + "; " + path + " not called",
+                    429,
+                    null,
+                    true);
+        }
         String base = properties.baseUrl().toString().replaceAll("/+$", "");
         HttpRequest request = HttpRequest.newBuilder(URI.create(base + path))
                 .timeout(properties.readTimeout())
@@ -208,11 +272,48 @@ public class CoinPaprikaClient implements AutoCloseable {
             Thread.currentThread().interrupt();
             throw new CoinPaprikaException("interrupted while waiting for CoinPaprika", 0, e);
         }
+        if (response.statusCode() == 429 || response.statusCode() == 402) {
+            Duration pause =
+                    retryAfter(response).orElse(response.statusCode() == 402 ? PLAN_LIMIT_WAIT : RATE_LIMIT_WAIT);
+            waiting.set(new Wait(clock.instant().plus(pause), response.statusCode()));
+        }
         if (response.statusCode() != 200) {
             throw new CoinPaprikaException(
                     "CoinPaprika answered HTTP " + response.statusCode() + " for " + path, response.statusCode(), null);
         }
         return response.body();
+    }
+
+    /**
+     * Counts one call against the hour's budget, if any is left; a low-priority call only while more than the reserve
+     * is left.
+     */
+    private boolean spend(boolean lowPriority) {
+        synchronized (sent) {
+            Instant now = clock.instant();
+            Instant hourAgo = now.minus(Duration.ofHours(1));
+            while (!sent.isEmpty() && !sent.peekFirst().isAfter(hourAgo)) {
+                sent.removeFirst();
+            }
+            int limit = properties.callsPerHour() - (lowPriority ? properties.reservedCalls() : 0);
+            if (sent.size() >= limit) {
+                return false;
+            }
+            sent.addLast(now);
+            return true;
+        }
+    }
+
+    /** The {@code Retry-After} of an answer in seconds, when it has a usable one. */
+    private static Optional<Duration> retryAfter(HttpResponse<?> response) {
+        return response.headers().firstValue("Retry-After").flatMap(value -> {
+            try {
+                long seconds = Long.parseLong(value.trim());
+                return seconds > 0 ? Optional.of(Duration.ofSeconds(seconds)) : Optional.empty();
+            } catch (NumberFormatException notSeconds) {
+                return Optional.empty();
+            }
+        });
     }
 
     private static String text(JsonNode node, String field) {

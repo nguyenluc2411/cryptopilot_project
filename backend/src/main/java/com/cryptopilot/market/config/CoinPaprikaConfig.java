@@ -1,5 +1,6 @@
 package com.cryptopilot.market.config;
 
+import com.cryptopilot.common.config.SchedulingConfig;
 import com.cryptopilot.market.client.CoinPaprikaClient;
 import com.cryptopilot.market.client.CoinPaprikaProperties;
 import com.cryptopilot.market.job.CoinDescriptionJob;
@@ -11,6 +12,7 @@ import com.cryptopilot.market.service.MarketReferenceService;
 import com.cryptopilot.market.service.impl.CoinDescriptionServiceImpl;
 import com.cryptopilot.market.service.impl.MarketReferenceServiceImpl;
 import java.time.Clock;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -32,8 +34,8 @@ import tools.jackson.databind.json.JsonMapper;
 public class CoinPaprikaConfig {
 
     @Bean(destroyMethod = "close")
-    CoinPaprikaClient coinPaprikaClient(CoinPaprikaProperties properties, JsonMapper json) {
-        return new CoinPaprikaClient(properties, json);
+    CoinPaprikaClient coinPaprikaClient(CoinPaprikaProperties properties, JsonMapper json, Clock clock) {
+        return new CoinPaprikaClient(properties, json, clock);
     }
 
     @Bean
@@ -57,12 +59,18 @@ public class CoinPaprikaConfig {
     }
 
     @Bean
-    MarketReferenceJob marketReferenceJob(MarketReferenceService reference, TaskScheduler scheduler, Clock clock) {
+    MarketReferenceJob marketReferenceJob(
+            MarketReferenceService reference,
+            @Qualifier(SchedulingConfig.BACKGROUND) TaskScheduler scheduler,
+            Clock clock) {
         return new MarketReferenceJob(reference, scheduler, clock);
     }
 
     @Bean
-    CoinDescriptionJob coinDescriptionJob(CoinDescriptionService descriptions, TaskScheduler scheduler, Clock clock) {
+    CoinDescriptionJob coinDescriptionJob(
+            CoinDescriptionService descriptions,
+            @Qualifier(SchedulingConfig.BACKGROUND) TaskScheduler scheduler,
+            Clock clock) {
         return new CoinDescriptionJob(descriptions, scheduler, clock);
     }
 }

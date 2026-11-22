@@ -1,6 +1,7 @@
 package com.cryptopilot.market.job;
 
 import com.cryptopilot.market.client.CoinPaprikaException;
+import com.cryptopilot.market.event.PairMarketEnabled;
 import com.cryptopilot.market.event.SymbolsSynchronised;
 import com.cryptopilot.market.service.CoinDescriptionService;
 import java.time.Clock;
@@ -9,6 +10,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
 
@@ -20,11 +22,18 @@ import org.springframework.scheduling.TaskScheduler;
  * {@link #SETTLE} and a later event replaces a pending run, so both markets are described by one run. The listener
  * only schedules: the HTTP calls happen on the scheduler, never on the thread that synchronised the symbols.
  *
- * <p>A CoinPaprika that asks to slow down (429) is tried once more after {@link #RATE_LIMIT_WAIT}; any other failure
- * waits for the next synchronisation. Either way the coins keep what they have, and nothing about prices or trading
+ * <p>A pair the administrator adds (UC-45) is synchronised on its own, without that event, so a pair brought into
+ * service schedules the run the same way: a batch of pairs makes one run, and a run with every coin described reads
+ * nothing.
+ *
+ * <p>Also once an hour ({@link #EVERY}), for the coins a run left without a logo because the hour's share of CoinPaprika
+ * calls was spent; with every coin described, or tried within the day, such a run reads nothing.
+ *
+ * <p>A CoinPaprika that asks to slow down (429, 402) is tried once more after {@link #RATE_LIMIT_WAIT}; any other
+ * failure waits for the next synchronisation. Either way the coins keep what they have, and nothing about prices or trading
  * depends on this job.
  *
- * <p>Rule: SRS 3.1.5; NSF-01.
+ * <p>Rule: SRS 3.1.5; NSF-01; UC-45.
  */
 public class CoinDescriptionJob {
 
@@ -32,6 +41,9 @@ public class CoinDescriptionJob {
 
     /** How long after the last market's synchronisation the run starts. */
     static final Duration SETTLE = Duration.ofSeconds(30);
+
+    /** How often the coins still without a logo are described again. */
+    static final Duration EVERY = Duration.ofHours(1);
 
     /** How long a 429 of CoinPaprika is waited out before the one retry. */
     static final Duration RATE_LIMIT_WAIT = Duration.ofMinutes(2);
@@ -49,10 +61,23 @@ public class CoinDescriptionJob {
         this.clock = clock;
     }
 
+    /** The hourly run, the first an hour from now: the start-up synchronisation describes the coins before. */
+    @EventListener(ApplicationReadyEvent.class)
+    public void start() {
+        scheduler.scheduleAtFixedRate(() -> run(false), clock.instant().plus(EVERY), EVERY);
+    }
+
     /** A market was synchronised: describe the coins once both have settled. */
     @EventListener
     public void onSymbolsSynchronised(SymbolsSynchronised event) {
         schedule(SETTLE, true);
+    }
+
+    /** A pair came into service: describe its coin once the pairs of the batch have settled, after commit. */
+    @EventListener
+    public void onPairMarketEnabled(PairMarketEnabled event) {
+        // AfterCommit logs a refused schedule (shutting down); the hourly run catches up.
+        AfterCommit.run(() -> schedule(SETTLE, true));
     }
 
     /**
