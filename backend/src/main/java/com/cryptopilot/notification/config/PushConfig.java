@@ -17,7 +17,7 @@ import org.springframework.web.client.RestClient;
 
 /**
  * Chooses the push adapter at start-up (T-058): Firebase Cloud Messaging when a service account key file is configured
- * ({@code FCM_CREDENTIALS_FILE}), a log line otherwise. Unlike mail, a missing key does not stop the prod profile: the
+ * ({@code FCM_SERVICE_ACCOUNT_PATH}), a log line otherwise. Unlike mail, a missing key does not stop the prod profile: the
  * web application works without push, and NSF-15 still shows every notification in the app.
  */
 @Configuration(proxyBeanMethods = false)
@@ -29,7 +29,7 @@ public class PushConfig {
     @Bean
     PushSender pushSender(PushProperties properties, Clock clock) {
         if (properties.credentialsFile().isBlank()) {
-            log.warn("FCM_CREDENTIALS_FILE is not set: push notifications are logged, not sent");
+            log.warn("FCM_SERVICE_ACCOUNT_PATH is not set: push notifications are logged, not sent");
             return new LoggingPushSender();
         }
         FcmCredentials credentials =

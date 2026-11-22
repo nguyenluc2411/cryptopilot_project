@@ -180,7 +180,7 @@ cryptopilot:
       retention: 90d
   push:
     # T-058, NSF-15: the Firebase service account key file; empty, pushes are logged instead of sent.
-    credentials-file: ${FCM_CREDENTIALS_FILE:}
+    credentials-file: ${FCM_SERVICE_ACCOUNT_PATH:}
     project-id: ${FCM_PROJECT_ID:}
   web:
     # Reverse proxies whose X-Forwarded-For is believed: addresses or CIDR ranges, comma-separated. Empty trusts none,

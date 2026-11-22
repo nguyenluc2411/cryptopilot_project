@@ -12,7 +12,7 @@ import org.springframework.validation.annotation.Validated;
 /**
  * Push notifications through Firebase Cloud Messaging, {@code cryptopilot.push} (T-058, NSF-15).
  *
- * @param credentialsFile the service account key file of the Firebase project ({@code FCM_CREDENTIALS_FILE}); blank
+ * @param credentialsFile the service account key file of the Firebase project ({@code FCM_SERVICE_ACCOUNT_PATH}); blank
  *     for none, and then pushes are logged instead of sent
  * @param projectId the Firebase project, or blank for the key file's own
  * @param apiUrl the base of the FCM HTTP v1 API
