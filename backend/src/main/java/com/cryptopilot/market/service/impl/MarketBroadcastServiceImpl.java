@@ -15,8 +15,12 @@ import com.cryptopilot.market.dto.response.MarketTradesResponse;
 import com.cryptopilot.market.dto.response.TickerUpdateResponse;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketBroadcastService;
+import com.cryptopilot.market.service.TopicSubscriptionService;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -28,6 +32,7 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.stereotype.Service;
 
@@ -57,8 +62,19 @@ import org.springframework.stereotype.Service;
  * previous push in one message, oldest first, and the latest depth snapshot. A best bid and ask is not pushed; the depth
  * carries it.
  *
+ * <h2>Only what someone listens to (TR-34)</h2>
+ *
+ * <p>A destination no session subscribes to is not pushed, not even serialised: its update is dropped at the push and
+ * the next one takes its place. The stream threads only put the latest state in the maps; the pushes run on the
+ * scheduler's threads, so a slow push never holds back the reading of the streams.
+ *
+ * <h2>Measured (TR-36)</h2>
+ *
+ * <p>{@code cryptopilot.market.push.latency} times each push from the instant the exchange produced its data to the
+ * hand-over to the broker, by kind ({@code ticker}, {@code kline}, {@code trades}, {@code depth}).
+ *
  * <p>Rule: NSF-03; BR-08; SRS 3.3.1, 4.2.3 (realtime price delivery within 2 s); TECHNICAL_DESIGN 9; D-50, D-51;
- * TR-03.
+ * TR-03, TR-34, TR-36.
  */
 @Service
 public class MarketBroadcastServiceImpl implements MarketBroadcastService {
@@ -73,12 +89,30 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
     private final Map<MarketType, Map<String, TickerUpdateResponse>> overview = new EnumMap<>(MarketType.class);
     private final Map<String, List<MarketTradeResponse>> trades = new ConcurrentHashMap<>();
     private final Map<String, DepthResponse> depths = new ConcurrentHashMap<>();
+    /** The latency timer's name (TR-36). */
+    public static final String PUSH_LATENCY = "cryptopilot.market.push.latency";
+
     private final SimpMessageSendingOperations broker;
     private final Clock clock;
+    private final TopicSubscriptionService subscriptions;
+    private final Map<String, Timer> latency = new ConcurrentHashMap<>();
+    private final MeterRegistry meters;
 
+    /** Pushes every destination, listened to or not, and measures nothing: for a broker without session events. */
     public MarketBroadcastServiceImpl(SimpMessageSendingOperations broker, Clock clock) {
+        this(broker, clock, null, null);
+    }
+
+    @Autowired
+    public MarketBroadcastServiceImpl(
+            SimpMessageSendingOperations broker,
+            Clock clock,
+            TopicSubscriptionService subscriptions,
+            MeterRegistry meters) {
         this.broker = broker;
         this.clock = clock;
+        this.subscriptions = subscriptions;
+        this.meters = meters;
         for (MarketType market : MarketType.values()) {
             overview.put(market, new ConcurrentHashMap<>());
         }
@@ -127,13 +161,17 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
             if (waiting != null && !waiting.isEmpty()) {
                 String[] parts =
                         destination.substring("/topic/trades.".length()).split("\\.", 2);
-                sent += send(destination, new MarketTradesResponse(parts[0], parts[1], waiting)) ? 1 : 0;
+                if (send(destination, new MarketTradesResponse(parts[0], parts[1], waiting))) {
+                    sent++;
+                    measure("trades", waiting.getLast().time());
+                }
             }
         }
         for (String destination : List.copyOf(depths.keySet())) {
             DepthResponse latest = depths.remove(destination);
-            if (latest != null) {
-                sent += send(destination, latest) ? 1 : 0;
+            if (latest != null && send(destination, latest)) {
+                sent++;
+                measure("depth", latest.receivedAt());
             }
         }
         return sent;
@@ -146,13 +184,17 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
             TickerUpdateResponse update = tickers.remove(destination);
             if (update != null && send(destination, update)) {
                 sent++;
+                measure("ticker", update.sourceTime());
             }
         }
         for (String destination : List.copyOf(klines.keySet())) {
             NavigableMap<Instant, KlineUpdateResponse> candles = klines.remove(destination);
             if (candles != null) {
                 for (KlineUpdateResponse update : candles.values()) {
-                    sent += send(destination, update) ? 1 : 0;
+                    if (send(destination, update)) {
+                        sent++;
+                        measure("kline", update.sourceTime());
+                    }
                 }
             }
         }
@@ -208,6 +250,9 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
     }
 
     private boolean send(String destination, Object payload) {
+        if (subscriptions != null && !subscriptions.hasSubscribers(destination)) {
+            return false;
+        }
         try {
             broker.convertAndSend(destination, payload);
             return true;
@@ -215,6 +260,23 @@ public class MarketBroadcastServiceImpl implements MarketBroadcastService {
             log.warn("Market topic {} could not be pushed: {}", destination, failure.toString());
             return false;
         }
+    }
+
+    /** Times one push from when the exchange produced its data; a missing instant or a skewed clock is not timed. */
+    private void measure(String kind, Instant producedAt) {
+        if (meters == null || producedAt == null) {
+            return;
+        }
+        Duration took = Duration.between(producedAt, clock.instant());
+        if (took.isNegative()) {
+            return;
+        }
+        latency.computeIfAbsent(kind, k -> Timer.builder(PUSH_LATENCY)
+                        .description("From the exchange producing the data to its push to the broker (TR-36)")
+                        .tag("kind", k)
+                        .publishPercentiles(0.5, 0.95, 0.99)
+                        .register(meters))
+                .record(took);
     }
 
     private static TickerUpdateResponse spot(MarketType market, TickerMessage ticker) {

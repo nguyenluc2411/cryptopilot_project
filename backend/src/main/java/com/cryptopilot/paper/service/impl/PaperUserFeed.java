@@ -14,7 +14,12 @@ import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.model.PaperAccount;
+import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.model.enums.WalletType;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -59,7 +64,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *
  * <p>Runs inside the caller's transaction. Outside one there is nothing to wait for, so nothing is noted.
  *
- * <p>Rule: TR-08, TR-41, TR-43; TECHNICAL_DESIGN 9.
+ * <h2>Measured (TR-36)</h2>
+ *
+ * <p>{@code cryptopilot.paper.fill.latency} times each live fill from the trade it matched on the exchange to the
+ * commit that records it, by market; a replayed fill is history and is not timed.
+ *
+ * <p>Rule: TR-08, TR-41, TR-43, TR-36; TECHNICAL_DESIGN 9.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -97,6 +107,8 @@ public class PaperUserFeed {
     private final SimpMessageSendingOperations broker;
     private final MarketApi market;
     private final FuturesAccountServiceImpl futuresAccounts;
+    private final MeterRegistry meters;
+    private final Clock clock;
 
     /** Notes that an order of the account changed. */
     void order(PaperAccount account, PaperOrder order) {
@@ -196,8 +208,37 @@ public class PaperUserFeed {
         return pending;
     }
 
+    /** The fill latency timer's name (TR-36). */
+    public static final String FILL_LATENCY = "cryptopilot.paper.fill.latency";
+
+    /** Times each live fill of the transaction from the exchange's trade to now, just before the commit (TR-36). */
+    private void measureFills(Pending pending) {
+        try {
+            pending.fills.values().forEach(owned -> measure("SPOT", owned.row()));
+            pending.futuresFills.values().forEach(owned -> measure("FUTURES", owned.row()));
+        } catch (RuntimeException failure) {
+            log.debug("TR-36 fill latency not recorded: {}", failure.toString());
+        }
+    }
+
+    private void measure(String market, PaperFill fill) {
+        if (fill.getFillSource() != FillSource.LIVE || fill.getSourceTime() == null) {
+            return;
+        }
+        Duration took = Duration.between(fill.getSourceTime(), clock.instant());
+        if (!took.isNegative()) {
+            Timer.builder(FILL_LATENCY)
+                    .description("From the exchange's trade to the commit of the paper fill it made (TR-36)")
+                    .tag("market", market)
+                    .publishPercentiles(0.5, 0.95, 0.99)
+                    .register(meters)
+                    .record(took);
+        }
+    }
+
     /** The bodies of the noted changes, written from the rows as the transaction leaves them. */
     private List<Message> write(Pending pending) {
+        measureFills(pending);
         try {
             Set<UUID> pairIds = new HashSet<>();
             pending.orders.values().forEach(owned -> pairIds.add(owned.row().getPairId()));
