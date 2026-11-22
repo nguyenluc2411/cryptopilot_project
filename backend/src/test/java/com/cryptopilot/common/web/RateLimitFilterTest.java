@@ -50,7 +50,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
             "cryptopilot.web.rate-limit.api=2",
             "cryptopilot.web.rate-limit.paper-orders=3",
             "cryptopilot.web.rate-limit.guest=2",
-            "cryptopilot.web.rate-limit.chart-candles=2"
+            "cryptopilot.web.rate-limit.chart-candles=2",
+            "cryptopilot.web.rate-limit.latency-samples=2"
         })
 @AutoConfigureMockMvc
 @Import({TestcontainersConfig.class, RateLimitFilterTest.TestClock.class})
@@ -210,6 +211,21 @@ class RateLimitFilterTest {
         watchlist(trader).andExpect(status().isOk());
     }
 
+    /** Latency sample batches have their own limit per account, apart from its other calls (TR-36). */
+    @Test
+    void TR36_latencySamples_areLimitedPerAccount_apartFromItsOtherCalls() throws Exception {
+        String trader = bearer(UUID.randomUUID());
+        latencySamples(trader).andExpect(status().is(not(429)));
+        latencySamples(trader).andExpect(status().is(not(429)));
+
+        latencySamples(trader)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().exists(HttpHeaders.RETRY_AFTER))
+                .andExpect(jsonPath("$.code").value("RATE_LIMITED"));
+        watchlist(trader).andExpect(status().isOk());
+        latencySamples(bearer(UUID.randomUUID())).andExpect(status().is(not(429)));
+    }
+
     @Test
     void TD53_healthChecksAndRefusedCalls_areNotCounted() throws Exception {
         for (int i = 0; i < 5; i++) {
@@ -232,6 +248,13 @@ class RateLimitFilterTest {
         MockHttpServletRequestBuilder request =
                 withPeer(get("/api/v1/market/spot/NOPAIRUSDT/chart-candles").param("tf", "5m"), peer);
         return mvc.perform(bearer == null ? request : request.header(HttpHeaders.AUTHORIZATION, bearer));
+    }
+
+    private ResultActions latencySamples(String bearer) throws Exception {
+        return mvc.perform(post("/api/v1/analysis/latency-samples")
+                .header(HttpHeaders.AUTHORIZATION, bearer)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"));
     }
 
     private ResultActions refresh(String peer) throws Exception {

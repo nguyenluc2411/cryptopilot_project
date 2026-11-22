@@ -31,6 +31,8 @@ import tools.jackson.databind.ObjectMapper;
  *   <li>{@code GET /api/v1/market/{market}/{symbol}/chart-candles}: rule {@code chart-candles}, per client address,
  *       signed in or not, instead of {@code api} or {@code guest}: a page the cache misses costs exchange weight the
  *       backfill and the alert replay share (TR-35).
+ *   <li>{@code POST /api/v1/analysis/latency-samples} by an authenticated account: rule {@code latency-sample}, per
+ *       account, instead of {@code api}: the samples are kept in memory, so a flood would only cost the report (TR-36).
  *   <li>Any other request under {@code /api/v1/} by an authenticated account: rule {@code api}, per account.
  *   <li>Any other request under {@code /api/v1/} without an account — a Guest reading the public market data or the
  *       forum (D-99): rule {@code guest}, per client address. Guests behind one address share its count.
@@ -55,6 +57,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String AUTH = "/api/v1/auth/";
     private static final String LOGIN = "/api/v1/auth/login";
     private static final String PAPER_ORDERS = "/api/v1/paper/orders";
+    private static final String LATENCY_SAMPLES = "/api/v1/analysis/latency-samples";
     private static final Pattern CHART_CANDLES = Pattern.compile("^/api/v1/market/[^/]+/[^/]+/chart-candles$");
     private static final String MESSAGE_ARGS = "messageArgs";
 
@@ -63,7 +66,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
      *
      * @param enabled false lets every request through (test contexts)
      */
-    public record Limits(boolean enabled, int login, int auth, int api, int paperOrders, int guest, int chartCandles) {}
+    public record Limits(
+            boolean enabled,
+            int login,
+            int auth,
+            int api,
+            int paperOrders,
+            int guest,
+            int chartCandles,
+            int latencySamples) {}
 
     private final Limits limits;
     private final FixedWindowRateLimiter limiter;
@@ -125,6 +136,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
             if ("POST".equals(request.getMethod()) && PAPER_ORDERS.equals(path)) {
                 return Optional.of(
                         new Limit("paper-order", "user:" + caller.getName(), limits.paperOrders(), paperOrderLimiter));
+            }
+            if ("POST".equals(request.getMethod()) && LATENCY_SAMPLES.equals(path)) {
+                return Optional.of(
+                        new Limit("latency-sample", "user:" + caller.getName(), limits.latencySamples(), limiter));
             }
             return Optional.of(new Limit("api", "user:" + caller.getName(), limits.api(), limiter));
         }

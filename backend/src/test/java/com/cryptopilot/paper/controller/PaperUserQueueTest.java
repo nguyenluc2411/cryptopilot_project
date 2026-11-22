@@ -302,26 +302,23 @@ class PaperUserQueueTest {
         return timer == null ? 0 : timer.count();
     }
 
-    /** TR-29: a MARKET buy that fills is told to its Trader as a MARKET notification that opens the order. */
+    /**
+     * TR-29: a MARKET buy filled by its own placement is not notified: the answer to the placement shows the fill. The
+     * order and its fill are still pushed to the Trader's queues.
+     */
     @Test
-    void TR29_aFilledOrder_isNotified_once() throws Exception {
+    void TR29_aMarketOrderFilledOnPlacement_isNotNotified() throws Exception {
         UUID trader = trader();
         price("100");
         String orderId = id(place(trader, market("BUY", "2")).andExpect(status().isCreated()));
 
-        await(() -> notices(trader) == 1, "the fill's notification");
-        Map<String, Object> notice = sql.sql("""
-                        select notification_type, title, content, reference_type, reference_id::text as reference_id
-                          from notification where user_id = ?""").param(trader).query().singleRow();
-        assertThat(notice)
-                .containsEntry("notification_type", "MARKET")
-                .containsEntry("title", "Order filled")
-                .containsEntry("reference_type", "PAPER_ORDER")
-                .containsEntry("reference_id", orderId);
-        assertThat((String) notice.get("content"))
-                .contains(symbol)
-                .contains("buy market")
-                .contains("filled 2");
+        assertThat(sql.sql("select order_status from trade_order where order_id = ?::uuid")
+                        .param(orderId)
+                        .query(String.class)
+                        .single())
+                .isEqualTo("FILLED");
+        Thread.sleep(500);
+        assertThat(notices(trader)).isZero();
     }
 
     /** TR-29: a resting LIMIT the engine fills later is notified; the Trader's own cancel is not. */
@@ -345,6 +342,17 @@ class PaperUserQueueTest {
                         .query(String.class)
                         .list())
                 .containsExactly(filled);
+        Map<String, Object> notice = sql.sql("""
+                        select notification_type, title, content, reference_type
+                          from notification where user_id = ?""").param(trader).query().singleRow();
+        assertThat(notice)
+                .containsEntry("notification_type", "MARKET")
+                .containsEntry("title", "Order filled")
+                .containsEntry("reference_type", "PAPER_ORDER");
+        assertThat((String) notice.get("content"))
+                .contains(symbol)
+                .contains("buy limit")
+                .contains("filled 1");
     }
 
     private long notices(UUID trader) {

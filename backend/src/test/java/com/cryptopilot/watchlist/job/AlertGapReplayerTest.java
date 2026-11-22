@@ -40,7 +40,8 @@ import org.mockito.ArgumentCaptor;
  * replays the whole window; (3) nothing older than the window is fetched; (4) a refusal of the exchange fires nothing
  * and stops that pair; (5) the pages are walked oldest first until the exchange has nothing newer; (6) a pair whose
  * book holds no alert is never fetched; (7) switched off, nothing is fetched; (8) on both paths, an alert armed after
- * a missed cross is not fired by it.
+ * a missed cross is not fired by it; (9) a reconnection asked during the restart's replay runs again as a gap replay,
+ * not the whole window.
  *
  * <p>Rule: NSF-06, BR-20; D-87.
  */
@@ -231,6 +232,28 @@ class AlertGapReplayerTest {
         assertThat(hit.getValue().observedValue())
                 .as("the cross at minute 2 came before the alert; the one at minute 4 after it")
                 .isEqualByComparingTo("101.5");
+    }
+
+    @Test
+    void T111_aReconnectionDuringTheRestartReplay_runsAgainAsAGapReplay() {
+        startEngine(crossAbove("100"));
+        clock.set(T0.plus(Duration.ofHours(1)));
+        Instant windowStart =
+                clock.instant().minus(Duration.ofMinutes(15)).truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
+        AlertGapReplayer replayer = replayer(true);
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, windowStart)).thenAnswer(call -> {
+            replayer.replayMarket(MarketType.SPOT, false);
+            return MinuteKlineBatch.of(List.of(closed(windowStart, "98"), closed(windowStart.plusSeconds(60), "99")));
+        });
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, windowStart.plusSeconds(120)))
+                .thenReturn(MinuteKlineBatch.of(List.of()));
+        when(market.closedMinuteKlines(MarketType.SPOT, PAIR, windowStart.plusSeconds(60)))
+                .thenReturn(MinuteKlineBatch.of(List.of()));
+
+        replayer.replayMarket(MarketType.SPOT, true);
+
+        verify(market, times(1)).closedMinuteKlines(MarketType.SPOT, PAIR, windowStart);
+        verify(market, times(1)).closedMinuteKlines(MarketType.SPOT, PAIR, windowStart.plusSeconds(60));
     }
 
     private void startEngine(PriceAlert... alerts) {

@@ -41,7 +41,8 @@ public class WebEdgeConfig {
                         properties.api(),
                         properties.paperOrders(),
                         properties.guest(),
-                        properties.chartCandles()),
+                        properties.chartCandles(),
+                        properties.latencySamples()),
                 new FixedWindowRateLimiter(redis, clock, properties.window()),
                 new FixedWindowRateLimiter(redis, clock, properties.paperOrdersWindow()),
                 json);

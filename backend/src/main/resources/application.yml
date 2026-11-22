@@ -203,6 +203,8 @@ cryptopilot:
       guest: ${RATE_LIMIT_GUEST:300}
       # TR-35 chart pages, per client address, signed in or not: a page the cache misses costs exchange weight.
       chart-candles: ${RATE_LIMIT_CHART_CANDLES:60}
+      # TR-36 latency sample batches, per account: a client reports now and then.
+      latency-samples: ${RATE_LIMIT_LATENCY_SAMPLES:12}
       # Placing a paper order is counted apart from the calls above, in a window of its own, as Binance does (50 new
       # orders in 10 seconds); cancels and reads are not counted.
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:50}

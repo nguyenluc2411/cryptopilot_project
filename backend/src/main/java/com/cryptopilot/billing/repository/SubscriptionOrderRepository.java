@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -49,6 +50,11 @@ public interface SubscriptionOrderRepository
     /** Whether any order, in any status, was placed for this package: such a package is never deleted (SRS 3.11.5). */
     @Transactional(readOnly = true)
     boolean existsByPackageId(UUID packageId);
+
+    /** The packages any order was placed for, in one query: those the package page shows as kept (SRS 3.11.5). */
+    @Transactional(readOnly = true)
+    @Query("select distinct o.packageId from SubscriptionOrder o")
+    Set<UUID> findOrderedPackageIds();
 
     /** Whether an order already has this code. */
     @Transactional(readOnly = true)

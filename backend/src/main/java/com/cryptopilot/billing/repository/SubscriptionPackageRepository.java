@@ -22,6 +22,9 @@ public interface SubscriptionPackageRepository extends Repository<SubscriptionPa
 
     SubscriptionPackage save(SubscriptionPackage subscriptionPackage);
 
+    /** Saves and writes the row at once, so a unique code taken meanwhile fails here, where it can be told. */
+    SubscriptionPackage saveAndFlush(SubscriptionPackage subscriptionPackage);
+
     @Transactional(readOnly = true)
     Optional<SubscriptionPackage> findById(UUID packageId);
 

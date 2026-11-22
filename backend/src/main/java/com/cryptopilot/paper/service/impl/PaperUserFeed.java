@@ -16,6 +16,7 @@ import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.event.PaperOrderNotice;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.FillSource;
+import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.WalletType;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -180,6 +181,17 @@ public class PaperUserFeed {
         futuresOrder(account, order);
     }
 
+    /**
+     * Notes that the Trader's own placement in this transaction filled the order: the answer to the placement shows the
+     * fill, so no "Order filled" notice is given for it (TR-29). A resting order that fills later is told as before.
+     */
+    void filledOnPlacement(PaperOrder order) {
+        Pending pending = pending();
+        if (pending != null) {
+            pending.answered.add(order.getId());
+        }
+    }
+
     /** Notes that the Futures account changed without an order: a transfer, a margin change, a leverage. */
     void futuresAccount(PaperAccount account) {
         Pending pending = pending();
@@ -224,6 +236,9 @@ public class PaperUserFeed {
         ended.addAll(pending.futuresOrders.values());
         ended.addAll(pending.futuresAlgos.values());
         for (Owned<PaperOrder> owned : ended) {
+            if (pending.answered.contains(owned.row().getId()) && owned.row().getOrderStatus() == OrderStatus.FILLED) {
+                continue;
+            }
             try {
                 PaperOrderNotices.of(owned.row(), symbols.get(owned.row().getPairId()))
                         .ifPresent(events::publishEvent);
@@ -389,6 +404,7 @@ public class PaperUserFeed {
         private final Map<UUID, Owned<PaperOrder>> futuresAlgos = new LinkedHashMap<>();
         private final List<Message> direct = new ArrayList<>();
         private final Set<UUID> futuresAccounts = new LinkedHashSet<>();
+        private final Set<UUID> answered = new HashSet<>();
         private List<Message> messages = List.of();
     }
 

@@ -125,7 +125,8 @@ public class AlertGapReplayer {
 
     /**
      * Replays one market's pairs, unless a replay of it is already running, in which case that one runs again when it
-     * ends.
+     * ends. The run again is always a gap replay, from each pair's newest price: only a reconnection asks for one
+     * meanwhile, and the run that just ended already covered the window.
      *
      * @param restart whether the gap is the restart's, the whole window, rather than the newest price onwards
      */
@@ -138,8 +139,10 @@ public class AlertGapReplayer {
         }
         boolean done = false;
         try {
+            boolean whole = restart;
             do {
-                replayOnce(target, restart);
+                replayOnce(target, whole);
+                whole = false;
             } while (askedAgain(target));
             done = true;
         } finally {

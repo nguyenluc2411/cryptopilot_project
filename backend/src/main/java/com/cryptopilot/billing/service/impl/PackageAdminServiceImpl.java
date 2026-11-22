@@ -24,9 +24,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +49,9 @@ public class PackageAdminServiceImpl implements PackageAdminService {
             .thenComparing(SubscriptionPackage::getPriceAmount)
             .thenComparing(SubscriptionPackage::getPackageCode);
 
+    /** The unique code of {@code subscription_package} (V1). */
+    static final String CODE_CONSTRAINT = "uq_subscription_package_code";
+
     private final SubscriptionPackageRepository packages;
     private final SubscriptionOrderRepository orders;
     private final AdminApi admin;
@@ -54,9 +59,10 @@ public class PackageAdminServiceImpl implements PackageAdminService {
     @Override
     @Transactional(readOnly = true)
     public List<AdminPackageResponse> list() {
+        Set<UUID> ordered = orders.findOrderedPackageIds();
         return packages.findAll().stream()
                 .sorted(CONSOLE_ORDER)
-                .map(this::response)
+                .map(p -> response(p, ordered.contains(p.getId())))
                 .toList();
     }
 
@@ -84,7 +90,16 @@ public class PackageAdminServiceImpl implements PackageAdminService {
                 request.durationDays(),
                 limitsOf(request.tier()));
         created.changeOffer(created.getPriceAmount(), request.durationDays(), request.purchasable());
-        SubscriptionPackage saved = packages.save(created);
+        SubscriptionPackage saved;
+        try {
+            saved = packages.saveAndFlush(created);
+        } catch (DataIntegrityViolationException raced) {
+            // Another administrator took the code between the check above and this insert.
+            if (String.valueOf(raced.getMostSpecificCause().getMessage()).contains(CODE_CONSTRAINT)) {
+                throw new BusinessException(ErrorCode.PACKAGE_CODE_TAKEN, request.code() + " is already a package");
+            }
+            throw raced;
+        }
         admin.audit(new AuditEntry(
                 adminId,
                 AuditAction.CONFIGURATION_CREATED,
@@ -263,6 +278,10 @@ public class PackageAdminServiceImpl implements PackageAdminService {
     }
 
     private AdminPackageResponse response(SubscriptionPackage p) {
+        return response(p, orders.existsByPackageId(p.getId()));
+    }
+
+    private AdminPackageResponse response(SubscriptionPackage p, boolean hasOrders) {
         PlanEntitlements e = p.entitlements();
         return new AdminPackageResponse(
                 p.getId(),
@@ -275,7 +294,7 @@ public class PackageAdminServiceImpl implements PackageAdminService {
                 p.getDurationDays(),
                 p.isPurchasable(),
                 p.isActive(),
-                orders.existsByPackageId(p.getId()),
+                hasOrders,
                 new AdminPackageResponse.Limits(
                         e.futuresAnalysis(),
                         e.scoreComponents(),
