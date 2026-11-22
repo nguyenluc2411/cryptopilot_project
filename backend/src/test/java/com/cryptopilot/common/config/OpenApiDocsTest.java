@@ -99,6 +99,8 @@ class OpenApiDocsTest {
             "/api/v1/paper/pnl/analysis",
             "/api/v1/admin/paper/overview",
             "/api/v1/market/{market}/{symbol}/chart-candles",
+            "/api/v1/analysis/latency-samples",
+            "/api/v1/admin/latency",
             "/api/v1/paper/futures/accountConfig",
             "/api/v1/paper/futures/commissionRate",
             "/api/v1/paper/futures/positionSide/dual",
