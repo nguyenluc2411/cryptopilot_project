@@ -80,6 +80,12 @@
 			<groupId>org.springframework.modulith</groupId>
 			<artifactId>spring-modulith-starter-core</artifactId>
 		</dependency>
+		<!-- TR-32: the completion advisor of the registry is narrowed to the recorded listeners (common.config), which
+		     compiles against the events core; the starters bring it at runtime only. Version from the Modulith BOM. -->
+		<dependency>
+			<groupId>org.springframework.modulith</groupId>
+			<artifactId>spring-modulith-events-core</artifactId>
+		</dependency>
 		<!-- ADR-010, T-056: the event publication registry over JDBC. Its rows live in event_publication, which V1
 		     creates; the registry's own schema initializer stays off (application.yml). -->
 		<dependency>
