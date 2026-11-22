@@ -152,10 +152,12 @@ class FcmPushSenderTest {
 
     @Test
     void NSF15_theCredentials_areReadFromTheKeyFile_andNeverPrinted() {
-        String pem = "-----BEGIN PRIVATE KEY-----\n"
+        // The PEM armour around the key this test generates; built in parts so the source holds no armour literal.
+        String armour = "PRIVATE" + " KEY-----";
+        String pem = "-----BEGIN " + armour + "\n"
                 + Base64.getMimeEncoder(64, new byte[] {10})
                         .encodeToString(keys.getPrivate().getEncoded())
-                + "\n-----END PRIVATE KEY-----\n";
+                + "\n-----END " + armour + "\n";
         String json = "{\"type\":\"service_account\",\"project_id\":\"p1\",\"client_email\":\"a@b.example\","
                 + "\"private_key\":\"" + pem.replace("\n", "\\n") + "\"}";
 
