@@ -3,6 +3,7 @@ package com.cryptopilot.market.controller;
 import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.market.dto.response.CandlesResponse;
+import com.cryptopilot.market.dto.response.ChartCandlesResponse;
 import com.cryptopilot.market.dto.response.CoinMarketResponse;
 import com.cryptopilot.market.dto.response.DepthResponse;
 import com.cryptopilot.market.dto.response.FuturesMetricsResponse;
@@ -11,6 +12,7 @@ import com.cryptopilot.market.dto.response.MarketTradesResponse;
 import com.cryptopilot.market.dto.response.PairResponse;
 import com.cryptopilot.market.dto.response.SpotStatsResponse;
 import com.cryptopilot.market.service.CandleService;
+import com.cryptopilot.market.service.ChartCandleService;
 import com.cryptopilot.market.service.CoinMarketService;
 import com.cryptopilot.market.service.MarketStatsService;
 import com.cryptopilot.market.service.PairService;
@@ -54,6 +56,7 @@ public class MarketController {
 
     private final PairService pairs;
     private final CandleService candles;
+    private final ChartCandleService chartCandles;
     private final MarketStatsService stats;
     private final TradingDataService trading;
     private final CoinMarketService coinMarket;
@@ -103,6 +106,37 @@ public class MarketController {
                     @RequestParam(required = false)
                     Instant to) {
         return candles.closedCandles(market, symbol, tf, limit, from, to);
+    }
+
+    /** The trading chart's candles at any of its sixteen timeframes, the forming one last (TR-35). */
+    @Operation(
+            summary = "Candles of the trading chart at any timeframe, the forming one last (TR-35)",
+            description = "15m, 1h, 4h and 1d are read from the stored candles; 1s (Spot only), 1m, 3m, 5m, 30m, 2h,"
+                    + " 6h, 8h, 12h, 3d, 1w and 1M from the exchange through a short cache. The candle still forming"
+                    + " is added last, marked closed: false, on the latest page unless forming is false.")
+    @ApiResponse(responseCode = "200", description = "The candles, oldest first")
+    @ApiResponse(responseCode = "400", description = "MSG01: an unknown timeframe, limit or a future to")
+    @ApiResponse(
+            responseCode = "404",
+            description = "MSG41: no pair with that symbol is enabled on that market (BR-07)")
+    @ApiResponse(
+            responseCode = "503",
+            description = "MARKET_DATA_UNAVAILABLE, MSG43: the exchange cannot be read now; try again shortly")
+    @GetMapping("/{market}/{symbol}/chart-candles")
+    public ChartCandlesResponse chartCandles(
+            @Parameter(description = "spot or futures, in any case") @PathVariable String market,
+            @PathVariable String symbol,
+            @Parameter(description = "1s (Spot), 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w or 1M")
+                    @RequestParam
+                    String tf,
+            @Parameter(description = "1 to 1000; default 500") @RequestParam(required = false) Integer limit,
+            @Parameter(description = "Candles opened before this instant, ISO 8601 UTC; default the latest")
+                    @RequestParam(required = false)
+                    Instant to,
+            @Parameter(description = "Whether the forming candle is added on the latest page; default true")
+                    @RequestParam(required = false, defaultValue = "true")
+                    boolean forming) {
+        return chartCandles.candles(market, symbol, tf, limit, to, forming);
     }
 
     /** The latest top levels of a pair's order book, before {@code /topic/depth} takes over (TR-03). */

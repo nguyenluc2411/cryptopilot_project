@@ -112,11 +112,24 @@ public class BinanceRestClient implements AutoCloseable {
      */
     public List<Kline> klines(
             BinanceVenue venue, String symbol, MarketInterval interval, Instant startTime, Instant endTime, int limit) {
+        return klines(
+                venue,
+                symbol,
+                Objects.requireNonNull(interval, "interval must not be null").code(),
+                startTime,
+                endTime,
+                limit);
+    }
+
+    /**
+     * Candles of one symbol at any interval of the exchange's chart, spelled as the exchange spells it (TR-35), e.g.
+     * {@code 3m} or {@code 1M}; as {@link #klines(BinanceVenue, String, MarketInterval, Instant, Instant, int)}.
+     */
+    public List<Kline> klines(
+            BinanceVenue venue, String symbol, String interval, Instant startTime, Instant endTime, int limit) {
         Objects.requireNonNull(venue, "venue must not be null");
         Map<String, Object> query = symbolQuery(symbol);
-        query.put(
-                "interval",
-                Objects.requireNonNull(interval, "interval must not be null").code());
+        query.put("interval", Objects.requireNonNull(interval, "interval must not be null"));
         putRange(query, startTime, endTime, limit);
         String path = venue == BinanceVenue.SPOT ? "/api/v3/klines" : "/fapi/v1/klines";
         return parser.klines(venue, get(venue, path, query));

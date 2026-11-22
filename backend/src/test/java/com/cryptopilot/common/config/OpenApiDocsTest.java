@@ -98,6 +98,7 @@ class OpenApiDocsTest {
             "/api/v1/paper/equity",
             "/api/v1/paper/pnl/analysis",
             "/api/v1/admin/paper/overview",
+            "/api/v1/market/{market}/{symbol}/chart-candles",
             "/api/v1/paper/futures/accountConfig",
             "/api/v1/paper/futures/commissionRate",
             "/api/v1/paper/futures/positionSide/dual",
