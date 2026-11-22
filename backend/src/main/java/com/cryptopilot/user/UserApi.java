@@ -190,6 +190,19 @@ public interface UserApi {
     void deactivateDevice(UUID userId, String fcmToken);
 
     /**
+     * The messaging tokens a notification may be pushed to (NSF-15): those of the account's active devices, or none
+     * when there is no such account, it is not ACTIVE, or its profile has push notifications switched off (SRS 3.2.5,
+     * SCR-07).
+     */
+    List<String> pushTokens(UUID userId);
+
+    /**
+     * Stops push notifications to the installation holding this messaging token, whichever account it belongs to:
+     * the Push Notification Service reported the token invalid (NSF-15). Does nothing when no active device holds it.
+     */
+    void deactivateInvalidPushToken(String fcmToken);
+
+    /**
      * The public name and avatar of each of these accounts that has a profile, read in one query, so a list that
      * shows many authors (the community feed, UC-26) does not read them one by one. An account without a profile is
      * left out; the order is not defined.

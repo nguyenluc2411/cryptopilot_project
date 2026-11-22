@@ -237,6 +237,22 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<String> pushTokens(UUID userId) {
+        boolean wanted = accounts.findById(userId)
+                .filter(account -> account.getAccountStatus() == AccountStatus.ACTIVE)
+                .flatMap(account -> profiles.findById(userId))
+                .map(UserProfile::isNotifyPush)
+                .orElse(false);
+        return wanted ? devices.activeTokens(userId) : List.of();
+    }
+
+    @Override
+    public void deactivateInvalidPushToken(String fcmToken) {
+        devices.deactivateInvalidToken(fcmToken);
+    }
+
+    @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean banForModeration(UUID userId, Instant at) {
         UserAccount account = accounts.findByIdForUpdate(userId)

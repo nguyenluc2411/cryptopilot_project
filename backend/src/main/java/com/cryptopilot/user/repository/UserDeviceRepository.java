@@ -2,6 +2,7 @@ package com.cryptopilot.user.repository;
 
 import com.cryptopilot.user.entity.UserDevice;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.Query;
@@ -36,6 +37,10 @@ public interface UserDeviceRepository extends Repository<UserDevice, UUID> {
      */
     @Transactional(readOnly = true)
     Optional<UserDevice> findByFcmToken(String fcmToken);
+
+    /** The active devices of an account, by {@code idx_user_device_user}: where its push messages go (NSF-15). */
+    @Transactional(readOnly = true)
+    List<UserDevice> findByUserIdAndActiveTrue(UUID userId);
 
     /** Writes a device. Not transactional here; the unit of work is the calling service's. */
     UserDevice save(UserDevice device);

@@ -15,6 +15,7 @@ import com.cryptopilot.paper.config.PaperAccountProperties;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.service.PaperMatchingService;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.StompRecorder;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -155,7 +156,9 @@ class PaperUserQueueTest {
 
     private void deleteRows() {
         for (UUID trader : traders) {
+            // The notices of TR-29 are written after the commit; awaited by the tests that expect one.
             for (String table : List.of(
+                    "notification",
                     "order_fill",
                     "trade_order",
                     "order_list",
@@ -166,6 +169,8 @@ class PaperUserQueueTest {
                         .param(trader)
                         .update();
             }
+            // Paper notices (TR-29) and their pushes are written after the commit: awaited first.
+            InAppNotifications.remove(sql, List.of(trader));
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         UUID base = sql.sql("select base_coin_id from crypto_pair where pair_id = ?")
@@ -273,6 +278,58 @@ class PaperUserQueueTest {
         await(() -> otherQueues.orders.size() == 1, "the other Trader's order");
         assertThat((String) JsonPath.read(otherQueues.orders.get(0), "$.orderId"))
                 .isEqualTo(own);
+    }
+
+    /** TR-29: a MARKET buy that fills is told to its Trader as a MARKET notification that opens the order. */
+    @Test
+    void TR29_aFilledOrder_isNotified_once() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String orderId = id(place(trader, market("BUY", "2")).andExpect(status().isCreated()));
+
+        await(() -> notices(trader) == 1, "the fill's notification");
+        Map<String, Object> notice = sql.sql("""
+                        select notification_type, title, content, reference_type, reference_id::text as reference_id
+                          from notification where user_id = ?""").param(trader).query().singleRow();
+        assertThat(notice)
+                .containsEntry("notification_type", "MARKET")
+                .containsEntry("title", "Order filled")
+                .containsEntry("reference_type", "PAPER_ORDER")
+                .containsEntry("reference_id", orderId);
+        assertThat((String) notice.get("content"))
+                .contains(symbol)
+                .contains("buy market")
+                .contains("filled 2");
+    }
+
+    /** TR-29: a resting LIMIT the engine fills later is notified; the Trader's own cancel is not. */
+    @Test
+    void TR29_aLaterFill_isNotified_andTheTradersCancel_isNot() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String filled = id(place(trader, limit("BUY", "90", "1")).andExpect(status().isCreated()));
+        String cancelled = id(place(trader, limit("BUY", "80", "1")).andExpect(status().isCreated()));
+        as(trader, post("/api/v1/paper/orders/" + cancelled + "/cancel"), null).andExpect(status().isOk());
+        RestingOrder resting = matching.restingOrders().stream()
+                .filter(order -> order.orderId().toString().equals(filled))
+                .findFirst()
+                .orElseThrow();
+        assertThat(matching.fill(resting, Instant.now(), FillSource.LIVE)).isTrue();
+
+        await(() -> notices(trader) == 1, "the fill's notification");
+        Thread.sleep(300);
+        assertThat(sql.sql("select reference_id::text from notification where user_id = ?")
+                        .param(trader)
+                        .query(String.class)
+                        .list())
+                .containsExactly(filled);
+    }
+
+    private long notices(UUID trader) {
+        return sql.sql("select count(*) from notification where user_id = ?")
+                .param(trader)
+                .query(Long.class)
+                .single();
     }
 
     /** A session without a signed-in user cannot subscribe to a user queue; it is refused and closed. */

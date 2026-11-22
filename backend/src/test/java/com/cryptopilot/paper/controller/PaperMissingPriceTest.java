@@ -20,6 +20,7 @@ import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.PaperLedgerInvariant;
 import com.cryptopilot.paper.service.PaperPnlService;
 import com.cryptopilot.paper.service.impl.GrantCosts;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import java.math.BigDecimal;
@@ -126,6 +127,8 @@ class PaperMissingPriceTest {
                         .param(trader)
                         .update();
             }
+            // Paper notices (TR-29) and their pushes are written after the commit: awaited first.
+            InAppNotifications.remove(sql, List.of(trader));
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         for (UUID pair : pairs) {

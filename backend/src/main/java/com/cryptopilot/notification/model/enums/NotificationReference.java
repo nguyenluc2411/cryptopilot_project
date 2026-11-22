@@ -19,5 +19,8 @@ public enum NotificationReference {
     MEMBER,
 
     /** A paper Futures position (TR-43). */
-    FUTURES_POSITION
+    FUTURES_POSITION,
+
+    /** A paper order, Spot or Futures, that filled, triggered or was ended by the system (TR-29). */
+    PAPER_ORDER
 }

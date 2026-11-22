@@ -35,8 +35,14 @@ public enum NotificationType {
     /** Someone mentioned the recipient in a post or a comment (D-125). */
     MENTION,
 
-    /** A margin call or a liquidation of the recipient's paper Futures positions (TR-43); V53 adds this kind. */
+    /**
+     * A margin call or a liquidation of the recipient's paper Futures positions (TR-43), and a paper Futures order that
+     * filled, triggered or was ended by the system (TR-29); V53 adds this kind.
+     */
     FUTURES,
-    /** Trading on a market was paused, or reopened after a pause, because its exchange data was lost (D-159). */
+    /**
+     * Trading on a market was paused, or reopened after a pause, because its exchange data was lost (D-159), and a
+     * paper Spot order that filled, triggered or was ended by the system (TR-29).
+     */
     MARKET
 }
