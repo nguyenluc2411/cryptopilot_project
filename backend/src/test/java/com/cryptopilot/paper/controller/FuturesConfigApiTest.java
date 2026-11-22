@@ -11,6 +11,7 @@ import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import java.math.BigDecimal;
@@ -113,6 +114,8 @@ class FuturesConfigApiTest {
             sql.sql("delete from subscription_order where user_id = ?")
                     .param(trader)
                     .update();
+            // Paper notices (TR-29) and their pushes are written after the commit: awaited first.
+            InAppNotifications.remove(sql, List.of(trader));
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         sql.sql("delete from leverage_bracket where pair_id = ?").param(pair).update();

@@ -13,6 +13,7 @@ import com.cryptopilot.paper.dto.response.FuturesTradeResponse;
 import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.event.PaperOrderNotice;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.enums.WalletType;
 import java.util.ArrayList;
@@ -29,6 +30,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -58,6 +60,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * commits as it would have without it. A Trader who misses a push sees the change on the next read, as before TR-08.
  *
  * <p>Runs inside the caller's transaction. Outside one there is nothing to wait for, so nothing is noted.
+ *
+ * <h2>Notices</h2>
+ *
+ * <p>An order the transaction left filled, triggered, or cancelled or expired by the system is also published as a
+ * {@link PaperOrderNotice}, before the commit, so the notification module writes its notification once it has
+ * committed (TR-29). A notice that cannot be published is logged and dropped, like a push.
  *
  * <p>Rule: TR-08, TR-41, TR-43; TECHNICAL_DESIGN 9.
  */
@@ -97,6 +105,7 @@ public class PaperUserFeed {
     private final SimpMessageSendingOperations broker;
     private final MarketApi market;
     private final FuturesAccountServiceImpl futuresAccounts;
+    private final ApplicationEventPublisher events;
 
     /** Notes that an order of the account changed. */
     void order(PaperAccount account, PaperOrder order) {
@@ -196,6 +205,24 @@ public class PaperUserFeed {
         return pending;
     }
 
+    /** Publishes the notice of each noted order whose end the Trader is told about (TR-29). */
+    private void publishNotices(Pending pending, Map<UUID, String> symbols) {
+        List<Owned<PaperOrder>> ended = new ArrayList<>(pending.orders.values());
+        ended.addAll(pending.futuresOrders.values());
+        ended.addAll(pending.futuresAlgos.values());
+        for (Owned<PaperOrder> owned : ended) {
+            try {
+                PaperOrderNotices.of(owned.row(), symbols.get(owned.row().getPairId()))
+                        .ifPresent(events::publishEvent);
+            } catch (RuntimeException failure) {
+                log.warn(
+                        "TR-29 notice of order {} not published: {}",
+                        owned.row().getId(),
+                        failure.toString());
+            }
+        }
+    }
+
     /** The bodies of the noted changes, written from the rows as the transaction leaves them. */
     private List<Message> write(Pending pending) {
         try {
@@ -276,6 +303,7 @@ public class PaperUserFeed {
                                 Rounding.toAmount(balance.getLockedAmount()),
                                 Rounding.toAmount(balance.total()))));
             });
+            publishNotices(pending, symbols);
             return messages;
         } catch (RuntimeException failure) {
             log.warn("TR-08 paper pushes of a transaction could not be written: {}", failure.toString());

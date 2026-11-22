@@ -42,6 +42,7 @@ import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.paper.service.PaperPnlService;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -176,6 +177,8 @@ class PaperOrderApiTest {
                         .param(trader)
                         .update();
             }
+            // Paper notices (TR-29) and their pushes are written after the commit: awaited first.
+            InAppNotifications.remove(sql, List.of(trader));
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         sql.sql("delete from order_matching_watermark where pair_id = ?")

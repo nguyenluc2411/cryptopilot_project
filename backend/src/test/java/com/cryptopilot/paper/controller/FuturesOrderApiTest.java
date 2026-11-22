@@ -47,6 +47,7 @@ import com.cryptopilot.paper.service.FuturesOrderService;
 import com.cryptopilot.paper.service.FuturesPositionWarningService;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.paper.service.impl.FuturesPairStop;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -213,6 +214,8 @@ class FuturesOrderApiTest {
             sql.sql("delete from subscription_order where user_id = ?")
                     .param(trader)
                     .update();
+            // Paper notices (TR-29) and their pushes are written after the commit: awaited first.
+            InAppNotifications.remove(sql, List.of(trader));
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         trading.retainOnly(MarketType.FUTURES, List.of());
@@ -3714,11 +3717,12 @@ class FuturesOrderApiTest {
                 .singleRow();
     }
 
+    /** The Futures risk notices (TR-43); the order notices of TR-29, which open an order, are left out. */
     private List<String> notices(UUID trader) {
-        return sql.sql("select title from notification where user_id = ? and notification_type = 'FUTURES'")
-                .param(trader)
-                .query(String.class)
-                .list();
+        return sql.sql("""
+                        select title from notification
+                         where user_id = ? and notification_type = 'FUTURES'
+                           and coalesce(reference_type, '') <> 'PAPER_ORDER'""").param(trader).query(String.class).list();
     }
 
     private ResultActions positionMode(UUID trader, boolean dual) throws Exception {

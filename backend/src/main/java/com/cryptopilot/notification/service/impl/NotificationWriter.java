@@ -3,6 +3,7 @@ package com.cryptopilot.notification.service.impl;
 import com.cryptopilot.common.util.UuidV7;
 import com.cryptopilot.notification.dto.response.NotificationResponse;
 import com.cryptopilot.notification.model.NewNotification;
+import com.cryptopilot.notification.model.NotificationWritten;
 import com.cryptopilot.notification.repository.NotificationRepository;
 import java.time.Clock;
 import java.time.Instant;
@@ -11,6 +12,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -24,6 +26,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * <p>A notification already written for its source key, or for an account that no longer exists, is not written and
  * not pushed: an event delivered twice notifies once. The push is not part of the notification: a failure is logged
  * and dropped, and the Trader sees the row on the next read. Outside a transaction nothing is pushed.
+ *
+ * <p>Each new notification is also published as {@link NotificationWritten}, so that, once it has committed, it is
+ * pushed to the recipient's mobile devices (T-058).
  *
  * <p>Rule: NSF-15; SRS 3.4.5; TECHNICAL_DESIGN 9.
  */
@@ -39,6 +44,7 @@ public class NotificationWriter {
     private final NotificationRepository notifications;
     private final SimpMessageSendingOperations broker;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
     /** Writes the notification unless its source key is taken; whether it was written. */
     boolean write(NewNotification notification) {
@@ -59,6 +65,14 @@ public class NotificationWriter {
         if (written == 0) {
             return false;
         }
+        events.publishEvent(new NotificationWritten(
+                id,
+                notification.recipientId(),
+                notification.type(),
+                notification.title(),
+                notification.content(),
+                notification.referenceType(),
+                notification.referenceId()));
         pushAfterCommit(
                 notification.recipientId(),
                 new NotificationResponse(

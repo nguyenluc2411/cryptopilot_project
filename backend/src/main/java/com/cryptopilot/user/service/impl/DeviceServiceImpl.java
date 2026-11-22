@@ -8,6 +8,7 @@ import com.cryptopilot.user.entity.UserDevice;
 import com.cryptopilot.user.repository.UserDeviceRepository;
 import com.cryptopilot.user.service.DeviceService;
 import java.time.Clock;
+import java.util.List;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
@@ -100,5 +101,26 @@ public class DeviceServiceImpl implements DeviceService {
                     devices.save(device);
                     log.info("Deactivated device {} of account {} on sign-out", device.getId(), userId);
                 });
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<String> activeTokens(UUID userId) {
+        return devices.findByUserIdAndActiveTrue(userId).stream()
+                .map(UserDevice::getFcmToken)
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public void deactivateInvalidToken(String fcmToken) {
+        devices.findByFcmToken(fcmToken).filter(UserDevice::isActive).ifPresent(device -> {
+            device.deactivate();
+            devices.save(device);
+            log.info(
+                    "Deactivated device {} of account {}: its push token was reported invalid",
+                    device.getId(),
+                    device.getUserId());
+        });
     }
 }

@@ -3,6 +3,7 @@ package com.cryptopilot.user.service;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.user.dto.request.RegisterDeviceRequest;
 import com.cryptopilot.user.dto.response.DeviceResponse;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -36,4 +37,10 @@ public interface DeviceService {
      * found.
      */
     void deactivateByToken(UUID userId, String fcmToken);
+
+    /** The tokens of the account's active devices (NSF-15). */
+    List<String> activeTokens(UUID userId);
+
+    /** Deactivates the device holding a token the Push Notification Service reported invalid, if active (NSF-15). */
+    void deactivateInvalidToken(String fcmToken);
 }
