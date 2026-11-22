@@ -278,6 +278,12 @@ public enum ErrorCode {
     MARKET_PRICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43"),
 
     /**
+     * Candles the trading chart reads from the exchange cannot be read now: rate limit, ban or outage (TR-35). 503: the
+     * same request succeeds once the exchange answers again. Borrows MSG43 (A-38).
+     */
+    MARKET_DATA_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43"),
+
+    /**
      * The pair is already in the caller's watchlist (BR-15). MSG45 takes the symbol. 409: the request conflicts with
      * a row that exists, like {@link #DATA_CONFLICT}.
      */
