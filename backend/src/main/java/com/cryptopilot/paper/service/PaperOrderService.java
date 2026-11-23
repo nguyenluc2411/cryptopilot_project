@@ -14,7 +14,7 @@ import java.util.UUID;
 
 /**
  * The orders of a Trader's paper account (TR-02): place, cancel, and read the open orders, the order history and the
- * trade history. This stage places Spot MARKET and LIMIT orders.
+ * trade history, also as CSV files. This stage places Spot MARKET and LIMIT orders.
  *
  * <p>Every call needs the account opened (MSG41 otherwise), and only ever reads or changes the caller's own orders.
  *
@@ -82,6 +82,29 @@ public interface PaperOrderService {
     /** The caller's orders, newest first, filtered and paged. */
     PageResponse<OrderResponse> orders(UUID userId, OrderQuery query);
 
-    /** The caller's fills, newest first, filtered and paged; the status filter does not apply. */
+    /**
+     * The caller's fills, newest first, filtered and paged; the status and type filters do not apply. With an order id,
+     * the fills of that order only (B5).
+     */
     PageResponse<FillResponse> fills(UUID userId, OrderQuery query);
+
+    /** The order history the query selects, newest first, as a CSV file of at most 10,000 rows (B7). */
+    Export exportOrders(UUID userId, OrderQuery query);
+
+    /** The trade history the query selects, newest first, as a CSV file of at most 10,000 rows (B7). */
+    Export exportFills(UUID userId, OrderQuery query);
+
+    /**
+     * A CSV export of the history.
+     *
+     * @param csv a header line, then one line per row, each ending in CRLF
+     * @param total how many rows the query selects
+     * @param rows how many the file holds: {@code total} unless it was cut at the limit
+     */
+    record Export(String csv, long total, int rows) {
+
+        public boolean truncated() {
+            return rows < total;
+        }
+    }
 }

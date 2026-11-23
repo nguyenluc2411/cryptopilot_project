@@ -10,7 +10,9 @@ import com.cryptopilot.paper.dto.response.OrderResponse;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
 import com.cryptopilot.paper.model.PlacedOrderList;
+import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
+import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.service.PaperOrderService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -18,12 +20,16 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -49,6 +55,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/paper")
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public class PaperOrderController {
+
+    static final MediaType CSV = new MediaType("text", "csv", StandardCharsets.UTF_8);
+
+    /** How many rows matched, when a CSV export holds fewer. */
+    static final String TOTAL = "X-Total-Count";
+
+    /** Set to {@code export} when a CSV export was cut at its limit. */
+    static final String TRUNCATED = "X-Result-Truncated";
 
     private final PaperOrderService orders;
 
@@ -174,11 +188,14 @@ public class PaperOrderController {
             @Parameter(description = "One pair; every pair when absent") @RequestParam(required = false) UUID pairId,
             @Parameter(description = "One status; every status when absent") @RequestParam(required = false)
                     OrderStatus status,
+            @Parameter(description = "One order type; every type when absent") @RequestParam(required = false)
+                    OrderType type,
+            @Parameter(description = "BUY or SELL; both when absent") @RequestParam(required = false) OrderSide side,
             @Parameter(description = "Placed at or after, ISO 8601 UTC") @RequestParam(required = false) Instant from,
             @Parameter(description = "Placed before, ISO 8601 UTC") @RequestParam(required = false) Instant to,
             @Parameter(description = "Page from 1; default 1") @RequestParam(required = false) Integer page,
             @Parameter(description = "1 to 100; default 20") @RequestParam(required = false) Integer pageSize) {
-        return orders.orders(callerOf(caller), new OrderQuery(pairId, status, from, to, page, pageSize));
+        return orders.orders(callerOf(caller), OrderQuery.orders(pairId, status, type, side, from, to, page, pageSize));
     }
 
     @Operation(summary = "The caller's trade history: every fill, newest first, 20 per page by default")
@@ -190,11 +207,70 @@ public class PaperOrderController {
     public PageResponse<FillResponse> fills(
             @AuthenticationPrincipal Jwt caller,
             @Parameter(description = "One pair; every pair when absent") @RequestParam(required = false) UUID pairId,
+            @Parameter(description = "The fills of one order; every order when absent") @RequestParam(required = false)
+                    UUID orderId,
+            @Parameter(description = "BUY or SELL; both when absent") @RequestParam(required = false) OrderSide side,
             @Parameter(description = "Traded at or after, ISO 8601 UTC") @RequestParam(required = false) Instant from,
             @Parameter(description = "Traded before, ISO 8601 UTC") @RequestParam(required = false) Instant to,
             @Parameter(description = "Page from 1; default 1") @RequestParam(required = false) Integer page,
             @Parameter(description = "1 to 100; default 20") @RequestParam(required = false) Integer pageSize) {
-        return orders.fills(callerOf(caller), new OrderQuery(pairId, null, from, to, page, pageSize));
+        return orders.fills(callerOf(caller), OrderQuery.fills(pairId, orderId, side, from, to, page, pageSize));
+    }
+
+    @Operation(summary = "The same order history as a CSV file, at most 10,000 orders, newest first (B7)")
+    @ApiResponse(
+            responseCode = "200",
+            description = "text/csv, a header line then one line per order. When more than 10,000 match:"
+                    + " `X-Total-Count: <n>` and `X-Result-Truncated: export`.")
+    @ApiResponse(responseCode = "400", description = "MSG01, MSG15: a parameter is invalid")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened yet")
+    @GetMapping("/orders/export")
+    public ResponseEntity<String> exportOrders(
+            @AuthenticationPrincipal Jwt caller,
+            @RequestParam(required = false) UUID pairId,
+            @RequestParam(required = false) OrderStatus status,
+            @RequestParam(required = false) OrderType type,
+            @RequestParam(required = false) OrderSide side,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to) {
+        return csv(
+                "cryptopilot-spot-orders.csv",
+                orders.exportOrders(
+                        callerOf(caller), OrderQuery.orders(pairId, status, type, side, from, to, null, null)));
+    }
+
+    @Operation(summary = "The same trade history as a CSV file, at most 10,000 fills, newest first (B7)")
+    @ApiResponse(
+            responseCode = "200",
+            description = "text/csv, a header line then one line per fill. When more than 10,000 match:"
+                    + " `X-Total-Count: <n>` and `X-Result-Truncated: export`.")
+    @ApiResponse(responseCode = "400", description = "MSG01, MSG15: a parameter is invalid")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: the account is not opened yet")
+    @GetMapping("/fills/export")
+    public ResponseEntity<String> exportFills(
+            @AuthenticationPrincipal Jwt caller,
+            @RequestParam(required = false) UUID pairId,
+            @RequestParam(required = false) UUID orderId,
+            @RequestParam(required = false) OrderSide side,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to) {
+        return csv(
+                "cryptopilot-spot-trades.csv",
+                orders.exportFills(callerOf(caller), OrderQuery.fills(pairId, orderId, side, from, to, null, null)));
+    }
+
+    private static ResponseEntity<String> csv(String name, PaperOrderService.Export export) {
+        ResponseEntity.BodyBuilder answer = ResponseEntity.ok()
+                .contentType(CSV)
+                .header(
+                        HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(name).build().toString());
+        if (export.truncated()) {
+            answer.header(TOTAL, String.valueOf(export.total())).header(TRUNCATED, "export");
+        }
+        return answer.body(export.csv());
     }
 
     private static UUID callerOf(Jwt caller) {

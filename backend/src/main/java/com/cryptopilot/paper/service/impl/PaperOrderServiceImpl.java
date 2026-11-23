@@ -50,6 +50,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -102,6 +103,9 @@ public class PaperOrderServiceImpl implements PaperOrderService {
 
     /** Decimals a Spot balance holds, so the decimals a quantity may have. */
     private static final int BALANCE_SCALE = Rounding.AMOUNT_SCALE;
+
+    /** The most rows a CSV export of the history holds (B7), as the audit log export. */
+    static final int EXPORT_LIMIT = 10_000;
 
     private static final Logger log = LoggerFactory.getLogger(PaperOrderServiceImpl.class);
 
@@ -306,43 +310,102 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Transactional(readOnly = true)
     public PageResponse<OrderResponse> orders(UUID userId, OrderQuery query) {
         PageRequest request = Paging.of(query.page(), query.pageSize());
-        TimeBounds.requireOrdered(query.from(), query.to());
-        // MSG41 for a Trader who has not opened an account, before anything is read.
-        accountOf(userId);
-        Set<OrderStatus> statuses =
-                query.status() == null ? EnumSet.allOf(OrderStatus.class) : EnumSet.of(query.status());
-        Instant from = TimeBounds.fromOrEarliest(query.from());
-        Instant to = TimeBounds.toOrLatest(query.to());
-        Page<PaperOrder> found = query.pairId() == null
-                ? orders.search(userId, MarketType.SPOT, statuses, from, to, request)
-                : orders.searchPair(userId, query.pairId(), MarketType.SPOT, statuses, from, to, request);
-        Map<UUID, String> symbols =
-                symbolsOf(found.getContent().stream().map(PaperOrder::getPairId).toList());
-        return PageResponse.of(found, order -> toResponse(order, symbols));
+        Page<PaperOrder> found = findOrders(userId, query, request);
+        return PageResponse.of(found, toOrderResponses(found.getContent())::get);
     }
 
     @Override
     @Transactional(readOnly = true)
     public PageResponse<FillResponse> fills(UUID userId, OrderQuery query) {
         PageRequest request = Paging.of(query.page(), query.pageSize());
+        Page<PaperFill> found = findFills(userId, query, request);
+        return PageResponse.of(found, toFillResponses(found.getContent())::get);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Export exportOrders(UUID userId, OrderQuery query) {
+        Page<PaperOrder> found = findOrders(userId, query, PageRequest.of(0, EXPORT_LIMIT));
+        Map<PaperOrder, OrderResponse> rows = toOrderResponses(found.getContent());
+        return new Export(
+                SpotHistoryCsv.orders(found.getContent().stream().map(rows::get).toList()),
+                found.getTotalElements(),
+                found.getNumberOfElements());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Export exportFills(UUID userId, OrderQuery query) {
+        Page<PaperFill> found = findFills(userId, query, PageRequest.of(0, EXPORT_LIMIT));
+        Map<PaperFill, FillResponse> rows = toFillResponses(found.getContent());
+        return new Export(
+                SpotHistoryCsv.fills(found.getContent().stream().map(rows::get).toList()),
+                found.getTotalElements(),
+                found.getNumberOfElements());
+    }
+
+    /** One page of the caller's Spot orders the query selects, newest first (B6: type and side as well). */
+    private Page<PaperOrder> findOrders(UUID userId, OrderQuery query, PageRequest request) {
         TimeBounds.requireOrdered(query.from(), query.to());
         // MSG41 for a Trader who has not opened an account, before anything is read.
         accountOf(userId);
+        Set<OrderStatus> statuses =
+                query.status() == null ? EnumSet.allOf(OrderStatus.class) : EnumSet.of(query.status());
+        Set<OrderType> types = query.type() == null ? PaperOrderRepository.ALL_TYPES : EnumSet.of(query.type());
+        Set<OrderSide> sides = sidesOf(query);
         Instant from = TimeBounds.fromOrEarliest(query.from());
         Instant to = TimeBounds.toOrLatest(query.to());
-        Page<PaperFill> found = query.pairId() == null
-                ? fills.search(userId, MarketType.SPOT, from, to, request)
-                : fills.searchPair(userId, query.pairId(), MarketType.SPOT, from, to, request);
+        return query.pairId() == null
+                ? orders.search(userId, MarketType.SPOT, statuses, types, sides, from, to, request)
+                : orders.searchPair(userId, query.pairId(), MarketType.SPOT, statuses, types, sides, from, to, request);
+    }
+
+    /** One page of the caller's Spot fills the query selects, newest first (B5: of one order as well). */
+    private Page<PaperFill> findFills(UUID userId, OrderQuery query, PageRequest request) {
+        TimeBounds.requireOrdered(query.from(), query.to());
+        // MSG41 for a Trader who has not opened an account, before anything is read.
+        accountOf(userId);
+        Set<OrderSide> sides = sidesOf(query);
+        Instant from = TimeBounds.fromOrEarliest(query.from());
+        Instant to = TimeBounds.toOrLatest(query.to());
+        if (query.orderId() != null) {
+            Page<PaperFill> found =
+                    fills.searchOrder(userId, query.orderId(), MarketType.SPOT, sides, from, to, request);
+            // An order lies on one pair, so with a pair that is not its own the order has no fill to show.
+            boolean otherPair = query.pairId() != null
+                    && found.getContent().stream()
+                            .anyMatch(fill -> !fill.getPairId().equals(query.pairId()));
+            return otherPair ? Page.empty(request) : found;
+        }
+        return query.pairId() == null
+                ? fills.search(userId, MarketType.SPOT, sides, from, to, request)
+                : fills.searchPair(userId, query.pairId(), MarketType.SPOT, sides, from, to, request);
+    }
+
+    private static Set<OrderSide> sidesOf(OrderQuery query) {
+        return query.side() == null ? PaperOrderRepository.ALL_SIDES : EnumSet.of(query.side());
+    }
+
+    /** Each order as the API shows it, with its pair's symbol, read once for all of them. */
+    private Map<PaperOrder, OrderResponse> toOrderResponses(List<PaperOrder> found) {
         Map<UUID, String> symbols =
-                symbolsOf(found.getContent().stream().map(PaperFill::getPairId).toList());
-        Map<UUID, String> assets =
-                market
-                        .coins(found.getContent().stream()
-                                .map(PaperFill::getFeeCoinId)
-                                .collect(Collectors.toSet()))
-                        .stream()
+                symbolsOf(found.stream().map(PaperOrder::getPairId).toList());
+        Map<PaperOrder, OrderResponse> responses = new IdentityHashMap<>();
+        found.forEach(order -> responses.put(order, toResponse(order, symbols)));
+        return responses;
+    }
+
+    /** Each fill as the API shows it, with its pair's symbol and fee coin, read once for all of them. */
+    private Map<PaperFill, FillResponse> toFillResponses(List<PaperFill> found) {
+        Map<UUID, String> symbols =
+                symbolsOf(found.stream().map(PaperFill::getPairId).toList());
+        Map<UUID, String> assets = found.isEmpty()
+                ? Map.of()
+                : market.coins(found.stream().map(PaperFill::getFeeCoinId).collect(Collectors.toSet())).stream()
                         .collect(Collectors.toMap(CoinListing::coinId, CoinListing::symbol));
-        return PageResponse.of(found, fill -> toResponse(fill, symbols, assets));
+        Map<PaperFill, FillResponse> responses = new IdentityHashMap<>();
+        found.forEach(fill -> responses.put(fill, toResponse(fill, symbols, assets)));
+        return responses;
     }
 
     /**

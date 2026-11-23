@@ -1533,6 +1533,203 @@ class PaperOrderApiTest {
                 .andExpect(status().isBadRequest());
     }
 
+    // ------------------------------------------------------------------------------------------
+    // History filters and CSV export (paper-trading-plan 20.2: B5, B6, B7)
+    // ------------------------------------------------------------------------------------------
+
+    /** The orders the history filter matrix places: id, type, side; two of them fill. */
+    private record Placed(String id, String type, String side) {}
+
+    private List<Placed> placeHistoryMatrix(UUID trader) throws Exception {
+        price("100");
+        List<Placed> placed = new ArrayList<>();
+        placed.add(new Placed(id(place(trader, market("BUY", "\"quantity\": 2"))), "MARKET", "BUY"));
+        placed.add(new Placed(id(place(trader, limit("BUY", "90", "1", null))), "LIMIT", "BUY"));
+        placed.add(new Placed(id(place(trader, limitMaker("BUY", "80", "1"))), "LIMIT_MAKER", "BUY"));
+        placed.add(new Placed(id(place(trader, market("SELL", "\"quantity\": 1"))), "MARKET", "SELL"));
+        placed.add(new Placed(id(place(trader, limit("SELL", "120", "0.5", null))), "LIMIT", "SELL"));
+        return placed;
+    }
+
+    @Test
+    void B6_theOrderHistory_returnsExactlyTheOrdersOfTheTypeAndSideAsked_forEveryCombination() throws Exception {
+        UUID trader = trader();
+        List<Placed> placed = placeHistoryMatrix(trader);
+
+        List<String> types = new ArrayList<>(List.of("MARKET", "LIMIT", "LIMIT_MAKER", "STOP_LOSS"));
+        types.add(null);
+        List<String> sides = new ArrayList<>(List.of("BUY", "SELL"));
+        sides.add(null);
+        List<String> pairs =
+                new ArrayList<>(List.of(pair.toString(), UUID.randomUUID().toString()));
+        pairs.add(null);
+        for (String type : types) {
+            for (String side : sides) {
+                for (String pairId : pairs) {
+                    MockHttpServletRequestBuilder request =
+                            get(PAPER + "/orders").param("pageSize", "100");
+                    if (type != null) {
+                        request.param("type", type);
+                    }
+                    if (side != null) {
+                        request.param("side", side);
+                    }
+                    if (pairId != null) {
+                        request.param("pairId", pairId);
+                    }
+                    List<String> expected = placed.stream()
+                            .filter(order -> type == null || order.type().equals(type))
+                            .filter(order -> side == null || order.side().equals(side))
+                            .filter(order -> pairId == null || pairId.equals(pair.toString()))
+                            .map(Placed::id)
+                            .toList()
+                            .reversed();
+                    String body = as(trader, request, null)
+                            .andExpect(status().isOk())
+                            .andReturn()
+                            .getResponse()
+                            .getContentAsString();
+                    List<String> found = JsonPath.read(body, "$.items[*].orderId");
+                    assertThat(found)
+                            .as("type %s, side %s, pair %s", type, side, pairId)
+                            .containsExactlyElementsOf(expected);
+                    assertThat((Integer) JsonPath.read(body, "$.total"))
+                            .as("total of type %s, side %s, pair %s", type, side, pairId)
+                            .isEqualTo(expected.size());
+                }
+            }
+        }
+        as(trader, get(PAPER + "/orders").param("type", "NOT_A_TYPE"), null).andExpect(status().isBadRequest());
+        as(trader, get(PAPER + "/orders").param("side", "LONG"), null).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void B5_theTradeHistoryOfOneOrder_holdsItsFillsOnly_andNoneOfAnotherTradersOrPair() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "1"), level("101", "1")), List.of(level("99", "5")));
+        String twoLevels = id(place(trader, market("BUY", "\"quantity\": 2")));
+        String oneLevel = id(place(trader, market("SELL", "\"quantity\": 1")));
+        UUID stranger = trader();
+
+        as(trader, get(PAPER + "/fills").param("orderId", twoLevels), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items[*].orderId", everyItem(is(twoLevels))));
+        as(trader, get(PAPER + "/fills").param("orderId", oneLevel), null)
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].side").value("SELL"));
+        as(trader, get(PAPER + "/fills").param("orderId", twoLevels).param("pairId", pair.toString()), null)
+                .andExpect(jsonPath("$.total").value(2));
+        as(
+                        trader,
+                        get(PAPER + "/fills")
+                                .param("orderId", twoLevels)
+                                .param("pairId", UUID.randomUUID().toString()),
+                        null)
+                .andExpect(jsonPath("$.total").value(0));
+        as(trader, get(PAPER + "/fills").param("orderId", twoLevels).param("side", "SELL"), null)
+                .andExpect(jsonPath("$.total").value(0));
+        as(trader, get(PAPER + "/fills").param("side", "SELL"), null)
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].orderId").value(oneLevel));
+        as(trader, get(PAPER + "/fills").param("side", "BUY").param("pairId", pair.toString()), null)
+                .andExpect(jsonPath("$.total").value(2));
+        as(stranger, get(PAPER + "/fills").param("orderId", twoLevels), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+        as(trader, get(PAPER + "/fills").param("orderId", UUID.randomUUID().toString()), null)
+                .andExpect(jsonPath("$.total").value(0));
+        as(trader, get(PAPER + "/fills").param("orderId", "not-a-uuid"), null).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void B7_theCsvExports_holdTheRowsOfTheSameFilter_newestFirst_inTheirColumns() throws Exception {
+        UUID trader = trader();
+        List<Placed> placed = placeHistoryMatrix(trader);
+
+        MvcResult orders = as(trader, get(PAPER + "/orders/export").param("side", "BUY"), null)
+                .andExpect(status().isOk())
+                .andExpect(result ->
+                        assertThat(result.getResponse().getContentType()).startsWith("text/csv"))
+                .andExpect(result -> assertThat(result.getResponse().getHeader(HttpHeaders.CONTENT_DISPOSITION))
+                        .contains("attachment")
+                        .contains("cryptopilot-spot-orders.csv"))
+                .andExpect(result -> assertThat(result.getResponse().getHeader("X-Result-Truncated"))
+                        .isNull())
+                .andReturn();
+        List<String> lines = List.of(orders.getResponse().getContentAsString().split("\r\n"));
+        assertThat(lines.getFirst()).startsWith("placedAt,orderId,clientOrderId,symbol,side,type,");
+        List<String> buys = placed.stream()
+                .filter(order -> order.side().equals("BUY"))
+                .map(Placed::id)
+                .toList()
+                .reversed();
+        assertThat(lines.subList(1, lines.size()).stream()
+                        .map(line -> line.split(",", -1)[1])
+                        .toList())
+                .containsExactlyElementsOf(buys);
+        String[] market = lines.getLast().split(",", -1);
+        assertThat(market[3]).isEqualTo(symbol);
+        assertThat(market[5]).isEqualTo("MARKET");
+        assertThat(market[12]).as("executedQuantity").isEqualTo("2");
+        assertThat(market[15]).as("status").isEqualTo("FILLED");
+        assertThat(market).hasSize(20);
+
+        String fills = as(
+                        trader,
+                        get(PAPER + "/fills/export")
+                                .param("orderId", placed.getFirst().id()),
+                        null)
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        List<String> fillLines = List.of(fills.split("\r\n"));
+        assertThat(fillLines.getFirst())
+                .isEqualTo(
+                        "tradedAt,fillId,orderId,symbol,side,price,quantity,quoteAmount,fee,feeAsset,liquidity,source");
+        assertThat(fillLines).hasSize(2);
+        assertThat(fillLines.get(1).split(",", -1))
+                .containsSubsequence(
+                        placed.getFirst().id(), symbol, "BUY", "100", "2", "200", "0.002", base(), "TAKER", "LIVE");
+
+        as(
+                        trader,
+                        get(PAPER + "/orders/export")
+                                .param("from", Instant.now().plusSeconds(3600).toString()),
+                        null)
+                .andExpect(status().isOk())
+                .andExpect(result ->
+                        assertThat(result.getResponse().getContentAsString()).isEqualTo(lines.getFirst() + "\r\n"));
+        as(traderWithoutAccount(), get(PAPER + "/fills/export"), null).andExpect(status().isNotFound());
+        as(
+                        trader,
+                        get(PAPER + "/orders/export")
+                                .param("from", Instant.now().plusSeconds(60).toString())
+                                .param("to", Instant.now().toString()),
+                        null)
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void B7_aClientOrderIdThatStartsLikeAFormula_isExportedAsText() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\", \"type\": \"LIMIT\","
+                                + " \"price\": 90, \"quantity\": 1, \"clientOrderId\": \"-2.5:sum\"}")
+                .andExpect(status().isCreated());
+
+        String csv = as(trader, get(PAPER + "/orders/export"), null)
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(csv.split("\r\n")[1].split(",", -1)[2]).isEqualTo("'-2.5:sum");
+    }
+
     @Test
     void TR02_tenTradersBuyingAtOnce_eachGetTheirOwnFill_andNoBalanceOrLedgerIsLost() throws Exception {
         price("100");
