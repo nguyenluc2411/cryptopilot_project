@@ -118,6 +118,8 @@ class TradingPauseGateApiTest {
                         {"pairId": "{pair}", "market": "SPOT", "type": "OCO", "oco": {"side": "SELL", "quantity": 1,
                          "takeProfitPrice": 110, "stopPrice": 90, "stopLimitPrice": 89}}""", SPOT),
                 new Call("spot cancel order", "POST", PAPER + "/orders/{id}/cancel", Map.of(), null, SPOT),
+                new Call("spot replace order", "POST", PAPER + "/orders/{id}/replace", Map.of(), """
+                        {"price": 85}""", SPOT),
                 new Call("spot cancel list", "POST", PAPER + "/order-lists/{id}/cancel", Map.of(), null, SPOT),
                 new Call(
                         "spot cancel all open",
@@ -326,9 +328,9 @@ class TradingPauseGateApiTest {
                 }
             }
         });
-        Set<String> placed = new TreeSet<>(calls().map(call ->
-                        call.method() + " " + call.path().replace("{id}/cancel", "{" + idName(call) + "}/cancel"))
-                .collect(Collectors.toSet()));
+        Set<String> placed = new TreeSet<>(
+                calls().map(call -> call.method() + " " + call.path().replace("{id}/", "{" + idName(call) + "}/"))
+                        .collect(Collectors.toSet()));
         placed.addAll(UNGATED);
         placed.addAll(PLANS_GATED);
 

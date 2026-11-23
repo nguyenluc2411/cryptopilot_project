@@ -1534,6 +1534,330 @@ class PaperOrderApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // OCO leg types (paper-trading-plan 20.2: B1)
+    // ------------------------------------------------------------------------------------------
+
+    /** The OCO part of a group with the leg types of B1; every {@code null} is left out. */
+    private static String ocoLegs(
+            String side,
+            String quantity,
+            String takeProfitType,
+            String takeProfitPrice,
+            String takeProfitStopPrice,
+            String stopPrice,
+            String stopLimitPrice,
+            String stopTrailingDelta) {
+        StringBuilder json = new StringBuilder("{\"side\": \"" + side + "\"");
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("quantity", quantity);
+        fields.put("takeProfitType", takeProfitType == null ? null : "\"" + takeProfitType + "\"");
+        fields.put("takeProfitPrice", takeProfitPrice);
+        fields.put("takeProfitStopPrice", takeProfitStopPrice);
+        fields.put("stopPrice", stopPrice);
+        fields.put("stopLimitPrice", stopLimitPrice);
+        fields.put("stopTrailingDelta", stopTrailingDelta);
+        fields.forEach((name, value) -> {
+            if (value != null) {
+                json.append(", \"").append(name).append("\": ").append(value);
+            }
+        });
+        return json.append("}").toString();
+    }
+
+    private String ocoGroup(String legs) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OCO\", \"oco\": " + legs + "}";
+    }
+
+    /**
+     * Every take profit type on both sides (B1): the take profit is stored with its type, limit price and stopPrice,
+     * the group locks once the larger need, and the take profit triggering at its stopPrice executes it and expires
+     * the stop, giving back everything; the ledger adds up after each.
+     */
+    @Test
+    void B1_everyTakeProfitType_onBothSides_triggersAtItsStopPrice_andExpiresTheStop() throws Exception {
+        record Case(
+                String side,
+                String type,
+                String price,
+                String stopAt,
+                String stop,
+                String stopLimit,
+                String locked,
+                String trade,
+                String finalStatus) {}
+        List<Case> cases = List.of(
+                new Case("SELL", "TAKE_PROFIT", null, "110", "95", "94", "1", "110", "FILLED"),
+                new Case("SELL", "TAKE_PROFIT_LIMIT", "109", "110", "95", null, "1", "110", "FILLED"),
+                new Case("BUY", "TAKE_PROFIT", null, "90", "105", "106", "106", "90", "FILLED"),
+                new Case("BUY", "TAKE_PROFIT_LIMIT", "91", "90", "105", "106", "106", "90", "FILLED"));
+        for (Case c : cases) {
+            UUID trader = trader();
+            price("100");
+            if (c.side().equals("SELL")) {
+                place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+            }
+            String coin = c.side().equals("SELL") ? base() : "USDT";
+            BigDecimal lockedAtStart = locked(trader, coin);
+            String body = placeList(
+                            trader,
+                            ocoGroup(ocoLegs(
+                                    c.side(), "1", c.type(), c.price(), c.stopAt(), c.stop(), c.stopLimit(), null)))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.orders[0].type").value(c.type()))
+                    .andExpect(jsonPath("$.orders[0].status").value("NEW"))
+                    .andExpect(jsonPath("$.orders[0].stopPrice").value(Double.parseDouble(c.stopAt())))
+                    .andExpect(
+                            jsonPath("$.orders[1].type").value(c.stopLimit() == null ? "STOP_LOSS" : "STOP_LOSS_LIMIT"))
+                    .andReturn()
+                    .getResponse()
+                    .getContentAsString();
+            String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+            String stop = JsonPath.read(body, "$.orders[1].orderId");
+            if (c.price() == null) {
+                as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                        .andExpect(jsonPath("$.price").doesNotExist());
+            }
+            assertThat(locked(trader, coin).subtract(lockedAtStart))
+                    .as("%s: locked once, the larger need", c)
+                    .isEqualByComparingTo(c.locked());
+            assertThat(matching.triggerOrders())
+                    .as("%s: both legs wait for a trigger", c)
+                    .anyMatch(order -> order.orderId().toString().equals(takeProfit))
+                    .anyMatch(order -> order.orderId().toString().equals(stop));
+
+            depth(List.of(level(c.trade(), "5")), List.of(level(c.trade(), "5")));
+            // Now, not ahead: the cases share the pair, and a trade stamped ahead would reach the next case's orders.
+            trade(c.trade(), 0);
+
+            try {
+                awaitStatus(trader, takeProfit, c.finalStatus());
+            } catch (AssertionError failed) {
+                throw new AssertionError(
+                        c + ": "
+                                + sql.sql("select order_status || ' ' || coalesce(status_reason, '-')"
+                                                + " from trade_order where order_id = ?")
+                                        .param(UUID.fromString(takeProfit))
+                                        .query(String.class)
+                                        .single(),
+                        failed);
+            }
+            as(trader, get(PAPER + "/orders/" + stop), null)
+                    .andExpect(jsonPath("$.status").value("EXPIRED"))
+                    .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+            assertThat(locked(trader, coin)).as(c.toString()).isEqualByComparingTo(lockedAtStart);
+            assertThat(matching.triggerOrders())
+                    .as("%s: the stop left the engine", c)
+                    .noneMatch(order -> order.orderId().toString().equals(stop));
+            assertLedgerAddsUpToTheBalances(trader);
+        }
+    }
+
+    @Test
+    void B1_theStopTriggering_expiresATakeProfitStop_whichNoLongerTriggers() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        String body = placeList(trader, ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT", null, "110", "95", null, null)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+        String stop = JsonPath.read(body, "$.orders[1].orderId");
+
+        depth(List.of(level("95", "5")), List.of(level("94.5", "5")));
+        trade("95", 1);
+        awaitStatus(trader, stop, "FILLED");
+        BigDecimal held = spot(trader, base());
+        trade("111", 2);
+        trade("112", 3);
+
+        as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        assertThat(matching.triggerOrders())
+                .noneMatch(order -> order.orderId().toString().equals(takeProfit));
+        assertThat(spot(trader, base())).isEqualByComparingTo(held);
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B1_aTrailingStopOfAnOco_followsTheHigh_triggersOnTheDelta_andExpiresTheTakeProfit() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        String body = placeList(trader, ocoGroup(ocoLegs("SELL", "1", null, "120", null, null, "90", "200")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orders[0].type").value("LIMIT_MAKER"))
+                .andExpect(jsonPath("$.orders[1].type").value("STOP_LOSS_LIMIT"))
+                .andExpect(jsonPath("$.orders[1].trailingDelta").value(200))
+                .andExpect(jsonPath("$.orders[1].stopPrice").doesNotExist())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+        String stop = JsonPath.read(body, "$.orders[1].orderId");
+        assertThat(locked(trader, base())).isEqualByComparingTo("1");
+
+        depth(List.of(level("108", "5")), List.of(level("107", "5")));
+        trade("110", 1);
+        trade("108", 2);
+        // 2 % back from the high of 110: 107.8.
+        trade("107.8", 3);
+
+        awaitStatus(trader, stop, "FILLED");
+        as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        assertThat(locked(trader, base())).isZero();
+        awaitInBook(takeProfit, false);
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B1_theFieldsOfEachLegType_areRequiredOrRefused_byName() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        record Shape(String legs, String field, String message) {}
+        List<Shape> shapes = List.of(
+                new Shape(
+                        ocoLegs("SELL", "1", "TAKE_PROFIT", null, null, "95", null, null),
+                        "oco.takeProfitStopPrice",
+                        "MSG01"),
+                new Shape(
+                        ocoLegs("SELL", "1", "TAKE_PROFIT", "110", "110", "95", null, null),
+                        "oco.takeProfitPrice",
+                        "MSG15"),
+                new Shape(
+                        ocoLegs("SELL", "1", "TAKE_PROFIT_LIMIT", null, "110", "95", null, null),
+                        "oco.takeProfitPrice",
+                        "MSG01"),
+                new Shape(
+                        ocoLegs("SELL", "1", null, "110", "110", "95", null, null), "oco.takeProfitStopPrice", "MSG15"),
+                new Shape(ocoLegs("SELL", "1", null, null, null, "95", null, null), "oco.takeProfitPrice", "MSG01"),
+                new Shape(ocoLegs("SELL", "1", "LIMIT", "110", null, "95", null, null), "oco.takeProfitType", "MSG15"),
+                new Shape(
+                        ocoLegs("SELL", "1", "STOP_LOSS", null, "110", "95", null, null),
+                        "oco.takeProfitType",
+                        "MSG15"),
+                new Shape(ocoLegs("SELL", "1", null, "110", null, null, null, null), "oco.stopPrice", "MSG01"),
+                new Shape(ocoLegs("SELL", "1", null, "110", null, "95", null, "200"), "oco.stopPrice", "MSG15"),
+                new Shape(ocoLegs("BUY", "1", null, "90", null, null, null, "200"), "oco.stopLimitPrice", "MSG01"),
+                new Shape(
+                        ocoLegs("SELL", "1", "TAKE_PROFIT", null, "99", "95", null, null),
+                        "oco.takeProfitStopPrice",
+                        "MSG15"),
+                new Shape(
+                        ocoLegs("BUY", "1", "TAKE_PROFIT", null, "101", "105", "106", null),
+                        "oco.takeProfitStopPrice",
+                        "MSG15"),
+                new Shape(ocoLegs("SELL", "1", null, "110", null, null, null, "0"), "oco.stopTrailingDelta", "MSG15"),
+                new Shape(ocoLegs("SELL", "1", null, "110", null, null, null, "-5"), "oco.stopTrailingDelta", "MSG15"));
+        long rows = orderCount(trader);
+        for (Shape shape : shapes) {
+            placeList(trader, ocoGroup(shape.legs()))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errors['" + shape.field() + "']").value(shape.message()));
+        }
+        rule("spot_max_trailing_below_delta", "2000");
+        placeList(trader, ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT", null, "110.001", "95", null, null)))
+                .andExpect(jsonPath("$.code").value("PAPER_PRICE_FILTER"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("oco.takeProfitStopPrice"));
+        placeList(trader, ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT_LIMIT", "109.999", "110", "95", null, null)))
+                .andExpect(jsonPath("$.code").value("PAPER_PRICE_FILTER"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("oco.takeProfitPrice"));
+        placeList(trader, ocoGroup(ocoLegs("SELL", "1", null, "110", null, null, null, "2001")))
+                .andExpect(jsonPath("$.code").value("PAPER_TRAILING_DELTA"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("oco.stopTrailingDelta"));
+        assertThat(orderCount(trader)).as("no refused group stored an order").isEqualTo(rows);
+        assertThat(locked(trader, base())).isZero();
+    }
+
+    @Test
+    void B1_anOtocoWithATakeProfitStop_placesItOnTheFill_andTriggersItThenWhenTheMarketIsAlreadyPastIt()
+            throws Exception {
+        UUID trader = trader();
+        price("100");
+        String waiting = placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTOCO\","
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"LIMIT\", \"price\": 90,"
+                                + " \"quantity\": 1}, \"oco\": "
+                                + ocoLegs("SELL", null, "TAKE_PROFIT_LIMIT", "94", "95", "85", "84", null) + "}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orders[1].type").value("TAKE_PROFIT_LIMIT"))
+                .andExpect(jsonPath("$.orders[1].status").value("PENDING_NEW"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String takeProfit = JsonPath.read(waiting, "$.orders[1].orderId");
+        String stop = JsonPath.read(waiting, "$.orders[2].orderId");
+
+        // The working buy fills at 90 while the market already stands past the take profit's 95.
+        price("96");
+        depth(List.of(level("96.5", "5")), List.of(level("96", "5")));
+        trade("90", 1);
+
+        awaitStatus(trader, JsonPath.read(waiting, "$.orders[0].orderId"), "FILLED");
+        awaitStatus(trader, takeProfit, "FILLED");
+        as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                .andExpect(jsonPath("$.triggeredAt").exists());
+        as(trader, get(PAPER + "/orders/" + stop), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        assertThat(locked(trader, base())).isZero();
+        assertThat(matching.triggerOrders()).noneMatch(order -> order.pairId().equals(pair));
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B1_aTakeProfitStop_countsAsASecondStop_towardsThePairsLimit() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        rule("spot_max_num_algo_orders", "2");
+        place(trader, stop("STOP_LOSS", "SELL", "95", null, null, "0.1")).andExpect(status().isCreated());
+
+        placeList(trader, ocoGroup(ocoLegs("SELL", "0.5", "TAKE_PROFIT", null, "110", "95", null, null)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_MAX_NUM_ALGO_ORDERS"));
+        placeList(trader, ocoGroup(ocoLegs("SELL", "0.5", null, "110", null, "95", null, null)))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    void B1_aGroupSentAgain_isComparedOnItsLegTypes_tooBeforeItIsAnsweredWithTheFirst() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        String first = keyed(ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT", null, "110", "95", null, null)), "b1-key");
+
+        String listId = JsonPath.read(
+                placeList(trader, first)
+                        .andExpect(status().isCreated())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString(),
+                "$.listId");
+        placeList(trader, first)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.listId").value(listId));
+        placeList(trader, keyed(ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT", null, "111", "95", null, null)), "b1-key"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+        placeList(
+                        trader,
+                        keyed(
+                                ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT_LIMIT", "110", "110", "95", null, null)),
+                                "b1-key"))
+                .andExpect(status().isConflict());
+        placeList(trader, keyed(ocoGroup(ocoLegs("SELL", "1", null, "110", null, "95", null, null)), "b1-key"))
+                .andExpect(status().isConflict());
+        assertThat(locked(trader, base())).isEqualByComparingTo("1");
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Cancel-replace (paper-trading-plan 20.2: B4)
     // ------------------------------------------------------------------------------------------
 
