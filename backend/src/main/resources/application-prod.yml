@@ -57,6 +57,10 @@ cryptopilot:
       api: ${RATE_LIMIT_API:120}
       paper-orders: ${RATE_LIMIT_PAPER_ORDERS:50}
       guest: ${RATE_LIMIT_GUEST:300}
+      # TR-35 chart pages, per client address, signed in or not: a page the cache misses costs exchange weight.
+      chart-candles: ${RATE_LIMIT_CHART_CANDLES:60}
+      # TR-36 latency sample batches, per account: a client reports now and then.
+      latency-samples: ${RATE_LIMIT_LATENCY_SAMPLES:12}
   auth:
     token-sweep:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
@@ -147,6 +151,9 @@ cryptopilot:
     # NSF-06 runs in this profile: PRICE alerts on the 1-minute candle updates, and the expiry sweep.
     enabled: true
     expiry-sweep:
+      enabled: true
+    replay:
+      # T-111: the 1-minute prices missed while a stream was lost or the application was down, replayed (15 min).
       enabled: true
   news:
     crawl:

@@ -315,7 +315,8 @@ class AlertEngineConcurrencyTest {
                     0,
                     null,
                     null,
-                    version);
+                    version,
+                    Instant.EPOCH);
         }
 
         private record Row(PriceAlert alert, boolean active) {}

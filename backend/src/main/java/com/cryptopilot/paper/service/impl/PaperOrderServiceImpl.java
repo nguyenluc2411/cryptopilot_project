@@ -381,6 +381,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         if (sweep.pastBook() && book.shown()) {
             order.flagDepthExhausted();
         }
+        feed.filledOnPlacement(order);
         return order;
     }
 

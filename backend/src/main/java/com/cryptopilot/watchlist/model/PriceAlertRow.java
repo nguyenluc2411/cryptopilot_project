@@ -9,7 +9,7 @@ import java.util.UUID;
 
 /**
  * An ACTIVE PRICE alert as the repository reads it, with the pair of its watchlist row; the symbol, which the
- * {@code market} module owns, is added to make a {@link PriceAlert}.
+ * {@code market} module owns, is added to make a {@link PriceAlert}. {@code armedAt} is the row's {@code updated_at}.
  *
  * <p>Rule: NSF-06; TECHNICAL_DESIGN 7.9.
  */
@@ -30,7 +30,8 @@ public record PriceAlertRow(
         int triggerCount,
         Instant lastTriggeredAt,
         Instant lastBarOpenTime,
-        long version) {
+        long version,
+        Instant armedAt) {
 
     /** The alert with its pair's symbol. */
     public PriceAlert withSymbol(String symbol) {
@@ -52,6 +53,7 @@ public record PriceAlertRow(
                 triggerCount,
                 lastTriggeredAt,
                 lastBarOpenTime,
-                version);
+                version,
+                armedAt);
     }
 }

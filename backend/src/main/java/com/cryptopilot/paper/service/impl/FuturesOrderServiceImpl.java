@@ -511,6 +511,7 @@ public class FuturesOrderServiceImpl implements FuturesOrderService {
         Instant now = clock.instant();
         futuresArrival.market(account, order, book, now);
         tpSl.settle(account, order, now);
+        feed.filledOnPlacement(order);
         return order;
     }
 

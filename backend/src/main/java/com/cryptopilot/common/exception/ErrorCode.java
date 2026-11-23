@@ -278,6 +278,12 @@ public enum ErrorCode {
     MARKET_PRICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43"),
 
     /**
+     * Candles the trading chart reads from the exchange cannot be read now: rate limit, ban or outage (TR-35). 503: the
+     * same request succeeds once the exchange answers again. Borrows MSG43 (A-38).
+     */
+    MARKET_DATA_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MSG43"),
+
+    /**
      * The pair is already in the caller's watchlist (BR-15). MSG45 takes the symbol. 409: the request conflicts with
      * a row that exists, like {@link #DATA_CONFLICT}.
      */
@@ -583,6 +589,21 @@ public enum ErrorCode {
      * package refuses the order.
      */
     PACKAGE_NOT_ON_SALE(HttpStatus.CONFLICT, "MSG43"),
+
+    /** Another package already has this code (SRS 3.11.5, UC-42). Borrows MSG43 (A-38). 409: the code is taken. */
+    PACKAGE_CODE_TAKEN(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * A package that orders were placed for cannot be deleted, only deactivated (SRS 3.11.5), so the orders and the
+     * subscriptions they opened keep their package. Borrows MSG43 (A-38). 409: the orders refuse it.
+     */
+    PACKAGE_IN_USE(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The FREE package cannot be purchased, deactivated or deleted, and there is exactly one (SRS 3.11.5, BR-62).
+     * Borrows MSG43 (A-38). 409: the package's tier refuses it.
+     */
+    FREE_PACKAGE_FIXED(HttpStatus.CONFLICT, "MSG43"),
 
     /**
      * The package is of a lower tier than the paid subscription the Trader holds, which may only be renewed or

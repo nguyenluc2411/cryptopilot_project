@@ -34,6 +34,7 @@ import com.cryptopilot.paper.service.FuturesOrderService;
 import com.cryptopilot.paper.service.FuturesPositionService;
 import com.cryptopilot.paper.service.PaperAccountService;
 import com.cryptopilot.paper.service.PaperMatchingService;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.math.BigDecimal;
@@ -178,6 +179,8 @@ class FuturesSettlementPropertyTest {
             sql.sql("delete from subscription_order where user_id = ?")
                     .param(trader)
                     .update();
+            // Paper notices (TR-29) and their pushes are written after the commit: awaited first.
+            InAppNotifications.remove(sql, List.of(trader));
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         trading.retainOnly(MarketType.FUTURES, List.of());

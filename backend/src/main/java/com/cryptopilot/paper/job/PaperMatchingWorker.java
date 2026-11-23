@@ -72,9 +72,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Runs the paper matching engine: one consumer thread owns a {@link PaperOrderBook} and applies to it, in arrival
@@ -281,6 +282,9 @@ public class PaperMatchingWorker
 
     /** Guarded by {@code this}. */
     private final List<Thread> workers = new ArrayList<>();
+
+    /** Stores a Trader's fills of one range in one transaction (TR-32); none when built by hand, as in unit tests. */
+    private TransactionTemplate together;
 
     @Autowired
     public PaperMatchingWorker(
@@ -529,28 +533,27 @@ public class PaperMatchingWorker
     @EventListener
     public void onRestedPublished(PaperOrderRested event) {
         expect(keyOf(event.order()));
+        onCompletion(() -> onRested(event), () -> onRestedRolledBack(event));
     }
 
     /** As {@link #onRestedPublished}, for a stop published to wait for its trigger. */
     @EventListener
     public void onAwaitingTriggerPublished(PaperOrderAwaitingTrigger event) {
         expect(new BookKey(event.order().market(), event.order().pairId()));
+        onCompletion(() -> onAwaitingTrigger(event), () -> onAwaitingTriggerRolledBack(event));
     }
 
     /** A placement that rolled back tracks nothing. */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
     public void onRestedRolledBack(PaperOrderRested event) {
         tracked(keyOf(event.order()));
     }
 
     /** As {@link #onRestedRolledBack}, for a stop. */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
     public void onAwaitingTriggerRolledBack(PaperOrderAwaitingTrigger event) {
         tracked(new BookKey(event.order().market(), event.order().pairId()));
     }
 
     /** A LIMIT order that did not execute on arrival waits in the book. */
-    @TransactionalEventListener
     public void onRested(PaperOrderRested event) {
         if (running) {
             queue.offer(new Command.Track(event.order()));
@@ -560,7 +563,6 @@ public class PaperMatchingWorker
     }
 
     /** A stop limit or a trailing stop waits for its trigger. */
-    @TransactionalEventListener
     public void onAwaitingTrigger(PaperOrderAwaitingTrigger event) {
         if (running) {
             queue.offer(new Command.TrackTrigger(event.order()));
@@ -582,7 +584,12 @@ public class PaperMatchingWorker
     }
 
     /** A Futures conditional order on the mark price waits for its trigger (TR-20). */
-    @TransactionalEventListener
+    @EventListener
+    public void onAwaitingMarkTriggerPublished(PaperOrderAwaitingMarkTrigger event) {
+        onCompletion(() -> onAwaitingMarkTrigger(event), () -> {});
+    }
+
+    /** As the transactional hand-off it was: called once the publishing transaction committed. */
     public void onAwaitingMarkTrigger(PaperOrderAwaitingMarkTrigger event) {
         if (running) {
             queue.offer(new Command.TrackMarkTrigger(event.order()));
@@ -593,7 +600,12 @@ public class PaperMatchingWorker
      * A committed change of a Trader's position or isolated wallet on a pair: its liquidation levels are read again on
      * the consumer thread, which alone owns the book (TR-22, plan 9.6).
      */
-    @TransactionalEventListener
+    @EventListener
+    public void onAccountChangedPublished(FuturesAccountChanged event) {
+        onCompletion(() -> onAccountChanged(event), () -> {});
+    }
+
+    /** As the transactional hand-off it was: called once the publishing transaction committed. */
     public void onAccountChanged(FuturesAccountChanged event) {
         if (running && accountChanges.add(event)) {
             queue.offer(new Command.AccountChanged(event.userId(), event.pairId()));
@@ -604,7 +616,12 @@ public class PaperMatchingWorker
      * A pair's leverage brackets were replaced (TR-46, plan 9.7): the liquidation levels and cross snapshots of every
      * Trader the engine watches on the pair are read again on the consumer thread, on the new brackets.
      */
-    @TransactionalEventListener
+    @EventListener
+    public void onBracketsReplacedPublished(LeverageBracketsReplaced event) {
+        onCompletion(() -> onBracketsReplaced(event), () -> {});
+    }
+
+    /** As the transactional hand-off it was: called once the publishing transaction committed. */
     public void onBracketsReplaced(LeverageBracketsReplaced event) {
         if (running) {
             queue.offer(new Command.BracketsReplaced(event.pairId()));
@@ -612,11 +629,39 @@ public class PaperMatchingWorker
     }
 
     /** A cancelled order leaves the book. */
-    @TransactionalEventListener
+    @EventListener
+    public void onCanceledPublished(PaperOrderCanceled event) {
+        onCompletion(() -> onCanceled(event), () -> {});
+    }
+
+    /** As the transactional hand-off it was: called once the publishing transaction committed. */
     public void onCanceled(PaperOrderCanceled event) {
         if (running) {
             queue.offer(new Command.Untrack(event.orderId()));
         }
+    }
+
+    /**
+     * Runs {@code committed} once the current transaction commits, {@code rolledBack} once it rolls back; nothing
+     * outside a transaction, as a {@code @TransactionalEventListener} does without a fallback. Registered by hand rather
+     * than through {@code @TransactionalEventListener}: Spring Modulith wraps every after-commit transactional listener
+     * to look up an event publication, in a new transaction, while the publishing request still holds its connection,
+     * which under concurrent placements starved the pool for its whole timeout (TR-32).
+     */
+    private static void onCompletion(Runnable committed, Runnable rolledBack) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == STATUS_COMMITTED) {
+                    committed.run();
+                } else if (status == STATUS_ROLLED_BACK) {
+                    rolledBack.run();
+                }
+            }
+        });
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1441,15 +1486,45 @@ public class PaperMatchingWorker
         failures.forEach(failure -> failed(key, failure));
     }
 
-    /** Stores one Trader's fills in order; a fill that fails does not stop the ones after it. */
+    /** Lets a Trader's fills of one range be stored in one transaction (TR-32). */
+    @Autowired(required = false)
+    void storeTogether(PlatformTransactionManager transactions) {
+        this.together = new TransactionTemplate(transactions);
+    }
+
+    /**
+     * Stores one Trader's fills in order. Several are stored in one transaction: one lock, one account read and one
+     * commit for all of them, so the last does not wait on a commit per fill before it (TR-32). Should any fail, that
+     * transaction rolls back whole and they are stored one by one, each in its own: a fill that fails does not stop
+     * the ones after it.
+     */
     private List<Failure> store(List<Fill> fills) {
+        if (together != null && fills.size() > 1) {
+            try {
+                together.executeWithoutResult(status -> fills.forEach(this::storeOne));
+                return List.of();
+            } catch (RuntimeException failed) {
+                log.debug(
+                        "TR-32 {} paper fills stored together failed, stored one by one: {}",
+                        fills.size(),
+                        failed.toString());
+            }
+        }
+        return storeEach(fills);
+    }
+
+    private void storeOne(Fill fill) {
+        if (!matching.fill(fill.order(), fill.tradedAt(), fill.source(), fill.candle())) {
+            log.debug("TR-02 paper order {} no longer works", fill.order().orderId());
+        }
+    }
+
+    /** Stores one Trader's fills in order, each in its own transaction; one that fails does not stop the others. */
+    private List<Failure> storeEach(List<Fill> fills) {
         List<Failure> failures = new ArrayList<>();
         for (Fill fill : fills) {
             try {
-                if (!matching.fill(fill.order(), fill.tradedAt(), fill.source(), fill.candle())) {
-                    log.debug(
-                            "TR-02 paper order {} no longer works", fill.order().orderId());
-                }
+                storeOne(fill);
             } catch (RuntimeException failure) {
                 failures.add(new Failure(fill, failure));
             }

@@ -2,6 +2,7 @@ package com.cryptopilot.billing.entity;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import com.cryptopilot.billing.PlanEntitlements;
@@ -129,5 +130,52 @@ class SubscriptionPackageTest {
                         false,
                         false))
                 .withMessageContaining(which);
+    }
+
+    /** SRS 3.11.5: the FREE package's offer is fixed and it stays active; its name may change. */
+    @Test
+    void UC42_theFreePackage_keepsItsOffer_andStaysActive() {
+        SubscriptionPackage free = SubscriptionPackage.free("FREE", "Free", FREE_LIMITS);
+
+        assertThat(free.isFree()).isTrue();
+        assertThatIllegalStateException().isThrownBy(() -> free.changeOffer(BigDecimal.TEN, 30, true));
+        assertThatIllegalStateException().isThrownBy(() -> free.changeActive(false));
+        free.changeActive(true);
+        free.rename("Miễn phí");
+        assertThat(free.getPackageName()).isEqualTo("Miễn phí");
+        assertThat(free.isActive()).isTrue();
+    }
+
+    /** SRS 3.11.5, BR-63: a paid package's new offer follows the rules a new package follows. */
+    @Test
+    void UC42_aPaidPackage_changesItsOffer_withinTheRules() {
+        SubscriptionPackage pro =
+                SubscriptionPackage.paid("PRO_X", "Pro", PlanTier.PRO, new BigDecimal("99000"), 30, PRO_LIMITS);
+
+        pro.changeOffer(new BigDecimal("109000"), 31, false);
+        pro.changeActive(false);
+
+        assertThat(pro.isFree()).isFalse();
+        assertThat(pro.getPriceAmount()).isEqualByComparingTo("109000");
+        assertThat(pro.getDurationDays()).isEqualTo(31);
+        assertThat(pro.isPurchasable()).isFalse();
+        assertThat(pro.isActive()).isFalse();
+        assertThatIllegalArgumentException().isThrownBy(() -> pro.changeOffer(BigDecimal.ZERO, 30, true));
+        assertThatIllegalArgumentException().isThrownBy(() -> pro.changeOffer(BigDecimal.ONE, 0, true));
+        assertThatIllegalArgumentException().isThrownBy(() -> pro.changeOffer(BigDecimal.ONE, 367, true));
+        assertThatNullPointerException().isThrownBy(() -> pro.changeOffer(null, 30, true));
+        assertThatIllegalArgumentException().isThrownBy(() -> pro.rename(" "));
+    }
+
+    /** BR-62: the tier's limits replace the package's own. */
+    @Test
+    void BR62_theTiersLimits_replaceThePackagesOwn() {
+        SubscriptionPackage pro =
+                SubscriptionPackage.paid("PRO_X", "Pro", PlanTier.PRO, new BigDecimal("99000"), 30, PRO_LIMITS);
+
+        pro.applyLimits(FREE_LIMITS);
+
+        assertThat(pro.entitlements()).isEqualTo(FREE_LIMITS);
+        assertThatNullPointerException().isThrownBy(() -> pro.applyLimits(null));
     }
 }

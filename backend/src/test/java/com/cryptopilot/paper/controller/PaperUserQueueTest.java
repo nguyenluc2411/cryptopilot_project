@@ -15,6 +15,7 @@ import com.cryptopilot.paper.config.PaperAccountProperties;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.enums.FillSource;
 import com.cryptopilot.paper.service.PaperMatchingService;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.StompRecorder;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -117,6 +118,9 @@ class PaperUserQueueTest {
     @Autowired
     private PaperAccountProperties grants;
 
+    @Autowired
+    private io.micrometer.core.instrument.MeterRegistry meters;
+
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
     private final List<WebSocketStompClient> clients = new ArrayList<>();
@@ -155,7 +159,9 @@ class PaperUserQueueTest {
 
     private void deleteRows() {
         for (UUID trader : traders) {
+            // The notices of TR-29 are written after the commit; awaited by the tests that expect one.
             for (String table : List.of(
+                    "notification",
                     "order_fill",
                     "trade_order",
                     "order_list",
@@ -166,6 +172,8 @@ class PaperUserQueueTest {
                         .param(trader)
                         .update();
             }
+            // Paper notices (TR-29) and their pushes are written after the commit: awaited first.
+            InAppNotifications.remove(sql, List.of(trader));
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         UUID base = sql.sql("select base_coin_id from crypto_pair where pair_id = ?")
@@ -273,6 +281,85 @@ class PaperUserQueueTest {
         await(() -> otherQueues.orders.size() == 1, "the other Trader's order");
         assertThat((String) JsonPath.read(otherQueues.orders.get(0), "$.orderId"))
                 .isEqualTo(own);
+    }
+
+    /** TR-36: a live fill is timed from its trade to its commit, under its market. */
+    @Test
+    void TR36_aLiveFill_isTimed() throws Exception {
+        UUID trader = trader();
+        price("100");
+        long before = fillsTimed();
+
+        place(trader, market("BUY", "1")).andExpect(status().isCreated());
+
+        assertThat(fillsTimed()).isEqualTo(before + 1);
+    }
+
+    private long fillsTimed() {
+        io.micrometer.core.instrument.Timer timer = meters.find("cryptopilot.paper.fill.latency")
+                .tag("market", "SPOT")
+                .timer();
+        return timer == null ? 0 : timer.count();
+    }
+
+    /**
+     * TR-29: a MARKET buy filled by its own placement is not notified: the answer to the placement shows the fill. The
+     * order and its fill are still pushed to the Trader's queues.
+     */
+    @Test
+    void TR29_aMarketOrderFilledOnPlacement_isNotNotified() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String orderId = id(place(trader, market("BUY", "2")).andExpect(status().isCreated()));
+
+        assertThat(sql.sql("select order_status from trade_order where order_id = ?::uuid")
+                        .param(orderId)
+                        .query(String.class)
+                        .single())
+                .isEqualTo("FILLED");
+        Thread.sleep(500);
+        assertThat(notices(trader)).isZero();
+    }
+
+    /** TR-29: a resting LIMIT the engine fills later is notified; the Trader's own cancel is not. */
+    @Test
+    void TR29_aLaterFill_isNotified_andTheTradersCancel_isNot() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String filled = id(place(trader, limit("BUY", "90", "1")).andExpect(status().isCreated()));
+        String cancelled = id(place(trader, limit("BUY", "80", "1")).andExpect(status().isCreated()));
+        as(trader, post("/api/v1/paper/orders/" + cancelled + "/cancel"), null).andExpect(status().isOk());
+        RestingOrder resting = matching.restingOrders().stream()
+                .filter(order -> order.orderId().toString().equals(filled))
+                .findFirst()
+                .orElseThrow();
+        assertThat(matching.fill(resting, Instant.now(), FillSource.LIVE)).isTrue();
+
+        await(() -> notices(trader) == 1, "the fill's notification");
+        Thread.sleep(300);
+        assertThat(sql.sql("select reference_id::text from notification where user_id = ?")
+                        .param(trader)
+                        .query(String.class)
+                        .list())
+                .containsExactly(filled);
+        Map<String, Object> notice = sql.sql("""
+                        select notification_type, title, content, reference_type
+                          from notification where user_id = ?""").param(trader).query().singleRow();
+        assertThat(notice)
+                .containsEntry("notification_type", "MARKET")
+                .containsEntry("title", "Order filled")
+                .containsEntry("reference_type", "PAPER_ORDER");
+        assertThat((String) notice.get("content"))
+                .contains(symbol)
+                .contains("buy limit")
+                .contains("filled 1");
+    }
+
+    private long notices(UUID trader) {
+        return sql.sql("select count(*) from notification where user_id = ?")
+                .param(trader)
+                .query(Long.class)
+                .single();
     }
 
     /** A session without a signed-in user cannot subscribe to a user queue; it is refused and closed. */

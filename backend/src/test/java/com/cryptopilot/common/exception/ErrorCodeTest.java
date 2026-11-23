@@ -105,11 +105,15 @@ class ErrorCodeTest {
             Map.entry(ErrorCode.COMMENT_NOT_HIDDEN, "MSG43 409"),
             Map.entry(ErrorCode.AUTHOR_BANNED, "MSG43 409"),
             Map.entry(ErrorCode.PACKAGE_NOT_ON_SALE, "MSG43 409"),
+            Map.entry(ErrorCode.PACKAGE_CODE_TAKEN, "MSG43 409"),
+            Map.entry(ErrorCode.PACKAGE_IN_USE, "MSG43 409"),
+            Map.entry(ErrorCode.FREE_PACKAGE_FIXED, "MSG43 409"),
             Map.entry(ErrorCode.SUBSCRIPTION_DOWNGRADE_REFUSED, "MSG43 409"),
             Map.entry(ErrorCode.PAYMENT_GATEWAY_DISABLED, "MSG43 409"),
             Map.entry(ErrorCode.PAYMENT_GATEWAY_UNAVAILABLE, "MSG43 503"),
             Map.entry(ErrorCode.ORDER_NOT_AWAITING_HANDLING, "MSG43 409"),
             Map.entry(ErrorCode.ORDER_ALREADY_PENDING, "MSG43 409"),
+            Map.entry(ErrorCode.MARKET_DATA_UNAVAILABLE, "MSG43 503"),
             Map.entry(ErrorCode.TRADING_PAUSED, "MSG57 503"));
 
     @ParameterizedTest

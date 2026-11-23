@@ -96,6 +96,11 @@ class OpenApiDocsTest {
             "/api/v1/paper/order-lists/{listId}/cancel",
             "/api/v1/paper/spot/pnl",
             "/api/v1/paper/equity",
+            "/api/v1/paper/pnl/analysis",
+            "/api/v1/admin/paper/overview",
+            "/api/v1/market/{market}/{symbol}/chart-candles",
+            "/api/v1/analysis/latency-samples",
+            "/api/v1/admin/latency",
             "/api/v1/paper/futures/accountConfig",
             "/api/v1/paper/futures/commissionRate",
             "/api/v1/paper/futures/positionSide/dual",
@@ -244,9 +249,13 @@ class OpenApiDocsTest {
             "/api/v1/admin/orders",
             "/api/v1/admin/orders/{orderCode}",
             "/api/v1/admin/orders/{orderCode}/reconcile",
-            "/api/v1/admin/orders/{orderCode}/handled");
+            "/api/v1/admin/orders/{orderCode}/handled",
+            "/api/v1/admin/packages",
+            "/api/v1/admin/packages/{packageId}",
+            "/api/v1/admin/packages/{packageId}/active",
+            "/api/v1/admin/packages/tiers/{tier}/limits");
 
-    private static final int OPERATIONS = 263;
+    private static final int OPERATIONS = 275;
 
     @Autowired
     private MockMvc mvc;

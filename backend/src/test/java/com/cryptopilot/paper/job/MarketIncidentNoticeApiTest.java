@@ -19,6 +19,7 @@ import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.notification.service.MarketNotificationService;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import java.math.BigDecimal;
@@ -149,6 +150,8 @@ class MarketIncidentNoticeApiTest {
                         .param(account)
                         .update();
             }
+            // Paper notices (TR-29) and their pushes are written after the commit: awaited first.
+            InAppNotifications.remove(sql, List.of(account));
             sql.sql("delete from user_account where user_id = ?").param(account).update();
         }
         trading.retainOnly(MarketType.FUTURES, List.of());

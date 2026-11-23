@@ -8,7 +8,9 @@ import org.springframework.data.domain.Sort;
 /**
  * The page a list endpoint was asked for, checked once for every endpoint: a page from 1, 1 to
  * {@link PageResponse#MAX_PAGE_SIZE} items, 20 when absent (CR-04). A value outside that range is a validation error
- * on its own parameter (MSG15), never silently clamped.
+ * on its own parameter (MSG15), never silently clamped. So is a page so far out that its rows would start past the
+ * largest offset a query takes ({@link Integer#MAX_VALUE}): {@code ?page=2147483647} is a 400, not an overflow deep in
+ * the persistence layer answered with a 500 (T-118).
  *
  * <p>Rule: CR-04.
  */
@@ -41,6 +43,11 @@ public final class Paging {
             throw new FieldValidationException(
                     "pageSize must be between 1 and " + PageResponse.MAX_PAGE_SIZE + ", was " + size,
                     Map.of("pageSize", "MSG15"));
+        }
+        if ((long) number * size > Integer.MAX_VALUE) {
+            throw new FieldValidationException(
+                    "page " + number + " of " + size + " starts past the last row a query can reach",
+                    Map.of("page", "MSG15"));
         }
         return PageRequest.of(number - 1, size, sort);
     }

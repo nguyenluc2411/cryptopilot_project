@@ -13,8 +13,15 @@ import com.cryptopilot.paper.dto.response.FuturesTradeResponse;
 import com.cryptopilot.paper.entity.PaperBalance;
 import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.event.PaperOrderNotice;
 import com.cryptopilot.paper.model.PaperAccount;
+import com.cryptopilot.paper.model.enums.FillSource;
+import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.WalletType;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -29,6 +36,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -59,7 +67,19 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  *
  * <p>Runs inside the caller's transaction. Outside one there is nothing to wait for, so nothing is noted.
  *
- * <p>Rule: TR-08, TR-41, TR-43; TECHNICAL_DESIGN 9.
+ * <h2>Notices</h2>
+ *
+ * <p>An order the transaction left filled, triggered, or cancelled or expired by the system is also published as a
+ * {@link PaperOrderNotice}, before the commit, so the notification module writes its notification once it has
+ * committed (TR-29). A notice that cannot be published is logged and dropped, like a push.
+ *
+ *
+ * <h2>Measured (TR-36)</h2>
+ *
+ * <p>{@code cryptopilot.paper.fill.latency} times each live fill from the trade it matched on the exchange to the
+ * commit that records it, by market; a replayed fill is history and is not timed.
+ *
+ * <p>Rule: TR-08, TR-41, TR-43, TR-36; TECHNICAL_DESIGN 9.
  */
 @Component
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
@@ -97,6 +117,9 @@ public class PaperUserFeed {
     private final SimpMessageSendingOperations broker;
     private final MarketApi market;
     private final FuturesAccountServiceImpl futuresAccounts;
+    private final ApplicationEventPublisher events;
+    private final MeterRegistry meters;
+    private final Clock clock;
 
     /** Notes that an order of the account changed. */
     void order(PaperAccount account, PaperOrder order) {
@@ -158,6 +181,17 @@ public class PaperUserFeed {
         futuresOrder(account, order);
     }
 
+    /**
+     * Notes that the Trader's own placement in this transaction filled the order: the answer to the placement shows the
+     * fill, so no "Order filled" notice is given for it (TR-29). A resting order that fills later is told as before.
+     */
+    void filledOnPlacement(PaperOrder order) {
+        Pending pending = pending();
+        if (pending != null) {
+            pending.answered.add(order.getId());
+        }
+    }
+
     /** Notes that the Futures account changed without an order: a transfer, a margin change, a leverage. */
     void futuresAccount(PaperAccount account) {
         Pending pending = pending();
@@ -196,8 +230,59 @@ public class PaperUserFeed {
         return pending;
     }
 
+    /** Publishes the notice of each noted order whose end the Trader is told about (TR-29). */
+    private void publishNotices(Pending pending, Map<UUID, String> symbols) {
+        List<Owned<PaperOrder>> ended = new ArrayList<>(pending.orders.values());
+        ended.addAll(pending.futuresOrders.values());
+        ended.addAll(pending.futuresAlgos.values());
+        for (Owned<PaperOrder> owned : ended) {
+            if (pending.answered.contains(owned.row().getId()) && owned.row().getOrderStatus() == OrderStatus.FILLED) {
+                continue;
+            }
+            try {
+                PaperOrderNotices.of(owned.row(), symbols.get(owned.row().getPairId()))
+                        .ifPresent(events::publishEvent);
+            } catch (RuntimeException failure) {
+                log.warn(
+                        "TR-29 notice of order {} not published: {}",
+                        owned.row().getId(),
+                        failure.toString());
+            }
+        }
+    }
+
+    /** The fill latency timer's name (TR-36). */
+    public static final String FILL_LATENCY = "cryptopilot.paper.fill.latency";
+
+    /** Times each live fill of the transaction from the exchange's trade to now, just before the commit (TR-36). */
+    private void measureFills(Pending pending) {
+        try {
+            pending.fills.values().forEach(owned -> measure("SPOT", owned.row()));
+            pending.futuresFills.values().forEach(owned -> measure("FUTURES", owned.row()));
+        } catch (RuntimeException failure) {
+            log.debug("TR-36 fill latency not recorded: {}", failure.toString());
+        }
+    }
+
+    private void measure(String market, PaperFill fill) {
+        // A live fill is dated at the exchange's trade (its source time is a replay's candle only).
+        if (fill.getFillSource() != FillSource.LIVE || fill.getTradedAt() == null) {
+            return;
+        }
+        Duration took = Duration.between(fill.getTradedAt(), clock.instant());
+        if (!took.isNegative()) {
+            Timer.builder(FILL_LATENCY)
+                    .description("From the exchange's trade to the commit of the paper fill it made (TR-36)")
+                    .tag("market", market)
+                    .publishPercentiles(0.5, 0.95, 0.99)
+                    .register(meters)
+                    .record(took);
+        }
+    }
+
     /** The bodies of the noted changes, written from the rows as the transaction leaves them. */
     private List<Message> write(Pending pending) {
+        measureFills(pending);
         try {
             Set<UUID> pairIds = new HashSet<>();
             pending.orders.values().forEach(owned -> pairIds.add(owned.row().getPairId()));
@@ -276,6 +361,7 @@ public class PaperUserFeed {
                                 Rounding.toAmount(balance.getLockedAmount()),
                                 Rounding.toAmount(balance.total()))));
             });
+            publishNotices(pending, symbols);
             return messages;
         } catch (RuntimeException failure) {
             log.warn("TR-08 paper pushes of a transaction could not be written: {}", failure.toString());
@@ -318,6 +404,7 @@ public class PaperUserFeed {
         private final Map<UUID, Owned<PaperOrder>> futuresAlgos = new LinkedHashMap<>();
         private final List<Message> direct = new ArrayList<>();
         private final Set<UUID> futuresAccounts = new LinkedHashSet<>();
+        private final Set<UUID> answered = new HashSet<>();
         private List<Message> messages = List.of();
     }
 

@@ -281,13 +281,15 @@ class PaperTradingSchemaTest {
                         .update());
     }
 
+    /** TR-28 (V75): a Spot sale records what it realised against the average cost; a Spot fill has no position side. */
     @Test
-    void BR21_aSpotFill_realisesNoProfitOrLoss() {
+    void TR28_aSpotFill_mayRecordWhatItRealised_butHasNoPositionSide() {
         UUID orderId = insertMarketOrder("SPOT", null, false);
         insertFill(orderId, "SPOT", null, null);
+        insertFill(orderId, "SPOT", null, BigDecimal.TEN);
 
         assertThatExceptionOfType(DataIntegrityViolationException.class)
-                .isThrownBy(() -> insertFill(orderId, "SPOT", null, BigDecimal.TEN));
+                .isThrownBy(() -> insertFill(orderId, "SPOT", "BOTH", BigDecimal.TEN));
     }
 
     // ---------------------------------------------------------------- helpers

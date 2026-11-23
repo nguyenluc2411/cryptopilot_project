@@ -42,6 +42,7 @@ import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.paper.service.PaperPnlService;
+import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -176,6 +177,8 @@ class PaperOrderApiTest {
                         .param(trader)
                         .update();
             }
+            // Paper notices (TR-29) and their pushes are written after the commit: awaited first.
+            InAppNotifications.remove(sql, List.of(trader));
             sql.sql("delete from user_account where user_id = ?").param(trader).update();
         }
         sql.sql("delete from order_matching_watermark where pair_id = ?")
@@ -1050,6 +1053,35 @@ class PaperOrderApiTest {
     }
 
     /**
+     * TR-28: a sale realises what it netted less the share of the average cost it took, recorded on its fill; a buy
+     * realises nothing.
+     */
+    @Test
+    void TR28_aSale_recordsWhatItRealised_againstTheAverageCost() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String bought = id(place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated()));
+        price("110");
+        String sold = id(place(trader, market("SELL", "\"quantity\": 1")).andExpect(status().isCreated()));
+
+        // 1 sold at 110 nets 110 less the 0.11 fee; it takes 1 / 1.998 of the 200 cost, 100.1001001.
+        assertThat(sql.sql("select realized_pnl_amount from order_fill where order_id = ?")
+                        .param(UUID.fromString(sold))
+                        .query(BigDecimal.class)
+                        .single())
+                .isEqualByComparingTo("9.7898999");
+        assertThat(sql.sql("select realized_pnl_amount from order_fill where order_id = ?")
+                        .param(UUID.fromString(bought))
+                        .query(BigDecimal.class)
+                        .list())
+                .containsOnlyNulls();
+        as(trader, get(PAPER + "/pnl/analysis").param("market", "SPOT").param("days", "7"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.trades.closed").value(1))
+                .andExpect(jsonPath("$.trades.wins").value(1));
+    }
+
+    /**
      * TR-13: the account's worth is snapshotted when it opens; today's PnL is the worth now less that snapshot, and a
      * second snapshot of the same day is never taken.
      */
@@ -1346,6 +1378,40 @@ class PaperOrderApiTest {
     // ------------------------------------------------------------------------------------------
     // Idempotency, refusals, ownership
     // ------------------------------------------------------------------------------------------
+
+    /**
+     * TR-31: one clientOrderId sent twice at once, as a double click does, is one order: the first is created, the other
+     * answers that same order, and only its funds are locked.
+     */
+    @Test
+    void TR31_theSameClientOrderId_twiceAtOnce_isOneOrder_andLocksOnce() throws Exception {
+        UUID trader = trader();
+        price("100");
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 10; i++) {
+                String body = "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\","
+                        + " \"type\": \"LIMIT\", \"price\": 90, \"quantity\": 1, \"clientOrderId\": \"dbl-" + i + "\"}";
+                CyclicBarrier start = new CyclicBarrier(2);
+                List<Future<String>> answers = new ArrayList<>();
+                for (int n = 0; n < 2; n++) {
+                    answers.add(pool.submit(() -> {
+                        start.await();
+                        return place(trader, body).andReturn().getResponse().getContentAsString();
+                    }));
+                }
+                String first = JsonPath.read(answers.get(0).get(30, TimeUnit.SECONDS), "$.orderId");
+                String second = JsonPath.read(answers.get(1).get(30, TimeUnit.SECONDS), "$.orderId");
+
+                assertThat(second).as("iteration %s", i).isEqualTo(first);
+                assertThat(orderCount(trader)).isEqualTo(i + 1L);
+                assertThat(locked(trader, "USDT")).isEqualByComparingTo(BigDecimal.valueOf(90L * (i + 1)));
+            }
+            PaperLedgerInvariant.assertHolds(sql, accountOf(trader));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 
     @Test
     void TR02_theSameClientOrderId_isTheSameOrder_andReusedForAnotherOrderIsAConflict() throws Exception {

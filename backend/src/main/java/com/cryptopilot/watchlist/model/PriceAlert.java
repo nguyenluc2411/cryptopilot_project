@@ -32,6 +32,9 @@ import java.util.UUID;
  * @param lastTriggeredAt when it last fired, or {@code null}
  * @param lastBarOpenTime the open time of the 1h candle it last fired on, or {@code null}
  * @param version the row version the bookkeeping was read at; a trigger is recorded only on this version
+ * @param armedAt when the rule took its current form: the row's {@code updated_at}, which moves on creation, on every
+ *     edit (an edit replaces the whole rule), on a resume and on a trigger; a replayed price from before it is not
+ *     judged against this rule (T-111)
  */
 public record PriceAlert(
         UUID alertId,
@@ -51,7 +54,8 @@ public record PriceAlert(
         int triggerCount,
         Instant lastTriggeredAt,
         Instant lastBarOpenTime,
-        long version) {
+        long version,
+        Instant armedAt) {
 
     public PriceAlert {
         Objects.requireNonNull(alertId, "alertId");
@@ -60,6 +64,7 @@ public record PriceAlert(
         Objects.requireNonNull(condition, "condition");
         Objects.requireNonNull(threshold, "threshold");
         Objects.requireNonNull(triggerMode, "triggerMode");
+        Objects.requireNonNull(armedAt, "armedAt");
     }
 
     /** The alert after a trigger this engine recorded, with the row version the update produced. */
@@ -82,6 +87,7 @@ public record PriceAlert(
                 triggerCount + 1,
                 at,
                 barOpenTime,
-                version + 1);
+                version + 1,
+                armedAt.isAfter(at) ? armedAt : at);
     }
 }

@@ -46,4 +46,15 @@ class PagingTest {
                 .satisfies(refused -> assertThat(refused.errors()).containsEntry("pageSize", "MSG15"));
         assertThatExceptionOfType(FieldValidationException.class).isThrownBy(() -> Paging.of(null, 0));
     }
+
+    /** T-118: a page whose first row lies past the largest query offset is refused on its parameter, not overflowed. */
+    @Test
+    void T118_aPagePastTheLargestOffset_isRefusedOnItsParameter() {
+        assertThatExceptionOfType(FieldValidationException.class)
+                .isThrownBy(() -> Paging.of(Integer.MAX_VALUE, null))
+                .satisfies(e -> assertThat(e.errors()).containsEntry("page", "MSG15"));
+        assertThatExceptionOfType(FieldValidationException.class).isThrownBy(() -> Paging.of(21_474_837, 100));
+        PageRequest last = Paging.of(21_474_836, 100);
+        assertThat(last.getOffset() + last.getPageSize()).isLessThanOrEqualTo(Integer.MAX_VALUE);
+    }
 }

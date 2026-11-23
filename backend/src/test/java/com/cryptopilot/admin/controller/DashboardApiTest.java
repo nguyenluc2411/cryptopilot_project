@@ -152,8 +152,8 @@ class DashboardApiTest {
         assertThat(csv.split("\r\n"))
                 .containsExactly(
                         "period,coveredFrom,coveredTo,newUsers,paidOrders,revenue,revenue:PREMIUM_MONTHLY,"
-                                + "revenue:PRO_MONTHLY,newPosts,newComments,aiQuestions",
-                        "2031-03-01,2031-03-01,2031-03-31,4,2,298000,199000,99000,2,1,0");
+                                + "revenue:PRO_MONTHLY,newPosts,newComments,aiQuestions,paperAccountsOpened,paperFills",
+                        "2031-03-01,2031-03-01,2031-03-31,4,2,298000,199000,99000,2,1,0,0,0");
     }
 
     @Test

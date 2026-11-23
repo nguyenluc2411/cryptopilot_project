@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.entity;
 
 import com.cryptopilot.common.entity.BaseEntity;
+import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.FillSource;
@@ -102,7 +103,10 @@ public class PaperFill extends BaseEntity {
     @Column(name = "position_id", updatable = false)
     private UUID positionId;
 
-    /** What a Futures fill realised, zero when it opened or increased; {@code null} on Spot. */
+    /**
+     * What a Futures fill realised, zero when it opened or increased; on Spot what a sale realised against the coin's
+     * average cost (TR-28), {@code null} on a buy and on a sale whose cost was not known.
+     */
     @Column(name = "realized_pnl_amount", precision = 28, scale = 8, updatable = false)
     private BigDecimal realizedPnlAmount;
 
@@ -138,6 +142,20 @@ public class PaperFill extends BaseEntity {
     public static PaperFill of(PaperOrder order, Execution execution, UsdtRate quoteUsdt) {
         return new PaperFill(
                 Objects.requireNonNull(order, "order"), Objects.requireNonNull(execution, "execution"), quoteUsdt);
+    }
+
+    /**
+     * Records what a Spot sale realised in USDT: what it netted less the share of the coin's average cost it took
+     * (TR-28, BR-73). Set before the fill is stored.
+     *
+     * @throws IllegalStateException on a Futures fill or a buy
+     */
+    public PaperFill realisedOnSale(BigDecimal realizedPnl) {
+        if (marketType != MarketType.SPOT || side != OrderSide.SELL) {
+            throw new IllegalStateException("only a Spot sale realises against an average cost");
+        }
+        realizedPnlAmount = Rounding.toAmount(Objects.requireNonNull(realizedPnl, "realizedPnl"));
+        return this;
     }
 
     /**
