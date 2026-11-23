@@ -4,9 +4,11 @@ import com.cryptopilot.common.config.OpenApiConfig;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.paper.dto.request.PlaceOrderListRequest;
 import com.cryptopilot.paper.dto.request.PlaceOrderRequest;
+import com.cryptopilot.paper.dto.request.ReplaceOrderRequest;
 import com.cryptopilot.paper.dto.response.FillResponse;
 import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
+import com.cryptopilot.paper.dto.response.ReplacedOrderResponse;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
 import com.cryptopilot.paper.model.PlacedOrderList;
@@ -259,6 +261,28 @@ public class PaperOrderController {
         return csv(
                 "cryptopilot-spot-trades.csv",
                 orders.exportFills(callerOf(caller), OrderQuery.fills(pairId, orderId, side, from, to, null, null)));
+    }
+
+    @Operation(
+            summary = "Cancel a working LIMIT or LIMIT_MAKER order and place it again at a new price (B4)."
+                    + " Binance: POST /api/v3/order/cancelReplace, STOP_ON_FAILURE")
+    @ApiResponse(responseCode = "200", description = "The cancelled order and the one placed in its place")
+    @ApiResponse(
+            responseCode = "400",
+            description = "MSG01, MSG15: the new terms do not fit the pair's filters, or the order is of another type"
+                    + " or of a group (orderId)")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such order of the caller")
+    @ApiResponse(
+            responseCode = "409",
+            description = "MSG43: the order has finished, is unchanged, or the new order is refused"
+                    + " (e.g. a LIMIT_MAKER that would take); the old order then works on as it was")
+    @PostMapping("/orders/{orderId}/replace")
+    public ReplacedOrderResponse replace(
+            @AuthenticationPrincipal Jwt caller,
+            @PathVariable UUID orderId,
+            @Valid @RequestBody ReplaceOrderRequest request) {
+        return orders.replace(callerOf(caller), orderId, request);
     }
 
     private static ResponseEntity<String> csv(String name, PaperOrderService.Export export) {

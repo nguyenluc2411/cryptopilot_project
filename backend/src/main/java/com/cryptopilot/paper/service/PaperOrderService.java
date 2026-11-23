@@ -3,9 +3,11 @@ package com.cryptopilot.paper.service;
 import com.cryptopilot.common.web.PageResponse;
 import com.cryptopilot.paper.dto.request.PlaceOrderListRequest;
 import com.cryptopilot.paper.dto.request.PlaceOrderRequest;
+import com.cryptopilot.paper.dto.request.ReplaceOrderRequest;
 import com.cryptopilot.paper.dto.response.FillResponse;
 import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
+import com.cryptopilot.paper.dto.response.ReplacedOrderResponse;
 import com.cryptopilot.paper.model.OrderQuery;
 import com.cryptopilot.paper.model.PlacedOrder;
 import com.cryptopilot.paper.model.PlacedOrderList;
@@ -51,6 +53,19 @@ public interface PaperOrderService {
      * @throws com.cryptopilot.common.exception.BusinessException {@code PAPER_ORDER_NOT_OPEN} when it has finished
      */
     OrderResponse cancel(UUID userId, UUID orderId);
+
+    /**
+     * Cancels a working LIMIT or LIMIT_MAKER order outside a group and places one with the new price, and quantity,
+     * in its place (B4); both happen or neither does.
+     *
+     * @throws com.cryptopilot.common.exception.ResourceNotFoundException when the caller has no such Spot order
+     * @throws com.cryptopilot.common.exception.FieldValidationException when the order is of another type or of a
+     *     group ({@code orderId} MSG15), or the new terms do not fit the pair's filters
+     * @throws com.cryptopilot.common.exception.BusinessException {@code PAPER_ORDER_NOT_OPEN} when it has finished;
+     *     {@code PAPER_ORDER_UNCHANGED} when it already works at that price and quantity; any refusal of a placement
+     *     for the new order, which leaves the old one working
+     */
+    ReplacedOrderResponse replace(UUID userId, UUID orderId, ReplaceOrderRequest request);
 
     /**
      * Places a group of orders (TR-10), once per {@code listClientOrderId}: a key already used for the same group

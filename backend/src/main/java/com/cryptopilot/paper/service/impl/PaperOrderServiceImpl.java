@@ -20,9 +20,11 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.dto.request.PlaceOrderListRequest;
 import com.cryptopilot.paper.dto.request.PlaceOrderRequest;
+import com.cryptopilot.paper.dto.request.ReplaceOrderRequest;
 import com.cryptopilot.paper.dto.response.FillResponse;
 import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
+import com.cryptopilot.paper.dto.response.ReplacedOrderResponse;
 import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.entity.PaperOrderList;
@@ -113,6 +115,9 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     private static final Set<OrderStatus> LISTED_OPEN =
             EnumSet.of(OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED, OrderStatus.PENDING_NEW);
 
+    /** The orders a cancel-replace takes (B4): those that wait at a price the Trader may move. */
+    private static final Set<OrderType> REPLACEABLE = EnumSet.of(OrderType.LIMIT, OrderType.LIMIT_MAKER);
+
     private final PaperAccountRepository accounts;
     private final PaperOrderRepository orders;
     private final PaperFillRepository fills;
@@ -145,10 +150,83 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 return new PlacedOrder(replayOf(placed.get(), request), false);
             }
         }
-        // A pair the exchange stopped trading takes no new order: its open ones are cancelled (NSF-01).
-        TradablePair pair = market.tradablePair(request.pairId(), request.market())
+        String key = request.clientOrderId() == null ? UuidV7.next().toString() : request.clientOrderId();
+        TradablePair pair = tradable(request.pairId());
+        PaperOrder order = placeNew(account, pair, request, key);
+        return new PlacedOrder(toResponse(order, pair.symbol()), true);
+    }
+
+    /**
+     * Cancels a working LIMIT or LIMIT_MAKER order and places one at the new price in its place, in one transaction,
+     * as the exchange's {@code cancelReplace} with {@code STOP_ON_FAILURE} (B4): when the new order is refused for any
+     * reason, the transaction rolls back and the old order works on as it was, its funds still locked, still in the
+     * engine's book (which only hears of either change after the commit). The new order keeps the side, type and time
+     * in force; its quantity is the one asked for, else what the old order had left. It is checked and executed as any
+     * placement: a LIMIT price that crosses the book takes it now, a LIMIT_MAKER one is refused.
+     */
+    @Override
+    @Transactional
+    public ReplacedOrderResponse replace(UUID userId, UUID orderId, ReplaceOrderRequest request) {
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        health.requireTrading(MarketType.SPOT);
+        PaperAccount account = accountOf(userId);
+        PaperOrder old = orders.findByIdAndUserIdAndMarketType(orderId, account.userId(), MarketType.SPOT)
+                .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
+        if (!old.isOpen()) {
+            throw new BusinessException(
+                    ErrorCode.PAPER_ORDER_NOT_OPEN,
+                    "order " + orderId + " is " + old.getOrderStatus() + " and cannot be replaced",
+                    old.getOrderStatus());
+        }
+        if (!REPLACEABLE.contains(old.getOrderType()) || old.getListId() != null) {
+            // A stop, a market order or an order of a group is cancelled and placed again by the Trader.
+            throw new FieldValidationException(
+                    "only a working LIMIT or LIMIT_MAKER order outside a group can be replaced",
+                    Map.of("orderId", "MSG15"));
+        }
+        BigDecimal left = old.getOrigQuantity().subtract(old.getExecutedQuantity());
+        BigDecimal quantity = request.quantity() == null ? left : request.quantity();
+        if (old.getLimitPrice().compareTo(request.price()) == 0 && left.compareTo(quantity) == 0) {
+            throw new BusinessException(
+                    ErrorCode.PAPER_ORDER_UNCHANGED, "order " + orderId + " already works at this price and quantity");
+        }
+        TradablePair pair = tradable(old.getPairId());
+        cancelWorking(account, old, coinsOf(old.getPairId()), clock.instant());
+        PlaceOrderRequest next = new PlaceOrderRequest(
+                old.getPairId(),
+                MarketType.SPOT,
+                old.getSide(),
+                old.getOrderType(),
+                old.getOrderType() == OrderType.LIMIT ? old.getTimeInForce() : null,
+                request.price(),
+                quantity,
+                null,
+                null,
+                null,
+                null);
+        requireShape(next);
+        PaperOrder placed = placeNew(account, pair, next, UuidV7.next().toString());
+        log.debug(
+                "Paper order {} on {} replaced by {}: {}",
+                old.getId(),
+                pair.symbol(),
+                placed.getId(),
+                placed.getOrderStatus());
+        return new ReplacedOrderResponse(toResponse(old, pair.symbol()), toResponse(placed, pair.symbol()));
+    }
+
+    /** A pair the exchange stopped trading takes no new order: its open ones are cancelled (NSF-01). */
+    private TradablePair tradable(UUID pairId) {
+        return market.tradablePair(pairId, MarketType.SPOT)
                 .filter(TradablePair::exchangeTrading)
-                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", request.pairId()));
+                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", pairId));
+    }
+
+    /**
+     * Checks a new order against the pair's filters and the account's limits, and places it under {@code key}; a
+     * refusal throws, and the caller's transaction leaves no row.
+     */
+    private PaperOrder placeNew(PaperAccount account, TradablePair pair, PlaceOrderRequest request, String key) {
         Terms terms = termsOf(request, pair.filters());
         limits.requireRoom(
                 account.userId(), pair.pairId(), pair.filters(), 1, terms.type().isSpotStop() ? 1 : 0);
@@ -164,7 +242,6 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 .orElseThrow(() -> new IllegalStateException("pair " + pair.pairId() + " is tradable but not stored"));
         usdtRates.requireValued(coins);
         Optional<SpotArrival.Book> book = arrival.bookFor(pair, terms.side());
-        String key = request.clientOrderId() == null ? UuidV7.next().toString() : request.clientOrderId();
         PaperOrder order =
                 switch (request.type()) {
                     case MARKET -> placeMarket(account, pair, coins, terms, key, book);
@@ -181,7 +258,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 order.getSide(),
                 order.getOrderType(),
                 order.getOrderStatus());
-        return new PlacedOrder(toResponse(order, pair.symbol()), true);
+        return order;
     }
 
     /** A closed market blocks cancels too, as the exchange does during maintenance (D-159). */

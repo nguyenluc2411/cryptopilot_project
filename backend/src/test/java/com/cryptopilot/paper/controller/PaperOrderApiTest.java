@@ -1534,6 +1534,268 @@ class PaperOrderApiTest {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Cancel-replace (paper-trading-plan 20.2: B4)
+    // ------------------------------------------------------------------------------------------
+
+    private ResultActions replace(UUID trader, String id, String body) throws Exception {
+        return as(trader, post(PAPER + "/orders/" + id + "/replace"), body);
+    }
+
+    /** Waits until the engine's book holds the order, or no longer does; it hears of changes after the commit. */
+    private void awaitInBook(String id, boolean present) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        boolean found;
+        do {
+            found = matching.restingOrders().stream()
+                    .anyMatch(order -> order.orderId().toString().equals(id));
+            if (found == present) {
+                return;
+            }
+            Thread.sleep(20);
+        } while (System.nanoTime() < deadline);
+        assertThat(found).as("order %s in the engine's book", id).isEqualTo(present);
+    }
+
+    private String orderStatus(String id) {
+        return sql.sql("select order_status from trade_order where order_id = ?")
+                .param(UUID.fromString(id))
+                .query(String.class)
+                .single();
+    }
+
+    /**
+     * A refused replacement changes nothing (B4, STOP_ON_FAILURE): for each way the new order can be refused, the old
+     * one stays NEW with its funds locked, no row or ledger entry is added, and the engine still fills it at its price.
+     */
+    @Test
+    void B4_aReplacementTheNewOrderCannotPass_leavesTheOldOrderWorking_forEveryRefusal() throws Exception {
+        record Refusal(String name, String type, String body, int status, String code) {}
+        List<Refusal> refusals = List.of(
+                new Refusal("off the tick", "LIMIT", "{\"price\": 89.995}", 400, null),
+                new Refusal("off the step", "LIMIT", "{\"price\": 89, \"quantity\": 1.0005}", 400, null),
+                new Refusal("worth too little", "LIMIT", "{\"price\": 89, \"quantity\": 0.01}", 400, null),
+                new Refusal(
+                        "more than the wallet holds",
+                        "LIMIT",
+                        "{\"price\": 99, \"quantity\": 200}",
+                        400,
+                        "PAPER_INSUFFICIENT_BALANCE"),
+                new Refusal("too far from the price", "LIMIT", "{\"price\": 0.01, \"quantity\": 1000}", 400, null),
+                new Refusal(
+                        "post only that would take", "LIMIT_MAKER", "{\"price\": 100}", 409, "PAPER_ORDER_WOULD_TAKE"),
+                new Refusal("unchanged", "LIMIT", "{\"price\": 90}", 409, "PAPER_ORDER_UNCHANGED"),
+                new Refusal(
+                        "unchanged, quantity given",
+                        "LIMIT",
+                        "{\"price\": 90, \"quantity\": 1}",
+                        409,
+                        "PAPER_ORDER_UNCHANGED"),
+                new Refusal("no price", "LIMIT", "{\"quantity\": 1}", 400, null),
+                new Refusal("price zero", "LIMIT", "{\"price\": 0}", 400, null));
+        rule("spot_bid_multiplier_up", "1.5");
+        rule("spot_bid_multiplier_down", "0.5");
+        for (Refusal refusal : refusals) {
+            UUID trader = trader();
+            price("100");
+            String old = id(place(
+                    trader,
+                    refusal.type().equals("LIMIT") ? limit("BUY", "90", "1", null) : limitMaker("BUY", "90", "1")));
+            long rows = orderCount(trader);
+            long entries = ledgerRows(trader);
+            BigDecimal lockedBefore = locked(trader, "USDT");
+
+            ResultActions refused = replace(trader, old, refusal.body()).andExpect(status().is(refusal.status()));
+            if (refusal.code() != null) {
+                refused.andExpect(jsonPath("$.code").value(refusal.code()));
+            }
+
+            assertThat(orderStatus(old)).as(refusal.name()).isEqualTo("NEW");
+            assertThat(orderCount(trader)).as(refusal.name()).isEqualTo(rows);
+            assertThat(ledgerRows(trader)).as(refusal.name()).isEqualTo(entries);
+            assertThat(locked(trader, "USDT")).as(refusal.name()).isEqualByComparingTo(lockedBefore);
+            awaitInBook(old, true);
+            trade("90", 1);
+            awaitStatus(trader, old, "FILLED");
+            assertLedgerAddsUpToTheBalances(trader);
+        }
+    }
+
+    /**
+     * A successful replacement, for each kind of order and move: the old order is CANCELED with its funds given back,
+     * the new one keeps the side, type and time in force, locks what it needs at its new price and fills there, and
+     * the engine no longer fills the old one.
+     */
+    @Test
+    void B4_aReplacement_cancelsTheOldOrder_andTheNewOneWorksAtItsPrice_forEveryKindAndMove() throws Exception {
+        record Move(
+                String name,
+                String side,
+                String type,
+                String timeInForce,
+                String from,
+                String to,
+                String quantity,
+                String newQuantity,
+                String locked,
+                String lockedCoin) {}
+        List<Move> moves = List.of(
+                new Move("buy lower", "BUY", "LIMIT", null, "90", "85", "1", null, "85", "USDT"),
+                new Move("buy higher, still waiting", "BUY", "LIMIT", null, "90", "95", "1", null, "95", "USDT"),
+                new Move("buy more", "BUY", "LIMIT", null, "90", "90", "1", "3", "270", "USDT"),
+                new Move("buy less, lower", "BUY", "LIMIT", null, "90", "80", "2", "0.5", "40", "USDT"),
+                new Move("sell higher", "SELL", "LIMIT", null, "110", "120", "1", null, "1", "BASE"),
+                new Move("sell lower, still waiting", "SELL", "LIMIT", null, "110", "105", "1", null, "1", "BASE"),
+                new Move("post-only buy lower", "BUY", "LIMIT_MAKER", null, "90", "88", "1", null, "88", "USDT"),
+                new Move(
+                        "post-only sell higher", "SELL", "LIMIT_MAKER", null, "110", "115", "1", "0.5", "0.5", "BASE"));
+        for (Move move : moves) {
+            UUID trader = trader();
+            price("100");
+            if (move.side().equals("SELL")) {
+                place(trader, market("BUY", "\"quantity\": 3")).andExpect(status().isCreated());
+            }
+            String coin = move.lockedCoin().equals("BASE") ? base() : "USDT";
+            BigDecimal lockedAtStart = locked(trader, coin);
+            String old = id(place(
+                    trader,
+                    move.type().equals("LIMIT")
+                            ? limit(move.side(), move.from(), move.quantity(), move.timeInForce())
+                            : limitMaker(move.side(), move.from(), move.quantity())));
+
+            String body = "{\"price\": " + move.to()
+                    + (move.newQuantity() == null ? "" : ", \"quantity\": " + move.newQuantity()) + "}";
+            String answer = replace(trader, old, body)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.canceled.orderId").value(old))
+                    .andExpect(jsonPath("$.canceled.status").value("CANCELED"))
+                    .andExpect(jsonPath("$.placed.status").value("NEW"))
+                    .andExpect(jsonPath("$.placed.side").value(move.side()))
+                    .andExpect(jsonPath("$.placed.type").value(move.type()))
+                    .andReturn()
+                    .getResponse()
+                    .getContentAsString();
+            String placed = JsonPath.read(answer, "$.placed.orderId");
+            assertThat(placed).as(move.name()).isNotEqualTo(old);
+            assertThat(new BigDecimal(JsonPath.read(answer, "$.placed.price").toString()))
+                    .as(move.name())
+                    .isEqualByComparingTo(move.to());
+            assertThat(new BigDecimal(JsonPath.read(answer, "$.placed.quantity").toString()))
+                    .as(move.name())
+                    .isEqualByComparingTo(move.newQuantity() == null ? move.quantity() : move.newQuantity());
+            if (move.type().equals("LIMIT")) {
+                assertThat((String) JsonPath.read(answer, "$.placed.timeInForce"))
+                        .isEqualTo("GTC");
+            }
+            assertThat(locked(trader, coin).subtract(lockedAtStart))
+                    .as("%s: locks the new order's need only", move.name())
+                    .isEqualByComparingTo(move.locked());
+            awaitInBook(old, false);
+            awaitInBook(placed, true);
+
+            trade(move.to(), 1);
+            awaitStatus(trader, placed, "FILLED");
+            assertThat(orderStatus(old)).as(move.name()).isEqualTo("CANCELED");
+            assertThat(locked(trader, coin)).as(move.name()).isEqualByComparingTo(lockedAtStart);
+            assertLedgerAddsUpToTheBalances(trader);
+        }
+    }
+
+    @Test
+    void B4_aLimitMovedAcrossTheBook_executesAtOnceAsATaker_likeANewOrder() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "5")), List.of(level("99", "5")));
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+
+        replace(trader, old, "{\"price\": 100}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canceled.status").value("CANCELED"))
+                .andExpect(jsonPath("$.placed.status").value("FILLED"))
+                .andExpect(jsonPath("$.placed.avgPrice").value(100.0));
+
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("0");
+        assertThat(spot(trader, base())).isEqualByComparingTo("0.999");
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B4_aPartlyFilledOrder_isReplacedByWhatItHasLeft_andKeepsWhatItExecuted() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "1"), level("101", "5")), List.of(level("99", "5")));
+        String old = id(place(trader, limit("BUY", "100", "3", null)));
+        assertThat(orderStatus(old)).isEqualTo("PARTIALLY_FILLED");
+
+        String answer = replace(trader, old, "{\"price\": 95}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canceled.status").value("CANCELED"))
+                .andExpect(jsonPath("$.canceled.executedQuantity").value(1.0))
+                .andExpect(jsonPath("$.placed.quantity").value(2.0))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("190");
+        trade("95", 1);
+        awaitStatus(trader, JsonPath.read(answer, "$.placed.orderId"), "FILLED");
+        assertThat(spot(trader, base())).as("1 + 2 bought, less 0.1 %").isEqualByComparingTo("2.997");
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B4_onlyAWorkingLimitOrLimitMakerOfTheCallerOutsideAGroup_canBeReplaced() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String filled = id(place(trader, market("BUY", "\"quantity\": 2")));
+        String stop = id(place(trader, stop("STOP_LOSS_LIMIT", "SELL", "95", null, "94", "1")));
+        String cancelled = id(place(trader, limit("BUY", "80", "1", null)));
+        as(trader, post(PAPER + "/orders/" + cancelled + "/cancel"), null).andExpect(status().isOk());
+        String group = placeList(trader, oco("SELL", "0.5", "120", "90", "89"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String leg = JsonPath.read(group, "$.orders[0].orderId");
+        String mine = id(place(trader, limit("BUY", "90", "1", null)));
+        UUID stranger = trader();
+
+        replace(trader, filled, "{\"price\": 90}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_NOT_OPEN"));
+        replace(trader, cancelled, "{\"price\": 85}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_NOT_OPEN"));
+        replace(trader, stop, "{\"price\": 93}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.orderId").value("MSG15"));
+        replace(trader, leg, "{\"price\": 125}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.orderId").value("MSG15"));
+        replace(stranger, mine, "{\"price\": 85}").andExpect(status().isNotFound());
+        replace(trader, UUID.randomUUID().toString(), "{\"price\": 85}").andExpect(status().isNotFound());
+        replace(traderWithoutAccount(), mine, "{\"price\": 85}").andExpect(status().isNotFound());
+
+        assertThat(orderStatus(stop)).isEqualTo("NEW");
+        assertThat(orderStatus(leg)).isEqualTo("NEW");
+        assertThat(orderStatus(mine)).isEqualTo("NEW");
+    }
+
+    @Test
+    void B4_aReplacedOrder_cannotBeReplacedAgain_andOnlyItsReplacementLocks() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+
+        replace(trader, old, "{\"price\": 85}").andExpect(status().isOk());
+        replace(trader, old, "{\"price\": 80}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_NOT_OPEN"));
+
+        assertThat(orderCount(trader)).isEqualTo(2);
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("85");
+    }
+
+    // ------------------------------------------------------------------------------------------
     // History filters and CSV export (paper-trading-plan 20.2: B5, B6, B7)
     // ------------------------------------------------------------------------------------------
 
