@@ -39,6 +39,38 @@ final class ScriptedWebSocketClient extends HttpClient {
     }
 
     private final List<Attempt> attempts = new CopyOnWriteArrayList<>();
+    private volatile RuntimeException refusal;
+    private volatile Error shutdownFailure;
+
+    /** The next attempt is refused at once: building it throws, and it is not recorded. */
+    void refuseNextWith(RuntimeException failure) {
+        refusal = failure;
+    }
+
+    /** Stopping this client throws, as the JDK's does when its selector died and cannot be woken. */
+    void failShutdownWith(Error failure) {
+        shutdownFailure = failure;
+    }
+
+    private volatile boolean terminated;
+
+    /** From now on the client reads as terminated, as one whose selector has exited. */
+    void terminate() {
+        terminated = true;
+    }
+
+    @Override
+    public boolean isTerminated() {
+        return terminated;
+    }
+
+    @Override
+    public void shutdownNow() {
+        Error failure = shutdownFailure;
+        if (failure != null) {
+            throw failure;
+        }
+    }
 
     /** The attempts so far, oldest first. */
     List<Attempt> attempts() {
@@ -73,6 +105,11 @@ final class ScriptedWebSocketClient extends HttpClient {
 
             @Override
             public CompletableFuture<WebSocket> buildAsync(URI uri, WebSocket.Listener listener) {
+                RuntimeException refused = refusal;
+                if (refused != null) {
+                    refusal = null;
+                    throw refused;
+                }
                 CompletableFuture<WebSocket> handshake = new CompletableFuture<>();
                 attempts.add(new Attempt(uri, listener, handshake));
                 return handshake;

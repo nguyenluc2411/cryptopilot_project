@@ -179,6 +179,31 @@ class PaperMissingPriceTest {
     }
 
     /**
+     * TR-13: once the day's snapshot is stored, a coin whose price is lost again is left out of the worth now, which
+     * is no loss of the day: today's PnL reads as not known and the answer says the worth is not complete.
+     */
+    @Test
+    void TR13_aCoinWhosePriceIsLostAfterTheSnapshot_makesTodaysPnlUnknown_notALoss() throws Exception {
+        UUID trader = trader();
+        price("BTCUSDT", "60000");
+        price("ETHUSDT", "3000");
+        price("BNBUSDT", "500");
+        pnl.snapshotAll();
+        equity(trader).andExpect(jsonPath("$.complete").value(true));
+
+        clearPrices();
+        price("ETHUSDT", "3000");
+        price("BNBUSDT", "500");
+
+        // 0.1 BTC at 60,000 left out: 23,000 now against 29,000 at the snapshot, which is no 6,000 loss.
+        equity(trader)
+                .andExpect(jsonPath("$.totalEquity").value(23000.0))
+                .andExpect(jsonPath("$.complete").value(false))
+                .andExpect(jsonPath("$.todayPnl").value(nullValue()))
+                .andExpect(jsonPath("$.todayPnlPercent").value(nullValue()));
+    }
+
+    /**
      * PT-R13: granted coins without a price at the opening have no cost; once a price is known the backfill gives each
      * its amount at that price, once, and leaves a coin a fill has changed as it is.
      */

@@ -59,9 +59,26 @@ public final class StreamHttpClients implements AutoCloseable {
         }
         if (!closed && current.compareAndSet(used, next)) {
             log.warn("NSF-03 the stream HTTP client stopped ({}); a new one takes over", failure.toString());
-            used.shutdownNow();
+            stop(used);
+            if (closed) {
+                // close() ran between the check and the swap and stopped the old client: nothing would stop this one.
+                stop(next);
+            }
         } else {
-            next.shutdownNow();
+            stop(next);
+        }
+    }
+
+    /**
+     * Stops a client the shards no longer use. Stopping one whose selector has already died can throw (the JDK's
+     * selector raises an {@link InternalError} when it cannot wake), which must not reach the shard that reported
+     * the failure, or that shard would schedule no further attempt.
+     */
+    private static void stop(HttpClient client) {
+        try {
+            client.shutdownNow();
+        } catch (RuntimeException | InternalError stopFailed) {
+            log.warn("NSF-03 a stopped stream HTTP client could not be shut down cleanly ({})", stopFailed.toString());
         }
     }
 
@@ -83,6 +100,6 @@ public final class StreamHttpClients implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
-        current.get().shutdownNow();
+        stop(current.get());
     }
 }

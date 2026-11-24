@@ -91,6 +91,152 @@ class StreamHttpClientsTest {
         assertThat(clients.built).isEqualTo(1);
     }
 
+    private static BinanceStreamShard shard(
+            StreamHttpClients http,
+            ManualScheduler time,
+            MutableTestClock clock,
+            Duration idle,
+            List<Boolean> openings) {
+        return new BinanceStreamShard(
+                "TEST-0",
+                URI.create("ws://127.0.0.1:1"),
+                STREAMS,
+                http,
+                new BinanceStreamParser(JsonMapper.builder().build()),
+                time,
+                BinanceStreamShardTest.properties(Duration.ofHours(1), idle),
+                new ReconnectBackoff(Duration.ofMillis(20), Duration.ofMillis(100), 0, () -> 0.0),
+                clock,
+                new BinanceStreamShard.Listener() {
+                    @Override
+                    public void onMessage(StreamMessage message) {}
+
+                    @Override
+                    public void onConnected(BinanceStreamShard connected, boolean afterLoss) {
+                        openings.add(afterLoss);
+                    }
+                });
+    }
+
+    /**
+     * Stopping the dead client throws (the JDK's selector raised an InternalError when it could not be woken): the
+     * shard that reported the failure still schedules its next attempt, which connects on the new client.
+     */
+    @Test
+    void NSF03_aDeadClientThatCannotBeStopped_stillLetsTheShardRetry() {
+        ScriptedWebSocketClient first = new ScriptedWebSocketClient();
+        ScriptedWebSocketClient second = new ScriptedWebSocketClient();
+        first.failShutdownWith(new InternalError(new IOException("An established connection was aborted")));
+        Clients clients = new Clients(first, second);
+        MutableTestClock clock = new MutableTestClock(AT);
+        ManualScheduler time = new ManualScheduler(clock);
+        List<Boolean> openings = new CopyOnWriteArrayList<>();
+        StreamHttpClients http = new StreamHttpClients(clients::next);
+        try (BinanceStreamShard shard = shard(http, time, clock, Duration.ofHours(1), openings)) {
+            shard.start();
+            first.attempt(0).handshake().completeExceptionally(selectorClosed());
+            time.advance(Duration.ofMillis(20));
+
+            assertThat(http.current()).isSameAs(second);
+            second.attempt(0).open();
+            assertThat(shard.isConnected()).isTrue();
+            assertThat(openings).containsExactly(true);
+        }
+    }
+
+    /** An attempt refused at once, by a throw instead of a failed handshake, is retried like any failure. */
+    @Test
+    void NSF03_anAttemptRefusedAtOnce_isRetried() {
+        ScriptedWebSocketClient only = new ScriptedWebSocketClient();
+        only.refuseNextWith(new IllegalStateException("refused"));
+        MutableTestClock clock = new MutableTestClock(AT);
+        ManualScheduler time = new ManualScheduler(clock);
+        List<Boolean> openings = new CopyOnWriteArrayList<>();
+        try (BinanceStreamShard shard =
+                shard(StreamHttpClients.fixed(only), time, clock, Duration.ofHours(1), openings)) {
+            shard.start();
+            assertThat(only.attempts()).isEmpty();
+            time.advance(Duration.ofMillis(20));
+
+            only.attempt(0).open();
+            assertThat(shard.isConnected()).isTrue();
+        }
+    }
+
+    /**
+     * A handshake in flight when the client's selector stopped never answers (the client's own timeout runs on that
+     * selector): it is given up after the connect timeout plus the idle timeout and retried; the retry fails at once
+     * on the dead client, which replaces it, and the next attempt connects on the new one. The late answer of the
+     * given-up attempt is let go.
+     */
+    @Test
+    void NSF03_aHandshakeThatNeverAnswers_isGivenUp_andTheShardRecovers_onANewClient() {
+        ScriptedWebSocketClient first = new ScriptedWebSocketClient();
+        ScriptedWebSocketClient second = new ScriptedWebSocketClient();
+        Clients clients = new Clients(first, second);
+        MutableTestClock clock = new MutableTestClock(AT);
+        ManualScheduler time = new ManualScheduler(clock);
+        List<Boolean> openings = new CopyOnWriteArrayList<>();
+        StreamHttpClients http = new StreamHttpClients(clients::next);
+        try (BinanceStreamShard shard = shard(http, time, clock, Duration.ofSeconds(10), openings)) {
+            shard.start();
+            // Connect timeout 2 s plus idle 10 s: still waited for at 10 s.
+            time.advance(Duration.ofSeconds(10));
+            assertThat(first.attempts()).hasSize(1);
+
+            time.advance(Duration.ofSeconds(6));
+            assertThat(first.attempts()).hasSize(2);
+            assertThat(http.current())
+                    .as("a given-up attempt alone replaces no client")
+                    .isSameAs(first);
+
+            first.attempt(1).handshake().completeExceptionally(selectorClosed());
+            assertThat(http.current()).isSameAs(second);
+            // The second failure in a row waits 40 ms.
+            time.advance(Duration.ofMillis(40));
+
+            ScriptedWebSocketClient.FakeWebSocket late = first.attempt(0).open();
+            assertThat(late.aborted()).isTrue();
+            assertThat(shard.isConnected()).isFalse();
+
+            second.attempt(0).open();
+            assertThat(shard.isConnected()).isTrue();
+            assertThat(openings).containsExactly(true);
+        }
+    }
+
+    /**
+     * No new client can be built for a dead one, found so by the watchdog giving up an attempt that never answered:
+     * the shard still schedules its next attempt, and the watchdog, which a throw would cancel for good, keeps
+     * running and gives up the next one too.
+     */
+    @Test
+    void NSF03_whenNoNewClientCanBeBuilt_theShardKeepsRetrying_andItsWatchdogRuns() {
+        ScriptedWebSocketClient only = new ScriptedWebSocketClient();
+        Clients clients = new Clients(only);
+        MutableTestClock clock = new MutableTestClock(AT);
+        ManualScheduler time = new ManualScheduler(clock);
+        List<Boolean> openings = new CopyOnWriteArrayList<>();
+        StreamHttpClients http = new StreamHttpClients(clients::next);
+        try (BinanceStreamShard shard = shard(http, time, clock, Duration.ofSeconds(10), openings)) {
+            shard.start();
+            only.terminate();
+
+            time.advance(Duration.ofSeconds(16));
+            assertThat(clients.built)
+                    .as("a second client was asked for, and none came")
+                    .isEqualTo(2);
+            assertThat(only.attempts()).hasSize(2);
+
+            time.advance(Duration.ofSeconds(16));
+            assertThat(clients.built).isEqualTo(3);
+            assertThat(only.attempts()).hasSize(3);
+
+            only.attempt(2).open();
+            assertThat(shard.isConnected()).isTrue();
+        }
+    }
+
     /** The shard's next attempt after the failure goes to the new client and connects. */
     @Test
     void NSF03_aShardOnAStoppedClient_reconnectsOnTheNewOne() {
