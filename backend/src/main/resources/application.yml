@@ -467,14 +467,18 @@ cryptopilot:
         # TR-03: each Spot pair also streams @aggTrade, @bookTicker and @depth20@100ms for the paper engine and the
         # trading screen: nine streams a pair instead of six.
         enabled: true
-        # TR-38: each Futures pair streams them too: @aggTrade under /market, @bookTicker and @depth20@100ms under
-        # /public, the only route that serves them (checked live 2026-10-29).
+        # TR-38: each Futures pair streams them too: @aggTrade under /market, @depth20@100ms (and @bookTicker when
+        # futures-book-ticker is on) under /public, the only route that serves them (checked live 2026-10-29).
         futures: true
         futures-public-url: wss://fstream.binance.com/public
         depth-levels: 20
         # The most streams on one /public connection (two a Futures pair, so 10 pairs). Fifty pairs on one connection
         # (thousands of messages a second) were closed by the exchange (1006) dozens of times a day (2026-11-21).
         public-streams-per-connection: 20
+        # The Futures @bookTicker is off: BTCUSDT alone pushes about 2,000 messages (300 KB) a second, and a
+        # connection carrying it was closed (1006) every few seconds to a minute even with one pair (measured
+        # 2026-11-24). The paper engine reads the depth first; its best levels, every 100 ms, stand in.
+        futures-book-ticker: false
         # A best bid and ask or depth older than this is not served as current (a lost stream).
         max-age: 10s
         # The latest trades kept per pair for the trades panel.

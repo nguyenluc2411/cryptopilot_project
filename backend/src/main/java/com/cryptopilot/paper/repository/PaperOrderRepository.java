@@ -4,12 +4,16 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.model.RestingOrder;
 import com.cryptopilot.paper.model.TriggerOrder;
+import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.OrderStatus;
 import com.cryptopilot.paper.model.enums.OrderType;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -24,6 +28,12 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Rule: TR-02.
  */
 public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
+
+    /** Every order type, for a search that does not filter by type. */
+    Set<OrderType> ALL_TYPES = Collections.unmodifiableSet(EnumSet.allOf(OrderType.class));
+
+    /** Both sides, for a search that does not filter by side. */
+    Set<OrderSide> ALL_SIDES = Collections.unmodifiableSet(EnumSet.allOf(OrderSide.class));
 
     /** An order by its key, whoever owns it: for the matching engine, which checks the account itself. */
     @Transactional(readOnly = true)
@@ -61,38 +71,68 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
             UUID userId, UUID pairId, MarketType marketType, Collection<OrderStatus> statuses);
 
     /**
-     * One page of an account's orders on one market in these statuses, placed in {@code [from, to)}, newest first.
+     * One page of an account's orders on one market in these statuses, types and sides, placed in
+     * {@code [from, to)}, newest first.
      * No parameter is null, so PostgreSQL can type every one.
      */
     @Transactional(readOnly = true)
     @Query(
             value = "select o from PaperOrder o where o.userId = :userId and o.marketType = :marketType"
-                    + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to"
-                    + " order by o.createdAt desc, o.id desc",
+                    + " and o.orderStatus in :statuses and o.orderType in :types and o.side in :sides"
+                    + " and o.createdAt >= :from and o.createdAt < :to order by o.createdAt desc, o.id desc",
             countQuery = "select count(o) from PaperOrder o where o.userId = :userId and o.marketType = :marketType"
-                    + " and o.orderStatus in :statuses and o.createdAt >= :from and o.createdAt < :to")
+                    + " and o.orderStatus in :statuses and o.orderType in :types and o.side in :sides"
+                    + " and o.createdAt >= :from and o.createdAt < :to")
     Page<PaperOrder> search(
+            UUID userId,
+            MarketType marketType,
+            Collection<OrderStatus> statuses,
+            Collection<OrderType> types,
+            Collection<OrderSide> sides,
+            Instant from,
+            Instant to,
+            Pageable pageable);
+
+    /** {@link #search} over every type and side. */
+    default Page<PaperOrder> search(
             UUID userId,
             MarketType marketType,
             Collection<OrderStatus> statuses,
             Instant from,
             Instant to,
-            Pageable pageable);
+            Pageable pageable) {
+        return search(userId, marketType, statuses, ALL_TYPES, ALL_SIDES, from, to, pageable);
+    }
+
+    /** {@link #searchPair} over every type and side. */
+    default Page<PaperOrder> searchPair(
+            UUID userId,
+            UUID pairId,
+            MarketType marketType,
+            Collection<OrderStatus> statuses,
+            Instant from,
+            Instant to,
+            Pageable pageable) {
+        return searchPair(userId, pairId, marketType, statuses, ALL_TYPES, ALL_SIDES, from, to, pageable);
+    }
 
     /** As {@link #search}, for one pair. */
     @Transactional(readOnly = true)
     @Query(
             value = "select o from PaperOrder o where o.userId = :userId and o.pairId = :pairId"
-                    + " and o.marketType = :marketType and o.orderStatus in :statuses and o.createdAt >= :from"
-                    + " and o.createdAt < :to order by o.createdAt desc, o.id desc",
+                    + " and o.marketType = :marketType and o.orderStatus in :statuses and o.orderType in :types"
+                    + " and o.side in :sides and o.createdAt >= :from and o.createdAt < :to"
+                    + " order by o.createdAt desc, o.id desc",
             countQuery = "select count(o) from PaperOrder o where o.userId = :userId and o.pairId = :pairId"
-                    + " and o.marketType = :marketType and o.orderStatus in :statuses and o.createdAt >= :from"
-                    + " and o.createdAt < :to")
+                    + " and o.marketType = :marketType and o.orderStatus in :statuses and o.orderType in :types"
+                    + " and o.side in :sides and o.createdAt >= :from and o.createdAt < :to")
     Page<PaperOrder> searchPair(
             UUID userId,
             UUID pairId,
             MarketType marketType,
             Collection<OrderStatus> statuses,
+            Collection<OrderType> types,
+            Collection<OrderSide> sides,
             Instant from,
             Instant to,
             Pageable pageable);

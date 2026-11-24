@@ -43,7 +43,7 @@ import tools.jackson.databind.json.JsonMapper;
 public final class BinanceStreamClient implements AutoCloseable {
 
     private final BinanceStreamProperties properties;
-    private final HttpClient http;
+    private final StreamHttpClients http;
     private final BinanceStreamParser parser;
     private final ScheduledExecutorService timer;
     private final ReconnectBackoff backoff;
@@ -52,9 +52,9 @@ public final class BinanceStreamClient implements AutoCloseable {
     /** A client with its own HTTP client and timer thread, both closed with it. */
     public BinanceStreamClient(BinanceStreamProperties properties, JsonMapper json, Clock clock) {
         this.properties = properties;
-        this.http = HttpClient.newBuilder()
+        this.http = new StreamHttpClients(() -> HttpClient.newBuilder()
                 .connectTimeout(properties.connectTimeout())
-                .build();
+                .build());
         this.parser = new BinanceStreamParser(json, clock);
         this.timer = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofPlatform().name("market-stream-timer").daemon().factory());
@@ -102,14 +102,16 @@ public final class BinanceStreamClient implements AutoCloseable {
     }
 
     /**
-     * The streams of one pair the venue serves under the {@code /public} route only: the best bid and ask and the
-     * depth of a Futures pair when its trading streams are enabled (TR-38); none on Spot, whose host has no routes.
+     * The streams of one pair the venue serves under the {@code /public} route only: the depth of a Futures pair when
+     * its trading streams are enabled (TR-38), and its best bid and ask only when {@code futures-book-ticker} is on
+     * (too much data to keep a connection open, measured 2026-11-24); none on Spot, whose host has no routes.
      */
     public List<String> publicStreamsFor(BinanceVenue venue, String symbol) {
         if (venue == BinanceVenue.SPOT || !tradingOn(venue)) {
             return List.of();
         }
-        return bookStreams(symbol.toLowerCase(Locale.ROOT));
+        String s = symbol.toLowerCase(Locale.ROOT);
+        return properties.trading().futuresBookTicker() ? bookStreams(s) : List.of(depthStream(s));
     }
 
     private boolean tradingOn(BinanceVenue venue) {
@@ -118,7 +120,11 @@ public final class BinanceStreamClient implements AutoCloseable {
     }
 
     private List<String> bookStreams(String s) {
-        return List.of(s + "@bookTicker", s + "@depth" + properties.trading().depthLevels() + "@100ms");
+        return List.of(s + "@bookTicker", depthStream(s));
+    }
+
+    private String depthStream(String s) {
+        return s + "@depth" + properties.trading().depthLevels() + "@100ms";
     }
 
     /** The most streams one connection carries. */
@@ -157,6 +163,6 @@ public final class BinanceStreamClient implements AutoCloseable {
     @Override
     public void close() {
         timer.shutdownNow();
-        http.shutdownNow();
+        http.close();
     }
 }

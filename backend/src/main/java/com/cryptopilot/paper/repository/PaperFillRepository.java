@@ -5,6 +5,7 @@ import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -27,21 +28,81 @@ public interface PaperFillRepository extends Repository<PaperFill, UUID> {
     @Transactional(readOnly = true)
     @Query(
             value = "select f from PaperFill f where f.userId = :userId and f.marketType = :marketType"
-                    + " and f.tradedAt >= :from and f.tradedAt < :to order by f.tradedAt desc, f.id desc",
+                    + " and f.side in :sides and f.tradedAt >= :from and f.tradedAt < :to"
+                    + " order by f.tradedAt desc, f.id desc",
             countQuery = "select count(f) from PaperFill f where f.userId = :userId and f.marketType = :marketType"
-                    + " and f.tradedAt >= :from and f.tradedAt < :to")
-    Page<PaperFill> search(UUID userId, MarketType marketType, Instant from, Instant to, Pageable pageable);
+                    + " and f.side in :sides and f.tradedAt >= :from and f.tradedAt < :to")
+    Page<PaperFill> search(
+            UUID userId,
+            MarketType marketType,
+            Collection<OrderSide> sides,
+            Instant from,
+            Instant to,
+            Pageable pageable);
+
+    /** {@link #searchPair} over both sides. */
+    default Page<PaperFill> searchPair(
+            UUID userId, UUID pairId, MarketType marketType, Instant from, Instant to, Pageable pageable) {
+        return searchPair(userId, pairId, marketType, PaperOrderRepository.ALL_SIDES, from, to, pageable);
+    }
 
     /** As {@link #search}, for one pair. */
     @Transactional(readOnly = true)
     @Query(
             value = "select f from PaperFill f where f.userId = :userId and f.pairId = :pairId"
-                    + " and f.marketType = :marketType and f.tradedAt >= :from and f.tradedAt < :to"
-                    + " order by f.tradedAt desc, f.id desc",
+                    + " and f.marketType = :marketType and f.side in :sides and f.tradedAt >= :from"
+                    + " and f.tradedAt < :to order by f.tradedAt desc, f.id desc",
             countQuery = "select count(f) from PaperFill f where f.userId = :userId and f.pairId = :pairId"
-                    + " and f.marketType = :marketType and f.tradedAt >= :from and f.tradedAt < :to")
+                    + " and f.marketType = :marketType and f.side in :sides and f.tradedAt >= :from"
+                    + " and f.tradedAt < :to")
     Page<PaperFill> searchPair(
-            UUID userId, UUID pairId, MarketType marketType, Instant from, Instant to, Pageable pageable);
+            UUID userId,
+            UUID pairId,
+            MarketType marketType,
+            Collection<OrderSide> sides,
+            Instant from,
+            Instant to,
+            Pageable pageable);
+
+    /**
+     * As {@link #search}, for the fills of one order of the account (B5, Binance {@code myTrades?orderId=}); an order
+     * of another account or market finds none.
+     */
+    @Transactional(readOnly = true)
+    @Query(
+            value = "select f from PaperFill f where f.userId = :userId and f.orderId = :orderId"
+                    + " and f.marketType = :marketType and f.side in :sides and f.tradedAt >= :from"
+                    + " and f.tradedAt < :to order by f.tradedAt desc, f.id desc",
+            countQuery = "select count(f) from PaperFill f where f.userId = :userId and f.orderId = :orderId"
+                    + " and f.marketType = :marketType and f.side in :sides and f.tradedAt >= :from"
+                    + " and f.tradedAt < :to")
+    Page<PaperFill> searchOrder(
+            UUID userId,
+            UUID orderId,
+            MarketType marketType,
+            Collection<OrderSide> sides,
+            Instant from,
+            Instant to,
+            Pageable pageable);
+
+    /** As {@link #searchOrder}, on one pair: an order on another pair finds none. No parameter is null. */
+    @Transactional(readOnly = true)
+    @Query(
+            value = "select f from PaperFill f where f.userId = :userId and f.orderId = :orderId"
+                    + " and f.pairId = :pairId and f.marketType = :marketType and f.side in :sides"
+                    + " and f.tradedAt >= :from and f.tradedAt < :to order by f.tradedAt desc, f.id desc",
+            countQuery = "select count(f) from PaperFill f where f.userId = :userId and f.orderId = :orderId"
+                    + " and f.pairId = :pairId and f.marketType = :marketType and f.side in :sides"
+                    + " and f.tradedAt >= :from and f.tradedAt < :to")
+    Page<PaperFill> searchOrderPair(
+            UUID userId,
+            UUID orderId,
+            UUID pairId,
+            MarketType marketType,
+            Collection<OrderSide> sides,
+            Instant from,
+            Instant to,
+            Pageable pageable);
 
     /**
      * The size of a Futures position at an instant: what its fills before it opened, less what they closed (plan 9.4,

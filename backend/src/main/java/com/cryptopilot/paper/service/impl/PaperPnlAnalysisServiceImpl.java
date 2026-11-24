@@ -83,7 +83,10 @@ public class PaperPnlAnalysisServiceImpl implements PaperPnlAnalysisService {
                         .collect(Collectors.toMap(
                                 PaperEquitySnapshot::getSnapshotDate, worthOf, (a, b) -> a, TreeMap::new));
         Map<LocalDate, BigDecimal> transfers = transfersOf(account.userId(), market, first);
-        BigDecimal worthNow = market == null ? now.total() : market == MarketType.SPOT ? now.spot() : now.futures();
+        // The Spot worth now leaves out the coins without a current price: today's PnL is not known, not a loss.
+        BigDecimal worthNow = market == MarketType.FUTURES
+                ? now.futures()
+                : !now.complete() ? null : market == null ? now.total() : now.spot();
 
         List<PnlAnalysisResponse.Day> daily = new ArrayList<>();
         BigDecimal cumulative = BigDecimal.ZERO;
@@ -135,7 +138,8 @@ public class PaperPnlAnalysisServiceImpl implements PaperPnlAnalysisService {
                 cumulative,
                 drawdown,
                 drawdownPercent,
-                now.complete(),
+                // Only Spot holds coins: the Futures wallet's worth is always whole.
+                market == MarketType.FUTURES || now.complete(),
                 List.copyOf(daily),
                 trades(account.userId(), market, first));
     }

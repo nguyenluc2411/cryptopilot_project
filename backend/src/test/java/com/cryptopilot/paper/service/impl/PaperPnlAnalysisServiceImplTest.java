@@ -139,7 +139,20 @@ class PaperPnlAnalysisServiceImplTest {
         assertThat(spot.maxDrawdown()).isEqualByComparingTo("0");
         assertThat(spot.maxDrawdownPercent()).isEqualByComparingTo("0.00");
         assertThat(spot.complete()).isFalse();
-        assertThat(spot.cumulativePnl()).isEqualByComparingTo("150");
+        // BNB is left out of the worth now: today is not known, so it is not counted (no loss and no gain).
+        assertThat(spot.todayPnl()).isNull();
+        assertThat(spot.daily()).hasSize(1);
+        assertThat(spot.cumulativePnl()).isEqualByComparingTo("100");
+
+        PnlAnalysisResponse all = service.analysis(TRADER, null, 7);
+        assertThat(all.todayPnl()).isNull();
+        assertThat(all.cumulativePnl()).isEqualByComparingTo("100");
+
+        // The Futures wallet holds no coin: its day is known.
+        PnlAnalysisResponse futures = service.analysis(TRADER, MarketType.FUTURES, 7);
+        assertThat(futures.todayPnl()).isEqualByComparingTo("0");
+        assertThat(futures.daily()).hasSize(2);
+        assertThat(futures.complete()).isTrue();
     }
 
     @Test
