@@ -24,7 +24,7 @@ import java.util.List;
  * @param fillColor {@code #RRGGBB} or {@code #RRGGBBAA}, or {@code null} for no fill
  * @param extendLeft whether a line goes on past its first anchor; false when left out
  * @param extendRight whether a line or zone goes on past its last anchor; false when left out
- * @param fontSize 8 to 48 pixels, or {@code null} for the default
+ * @param fontSize 12 to 48 pixels (the client's type scale starts at 12, D-161), or {@code null} for the default
  * @param fibLevels up to 24 ratios between -10 and 10, or {@code null} for the tool's default set
  */
 public record DrawingStyleRequest(
@@ -39,7 +39,7 @@ public record DrawingStyleRequest(
         Boolean extendLeft,
         Boolean extendRight,
 
-        @Min(value = 8, message = "MSG01") @Max(value = 48, message = "MSG01")
+        @Min(value = 12, message = "MSG01") @Max(value = 48, message = "MSG01")
         Integer fontSize,
 
         @Size(max = 24, message = "MSG01")

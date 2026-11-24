@@ -314,7 +314,7 @@ class ChartDrawingApiTest {
                         {"layoutId":"%s","type":"HORIZONTAL_LINE",
                          "points":[{"time":"2026-11-10T00:00:00Z","price":"0"}],
                          "style":{"lineColor":"red","lineWidth":9,"lineStyle":"SOLID","fillColor":"#12345",
-                                  "fontSize":4,"fibLevels":[11]}}""".formatted(layout))
+                                  "fontSize":11,"fibLevels":[11]}}""".formatted(layout))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors['points[0].price']").value("MSG15"))
                 .andExpect(jsonPath("$.errors['style.lineColor']").value("MSG01"))
