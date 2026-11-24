@@ -8,9 +8,12 @@
 # gate. A red build means the change does not integrate; the job name "build-and-test" is stable so it
 # can be made a required status check on develop and main.
 #
-# Deliberately not here yet (the rest of T-009): building and pushing the container image, deploying,
-# and a gate that compares coverage with the previous build rather than with a fixed minimum. None of
-# it needs a secret today, and none is configured.
+# T-009 adds two things. A pull request is also held to the coverage of develop: its line and branch
+# coverage may not fall more than 0.1 points below those of the latest green develop build
+# (tools/ci/coverage_gate.py; the fixed minimum of pom.xml still applies). And the container images of the
+# backend and the AI Service are built on every run; on a push to develop they are pushed to the GitHub
+# Container Registry with the run's own token (no stored secret), tagged with the commit and "develop".
+# Deploying stays manual (deploy/README.md "Staging").
 #
 # Tests tagged "live" call the real exchange and stay excluded, as in every local build: the Surefire
 # configuration excludes them, and a CI runner may be geo-blocked (HTTP 451) anyway.
@@ -45,6 +48,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      # Only to read the coverage report of the latest green develop build (the coverage gate).
+      actions: read
     defaults:
       run:
         working-directory: backend
@@ -66,6 +71,22 @@ jobs:
 
       - name: Build and run the full suite with the coverage gate
         run: ./mvnw -B -ntp verify
+
+      - name: Fetch the coverage of the latest green develop build
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch develop --event push \
+            --status success -L 1 --json databaseId -q '.[0].databaseId')
+          if [ -n "$run_id" ]; then
+            gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n jacoco-report -D "$RUNNER_TEMP/baseline" \
+              || echo "The report of run $run_id is gone (kept 14 days); nothing to compare."
+          fi
+
+      - name: Refuse a coverage drop against develop
+        if: github.event_name == 'pull_request'
+        run: python3 ../tools/ci/coverage_gate.py target/site/jacoco/jacoco.xml "$RUNNER_TEMP/baseline/jacoco.xml"
 
       - name: Upload test reports
         if: always()
@@ -118,3 +139,43 @@ jobs:
 
       - name: Run the tests
         run: npm test
+
+  # The container images (T-004, T-009). Built on every run, once the tests are green, so a broken Dockerfile shows in
+  # the pull request; pushed only on a push to develop, to ghcr.io/<owner>/cryptopilot-backend and -ai-service, with the
+  # run's own token. The web image is built by the web repository: its backend address is compiled in, so the staging
+  # host builds it (deploy/docker-compose.yml).
+  images:
+    name: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build-and-test, ai-service-test]
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUSH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Sign in to the GitHub Container Registry
+        if: env.PUSH == 'true'
+        env:
+          TOKEN: ${{ github.token }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build, and on develop push, the backend and AI Service images
+        run: |
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          for component in backend ai-service; do
+            image="ghcr.io/$owner/cryptopilot-$component"
+            docker build --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              -t "$image:$GITHUB_SHA" -t "$image:develop" "$component"
+            if [ "$PUSH" = "true" ]; then
+              docker push "$image:$GITHUB_SHA"
+              docker push "$image:develop"
+            fi
+          done
