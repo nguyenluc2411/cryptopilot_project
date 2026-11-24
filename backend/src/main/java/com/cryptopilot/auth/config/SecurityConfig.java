@@ -236,6 +236,8 @@ public class SecurityConfig {
         "/api/v1/me/**",
         "/api/v1/analysis/**",
         "/api/v1/watchlist/**",
+        "/api/v1/chart-drawings/**",
+        "/api/v1/chart-layouts/**",
         "/api/v1/alerts/**",
         "/api/v1/notifications/**",
         "/api/v1/plans/**",

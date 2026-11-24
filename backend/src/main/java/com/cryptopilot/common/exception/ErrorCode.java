@@ -643,7 +643,19 @@ public enum ErrorCode {
      * The body names the market, its state and since when. 503: the same request succeeds once trading reopens. A new
      * message id, MSG57, until the SRS gives it a text.
      */
-    TRADING_PAUSED(HttpStatus.SERVICE_UNAVAILABLE, "MSG57");
+    TRADING_PAUSED(HttpStatus.SERVICE_UNAVAILABLE, "MSG57"),
+
+    /**
+     * The chart layout already holds the most drawings allowed (D-149). Borrows MSG43 (A-38); messageArgs is the
+     * maximum. 409: the same request succeeds once a drawing of the layout is removed.
+     */
+    CHART_DRAWING_LIMIT_REACHED(HttpStatus.CONFLICT, "MSG43"),
+
+    /**
+     * The Trader already keeps the most chart layouts allowed on this pair (D-149). Borrows MSG43 (A-38); messageArgs
+     * is the maximum. 409: the same request succeeds once a layout of the pair is removed.
+     */
+    CHART_LAYOUT_LIMIT_REACHED(HttpStatus.CONFLICT, "MSG43");
 
     private final HttpStatus status;
     private final String messageCode;

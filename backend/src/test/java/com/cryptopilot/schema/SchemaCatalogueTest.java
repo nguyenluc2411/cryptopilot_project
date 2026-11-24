@@ -50,7 +50,8 @@ class SchemaCatalogueTest {
             "news_article_tag.article_id -> news_article",
             "news_article_tag.tag_id -> news_tag",
             "news_article_coin.article_id -> news_article",
-            "academy_progress.article_id -> academy_article");
+            "academy_progress.article_id -> academy_article",
+            "chart_drawing.layout_id -> chart_layout");
 
     @Autowired
     private JdbcClient jdbc;
