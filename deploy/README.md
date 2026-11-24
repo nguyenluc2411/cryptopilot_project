@@ -2,11 +2,54 @@
 
 | File | What it is |
 |---|---|
-| `docker-compose.dev.yml` | PostgreSQL + TimescaleDB and Redis for local development |
-| `.env.example` | The environment template; copy it to `deploy/.env` (never committed) |
+| `docker-compose.dev.yml` | PostgreSQL + TimescaleDB and Redis for local development; with `--profile app` also the backend, the AI Service and the web app's Vite server in containers (T-004) |
+| `docker-compose.yml` | Staging: the whole system on one host behind Caddy with HTTPS (T-004, T-096), below |
+| `caddy/Caddyfile` | The staging edge: `/api`, `/ws` and the health check to the backend, the rest to the web app |
+| `.env.example` | The environment template; copy it to `deploy/.env` (dev) or `deploy/.env.staging` (staging), never committed |
 | `run-backend.ps1` | Loads `deploy/.env` and starts the backend locally (Windows) |
 | `demo/load-wf01.ps1`, `demo/wf01.json` | The WF-01 demonstration data loader (DEMO-01), below |
 | `demo/load-paper.ps1` | The demo trading data of the defence (TR-33): demo.pro's paper account with Spot and Futures activity; run after `load-wf01.ps1` with `DEMO_PASSWORD` set |
+
+## Containers (T-004)
+
+Each component has its own image: `backend/Dockerfile` (Maven build, then the JRE 21 runtime; tests are run by CI, not
+here), `ai-service/Dockerfile` (Node 22) and, in the web repository, `Dockerfile` (Vite build served by nginx). Every
+image has a health check: the backend's readiness (`/actuator/health/readiness`), the AI Service's `/health`, the web
+server's `/healthz`.
+
+### Everything on a developer machine
+
+```powershell
+docker compose -f deploy/docker-compose.dev.yml --profile app up -d --build
+```
+
+The backend runs the `dev` profile against the containers' database and Redis, the web app runs Vite at
+http://localhost:5173. Stop the IDE's backend, AI Service and Vite first: the containers take ports 8080, 7070 and
+5173. Without `--profile app` only the database and Redis start, as before.
+
+## Staging
+
+One host (EC2, T-096) runs `docker-compose.yml`: the database, Redis, the AI Service, the backend under `prod,demo`
+with `CRYPTOPILOT_ENVIRONMENT=staging`, the web app and Caddy. Only Caddy publishes ports (80 and 443); it obtains the
+HTTPS certificate by itself, and the web app's production build accepts only `https` and `wss` addresses.
+
+1. Point a host name at the server. Without a domain, `<public IP>.sslip.io` resolves to the IP and gets a certificate.
+2. On the server, clone this repository and the web repository side by side (or set `WEB_DIR`).
+3. `cp deploy/.env.example deploy/.env.staging` and fill it in. Required: `SITE_ADDRESS`, `DB_PASSWORD`, `JWT_SECRET`,
+   `AI_SERVICE_SHARED_SECRET`, `LLM_API_KEY`, `SMTP_HOST`, `SMTP_FROM`, the three `CLOUDINARY_*`; the demonstration
+   also needs `ADMIN_PASSWORD_HASH` and `DEMO_PASSWORD_HASH`. Compose names any missing one and stops.
+4. Start it:
+
+   ```bash
+   docker compose -f deploy/docker-compose.yml --env-file deploy/.env.staging up -d --build
+   docker compose -f deploy/docker-compose.yml --env-file deploy/.env.staging ps     # every service healthy
+   ```
+
+5. Load the demonstration data from a developer machine with `demo/load-wf01.ps1 -BaseUrl https://<SITE_ADDRESS>`
+   (below): it only calls the API.
+
+The payment gateways' IPN addresses are `https://<SITE_ADDRESS>/api/v1/billing/ipn/sepay` and `.../momo`. The memory
+limits suit a host with 8 GB (backend 2.5 GB, database 1.5 GB); `BACKEND_MEM_LIMIT` and `DB_MEM_LIMIT` change them.
 
 ## WF-01 demonstration data
 

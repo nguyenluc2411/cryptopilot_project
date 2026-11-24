@@ -1,0 +1,33 @@
+# The edge of staging (T-004, T-096). SITE_ADDRESS is the public host name, e.g. 54.1.2.3.sslip.io: Caddy obtains and
+# renews its certificate by itself (ports 80 and 443 must be open). With SITE_ADDRESS=localhost it uses its own local
+# authority instead, for a trial on a developer machine. No account e-mail is needed for the certificate.
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# REST, the STOMP endpoint and the payment notifications go to the backend; Caddy sets X-Forwarded-For.
+	handle /api/* {
+		reverse_proxy backend:8080
+	}
+	handle /ws* {
+		reverse_proxy backend:8080
+	}
+	# The backend's health only, for the uptime check; the rest of Actuator is not exposed.
+	handle /actuator/health* {
+		reverse_proxy backend:8080
+	}
+	handle {
+		reverse_proxy web:80
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	log {
+		output stdout
+		format console
+	}
+}

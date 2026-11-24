@@ -1,0 +1,164 @@
+# Staging: the whole system on one host (T-004, T-096), behind Caddy with an automatic HTTPS certificate.
+#   cp deploy/.env.example deploy/.env.staging     # fill it in, see deploy/README.md "Staging"
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env.staging up -d --build
+# Only Caddy publishes ports (80 and 443); the database, Redis, the backend and the AI Service stay on the internal
+# network. The web image is built from the web repository, at WEB_DIR (default: next to this repository).
+name: cryptopilot-staging
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  db:
+    image: timescale/timescaledb:2.30.1-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-cryptopilot}
+      POSTGRES_USER: ${DB_USER:-cryptopilot}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      TZ: UTC
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: ${DB_MEM_LIMIT:-1536m}
+    logging: *logging
+
+  redis:
+    image: redis:7.4.11-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "exec redis-server --save '' --appendonly no --maxmemory 192mb --maxmemory-policy allkeys-lru $${REDIS_PASSWORD:+--requirepass $$REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli $${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    logging: *logging
+
+  ai-service:
+    build: ../ai-service
+    image: ${IMAGE_PREFIX:-cryptopilot}/ai-service:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 7070
+      AI_SERVICE_SHARED_SECRET: ${AI_SERVICE_SHARED_SECRET:?Set AI_SERVICE_SHARED_SECRET}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      LLM_API_KEY: ${LLM_API_KEY:?Set LLM_API_KEY}
+      LLM_REQUESTS_PER_MINUTE: ${LLM_REQUESTS_PER_MINUTE:-10}
+      LLM_MAX_CONCURRENT: ${LLM_MAX_CONCURRENT:-2}
+      LLM_CHAT_API_KEY: ${LLM_CHAT_API_KEY:-}
+      LLM_CHAT_REQUESTS_PER_MINUTE: ${LLM_CHAT_REQUESTS_PER_MINUTE:-10}
+      LLM_CHAT_MAX_CONCURRENT: ${LLM_CHAT_MAX_CONCURRENT:-2}
+      LLM_CHAT_TIMEOUT_MS: ${LLM_CHAT_TIMEOUT_MS:-25000}
+      LLM_CHAT_BUDGET_MS: ${LLM_CHAT_BUDGET_MS:-60000}
+    mem_limit: 256m
+    logging: *logging
+
+  backend:
+    build: ../backend
+    image: ${IMAGE_PREFIX:-cryptopilot}/backend:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-service:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,demo}
+      CRYPTOPILOT_ENVIRONMENT: ${CRYPTOPILOT_ENVIRONMENT:-staging}
+      JAVA_OPTS: ${JAVA_OPTS:--XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError}
+      DB_URL: jdbc:postgresql://db:5432/${DB_NAME:-cryptopilot}
+      DB_USER: ${DB_USER:-cryptopilot}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_POOL_MAX: ${DB_POOL_MAX:-30}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      DEMO_PASSWORD_HASH: ${DEMO_PASSWORD_HASH:-}
+      # Caddy is the only proxy in front of the backend, on the fixed internal subnet below.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.0.0/24}
+      CORS_ALLOWED_ORIGINS: https://${SITE_ADDRESS:?Set SITE_ADDRESS}
+      PUBLIC_BASE_URL: https://${SITE_ADDRESS}
+      AI_SERVICE_URL: http://ai-service:7070
+      AI_SERVICE_SHARED_SECRET: ${AI_SERVICE_SHARED_SECRET}
+      SEPAY_MERCHANT_ID: ${SEPAY_MERCHANT_ID:-}
+      SEPAY_SECRET_KEY: ${SEPAY_SECRET_KEY:-}
+      SEPAY_IPN_SECRET_KEY: ${SEPAY_IPN_SECRET_KEY:-}
+      SEPAY_CHECKOUT_URL: ${SEPAY_CHECKOUT_URL:-}
+      SEPAY_API_URL: ${SEPAY_API_URL:-}
+      MOMO_PARTNER_CODE: ${MOMO_PARTNER_CODE:-}
+      MOMO_ACCESS_KEY: ${MOMO_ACCESS_KEY:-}
+      MOMO_SECRET_KEY: ${MOMO_SECRET_KEY:-}
+      MOMO_ENDPOINT: ${MOMO_ENDPOINT:-https://test-payment.momo.vn}
+      MOMO_IPN_URL: https://${SITE_ADDRESS}/api/v1/billing/ipn/momo
+      SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST (prod refuses to start without mail)}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_STARTTLS_REQUIRED: ${SMTP_STARTTLS_REQUIRED:-true}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:?Set CLOUDINARY_CLOUD_NAME (prod refuses to start without media storage)}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:?Set CLOUDINARY_API_KEY}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:?Set CLOUDINARY_API_SECRET}
+      FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:+/run/secrets/fcm.json}
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+    volumes:
+      # The Firebase service account, when FCM_SERVICE_ACCOUNT_PATH names one on the host; an empty file otherwise.
+      - ${FCM_SERVICE_ACCOUNT_PATH:-/dev/null}:/run/secrets/fcm.json:ro
+    mem_limit: ${BACKEND_MEM_LIMIT:-2560m}
+    logging: *logging
+
+  web:
+    build:
+      context: ${WEB_DIR:-../../cryptopilot-frontend}
+      args:
+        VITE_API_BASE_URL: https://${SITE_ADDRESS}/api/v1
+        VITE_WS_URL: wss://${SITE_ADDRESS}/ws
+    image: ${IMAGE_PREFIX:-cryptopilot}/web:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    mem_limit: 64m
+    logging: *logging
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - web
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 128m
+    logging: *logging
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
