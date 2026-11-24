@@ -43,7 +43,7 @@ import tools.jackson.databind.json.JsonMapper;
 public final class BinanceStreamClient implements AutoCloseable {
 
     private final BinanceStreamProperties properties;
-    private final HttpClient http;
+    private final StreamHttpClients http;
     private final BinanceStreamParser parser;
     private final ScheduledExecutorService timer;
     private final ReconnectBackoff backoff;
@@ -52,9 +52,9 @@ public final class BinanceStreamClient implements AutoCloseable {
     /** A client with its own HTTP client and timer thread, both closed with it. */
     public BinanceStreamClient(BinanceStreamProperties properties, JsonMapper json, Clock clock) {
         this.properties = properties;
-        this.http = HttpClient.newBuilder()
+        this.http = new StreamHttpClients(() -> HttpClient.newBuilder()
                 .connectTimeout(properties.connectTimeout())
-                .build();
+                .build());
         this.parser = new BinanceStreamParser(json, clock);
         this.timer = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofPlatform().name("market-stream-timer").daemon().factory());
@@ -157,6 +157,6 @@ public final class BinanceStreamClient implements AutoCloseable {
     @Override
     public void close() {
         timer.shutdownNow();
-        http.shutdownNow();
+        http.close();
     }
 }

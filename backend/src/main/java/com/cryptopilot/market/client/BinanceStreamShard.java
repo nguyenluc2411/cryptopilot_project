@@ -69,7 +69,7 @@ public final class BinanceStreamShard implements AutoCloseable {
     private final String name;
     private final URI uri;
     private final List<String> streams;
-    private final HttpClient http;
+    private final StreamHttpClients http;
     private final BinanceStreamParser parser;
     private final ScheduledExecutorService timer;
     private final ReconnectBackoff backoff;
@@ -101,6 +101,21 @@ public final class BinanceStreamShard implements AutoCloseable {
             URI base,
             List<String> streams,
             HttpClient http,
+            BinanceStreamParser parser,
+            ScheduledExecutorService timer,
+            BinanceStreamProperties properties,
+            ReconnectBackoff backoff,
+            Clock clock,
+            Listener listener) {
+        this(name, base, streams, StreamHttpClients.fixed(http), parser, timer, properties, backoff, clock, listener);
+    }
+
+    /** A shard, not yet connected, opening its sockets with whichever client {@code http} holds at each attempt. */
+    public BinanceStreamShard(
+            String name,
+            URI base,
+            List<String> streams,
+            StreamHttpClients http,
             BinanceStreamParser parser,
             ScheduledExecutorService timer,
             BinanceStreamProperties properties,
@@ -173,11 +188,13 @@ public final class BinanceStreamShard implements AutoCloseable {
 
     private void connect(boolean renewing) {
         Frames frames = new Frames();
-        http.newWebSocketBuilder()
+        HttpClient client = http.current();
+        client.newWebSocketBuilder()
                 .connectTimeout(connectTimeout)
                 .buildAsync(uri, frames)
                 .whenComplete((socket, failure) -> {
                     if (failure != null) {
+                        http.failed(client, failure);
                         failed(renewing, failure);
                     } else {
                         opened(socket, frames, renewing);
