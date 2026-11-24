@@ -51,7 +51,10 @@ public class ChartDrawingServiceImpl implements ChartDrawingService {
     /** The most drawings one layout holds (D-149). */
     static final int MAX_PER_LAYOUT = 200;
 
-    /** The scope of the per-user lock the creates of this module take, apart from the other modules' writes. */
+    /**
+     * The scope of the per-user lock this module's creates and layout deletes take, apart from the other modules'
+     * writes: a layout looked up under it cannot be deleted before the rows that depend on it are written.
+     */
     static final String LOCK_SCOPE = "chart-drawing";
 
     private static final TypeReference<List<ChartPoint>> POINTS = new TypeReference<>() {};
@@ -72,12 +75,14 @@ public class ChartDrawingServiceImpl implements ChartDrawingService {
     @Override
     @Transactional
     public ChartDrawingResponse create(UUID userId, CreateChartDrawingRequest request) {
+        // Looked up under the lock a layout delete takes too, so the layout cannot go between here and the insert
+        // (which would answer 409 for what is a layout no longer there).
+        lock.lock(LOCK_SCOPE, userId);
         if (layouts.findByIdAndUserId(request.layoutId(), userId).isEmpty()) {
             throw new ResourceNotFoundException("ChartLayout", request.layoutId());
         }
         List<ChartPoint> points = points(request.points());
         DrawingRules.check(request.type(), points, request.text());
-        lock.lock(LOCK_SCOPE, userId);
         long held = drawings.countByLayoutId(request.layoutId());
         if (held >= MAX_PER_LAYOUT) {
             throw new BusinessException(

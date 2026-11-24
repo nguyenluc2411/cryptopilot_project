@@ -69,12 +69,14 @@ public class ChartLayoutServiceImpl implements ChartLayoutService {
         if (!listed) {
             throw new ResourceNotFoundException("CryptoPair", request.pairId());
         }
+        // The copied layout is looked up under the lock its delete takes, so it cannot go before its drawings are
+        // copied (which would answer an empty copy).
+        lock.lock(ChartDrawingServiceImpl.LOCK_SCOPE, userId);
         ChartLayout source = request.copyFrom() == null ? null : owned(userId, request.copyFrom());
         if (source != null && !source.getPairId().equals(request.pairId())) {
             throw new FieldValidationException(
                     "layout " + source.getId() + " is on another pair", Map.of("copyFrom", "MSG01"));
         }
-        lock.lock(ChartDrawingServiceImpl.LOCK_SCOPE, userId);
         List<Integer> taken = layouts.seqNos(userId, request.pairId());
         if (taken.size() >= MAX_PER_PAIR) {
             throw new BusinessException(
@@ -109,6 +111,8 @@ public class ChartLayoutServiceImpl implements ChartLayoutService {
     @Override
     @Transactional
     public void delete(UUID userId, UUID layoutId) {
+        // Waits for a create that is adding a drawing to the layout, or copying it, to finish.
+        lock.lock(ChartDrawingServiceImpl.LOCK_SCOPE, userId);
         layouts.delete(owned(userId, layoutId));
     }
 
