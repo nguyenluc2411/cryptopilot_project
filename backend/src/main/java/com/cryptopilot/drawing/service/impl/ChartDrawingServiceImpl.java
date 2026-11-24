@@ -9,6 +9,8 @@ import com.cryptopilot.drawing.dto.request.CreateChartDrawingRequest;
 import com.cryptopilot.drawing.dto.request.DrawingStyleRequest;
 import com.cryptopilot.drawing.dto.request.UpdateChartDrawingRequest;
 import com.cryptopilot.drawing.dto.response.ChartDrawingResponse;
+import com.cryptopilot.drawing.dto.response.ChartPointResponse;
+import com.cryptopilot.drawing.dto.response.DrawingStyleResponse;
 import com.cryptopilot.drawing.entity.ChartDrawing;
 import com.cryptopilot.drawing.model.ChartPoint;
 import com.cryptopilot.drawing.model.DrawingStyle;
@@ -168,12 +170,26 @@ public class ChartDrawingServiceImpl implements ChartDrawingService {
     }
 
     private ChartDrawingResponse toResponse(ChartDrawing drawing) {
+        // The stored JSON is read into the model and handed out as response records (dto/response), so what the
+        // API answers stays apart from how a drawing is kept.
+        List<ChartPointResponse> points = json.readValue(drawing.getPoints(), POINTS).stream()
+                .map(point -> new ChartPointResponse(point.time(), point.price()))
+                .toList();
+        DrawingStyle style = json.readValue(drawing.getStyle(), DrawingStyle.class);
         return new ChartDrawingResponse(
                 drawing.getId(),
                 drawing.getLayoutId(),
                 drawing.getDrawingType(),
-                json.readValue(drawing.getPoints(), POINTS),
-                json.readValue(drawing.getStyle(), DrawingStyle.class),
+                points,
+                new DrawingStyleResponse(
+                        style.lineColor(),
+                        style.lineWidth(),
+                        style.lineStyle(),
+                        style.fillColor(),
+                        style.extendLeft(),
+                        style.extendRight(),
+                        style.fontSize(),
+                        style.fibLevels()),
                 drawing.getLabelText(),
                 drawing.isLocked(),
                 drawing.isHidden(),

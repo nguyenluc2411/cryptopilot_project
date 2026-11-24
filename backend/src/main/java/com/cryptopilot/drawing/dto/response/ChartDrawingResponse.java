@@ -1,7 +1,5 @@
 package com.cryptopilot.drawing.dto.response;
 
-import com.cryptopilot.drawing.model.ChartPoint;
-import com.cryptopilot.drawing.model.DrawingStyle;
 import com.cryptopilot.drawing.model.enums.DrawingType;
 import java.time.Instant;
 import java.util.List;
@@ -28,8 +26,8 @@ public record ChartDrawingResponse(
         UUID id,
         UUID layoutId,
         DrawingType type,
-        List<ChartPoint> points,
-        DrawingStyle style,
+        List<ChartPointResponse> points,
+        DrawingStyleResponse style,
         String text,
         boolean locked,
         boolean hidden,
