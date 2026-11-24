@@ -1,6 +1,7 @@
 package com.cryptopilot.drawing.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,6 +14,7 @@ import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -25,6 +27,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.NestedExceptionUtils;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -254,7 +258,8 @@ class ChartDrawingApiTest {
         String id = create(owner, layout);
 
         as(stranger, get(DRAWINGS + "?layoutId=" + layout), null)
-                .andExpect(jsonPath("$.length()").value(0));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         as(stranger, post(DRAWINGS), trendLine(layout))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
@@ -262,7 +267,7 @@ class ChartDrawingApiTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
         as(stranger, delete(DRAWINGS + "/" + id), null).andExpect(status().isNotFound());
-        as(stranger, delete(DRAWINGS + "?layoutId=" + layout), null).andExpect(status().isNoContent());
+        as(stranger, delete(DRAWINGS + "?layoutId=" + layout), null).andExpect(status().isNotFound());
 
         as(owner, get(DRAWINGS + "?layoutId=" + layout), null)
                 .andExpect(jsonPath("$.length()").value(1))
@@ -278,6 +283,48 @@ class ChartDrawingApiTest {
         UUID trader = trader();
         as(trader, post(DRAWINGS), trendLine(UUID.randomUUID())).andExpect(status().isNotFound());
         assertThat(count(trader)).isZero();
+    }
+
+    /**
+     * A layout removed in another tab answers 404 like a missing one, so the chart learns it is gone.
+     *
+     * <p>Reference: OWASP Foundation (2023). <i>API Security Top 10</i>, API1:2023 "Broken Object Level
+     * Authorization".
+     */
+    @Test
+    void D149_aRemovedLayout_isNotFoundWhenListedOrCleared() throws Exception {
+        UUID trader = trader();
+        UUID layout = layout(trader, pair);
+        create(trader, layout);
+        as(trader, delete("/api/v1/chart-layouts/" + layout), null).andExpect(status().isNoContent());
+
+        as(trader, get(DRAWINGS + "?layoutId=" + layout), null)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("RESOURCE_NOT_FOUND"));
+        as(trader, delete(DRAWINGS + "?layoutId=" + layout), null).andExpect(status().isNotFound());
+    }
+
+    /**
+     * The composite foreign key refuses a drawing whose owner is not its layout's owner.
+     *
+     * <p>Reference: PostgreSQL Global Development Group. <i>PostgreSQL 16 Documentation</i>, §5.4.5 "Foreign Keys".
+     */
+    @Test
+    void D149_aDrawingOwnedByAnotherTraderThanItsLayout_isRefusedByTheDatabase() {
+        UUID owner = trader();
+        UUID stranger = trader();
+        UUID layout = layout(owner, pair);
+
+        assertThatThrownBy(() -> sql.sql("""
+                                insert into chart_drawing (drawing_id, user_id, layout_id, drawing_type, points, style,
+                                                           created_at, updated_at)
+                                values (?, ?, ?, 'HORIZONTAL_LINE', '[]'::jsonb, '{}'::jsonb, ?, ?)""")
+                        .params(UUID.randomUUID(), stranger, layout, now(), now())
+                        .update())
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .satisfies(e -> assertThat(((SQLException) NestedExceptionUtils.getMostSpecificCause(e)).getSQLState())
+                        .isEqualTo("23503"));
+        assertThat(count(stranger)).isZero();
     }
 
     @Test

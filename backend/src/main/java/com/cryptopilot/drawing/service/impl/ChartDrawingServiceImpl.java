@@ -69,6 +69,7 @@ public class ChartDrawingServiceImpl implements ChartDrawingService {
     @Override
     @Transactional(readOnly = true)
     public List<ChartDrawingResponse> list(UUID userId, UUID layoutId) {
+        ownedLayout(userId, layoutId);
         return drawings.findByUserIdAndLayoutIdOrderByCreatedAtAscIdAsc(userId, layoutId).stream()
                 .map(this::toResponse)
                 .toList();
@@ -80,9 +81,7 @@ public class ChartDrawingServiceImpl implements ChartDrawingService {
         // Looked up under the lock a layout delete takes too, so the layout cannot go between here and the insert
         // (which would answer 409 for what is a layout no longer there).
         lock.lock(LOCK_SCOPE, userId);
-        if (layouts.findByIdAndUserId(request.layoutId(), userId).isEmpty()) {
-            throw new ResourceNotFoundException("ChartLayout", request.layoutId());
-        }
+        ownedLayout(userId, request.layoutId());
         List<ChartPoint> points = points(request.points());
         DrawingRules.check(request.type(), points, request.text());
         long held = drawings.countByLayoutId(request.layoutId());
@@ -134,7 +133,15 @@ public class ChartDrawingServiceImpl implements ChartDrawingService {
     @Override
     @Transactional
     public int deleteAll(UUID userId, UUID layoutId) {
+        ownedLayout(userId, layoutId);
         return drawings.deleteByOwnerAndLayout(userId, layoutId);
+    }
+
+    /** A missing layout and another Trader's layout get the same 404, so neither reveals whether the key exists. */
+    private void ownedLayout(UUID userId, UUID layoutId) {
+        if (layouts.findByIdAndUserId(layoutId, userId).isEmpty()) {
+            throw new ResourceNotFoundException("ChartLayout", layoutId);
+        }
     }
 
     private ChartDrawing owned(UUID userId, UUID drawingId) {

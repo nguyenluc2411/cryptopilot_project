@@ -18,7 +18,9 @@ CREATE TABLE chart_layout (
     CONSTRAINT pk_chart_layout PRIMARY KEY (layout_id),
     CONSTRAINT fk_chart_layout_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
     CONSTRAINT fk_chart_layout_pair FOREIGN KEY (pair_id) REFERENCES crypto_pair (pair_id),
-    CONSTRAINT uq_chart_layout_user_pair_seq UNIQUE (user_id, pair_id, seq_no)
+    CONSTRAINT uq_chart_layout_user_pair_seq UNIQUE (user_id, pair_id, seq_no),
+    -- The target of the drawings' composite foreign key.
+    CONSTRAINT uq_chart_layout_id_user UNIQUE (layout_id, user_id)
 );
 
 -- The pair index serves the foreign key; the unique key already serves the Trader's list of one pair.
@@ -39,8 +41,9 @@ CREATE TABLE chart_drawing (
     version      bigint       NOT NULL DEFAULT 0,
     CONSTRAINT pk_chart_drawing PRIMARY KEY (drawing_id),
     CONSTRAINT fk_chart_drawing_user FOREIGN KEY (user_id) REFERENCES user_account (user_id),
-    -- Removing a layout removes its drawings.
-    CONSTRAINT fk_chart_drawing_layout FOREIGN KEY (layout_id) REFERENCES chart_layout (layout_id) ON DELETE CASCADE,
+    -- A drawing's owner is its layout's owner. Removing a layout removes its drawings.
+    CONSTRAINT fk_chart_drawing_layout FOREIGN KEY (layout_id, user_id)
+        REFERENCES chart_layout (layout_id, user_id) ON DELETE CASCADE,
     CONSTRAINT ck_chart_drawing_type CHECK (drawing_type IN ('TREND_LINE', 'HORIZONTAL_LINE', 'HORIZONTAL_RAY',
         'VERTICAL_LINE', 'RECTANGLE', 'FIB_RETRACEMENT', 'LONG_POSITION', 'SHORT_POSITION', 'TEXT', 'PARALLEL_CHANNEL',
         'FIB_EXTENSION', 'PRICE_RANGE', 'DATE_RANGE', 'ARROW', 'XABCD_PATTERN', 'CYPHER_PATTERN', 'ABCD_PATTERN',

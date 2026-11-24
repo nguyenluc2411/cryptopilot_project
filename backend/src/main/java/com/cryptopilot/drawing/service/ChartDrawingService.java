@@ -12,10 +12,17 @@ import java.util.UUID;
  * {@link com.cryptopilot.drawing.service.impl.ChartDrawingServiceImpl}.
  *
  * <p>Rule: D-149; T-119.
+ *
+ * <p>Reference: OWASP Foundation (2023). <i>API Security Top 10</i>, API1:2023 "Broken Object Level Authorization".
  */
 public interface ChartDrawingService {
 
-    /** The caller's drawings in the layout, oldest first; empty for a layout that is not the caller's. */
+    /**
+     * The caller's drawings in the layout, oldest first.
+     *
+     * @throws com.cryptopilot.common.exception.ResourceNotFoundException MSG41 when the layout is gone or not the
+     *     caller's
+     */
     List<ChartDrawingResponse> list(UUID userId, UUID layoutId);
 
     /**
@@ -38,6 +45,11 @@ public interface ChartDrawingService {
     /** Removes one of the caller's drawings; MSG41 when there is no such drawing. */
     void delete(UUID userId, UUID drawingId);
 
-    /** Removes every drawing of the caller in the layout and answers how many were removed. */
+    /**
+     * Removes every drawing of the caller in the layout and answers how many were removed.
+     *
+     * @throws com.cryptopilot.common.exception.ResourceNotFoundException MSG41 when the layout is gone or not the
+     *     caller's
+     */
     int deleteAll(UUID userId, UUID layoutId);
 }

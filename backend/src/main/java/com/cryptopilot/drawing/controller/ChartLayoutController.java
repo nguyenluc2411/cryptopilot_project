@@ -35,7 +35,8 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>Rule: D-149; T-119.
  *
- * <p>Reference: IETF RFC 9110 (2022). <i>HTTP Semantics</i>, §9.3 (methods) and §15 (status codes).
+ * <p>Reference: IETF RFC 9110 (2022). <i>HTTP Semantics</i>, §9.3 (methods), §15 (status codes) and §15.5.10 "409
+ * Conflict".
  */
 @Tag(name = "Chart layouts", description = "The Trader's layouts of drawings on the chart of a pair (D-149). Trader.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
@@ -79,6 +80,9 @@ public class ChartLayoutController {
     @ApiResponse(responseCode = "400", description = "MSG01: the name is too long")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such layout of the caller")
+    @ApiResponse(
+            responseCode = "409",
+            description = "The layout changed or was removed by another request; nothing written")
     @PutMapping("/{id}")
     public ChartLayoutResponse rename(
             @AuthenticationPrincipal Jwt caller,
@@ -91,6 +95,9 @@ public class ChartLayoutController {
     @ApiResponse(responseCode = "204", description = "Removed")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such layout of the caller")
+    @ApiResponse(
+            responseCode = "409",
+            description = "The layout changed or was removed by another request; nothing written")
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {

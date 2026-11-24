@@ -35,7 +35,8 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>Rule: D-149; T-119.
  *
- * <p>Reference: IETF RFC 9110 (2022). <i>HTTP Semantics</i>, §9.3 (methods) and §15 (status codes).
+ * <p>Reference: IETF RFC 9110 (2022). <i>HTTP Semantics</i>, §9.3 (methods), §15 (status codes) and §15.5.10 "409
+ * Conflict".
  */
 @Tag(name = "Chart drawings", description = "The Trader's drawings on the chart of a pair (D-149). Trader.")
 @SecurityRequirement(name = OpenApiConfig.BEARER)
@@ -47,9 +48,10 @@ public class ChartDrawingController {
     private final ChartDrawingService drawings;
 
     @Operation(summary = "The caller's drawings in a layout, oldest first")
-    @ApiResponse(responseCode = "200", description = "Every drawing; empty when the layout is not the caller's")
+    @ApiResponse(responseCode = "200", description = "Every drawing; empty when the layout has none")
     @ApiResponse(responseCode = "400", description = "MSG01: `layoutId` is missing or not a UUID")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such layout of the caller")
     @GetMapping
     public List<ChartDrawingResponse> list(
             @AuthenticationPrincipal Jwt caller,
@@ -77,7 +79,10 @@ public class ChartDrawingController {
     @ApiResponse(responseCode = "400", description = "MSG01/MSG15: `errors` names each rejected field")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such drawing of the caller")
-    @ApiResponse(responseCode = "409", description = "The drawing changed since `version` was read; nothing written")
+    @ApiResponse(
+            responseCode = "409",
+            description = "The drawing changed since `version` was read, or was removed with its layout meanwhile;"
+                    + " nothing written")
     @PutMapping("/{id}")
     public ChartDrawingResponse update(
             @AuthenticationPrincipal Jwt caller,
@@ -90,6 +95,9 @@ public class ChartDrawingController {
     @ApiResponse(responseCode = "204", description = "Removed")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
     @ApiResponse(responseCode = "404", description = "MSG41: no such drawing of the caller")
+    @ApiResponse(
+            responseCode = "409",
+            description = "The drawing was removed meanwhile, e.g. with its layout; nothing written")
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
@@ -97,9 +105,10 @@ public class ChartDrawingController {
     }
 
     @Operation(summary = "Remove every drawing of the caller in a layout (the client confirms first)")
-    @ApiResponse(responseCode = "204", description = "Removed, or there was nothing to remove")
+    @ApiResponse(responseCode = "204", description = "Removed, or the layout had no drawings")
     @ApiResponse(responseCode = "400", description = "MSG01: `layoutId` is missing or not a UUID")
     @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @ApiResponse(responseCode = "404", description = "MSG41: no such layout of the caller")
     @DeleteMapping
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteAll(
