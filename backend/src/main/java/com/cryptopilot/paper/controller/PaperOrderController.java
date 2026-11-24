@@ -265,8 +265,12 @@ public class PaperOrderController {
 
     @Operation(
             summary = "Cancel a working LIMIT or LIMIT_MAKER order and place it again at a new price (B4)."
-                    + " Binance: POST /api/v3/order/cancelReplace, STOP_ON_FAILURE")
-    @ApiResponse(responseCode = "200", description = "The cancelled order and the one placed in its place")
+                    + " Binance: POST /api/v3/order/cancelReplace, STOP_ON_FAILURE. With newClientOrderId the call"
+                    + " is idempotent: sent again, it answers what the first one did")
+    @ApiResponse(
+            responseCode = "200",
+            description = "The cancelled order and the one placed in its place; for a replacement sent again with"
+                    + " the same newClientOrderId, the same answer, nothing changed")
     @ApiResponse(
             responseCode = "400",
             description = "MSG01, MSG15: the new terms do not fit the pair's filters, or the order is of another type"
@@ -275,8 +279,9 @@ public class PaperOrderController {
     @ApiResponse(responseCode = "404", description = "MSG41: no such order of the caller")
     @ApiResponse(
             responseCode = "409",
-            description = "MSG43: the order has finished, is unchanged, or the new order is refused"
-                    + " (e.g. a LIMIT_MAKER that would take); the old order then works on as it was")
+            description = "MSG43: the order has finished, is unchanged, newClientOrderId was used for other terms,"
+                    + " or the new order is refused (e.g. a LIMIT_MAKER that would take); the old order then works on"
+                    + " as it was")
     @PostMapping("/orders/{orderId}/replace")
     public ReplacedOrderResponse replace(
             @AuthenticationPrincipal Jwt caller,

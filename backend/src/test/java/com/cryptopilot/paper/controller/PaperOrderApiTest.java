@@ -2119,6 +2119,95 @@ class PaperOrderApiTest {
         assertThat(locked(trader, "USDT")).isEqualByComparingTo("85");
     }
 
+    /**
+     * A replacement sent again with the same newClientOrderId, as a retry after a timeout, answers what the first one
+     * did and changes nothing; the key with other terms, or one an unrelated order holds, is refused.
+     */
+    @Test
+    void B4_aReplacementSentAgainWithItsNewClientOrderId_answersTheSameOrder_andChangesNothing() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+        String body = "{\"price\": 85, \"newClientOrderId\": \"rep-1\"}";
+
+        String first = replace(trader, old, body)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.placed.clientOrderId").value("rep-1"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        BigDecimal lockedAfterFirst = locked(trader, "USDT");
+        String placed = JsonPath.read(first, "$.placed.orderId");
+        replace(trader, old, body)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canceled.orderId").value(old))
+                .andExpect(jsonPath("$.canceled.status").value("CANCELED"))
+                .andExpect(jsonPath("$.placed.orderId").value(placed));
+
+        assertThat(openOrderCount(trader)).isEqualTo(1);
+        assertThat(orderCount(trader)).isEqualTo(2);
+        assertThat(locked(trader, "USDT"))
+                .isEqualByComparingTo(lockedAfterFirst)
+                .isEqualByComparingTo("85");
+        // The same key with another price is a reused key, as on a placement.
+        replace(trader, old, "{\"price\": 80, \"newClientOrderId\": \"rep-1\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+        assertThat(orderStatus(placed)).isEqualTo("NEW");
+    }
+
+    @Test
+    void B4_aNewClientOrderIdAnUnrelatedOrderHolds_isRefused_andTheOldOrderWorksOn() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+        place(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\", \"type\": \"LIMIT\","
+                                + " \"price\": 85, \"quantity\": 1, \"clientOrderId\": \"taken-1\"}")
+                .andExpect(status().isCreated());
+
+        replace(trader, old, "{\"price\": 85, \"newClientOrderId\": \"taken-1\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+
+        assertThat(orderStatus(old)).isEqualTo("NEW");
+        assertThat(orderCount(trader)).isEqualTo(2);
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("175");
+        replace(trader, old, "{\"price\": 85, \"newClientOrderId\": \"bad key!\"}")
+                .andExpect(status().isBadRequest());
+    }
+
+    /** At the pair's open-order limit a replacement still passes: the old order is cancelled before the count. */
+    @Test
+    void B4_aReplacementAtTheOpenOrderLimit_passes_andTheCountStaysAtTheLimit() throws Exception {
+        UUID trader = trader();
+        price("100");
+        int limit = 3;
+        rule("spot_max_num_orders", String.valueOf(limit));
+        List<String> working = new ArrayList<>();
+        for (int i = 0; i < limit; i++) {
+            working.add(id(place(trader, limit("BUY", "90", "1", null))));
+        }
+        place(trader, limit("BUY", "90", "1", null))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_MAX_NUM_ORDERS"));
+
+        replace(trader, working.getFirst(), "{\"price\": 85}").andExpect(status().isOk());
+
+        assertThat(orderStatus(working.getFirst())).isEqualTo("CANCELED");
+        assertThat(openOrderCount(trader)).isEqualTo(limit);
+        rule("spot_max_num_orders", "null");
+    }
+
+    private long openOrderCount(UUID trader) {
+        return sql.sql(
+                        "select count(*) from trade_order where user_id = ? and order_status in ('NEW', 'PARTIALLY_FILLED')")
+                .param(trader)
+                .query(Long.class)
+                .single();
+    }
+
     // ------------------------------------------------------------------------------------------
     // History filters and CSV export (paper-trading-plan 20.2: B5, B6, B7)
     // ------------------------------------------------------------------------------------------
@@ -2206,13 +2295,15 @@ class PaperOrderApiTest {
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.items[0].side").value("SELL"));
         as(trader, get(PAPER + "/fills").param("orderId", twoLevels).param("pairId", pair.toString()), null)
-                .andExpect(jsonPath("$.total").value(2));
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items[*].orderId", everyItem(is(twoLevels))));
         as(
                         trader,
                         get(PAPER + "/fills")
                                 .param("orderId", twoLevels)
                                 .param("pairId", UUID.randomUUID().toString()),
                         null)
+                .andExpect(jsonPath("$.items").isEmpty())
                 .andExpect(jsonPath("$.total").value(0));
         as(trader, get(PAPER + "/fills").param("orderId", twoLevels).param("side", "SELL"), null)
                 .andExpect(jsonPath("$.total").value(0));

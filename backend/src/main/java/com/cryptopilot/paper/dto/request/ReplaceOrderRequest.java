@@ -3,6 +3,7 @@ package com.cryptopilot.paper.dto.request;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import java.math.BigDecimal;
 
 /**
@@ -12,6 +13,9 @@ import java.math.BigDecimal;
  *
  * @param price the new limit price, on the pair's tick
  * @param quantity the new quantity, on the pair's step; when absent, what the replaced order has left to fill
+ * @param newClientOrderId the idempotency key of the new order: the same replacement sent again with it, e.g. after a
+ *     timeout, answers with the order that replaced the old one instead of a conflict; up to 64 letters, digits and
+ *     {@code . _ : -}. Optional
  */
 public record ReplaceOrderRequest(
         @NotNull(message = "MSG01")
@@ -21,4 +25,7 @@ public record ReplaceOrderRequest(
 
         @DecimalMin(value = "0", inclusive = false, message = "MSG15")
         @Digits(integer = 16, fraction = 12, message = "MSG15")
-        BigDecimal quantity) {}
+        BigDecimal quantity,
+
+        @Pattern(regexp = "[A-Za-z0-9._:-]{1,64}", message = "MSG15")
+        String newClientOrderId) {}

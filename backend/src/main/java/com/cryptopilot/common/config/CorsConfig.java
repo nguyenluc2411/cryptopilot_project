@@ -18,7 +18,8 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
  *
  * <p>Rule: TECHNICAL_DESIGN 5.3.
  *
- * <p>Reference: WHATWG. <i>Fetch Standard</i>, "CORS protocol".
+ * <p>Reference: WHATWG. <i>Fetch Standard</i>, "CORS protocol"; RFC 6266, <i>Use of the Content-Disposition Header
+ * Field in HTTP</i> (the file name of an export).
  */
 @Configuration
 @EnableConfigurationProperties(CorsProperties.class)
@@ -28,9 +29,10 @@ public class CorsConfig {
 
     static final List<String> REQUEST_HEADERS = List.of("Authorization", "Content-Type", "Accept", "X-Correlation-Id");
 
-    // The audit log says when a result was cut (UC-52), which a web client on another origin must be able to read.
+    // The audit log says when a result was cut (UC-52), which a web client on another origin must be able to read;
+    // so is the file name of an export.
     static final List<String> EXPOSED_HEADERS =
-            List.of("X-Correlation-Id", "Retry-After", "X-Result-Truncated", "X-Total-Count");
+            List.of("X-Correlation-Id", "Retry-After", "X-Result-Truncated", "X-Total-Count", "Content-Disposition");
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(CorsProperties properties) {

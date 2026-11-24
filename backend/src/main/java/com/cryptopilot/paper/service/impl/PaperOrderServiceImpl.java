@@ -162,7 +162,9 @@ public class PaperOrderServiceImpl implements PaperOrderService {
      * reason, the transaction rolls back and the old order works on as it was, its funds still locked, still in the
      * engine's book (which only hears of either change after the commit). The new order keeps the side, type and time
      * in force; its quantity is the one asked for, else what the old order had left. It is checked and executed as any
-     * placement: a LIMIT price that crosses the book takes it now, a LIMIT_MAKER one is refused.
+     * placement: a LIMIT price that crosses the book takes it now, a LIMIT_MAKER one is refused. With a
+     * {@code newClientOrderId} the call is idempotent: sent again, e.g. after a timeout, it answers what the first one
+     * did and changes nothing (Helland, P. (2012). Idempotence Is Not a Medical Condition. <i>ACM Queue</i>, 10(4)).
      */
     @Override
     @Transactional
@@ -172,6 +174,13 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         PaperAccount account = accountOf(userId);
         PaperOrder old = orders.findByIdAndUserIdAndMarketType(orderId, account.userId(), MarketType.SPOT)
                 .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
+        if (request.newClientOrderId() != null) {
+            Optional<PaperOrder> placed =
+                    orders.findByUserIdAndClientOrderId(account.userId(), request.newClientOrderId());
+            if (placed.isPresent()) {
+                return replayOf(old, placed.get(), request);
+            }
+        }
         if (!old.isOpen()) {
             throw new BusinessException(
                     ErrorCode.PAPER_ORDER_NOT_OPEN,
@@ -205,7 +214,8 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 null,
                 null);
         requireShape(next);
-        PaperOrder placed = placeNew(account, pair, next, UuidV7.next().toString());
+        String key = request.newClientOrderId() == null ? UuidV7.next().toString() : request.newClientOrderId();
+        PaperOrder placed = placeNew(account, pair, next, key);
         log.debug(
                 "Paper order {} on {} replaced by {}: {}",
                 old.getId(),
@@ -446,13 +456,10 @@ public class PaperOrderServiceImpl implements PaperOrderService {
         Instant from = TimeBounds.fromOrEarliest(query.from());
         Instant to = TimeBounds.toOrLatest(query.to());
         if (query.orderId() != null) {
-            Page<PaperFill> found =
-                    fills.searchOrder(userId, query.orderId(), MarketType.SPOT, sides, from, to, request);
-            // An order lies on one pair, so with a pair that is not its own the order has no fill to show.
-            boolean otherPair = query.pairId() != null
-                    && found.getContent().stream()
-                            .anyMatch(fill -> !fill.getPairId().equals(query.pairId()));
-            return otherPair ? Page.empty(request) : found;
+            return query.pairId() == null
+                    ? fills.searchOrder(userId, query.orderId(), MarketType.SPOT, sides, from, to, request)
+                    : fills.searchOrderPair(
+                            userId, query.orderId(), query.pairId(), MarketType.SPOT, sides, from, to, request);
         }
         return query.pairId() == null
                 ? fills.search(userId, MarketType.SPOT, sides, from, to, request)
@@ -813,6 +820,30 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                             + " of other values");
         }
         return toResponse(placed, symbolOf(symbolsOf(List.of(placed.getPairId())), placed.getPairId()));
+    }
+
+    /**
+     * The answer to a replacement sent again with a {@code newClientOrderId} already used: what the first call did, when
+     * the old order is cancelled and the order under the key has its pair, side and type and the asked price and
+     * quantity; else the key was used for other terms, refused as a reused {@code clientOrderId} is.
+     */
+    private ReplacedOrderResponse replayOf(PaperOrder old, PaperOrder placed, ReplaceOrderRequest request) {
+        BigDecimal left = old.getOrigQuantity().subtract(old.getExecutedQuantity());
+        boolean same = old.getOrderStatus() == OrderStatus.CANCELED
+                && placed.getMarketType() == MarketType.SPOT
+                && placed.getPairId().equals(old.getPairId())
+                && placed.getSide() == old.getSide()
+                && placed.getOrderType() == old.getOrderType()
+                && sameValue(placed.getLimitPrice(), request.price())
+                && sameValue(placed.getOrigQuantity(), request.quantity() == null ? left : request.quantity());
+        if (!same) {
+            throw new BusinessException(
+                    ErrorCode.DATA_CONFLICT,
+                    "clientOrderId " + request.newClientOrderId() + " was used for order " + placed.getId()
+                            + " of other values");
+        }
+        String symbol = symbolOf(symbolsOf(List.of(old.getPairId())), old.getPairId());
+        return new ReplacedOrderResponse(toResponse(old, symbol), toResponse(placed, symbol));
     }
 
     private static boolean sameValue(BigDecimal stored, BigDecimal asked) {

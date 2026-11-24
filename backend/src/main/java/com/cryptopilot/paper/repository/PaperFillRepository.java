@@ -85,6 +85,25 @@ public interface PaperFillRepository extends Repository<PaperFill, UUID> {
             Instant to,
             Pageable pageable);
 
+    /** As {@link #searchOrder}, on one pair: an order on another pair finds none. No parameter is null. */
+    @Transactional(readOnly = true)
+    @Query(
+            value = "select f from PaperFill f where f.userId = :userId and f.orderId = :orderId"
+                    + " and f.pairId = :pairId and f.marketType = :marketType and f.side in :sides"
+                    + " and f.tradedAt >= :from and f.tradedAt < :to order by f.tradedAt desc, f.id desc",
+            countQuery = "select count(f) from PaperFill f where f.userId = :userId and f.orderId = :orderId"
+                    + " and f.pairId = :pairId and f.marketType = :marketType and f.side in :sides"
+                    + " and f.tradedAt >= :from and f.tradedAt < :to")
+    Page<PaperFill> searchOrderPair(
+            UUID userId,
+            UUID orderId,
+            UUID pairId,
+            MarketType marketType,
+            Collection<OrderSide> sides,
+            Instant from,
+            Instant to,
+            Pageable pageable);
+
     /**
      * The size of a Futures position at an instant: what its fills before it opened, less what they closed (plan 9.4,
      * the quantity a funding settlement is charged on). Every fill of a position on its opening side opened it. A fill a
