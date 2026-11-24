@@ -110,6 +110,26 @@ class DrawingRulesTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void D149_anAnchor_isAtATimeAChartCanPlaceAndReadBack() {
+        List<ChartPoint> line = points(2);
+        assertThatCode(() -> DrawingRules.check(
+                        DrawingType.TREND_LINE, List.of(at(DrawingRules.EARLIEST), at(DrawingRules.LATEST)), null))
+                .doesNotThrowAnyException();
+        assertField(
+                () -> DrawingRules.check(
+                        DrawingType.TREND_LINE, List.of(line.get(0), at(DrawingRules.LATEST.plusSeconds(1))), null),
+                "points[1].time");
+        assertField(
+                () -> DrawingRules.check(
+                        DrawingType.TREND_LINE, List.of(at(DrawingRules.EARLIEST.minusSeconds(1)), line.get(1)), null),
+                "points[0].time");
+    }
+
+    private static ChartPoint at(Instant time) {
+        return new ChartPoint(time, BigDecimal.TEN);
+    }
+
     private static void assertField(ThrowingCallable call, String field) {
         assertThatThrownBy(call).isInstanceOfSatisfying(FieldValidationException.class, e -> assertThat(e.errors())
                 .containsEntry(field, "MSG01"));

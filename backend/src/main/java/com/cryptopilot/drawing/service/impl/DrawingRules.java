@@ -3,16 +3,27 @@ package com.cryptopilot.drawing.service.impl;
 import com.cryptopilot.common.exception.FieldValidationException;
 import com.cryptopilot.drawing.model.ChartPoint;
 import com.cryptopilot.drawing.model.enums.DrawingType;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 /**
- * The checks a drawing must pass beyond its field constraints: as many anchors as its type has, a position whose stop
- * and target lie on the right sides of its entry, and a text drawing that has text. A failure names the field, MSG01.
+ * The checks a drawing must pass beyond its field constraints: as many anchors as its type has, each at a time a chart
+ * can place, a position whose stop and target lie on the right sides of its entry, and a text drawing that has text. A
+ * failure names the field, MSG01.
  *
  * <p>Rule: D-149 (2); T-119.
  */
 final class DrawingRules {
+
+    /**
+     * The span of anchor times kept: from the Unix epoch, where chart time starts, to the last second written with a
+     * four-digit year. A later time is written {@code +10000-...}, which a browser does not read back, and one such
+     * anchor would keep the whole layout from loading. An anchor may lie after the last candle, so the bound is far.
+     */
+    static final Instant EARLIEST = Instant.EPOCH;
+
+    static final Instant LATEST = Instant.parse("9999-12-31T23:59:59Z");
 
     private DrawingRules() {}
 
@@ -20,6 +31,14 @@ final class DrawingRules {
     static void check(DrawingType type, List<ChartPoint> points, String text) {
         if (points.size() != type.anchors()) {
             throw invalid("points", type + " has " + type.anchors() + " anchors, the request sent " + points.size());
+        }
+        for (int i = 0; i < points.size(); i++) {
+            Instant time = points.get(i).time();
+            if (time.isBefore(EARLIEST) || time.isAfter(LATEST)) {
+                throw invalid(
+                        "points[" + i + "].time",
+                        "anchor " + i + " at " + time + " is outside " + EARLIEST + " to " + LATEST);
+            }
         }
         switch (type) {
             case LONG_POSITION -> requireOrdered(points.get(1), points.get(0), points.get(2), "a long position");
