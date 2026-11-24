@@ -115,7 +115,9 @@ public class PaperPnlServiceImpl implements PaperPnlService {
         PaperAccount account = accountOf(userId);
         PaperEquity.Worth now = equity.worth(account.userId());
         LocalDate today = equity.today();
-        Optional<PaperEquitySnapshot> start = snapshots.findByUserIdAndSnapshotDate(account.userId(), today);
+        // TR-13: a coin without a current price is left out of the worth now, which is no loss of the day.
+        Optional<PaperEquitySnapshot> start =
+                now.complete() ? snapshots.findByUserIdAndSnapshotDate(account.userId(), today) : Optional.empty();
         BigDecimal todayPnl = start.map(
                         snapshot -> Rounding.toAmount(now.total().subtract(snapshot.getTotalEquityAmount())))
                 .orElse(null);
@@ -134,7 +136,8 @@ public class PaperPnlServiceImpl implements PaperPnlService {
                         snapshot.getFuturesEquityAmount(),
                         snapshot.getTotalEquityAmount()))
                 .toList();
-        return new EquityResponse(now.spot(), now.futures(), now.total(), todayPnl, todayPercent, history);
+        return new EquityResponse(
+                now.spot(), now.futures(), now.total(), todayPnl, todayPercent, history, now.complete());
     }
 
     @Override

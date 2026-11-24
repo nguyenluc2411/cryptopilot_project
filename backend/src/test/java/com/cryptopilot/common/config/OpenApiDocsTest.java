@@ -90,7 +90,10 @@ class OpenApiDocsTest {
             "/api/v1/paper/orders/open",
             "/api/v1/paper/orders/{orderId}",
             "/api/v1/paper/orders/{orderId}/cancel",
+            "/api/v1/paper/orders/{orderId}/replace",
+            "/api/v1/paper/orders/export",
             "/api/v1/paper/fills",
+            "/api/v1/paper/fills/export",
             "/api/v1/paper/order-lists",
             "/api/v1/paper/order-lists/{listId}",
             "/api/v1/paper/order-lists/{listId}/cancel",
@@ -255,7 +258,7 @@ class OpenApiDocsTest {
             "/api/v1/admin/packages/{packageId}/active",
             "/api/v1/admin/packages/tiers/{tier}/limits");
 
-    private static final int OPERATIONS = 275;
+    private static final int OPERATIONS = 278;
 
     @Autowired
     private MockMvc mvc;

@@ -20,9 +20,11 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.dto.request.PlaceOrderListRequest;
 import com.cryptopilot.paper.dto.request.PlaceOrderRequest;
+import com.cryptopilot.paper.dto.request.ReplaceOrderRequest;
 import com.cryptopilot.paper.dto.response.FillResponse;
 import com.cryptopilot.paper.dto.response.OrderListResponse;
 import com.cryptopilot.paper.dto.response.OrderResponse;
+import com.cryptopilot.paper.dto.response.ReplacedOrderResponse;
 import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.entity.PaperOrderList;
@@ -47,9 +49,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -103,11 +107,17 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     /** Decimals a Spot balance holds, so the decimals a quantity may have. */
     private static final int BALANCE_SCALE = Rounding.AMOUNT_SCALE;
 
+    /** The most rows a CSV export of the history holds (B7), as the audit log export. */
+    static final int EXPORT_LIMIT = 10_000;
+
     private static final Logger log = LoggerFactory.getLogger(PaperOrderServiceImpl.class);
 
     /** What the open orders list: the working orders, and the pending orders of groups (TR-10). */
     private static final Set<OrderStatus> LISTED_OPEN =
             EnumSet.of(OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED, OrderStatus.PENDING_NEW);
+
+    /** The orders a cancel-replace takes (B4): those that wait at a price the Trader may move. */
+    private static final Set<OrderType> REPLACEABLE = EnumSet.of(OrderType.LIMIT, OrderType.LIMIT_MAKER);
 
     private final PaperAccountRepository accounts;
     private final PaperOrderRepository orders;
@@ -141,10 +151,96 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 return new PlacedOrder(replayOf(placed.get(), request), false);
             }
         }
-        // A pair the exchange stopped trading takes no new order: its open ones are cancelled (NSF-01).
-        TradablePair pair = market.tradablePair(request.pairId(), request.market())
+        String key = request.clientOrderId() == null ? UuidV7.next().toString() : request.clientOrderId();
+        TradablePair pair = tradable(request.pairId());
+        PaperOrder order = placeNew(account, pair, request, key);
+        return new PlacedOrder(toResponse(order, pair.symbol()), true);
+    }
+
+    /**
+     * Cancels a working LIMIT or LIMIT_MAKER order and places one at the new price in its place, in one transaction,
+     * as the exchange's {@code cancelReplace} with {@code STOP_ON_FAILURE} (B4): when the new order is refused for any
+     * reason, the transaction rolls back and the old order works on as it was, its funds still locked, still in the
+     * engine's book (which only hears of either change after the commit). The new order keeps the side, type and time
+     * in force; its quantity is the one asked for, else what the old order had left. It is checked and executed as any
+     * placement: a LIMIT price that crosses the book takes it now, a LIMIT_MAKER one is refused. With a
+     * {@code newClientOrderId} the call is idempotent: sent again, e.g. after a timeout, it answers what the first one
+     * did and changes nothing (Helland, P. (2012). Idempotence Is Not a Medical Condition. <i>ACM Queue</i>, 10(4)).
+     * A replay is answered even while trading is paused.
+     */
+    @Override
+    @Transactional
+    public ReplacedOrderResponse replace(UUID userId, UUID orderId, ReplaceOrderRequest request) {
+        lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
+        PaperAccount account = accountOf(userId);
+        if (request.newClientOrderId() != null) {
+            Optional<PaperOrder> placed =
+                    orders.findByUserIdAndClientOrderId(account.userId(), request.newClientOrderId());
+            if (placed.isPresent()) {
+                PaperOrder old = orders.findByIdAndUserIdAndMarketType(orderId, account.userId(), MarketType.SPOT)
+                        .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
+                return replayOf(old, placed.get(), request);
+            }
+        }
+        health.requireTrading(MarketType.SPOT);
+        PaperOrder old = orders.findByIdAndUserIdAndMarketType(orderId, account.userId(), MarketType.SPOT)
+                .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
+        if (!old.isOpen()) {
+            throw new BusinessException(
+                    ErrorCode.PAPER_ORDER_NOT_OPEN,
+                    "order " + orderId + " is " + old.getOrderStatus() + " and cannot be replaced",
+                    old.getOrderStatus());
+        }
+        if (!REPLACEABLE.contains(old.getOrderType()) || old.getListId() != null) {
+            // A stop, a market order or an order of a group is cancelled and placed again by the Trader.
+            throw new FieldValidationException(
+                    "only a working LIMIT or LIMIT_MAKER order outside a group can be replaced",
+                    Map.of("orderId", "MSG15"));
+        }
+        BigDecimal left = old.getOrigQuantity().subtract(old.getExecutedQuantity());
+        BigDecimal quantity = request.quantity() == null ? left : request.quantity();
+        if (old.getLimitPrice().compareTo(request.price()) == 0 && left.compareTo(quantity) == 0) {
+            throw new BusinessException(
+                    ErrorCode.PAPER_ORDER_UNCHANGED, "order " + orderId + " already works at this price and quantity");
+        }
+        TradablePair pair = tradable(old.getPairId());
+        cancelWorking(account, old, coinsOf(old.getPairId()), clock.instant());
+        PlaceOrderRequest next = new PlaceOrderRequest(
+                old.getPairId(),
+                MarketType.SPOT,
+                old.getSide(),
+                old.getOrderType(),
+                old.getOrderType() == OrderType.LIMIT ? old.getTimeInForce() : null,
+                request.price(),
+                quantity,
+                null,
+                null,
+                null,
+                null);
+        requireShape(next);
+        String key = request.newClientOrderId() == null ? UuidV7.next().toString() : request.newClientOrderId();
+        PaperOrder placed = placeNew(account, pair, next, key);
+        log.debug(
+                "Paper order {} on {} replaced by {}: {}",
+                old.getId(),
+                pair.symbol(),
+                placed.getId(),
+                placed.getOrderStatus());
+        return new ReplacedOrderResponse(toResponse(old, pair.symbol()), toResponse(placed, pair.symbol()));
+    }
+
+    /** A pair the exchange stopped trading takes no new order: its open ones are cancelled (NSF-01). */
+    private TradablePair tradable(UUID pairId) {
+        return market.tradablePair(pairId, MarketType.SPOT)
                 .filter(TradablePair::exchangeTrading)
-                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", request.pairId()));
+                .orElseThrow(() -> new ResourceNotFoundException("CryptoPair", pairId));
+    }
+
+    /**
+     * Checks a new order against the pair's filters and the account's limits, and places it under {@code key}; a
+     * refusal throws, and the caller's transaction leaves no row.
+     */
+    private PaperOrder placeNew(PaperAccount account, TradablePair pair, PlaceOrderRequest request, String key) {
         Terms terms = termsOf(request, pair.filters());
         limits.requireRoom(
                 account.userId(), pair.pairId(), pair.filters(), 1, terms.type().isSpotStop() ? 1 : 0);
@@ -160,7 +256,6 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 .orElseThrow(() -> new IllegalStateException("pair " + pair.pairId() + " is tradable but not stored"));
         usdtRates.requireValued(coins);
         Optional<SpotArrival.Book> book = arrival.bookFor(pair, terms.side());
-        String key = request.clientOrderId() == null ? UuidV7.next().toString() : request.clientOrderId();
         PaperOrder order =
                 switch (request.type()) {
                     case MARKET -> placeMarket(account, pair, coins, terms, key, book);
@@ -177,7 +272,7 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                 order.getSide(),
                 order.getOrderType(),
                 order.getOrderStatus());
-        return new PlacedOrder(toResponse(order, pair.symbol()), true);
+        return order;
     }
 
     /** A closed market blocks cancels too, as the exchange does during maintenance (D-159). */
@@ -306,43 +401,99 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     @Transactional(readOnly = true)
     public PageResponse<OrderResponse> orders(UUID userId, OrderQuery query) {
         PageRequest request = Paging.of(query.page(), query.pageSize());
-        TimeBounds.requireOrdered(query.from(), query.to());
-        // MSG41 for a Trader who has not opened an account, before anything is read.
-        accountOf(userId);
-        Set<OrderStatus> statuses =
-                query.status() == null ? EnumSet.allOf(OrderStatus.class) : EnumSet.of(query.status());
-        Instant from = TimeBounds.fromOrEarliest(query.from());
-        Instant to = TimeBounds.toOrLatest(query.to());
-        Page<PaperOrder> found = query.pairId() == null
-                ? orders.search(userId, MarketType.SPOT, statuses, from, to, request)
-                : orders.searchPair(userId, query.pairId(), MarketType.SPOT, statuses, from, to, request);
-        Map<UUID, String> symbols =
-                symbolsOf(found.getContent().stream().map(PaperOrder::getPairId).toList());
-        return PageResponse.of(found, order -> toResponse(order, symbols));
+        Page<PaperOrder> found = findOrders(userId, query, request);
+        return PageResponse.of(found, toOrderResponses(found.getContent())::get);
     }
 
     @Override
     @Transactional(readOnly = true)
     public PageResponse<FillResponse> fills(UUID userId, OrderQuery query) {
         PageRequest request = Paging.of(query.page(), query.pageSize());
+        Page<PaperFill> found = findFills(userId, query, request);
+        return PageResponse.of(found, toFillResponses(found.getContent())::get);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Export exportOrders(UUID userId, OrderQuery query) {
+        Page<PaperOrder> found = findOrders(userId, query, PageRequest.of(0, EXPORT_LIMIT));
+        Map<PaperOrder, OrderResponse> rows = toOrderResponses(found.getContent());
+        return new Export(
+                SpotHistoryCsv.orders(found.getContent().stream().map(rows::get).toList()),
+                found.getTotalElements(),
+                found.getNumberOfElements());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Export exportFills(UUID userId, OrderQuery query) {
+        Page<PaperFill> found = findFills(userId, query, PageRequest.of(0, EXPORT_LIMIT));
+        Map<PaperFill, FillResponse> rows = toFillResponses(found.getContent());
+        return new Export(
+                SpotHistoryCsv.fills(found.getContent().stream().map(rows::get).toList()),
+                found.getTotalElements(),
+                found.getNumberOfElements());
+    }
+
+    /** One page of the caller's Spot orders the query selects, newest first (B6: type and side as well). */
+    private Page<PaperOrder> findOrders(UUID userId, OrderQuery query, PageRequest request) {
         TimeBounds.requireOrdered(query.from(), query.to());
         // MSG41 for a Trader who has not opened an account, before anything is read.
         accountOf(userId);
+        Set<OrderStatus> statuses =
+                query.status() == null ? EnumSet.allOf(OrderStatus.class) : EnumSet.of(query.status());
+        Set<OrderType> types = query.type() == null ? PaperOrderRepository.ALL_TYPES : EnumSet.of(query.type());
+        Set<OrderSide> sides = sidesOf(query);
         Instant from = TimeBounds.fromOrEarliest(query.from());
         Instant to = TimeBounds.toOrLatest(query.to());
-        Page<PaperFill> found = query.pairId() == null
-                ? fills.search(userId, MarketType.SPOT, from, to, request)
-                : fills.searchPair(userId, query.pairId(), MarketType.SPOT, from, to, request);
+        return query.pairId() == null
+                ? orders.search(userId, MarketType.SPOT, statuses, types, sides, from, to, request)
+                : orders.searchPair(userId, query.pairId(), MarketType.SPOT, statuses, types, sides, from, to, request);
+    }
+
+    /** One page of the caller's Spot fills the query selects, newest first (B5: of one order as well). */
+    private Page<PaperFill> findFills(UUID userId, OrderQuery query, PageRequest request) {
+        TimeBounds.requireOrdered(query.from(), query.to());
+        // MSG41 for a Trader who has not opened an account, before anything is read.
+        accountOf(userId);
+        Set<OrderSide> sides = sidesOf(query);
+        Instant from = TimeBounds.fromOrEarliest(query.from());
+        Instant to = TimeBounds.toOrLatest(query.to());
+        if (query.orderId() != null) {
+            return query.pairId() == null
+                    ? fills.searchOrder(userId, query.orderId(), MarketType.SPOT, sides, from, to, request)
+                    : fills.searchOrderPair(
+                            userId, query.orderId(), query.pairId(), MarketType.SPOT, sides, from, to, request);
+        }
+        return query.pairId() == null
+                ? fills.search(userId, MarketType.SPOT, sides, from, to, request)
+                : fills.searchPair(userId, query.pairId(), MarketType.SPOT, sides, from, to, request);
+    }
+
+    private static Set<OrderSide> sidesOf(OrderQuery query) {
+        return query.side() == null ? PaperOrderRepository.ALL_SIDES : EnumSet.of(query.side());
+    }
+
+    /** Each order as the API shows it, with its pair's symbol, read once for all of them. */
+    private Map<PaperOrder, OrderResponse> toOrderResponses(List<PaperOrder> found) {
         Map<UUID, String> symbols =
-                symbolsOf(found.getContent().stream().map(PaperFill::getPairId).toList());
-        Map<UUID, String> assets =
-                market
-                        .coins(found.getContent().stream()
-                                .map(PaperFill::getFeeCoinId)
-                                .collect(Collectors.toSet()))
-                        .stream()
+                symbolsOf(found.stream().map(PaperOrder::getPairId).toList());
+        Map<PaperOrder, OrderResponse> responses = new IdentityHashMap<>();
+        found.forEach(order -> responses.put(order, toResponse(order, symbols)));
+        return responses;
+    }
+
+    /** Each fill as the API shows it, with its pair's symbol and fee coin, read once for all of them. */
+    private Map<PaperFill, FillResponse> toFillResponses(List<PaperFill> found) {
+        Map<UUID, String> symbols =
+                symbolsOf(found.stream().map(PaperFill::getPairId).toList());
+        Map<UUID, String> assets = found.isEmpty()
+                ? Map.of()
+                : market.coins(found.stream().map(PaperFill::getFeeCoinId).collect(Collectors.toSet())).stream()
                         .collect(Collectors.toMap(CoinListing::coinId, CoinListing::symbol));
-        return PageResponse.of(found, fill -> toResponse(fill, symbols, assets));
+        Map<PaperFill, FillResponse> responses = new IdentityHashMap<>();
+        found.forEach(fill -> responses.put(fill, toResponse(fill, symbols, assets)));
+        return responses;
     }
 
     /**
@@ -673,6 +824,35 @@ public class PaperOrderServiceImpl implements PaperOrderService {
                             + " of other values");
         }
         return toResponse(placed, symbolOf(symbolsOf(List.of(placed.getPairId())), placed.getPairId()));
+    }
+
+    /**
+     * The answer to a replacement sent again with a {@code newClientOrderId} already used: what the first call did, when
+     * the old order is cancelled and the order under the key has its pair, side and type and the asked price and
+     * quantity; else the key was used for other terms, refused as a reused {@code clientOrderId} is. The order under
+     * the key was created no earlier than the old order was cancelled.
+     */
+    private ReplacedOrderResponse replayOf(PaperOrder old, PaperOrder placed, ReplaceOrderRequest request) {
+        BigDecimal left = old.getOrigQuantity().subtract(old.getExecutedQuantity());
+        boolean same = old.getOrderStatus() == OrderStatus.CANCELED
+                && old.getClosedAt() != null
+                && !placed.getCreatedAt()
+                        .truncatedTo(ChronoUnit.MICROS)
+                        .isBefore(old.getClosedAt().truncatedTo(ChronoUnit.MICROS))
+                && placed.getMarketType() == MarketType.SPOT
+                && placed.getPairId().equals(old.getPairId())
+                && placed.getSide() == old.getSide()
+                && placed.getOrderType() == old.getOrderType()
+                && sameValue(placed.getLimitPrice(), request.price())
+                && sameValue(placed.getOrigQuantity(), request.quantity() == null ? left : request.quantity());
+        if (!same) {
+            throw new BusinessException(
+                    ErrorCode.DATA_CONFLICT,
+                    "clientOrderId " + request.newClientOrderId() + " was used for order " + placed.getId()
+                            + " of other values");
+        }
+        String symbol = symbolOf(symbolsOf(List.of(old.getPairId())), old.getPairId());
+        return new ReplacedOrderResponse(toResponse(old, symbol), toResponse(placed, symbol));
     }
 
     private static boolean sameValue(BigDecimal stored, BigDecimal asked) {

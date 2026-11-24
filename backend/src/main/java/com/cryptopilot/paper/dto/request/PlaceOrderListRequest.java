@@ -9,6 +9,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 import java.util.UUID;
 
@@ -16,9 +17,11 @@ import java.util.UUID;
  * A group of paper Spot orders to place together, as the exchange's Spot order lists (TR-10).
  *
  * <ul>
- *   <li>OCO: {@code oco} only. A take profit LIMIT_MAKER and a STOP_LOSS_LIMIT (a STOP_LOSS without a stop limit
- *       price) on the same side and quantity, placed now; one executing or triggering ends the other. For a SELL the
- *       take profit is above the last price and the stop below it; for a BUY the reverse.
+ *   <li>OCO: {@code oco} only. A take profit (LIMIT_MAKER, or TAKE_PROFIT_LIMIT or TAKE_PROFIT that trigger at
+ *       {@code takeProfitStopPrice}) and a STOP_LOSS_LIMIT (a STOP_LOSS without a stop limit price, either trailing
+ *       when {@code stopTrailingDelta} is given) on the same side and quantity, placed now; one executing or triggering
+ *       ends the other. For a SELL the take profit is above the last price and the stop below it; for a BUY the
+ *       reverse (B1: the leg types of the exchange's {@code orderList/oco}).
  *   <li>OTO: {@code working} and {@code pending}. The working order (LIMIT or LIMIT_MAKER) is placed now; the pending
  *       one (LIMIT, LIMIT_MAKER, STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT or TAKE_PROFIT_LIMIT) once the working order
  *       has filled in full.
@@ -85,9 +88,15 @@ public record PlaceOrderListRequest(
      * @param side BUY or SELL
      * @param quantity the base quantity of each; required for an OCO. Absent in an OTOCO, it is what the working
      *     order leaves: a BUY's quantity less the largest Spot fee rate, floored to the step; a SELL's quantity
-     * @param takeProfitPrice the take profit LIMIT_MAKER's price
-     * @param stopPrice the stop's stopPrice
+     * @param takeProfitPrice the take profit's limit price: a LIMIT_MAKER's or a TAKE_PROFIT_LIMIT's; absent for a
+     *     TAKE_PROFIT, executed as a MARKET order once triggered
+     * @param stopPrice the stop's stopPrice; absent for a trailing stop, which tracks the price from its placement
      * @param stopLimitPrice the STOP_LOSS_LIMIT's price; absent for a STOP_LOSS, executed as a MARKET order
+     * @param takeProfitType LIMIT_MAKER when absent, TAKE_PROFIT_LIMIT or TAKE_PROFIT (B1)
+     * @param takeProfitStopPrice a TAKE_PROFIT_LIMIT's or TAKE_PROFIT's stopPrice, where it triggers: above the price the
+     *     OCO starts at for a SELL, below it for a BUY; absent for a LIMIT_MAKER
+     * @param stopTrailingDelta the stop trails the best price by this many basis points (100 = 1 %), within the pair's
+     *     {@code TRAILING_DELTA} range, instead of waiting at a stopPrice (B1)
      */
     public record Oco(
             @NotNull(message = "MSG01") OrderSide side,
@@ -96,17 +105,34 @@ public record PlaceOrderListRequest(
             @Digits(integer = 16, fraction = 12, message = "MSG15")
             BigDecimal quantity,
 
-            @NotNull(message = "MSG01")
             @DecimalMin(value = "0", inclusive = false, message = "MSG15")
             @Digits(integer = 16, fraction = 12, message = "MSG15")
             BigDecimal takeProfitPrice,
 
-            @NotNull(message = "MSG01")
             @DecimalMin(value = "0", inclusive = false, message = "MSG15")
             @Digits(integer = 16, fraction = 12, message = "MSG15")
             BigDecimal stopPrice,
 
             @DecimalMin(value = "0", inclusive = false, message = "MSG15")
             @Digits(integer = 16, fraction = 12, message = "MSG15")
-            BigDecimal stopLimitPrice) {}
+            BigDecimal stopLimitPrice,
+
+            OrderType takeProfitType,
+
+            @DecimalMin(value = "0", inclusive = false, message = "MSG15")
+            @Digits(integer = 16, fraction = 12, message = "MSG15")
+            BigDecimal takeProfitStopPrice,
+
+            @Positive(message = "MSG15") Long stopTrailingDelta) {
+
+        /** The take profit's type: LIMIT_MAKER unless another is asked for. */
+        public OrderType takeProfitKind() {
+            return takeProfitType == null ? OrderType.LIMIT_MAKER : takeProfitType;
+        }
+
+        /** Where the take profit starts to act: a LIMIT_MAKER's price, a take profit stop's stopPrice. */
+        public BigDecimal takeProfitLevel() {
+            return takeProfitKind() == OrderType.LIMIT_MAKER ? takeProfitPrice : takeProfitStopPrice;
+        }
+    }
 }

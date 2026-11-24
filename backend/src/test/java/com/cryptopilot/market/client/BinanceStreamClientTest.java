@@ -44,7 +44,7 @@ class BinanceStreamClientTest {
 
     /**
      * TR-03, TR-38: a Spot pair adds its trades, best bid and ask and depth; a futures pair adds its trades to its
-     * /market streams and puts its best bid and ask and depth on the /public route.
+     * /market streams and puts its depth on the /public route, its best bid and ask only when that is turned on.
      */
     @Test
     void TR03_withTradingStreams_aSpotPairAddsItsTradesBookTickerAndDepth() {
@@ -65,7 +65,26 @@ class BinanceStreamClientTest {
                     .endsWith("btcusdt@aggTrade")
                     .hasSize(8);
             assertThat(client.publicStreamsFor(BinanceVenue.USD_M_FUTURES, "BTCUSDT"))
+                    .as("no Futures best bid and ask by default: too much data to keep a connection open")
+                    .containsExactly("btcusdt@depth10@100ms");
+        }
+        try (BinanceStreamClient client = new BinanceStreamClient(
+                properties(new BinanceStreamProperties.Trading(
+                        true,
+                        true,
+                        URI.create("wss://fstream.binance.com/public"),
+                        10,
+                        Duration.ofSeconds(10),
+                        50,
+                        20,
+                        true)),
+                JsonMapper.builder().build(),
+                Clock.systemUTC())) {
+            assertThat(client.publicStreamsFor(BinanceVenue.USD_M_FUTURES, "BTCUSDT"))
                     .containsExactly("btcusdt@bookTicker", "btcusdt@depth10@100ms");
+            assertThat(client.streamsFor(BinanceVenue.SPOT, "BTCUSDT"))
+                    .as("the Spot best bid and ask stay on either way")
+                    .contains("btcusdt@bookTicker");
         }
         try (BinanceStreamClient client = new BinanceStreamClient(
                 properties(new BinanceStreamProperties.Trading(

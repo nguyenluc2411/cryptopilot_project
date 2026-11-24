@@ -24,6 +24,7 @@ import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.event.SpotPairStoppedTrading;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.PaperLedgerInvariant;
@@ -43,6 +44,7 @@ import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.paper.service.PaperPnlService;
 import com.cryptopilot.support.InAppNotifications;
+import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -115,6 +117,9 @@ class PaperOrderApiTest {
 
     @Autowired
     private JwtEncoder jwtEncoder;
+
+    @Autowired
+    private MarketHealthService health;
 
     @Autowired
     private PriceCacheService prices;
@@ -1531,6 +1536,933 @@ class PaperOrderApiTest {
                                 .param("to", Instant.now().toString()),
                         null)
                 .andExpect(status().isBadRequest());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // OCO leg types (paper-trading-plan 20.2: B1)
+    // ------------------------------------------------------------------------------------------
+
+    /** The OCO part of a group with the leg types of B1; every {@code null} is left out. */
+    private static String ocoLegs(
+            String side,
+            String quantity,
+            String takeProfitType,
+            String takeProfitPrice,
+            String takeProfitStopPrice,
+            String stopPrice,
+            String stopLimitPrice,
+            String stopTrailingDelta) {
+        StringBuilder json = new StringBuilder("{\"side\": \"" + side + "\"");
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("quantity", quantity);
+        fields.put("takeProfitType", takeProfitType == null ? null : "\"" + takeProfitType + "\"");
+        fields.put("takeProfitPrice", takeProfitPrice);
+        fields.put("takeProfitStopPrice", takeProfitStopPrice);
+        fields.put("stopPrice", stopPrice);
+        fields.put("stopLimitPrice", stopLimitPrice);
+        fields.put("stopTrailingDelta", stopTrailingDelta);
+        fields.forEach((name, value) -> {
+            if (value != null) {
+                json.append(", \"").append(name).append("\": ").append(value);
+            }
+        });
+        return json.append("}").toString();
+    }
+
+    private String ocoGroup(String legs) {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OCO\", \"oco\": " + legs + "}";
+    }
+
+    /**
+     * Every take profit type on both sides (B1): the take profit is stored with its type, limit price and stopPrice,
+     * the group locks once the larger need, and the take profit triggering at its stopPrice executes it and expires
+     * the stop, giving back everything; the ledger adds up after each.
+     */
+    @Test
+    void B1_everyTakeProfitType_onBothSides_triggersAtItsStopPrice_andExpiresTheStop() throws Exception {
+        record Case(
+                String side,
+                String type,
+                String price,
+                String stopAt,
+                String stop,
+                String stopLimit,
+                String locked,
+                String trade,
+                String finalStatus) {}
+        List<Case> cases = List.of(
+                new Case("SELL", "TAKE_PROFIT", null, "110", "95", "94", "1", "110", "FILLED"),
+                new Case("SELL", "TAKE_PROFIT_LIMIT", "109", "110", "95", null, "1", "110", "FILLED"),
+                new Case("BUY", "TAKE_PROFIT", null, "90", "105", "106", "106", "90", "FILLED"),
+                new Case("BUY", "TAKE_PROFIT_LIMIT", "91", "90", "105", "106", "106", "90", "FILLED"));
+        for (Case c : cases) {
+            UUID trader = trader();
+            price("100");
+            if (c.side().equals("SELL")) {
+                place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+            }
+            String coin = c.side().equals("SELL") ? base() : "USDT";
+            BigDecimal lockedAtStart = locked(trader, coin);
+            String body = placeList(
+                            trader,
+                            ocoGroup(ocoLegs(
+                                    c.side(), "1", c.type(), c.price(), c.stopAt(), c.stop(), c.stopLimit(), null)))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.orders[0].type").value(c.type()))
+                    .andExpect(jsonPath("$.orders[0].status").value("NEW"))
+                    .andExpect(jsonPath("$.orders[0].stopPrice").value(Double.parseDouble(c.stopAt())))
+                    .andExpect(
+                            jsonPath("$.orders[1].type").value(c.stopLimit() == null ? "STOP_LOSS" : "STOP_LOSS_LIMIT"))
+                    .andReturn()
+                    .getResponse()
+                    .getContentAsString();
+            String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+            String stop = JsonPath.read(body, "$.orders[1].orderId");
+            if (c.price() == null) {
+                as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                        .andExpect(jsonPath("$.price").doesNotExist());
+            }
+            assertThat(locked(trader, coin).subtract(lockedAtStart))
+                    .as("%s: locked once, the larger need", c)
+                    .isEqualByComparingTo(c.locked());
+            assertThat(matching.triggerOrders())
+                    .as("%s: both legs wait for a trigger", c)
+                    .anyMatch(order -> order.orderId().toString().equals(takeProfit))
+                    .anyMatch(order -> order.orderId().toString().equals(stop));
+
+            depth(List.of(level(c.trade(), "5")), List.of(level(c.trade(), "5")));
+            // Now, not ahead: the cases share the pair, and a trade stamped ahead would reach the next case's orders.
+            trade(c.trade(), 0);
+
+            try {
+                awaitStatus(trader, takeProfit, c.finalStatus());
+            } catch (AssertionError failed) {
+                throw new AssertionError(
+                        c + ": "
+                                + sql.sql("select order_status || ' ' || coalesce(status_reason, '-')"
+                                                + " from trade_order where order_id = ?")
+                                        .param(UUID.fromString(takeProfit))
+                                        .query(String.class)
+                                        .single(),
+                        failed);
+            }
+            as(trader, get(PAPER + "/orders/" + stop), null)
+                    .andExpect(jsonPath("$.status").value("EXPIRED"))
+                    .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+            assertThat(locked(trader, coin)).as(c.toString()).isEqualByComparingTo(lockedAtStart);
+            assertThat(matching.triggerOrders())
+                    .as("%s: the stop left the engine", c)
+                    .noneMatch(order -> order.orderId().toString().equals(stop));
+            assertLedgerAddsUpToTheBalances(trader);
+        }
+    }
+
+    @Test
+    void B1_theStopTriggering_expiresATakeProfitStop_whichNoLongerTriggers() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        String body = placeList(trader, ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT", null, "110", "95", null, null)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+        String stop = JsonPath.read(body, "$.orders[1].orderId");
+
+        depth(List.of(level("95", "5")), List.of(level("94.5", "5")));
+        trade("95", 1);
+        awaitStatus(trader, stop, "FILLED");
+        BigDecimal held = spot(trader, base());
+        trade("111", 2);
+        trade("112", 3);
+
+        as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        assertThat(matching.triggerOrders())
+                .noneMatch(order -> order.orderId().toString().equals(takeProfit));
+        assertThat(spot(trader, base())).isEqualByComparingTo(held);
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B1_aTrailingStopOfAnOco_followsTheHigh_triggersOnTheDelta_andExpiresTheTakeProfit() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        String body = placeList(trader, ocoGroup(ocoLegs("SELL", "1", null, "120", null, null, "90", "200")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orders[0].type").value("LIMIT_MAKER"))
+                .andExpect(jsonPath("$.orders[1].type").value("STOP_LOSS_LIMIT"))
+                .andExpect(jsonPath("$.orders[1].trailingDelta").value(200))
+                .andExpect(jsonPath("$.orders[1].stopPrice").doesNotExist())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String takeProfit = JsonPath.read(body, "$.orders[0].orderId");
+        String stop = JsonPath.read(body, "$.orders[1].orderId");
+        assertThat(locked(trader, base())).isEqualByComparingTo("1");
+
+        depth(List.of(level("108", "5")), List.of(level("107", "5")));
+        trade("110", 1);
+        trade("108", 2);
+        // 2 % back from the high of 110: 107.8.
+        trade("107.8", 3);
+
+        awaitStatus(trader, stop, "FILLED");
+        as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        assertThat(locked(trader, base())).isZero();
+        awaitInBook(takeProfit, false);
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B1_theFieldsOfEachLegType_areRequiredOrRefused_byName() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        record Shape(String legs, String field, String message) {}
+        List<Shape> shapes = List.of(
+                new Shape(
+                        ocoLegs("SELL", "1", "TAKE_PROFIT", null, null, "95", null, null),
+                        "oco.takeProfitStopPrice",
+                        "MSG01"),
+                new Shape(
+                        ocoLegs("SELL", "1", "TAKE_PROFIT", "110", "110", "95", null, null),
+                        "oco.takeProfitPrice",
+                        "MSG15"),
+                new Shape(
+                        ocoLegs("SELL", "1", "TAKE_PROFIT_LIMIT", null, "110", "95", null, null),
+                        "oco.takeProfitPrice",
+                        "MSG01"),
+                new Shape(
+                        ocoLegs("SELL", "1", null, "110", "110", "95", null, null), "oco.takeProfitStopPrice", "MSG15"),
+                new Shape(ocoLegs("SELL", "1", null, null, null, "95", null, null), "oco.takeProfitPrice", "MSG01"),
+                new Shape(ocoLegs("SELL", "1", "LIMIT", "110", null, "95", null, null), "oco.takeProfitType", "MSG15"),
+                new Shape(
+                        ocoLegs("SELL", "1", "STOP_LOSS", null, "110", "95", null, null),
+                        "oco.takeProfitType",
+                        "MSG15"),
+                new Shape(ocoLegs("SELL", "1", null, "110", null, null, null, null), "oco.stopPrice", "MSG01"),
+                new Shape(ocoLegs("SELL", "1", null, "110", null, "95", null, "200"), "oco.stopPrice", "MSG15"),
+                new Shape(ocoLegs("BUY", "1", null, "90", null, null, null, "200"), "oco.stopLimitPrice", "MSG01"),
+                new Shape(
+                        ocoLegs("SELL", "1", "TAKE_PROFIT", null, "99", "95", null, null),
+                        "oco.takeProfitStopPrice",
+                        "MSG15"),
+                new Shape(
+                        ocoLegs("BUY", "1", "TAKE_PROFIT", null, "101", "105", "106", null),
+                        "oco.takeProfitStopPrice",
+                        "MSG15"),
+                new Shape(ocoLegs("SELL", "1", null, "110", null, null, null, "0"), "oco.stopTrailingDelta", "MSG15"),
+                new Shape(ocoLegs("SELL", "1", null, "110", null, null, null, "-5"), "oco.stopTrailingDelta", "MSG15"));
+        long rows = orderCount(trader);
+        for (Shape shape : shapes) {
+            placeList(trader, ocoGroup(shape.legs()))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errors['" + shape.field() + "']").value(shape.message()));
+        }
+        rule("spot_max_trailing_below_delta", "2000");
+        placeList(trader, ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT", null, "110.001", "95", null, null)))
+                .andExpect(jsonPath("$.code").value("PAPER_PRICE_FILTER"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("oco.takeProfitStopPrice"));
+        placeList(trader, ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT_LIMIT", "109.999", "110", "95", null, null)))
+                .andExpect(jsonPath("$.code").value("PAPER_PRICE_FILTER"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("oco.takeProfitPrice"));
+        placeList(trader, ocoGroup(ocoLegs("SELL", "1", null, "110", null, null, null, "2001")))
+                .andExpect(jsonPath("$.code").value("PAPER_TRAILING_DELTA"))
+                .andExpect(jsonPath("$.messageArgs[0]").value("oco.stopTrailingDelta"));
+        assertThat(orderCount(trader)).as("no refused group stored an order").isEqualTo(rows);
+        assertThat(locked(trader, base())).isZero();
+    }
+
+    @Test
+    void B1_anOtocoWithATakeProfitStop_placesItOnTheFill_andTriggersItThenWhenTheMarketIsAlreadyPastIt()
+            throws Exception {
+        UUID trader = trader();
+        price("100");
+        String waiting = placeList(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"type\": \"OTOCO\","
+                                + " \"working\": {\"side\": \"BUY\", \"type\": \"LIMIT\", \"price\": 90,"
+                                + " \"quantity\": 1}, \"oco\": "
+                                + ocoLegs("SELL", null, "TAKE_PROFIT_LIMIT", "94", "95", "85", "84", null) + "}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orders[1].type").value("TAKE_PROFIT_LIMIT"))
+                .andExpect(jsonPath("$.orders[1].status").value("PENDING_NEW"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String takeProfit = JsonPath.read(waiting, "$.orders[1].orderId");
+        String stop = JsonPath.read(waiting, "$.orders[2].orderId");
+
+        // The working buy fills at 90 while the market already stands past the take profit's 95.
+        price("96");
+        depth(List.of(level("96.5", "5")), List.of(level("96", "5")));
+        trade("90", 1);
+
+        awaitStatus(trader, JsonPath.read(waiting, "$.orders[0].orderId"), "FILLED");
+        awaitStatus(trader, takeProfit, "FILLED");
+        as(trader, get(PAPER + "/orders/" + takeProfit), null)
+                .andExpect(jsonPath("$.triggeredAt").exists());
+        as(trader, get(PAPER + "/orders/" + stop), null)
+                .andExpect(jsonPath("$.status").value("EXPIRED"))
+                .andExpect(jsonPath("$.statusReason").value("OCO_OTHER_EXECUTED"));
+        assertThat(locked(trader, base())).isZero();
+        assertThat(matching.triggerOrders()).noneMatch(order -> order.pairId().equals(pair));
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B1_aTakeProfitStop_countsAsASecondStop_towardsThePairsLimit() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        rule("spot_max_num_algo_orders", "2");
+        place(trader, stop("STOP_LOSS", "SELL", "95", null, null, "0.1")).andExpect(status().isCreated());
+
+        placeList(trader, ocoGroup(ocoLegs("SELL", "0.5", "TAKE_PROFIT", null, "110", "95", null, null)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_MAX_NUM_ALGO_ORDERS"));
+        placeList(trader, ocoGroup(ocoLegs("SELL", "0.5", null, "110", null, "95", null, null)))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    void B1_aGroupSentAgain_isComparedOnItsLegTypes_tooBeforeItIsAnsweredWithTheFirst() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(trader, market("BUY", "\"quantity\": 2")).andExpect(status().isCreated());
+        String first = keyed(ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT", null, "110", "95", null, null)), "b1-key");
+
+        String listId = JsonPath.read(
+                placeList(trader, first)
+                        .andExpect(status().isCreated())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString(),
+                "$.listId");
+        placeList(trader, first)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.listId").value(listId));
+        placeList(trader, keyed(ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT", null, "111", "95", null, null)), "b1-key"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+        placeList(
+                        trader,
+                        keyed(
+                                ocoGroup(ocoLegs("SELL", "1", "TAKE_PROFIT_LIMIT", "110", "110", "95", null, null)),
+                                "b1-key"))
+                .andExpect(status().isConflict());
+        placeList(trader, keyed(ocoGroup(ocoLegs("SELL", "1", null, "110", null, "95", null, null)), "b1-key"))
+                .andExpect(status().isConflict());
+        assertThat(locked(trader, base())).isEqualByComparingTo("1");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Cancel-replace (paper-trading-plan 20.2: B4)
+    // ------------------------------------------------------------------------------------------
+
+    private ResultActions replace(UUID trader, String id, String body) throws Exception {
+        return as(trader, post(PAPER + "/orders/" + id + "/replace"), body);
+    }
+
+    /** Waits until the engine's book holds the order, or no longer does; it hears of changes after the commit. */
+    private void awaitInBook(String id, boolean present) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        boolean found;
+        do {
+            found = matching.restingOrders().stream()
+                    .anyMatch(order -> order.orderId().toString().equals(id));
+            if (found == present) {
+                return;
+            }
+            Thread.sleep(20);
+        } while (System.nanoTime() < deadline);
+        assertThat(found).as("order %s in the engine's book", id).isEqualTo(present);
+    }
+
+    private String orderStatus(String id) {
+        return sql.sql("select order_status from trade_order where order_id = ?")
+                .param(UUID.fromString(id))
+                .query(String.class)
+                .single();
+    }
+
+    /**
+     * A refused replacement changes nothing (B4, STOP_ON_FAILURE): for each way the new order can be refused, the old
+     * one stays NEW with its funds locked, no row or ledger entry is added, and the engine still fills it at its price.
+     */
+    @Test
+    void B4_aReplacementTheNewOrderCannotPass_leavesTheOldOrderWorking_forEveryRefusal() throws Exception {
+        record Refusal(String name, String type, String body, int status, String code) {}
+        List<Refusal> refusals = List.of(
+                new Refusal("off the tick", "LIMIT", "{\"price\": 89.995}", 400, null),
+                new Refusal("off the step", "LIMIT", "{\"price\": 89, \"quantity\": 1.0005}", 400, null),
+                new Refusal("worth too little", "LIMIT", "{\"price\": 89, \"quantity\": 0.01}", 400, null),
+                new Refusal(
+                        "more than the wallet holds",
+                        "LIMIT",
+                        "{\"price\": 99, \"quantity\": 200}",
+                        400,
+                        "PAPER_INSUFFICIENT_BALANCE"),
+                new Refusal("too far from the price", "LIMIT", "{\"price\": 0.01, \"quantity\": 1000}", 400, null),
+                new Refusal(
+                        "post only that would take", "LIMIT_MAKER", "{\"price\": 100}", 409, "PAPER_ORDER_WOULD_TAKE"),
+                new Refusal("unchanged", "LIMIT", "{\"price\": 90}", 409, "PAPER_ORDER_UNCHANGED"),
+                new Refusal(
+                        "unchanged, quantity given",
+                        "LIMIT",
+                        "{\"price\": 90, \"quantity\": 1}",
+                        409,
+                        "PAPER_ORDER_UNCHANGED"),
+                new Refusal("no price", "LIMIT", "{\"quantity\": 1}", 400, null),
+                new Refusal("price zero", "LIMIT", "{\"price\": 0}", 400, null));
+        rule("spot_bid_multiplier_up", "1.5");
+        rule("spot_bid_multiplier_down", "0.5");
+        for (Refusal refusal : refusals) {
+            UUID trader = trader();
+            price("100");
+            String old = id(place(
+                    trader,
+                    refusal.type().equals("LIMIT") ? limit("BUY", "90", "1", null) : limitMaker("BUY", "90", "1")));
+            long rows = orderCount(trader);
+            long entries = ledgerRows(trader);
+            BigDecimal lockedBefore = locked(trader, "USDT");
+
+            ResultActions refused = replace(trader, old, refusal.body()).andExpect(status().is(refusal.status()));
+            if (refusal.code() != null) {
+                refused.andExpect(jsonPath("$.code").value(refusal.code()));
+            }
+
+            assertThat(orderStatus(old)).as(refusal.name()).isEqualTo("NEW");
+            assertThat(orderCount(trader)).as(refusal.name()).isEqualTo(rows);
+            assertThat(ledgerRows(trader)).as(refusal.name()).isEqualTo(entries);
+            assertThat(locked(trader, "USDT")).as(refusal.name()).isEqualByComparingTo(lockedBefore);
+            awaitInBook(old, true);
+            trade("90", 1);
+            awaitStatus(trader, old, "FILLED");
+            assertLedgerAddsUpToTheBalances(trader);
+        }
+    }
+
+    /**
+     * A successful replacement, for each kind of order and move: the old order is CANCELED with its funds given back,
+     * the new one keeps the side, type and time in force, locks what it needs at its new price and fills there, and
+     * the engine no longer fills the old one.
+     */
+    @Test
+    void B4_aReplacement_cancelsTheOldOrder_andTheNewOneWorksAtItsPrice_forEveryKindAndMove() throws Exception {
+        record Move(
+                String name,
+                String side,
+                String type,
+                String timeInForce,
+                String from,
+                String to,
+                String quantity,
+                String newQuantity,
+                String locked,
+                String lockedCoin) {}
+        List<Move> moves = List.of(
+                new Move("buy lower", "BUY", "LIMIT", null, "90", "85", "1", null, "85", "USDT"),
+                new Move("buy higher, still waiting", "BUY", "LIMIT", null, "90", "95", "1", null, "95", "USDT"),
+                new Move("buy more", "BUY", "LIMIT", null, "90", "90", "1", "3", "270", "USDT"),
+                new Move("buy less, lower", "BUY", "LIMIT", null, "90", "80", "2", "0.5", "40", "USDT"),
+                new Move("sell higher", "SELL", "LIMIT", null, "110", "120", "1", null, "1", "BASE"),
+                new Move("sell lower, still waiting", "SELL", "LIMIT", null, "110", "105", "1", null, "1", "BASE"),
+                new Move("post-only buy lower", "BUY", "LIMIT_MAKER", null, "90", "88", "1", null, "88", "USDT"),
+                new Move(
+                        "post-only sell higher", "SELL", "LIMIT_MAKER", null, "110", "115", "1", "0.5", "0.5", "BASE"));
+        for (Move move : moves) {
+            UUID trader = trader();
+            price("100");
+            if (move.side().equals("SELL")) {
+                place(trader, market("BUY", "\"quantity\": 3")).andExpect(status().isCreated());
+            }
+            String coin = move.lockedCoin().equals("BASE") ? base() : "USDT";
+            BigDecimal lockedAtStart = locked(trader, coin);
+            String old = id(place(
+                    trader,
+                    move.type().equals("LIMIT")
+                            ? limit(move.side(), move.from(), move.quantity(), move.timeInForce())
+                            : limitMaker(move.side(), move.from(), move.quantity())));
+
+            String body = "{\"price\": " + move.to()
+                    + (move.newQuantity() == null ? "" : ", \"quantity\": " + move.newQuantity()) + "}";
+            String answer = replace(trader, old, body)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.canceled.orderId").value(old))
+                    .andExpect(jsonPath("$.canceled.status").value("CANCELED"))
+                    .andExpect(jsonPath("$.placed.status").value("NEW"))
+                    .andExpect(jsonPath("$.placed.side").value(move.side()))
+                    .andExpect(jsonPath("$.placed.type").value(move.type()))
+                    .andReturn()
+                    .getResponse()
+                    .getContentAsString();
+            String placed = JsonPath.read(answer, "$.placed.orderId");
+            assertThat(placed).as(move.name()).isNotEqualTo(old);
+            assertThat(new BigDecimal(JsonPath.read(answer, "$.placed.price").toString()))
+                    .as(move.name())
+                    .isEqualByComparingTo(move.to());
+            assertThat(new BigDecimal(JsonPath.read(answer, "$.placed.quantity").toString()))
+                    .as(move.name())
+                    .isEqualByComparingTo(move.newQuantity() == null ? move.quantity() : move.newQuantity());
+            if (move.type().equals("LIMIT")) {
+                assertThat((String) JsonPath.read(answer, "$.placed.timeInForce"))
+                        .isEqualTo("GTC");
+            }
+            assertThat(locked(trader, coin).subtract(lockedAtStart))
+                    .as("%s: locks the new order's need only", move.name())
+                    .isEqualByComparingTo(move.locked());
+            awaitInBook(old, false);
+            awaitInBook(placed, true);
+
+            trade(move.to(), 1);
+            awaitStatus(trader, placed, "FILLED");
+            assertThat(orderStatus(old)).as(move.name()).isEqualTo("CANCELED");
+            assertThat(locked(trader, coin)).as(move.name()).isEqualByComparingTo(lockedAtStart);
+            assertLedgerAddsUpToTheBalances(trader);
+        }
+    }
+
+    @Test
+    void B4_aLimitMovedAcrossTheBook_executesAtOnceAsATaker_likeANewOrder() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "5")), List.of(level("99", "5")));
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+
+        replace(trader, old, "{\"price\": 100}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canceled.status").value("CANCELED"))
+                .andExpect(jsonPath("$.placed.status").value("FILLED"))
+                .andExpect(jsonPath("$.placed.avgPrice").value(100.0));
+
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("0");
+        assertThat(spot(trader, base())).isEqualByComparingTo("0.999");
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B4_aPartlyFilledOrder_isReplacedByWhatItHasLeft_andKeepsWhatItExecuted() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "1"), level("101", "5")), List.of(level("99", "5")));
+        String old = id(place(trader, limit("BUY", "100", "3", null)));
+        assertThat(orderStatus(old)).isEqualTo("PARTIALLY_FILLED");
+
+        String answer = replace(trader, old, "{\"price\": 95}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canceled.status").value("CANCELED"))
+                .andExpect(jsonPath("$.canceled.executedQuantity").value(1.0))
+                .andExpect(jsonPath("$.placed.quantity").value(2.0))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("190");
+        trade("95", 1);
+        awaitStatus(trader, JsonPath.read(answer, "$.placed.orderId"), "FILLED");
+        assertThat(spot(trader, base())).as("1 + 2 bought, less 0.1 %").isEqualByComparingTo("2.997");
+        assertLedgerAddsUpToTheBalances(trader);
+    }
+
+    @Test
+    void B4_onlyAWorkingLimitOrLimitMakerOfTheCallerOutsideAGroup_canBeReplaced() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String filled = id(place(trader, market("BUY", "\"quantity\": 2")));
+        String stop = id(place(trader, stop("STOP_LOSS_LIMIT", "SELL", "95", null, "94", "1")));
+        String cancelled = id(place(trader, limit("BUY", "80", "1", null)));
+        as(trader, post(PAPER + "/orders/" + cancelled + "/cancel"), null).andExpect(status().isOk());
+        String group = placeList(trader, oco("SELL", "0.5", "120", "90", "89"))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String leg = JsonPath.read(group, "$.orders[0].orderId");
+        String mine = id(place(trader, limit("BUY", "90", "1", null)));
+        UUID stranger = trader();
+
+        replace(trader, filled, "{\"price\": 90}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_NOT_OPEN"));
+        replace(trader, cancelled, "{\"price\": 85}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_NOT_OPEN"));
+        replace(trader, stop, "{\"price\": 93}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.orderId").value("MSG15"));
+        replace(trader, leg, "{\"price\": 125}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.orderId").value("MSG15"));
+        replace(stranger, mine, "{\"price\": 85}").andExpect(status().isNotFound());
+        replace(trader, UUID.randomUUID().toString(), "{\"price\": 85}").andExpect(status().isNotFound());
+        replace(traderWithoutAccount(), mine, "{\"price\": 85}").andExpect(status().isNotFound());
+
+        assertThat(orderStatus(stop)).isEqualTo("NEW");
+        assertThat(orderStatus(leg)).isEqualTo("NEW");
+        assertThat(orderStatus(mine)).isEqualTo("NEW");
+    }
+
+    @Test
+    void B4_aReplacedOrder_cannotBeReplacedAgain_andOnlyItsReplacementLocks() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+
+        replace(trader, old, "{\"price\": 85}").andExpect(status().isOk());
+        replace(trader, old, "{\"price\": 80}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_ORDER_NOT_OPEN"));
+
+        assertThat(orderCount(trader)).isEqualTo(2);
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("85");
+    }
+
+    /**
+     * A replacement sent again with the same newClientOrderId, as a retry after a timeout, answers what the first one
+     * did and changes nothing; the key with other terms, or one an unrelated order holds, is refused.
+     */
+    @Test
+    void B4_aReplacementSentAgainWithItsNewClientOrderId_answersTheSameOrder_andChangesNothing() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+        String body = "{\"price\": 85, \"newClientOrderId\": \"rep-1\"}";
+
+        String first = replace(trader, old, body)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.placed.clientOrderId").value("rep-1"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        BigDecimal lockedAfterFirst = locked(trader, "USDT");
+        String placed = JsonPath.read(first, "$.placed.orderId");
+        replace(trader, old, body)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.canceled.orderId").value(old))
+                .andExpect(jsonPath("$.canceled.status").value("CANCELED"))
+                .andExpect(jsonPath("$.placed.orderId").value(placed));
+
+        assertThat(openOrderCount(trader)).isEqualTo(1);
+        assertThat(orderCount(trader)).isEqualTo(2);
+        assertThat(locked(trader, "USDT"))
+                .isEqualByComparingTo(lockedAfterFirst)
+                .isEqualByComparingTo("85");
+        // The same key with another price is a reused key, as on a placement.
+        replace(trader, old, "{\"price\": 80, \"newClientOrderId\": \"rep-1\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+        assertThat(orderStatus(placed)).isEqualTo("NEW");
+    }
+
+    @Test
+    void B4_aKeyOfAnOrderPlacedBeforeTheOldOneWasCancelled_isNotTakenAsItsReplacement() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+        String other = id(place(
+                trader,
+                "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\", \"type\": \"LIMIT\","
+                        + " \"price\": 85, \"quantity\": 1, \"clientOrderId\": \"rep-x\"}"));
+        as(trader, post(PAPER + "/orders/" + old + "/cancel"), null).andExpect(status().isOk());
+        long count = orderCount(trader);
+        BigDecimal locked = locked(trader, "USDT");
+
+        replace(trader, old, "{\"price\": 85, \"newClientOrderId\": \"rep-x\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+
+        assertThat(orderStatus(old)).isEqualTo("CANCELED");
+        assertThat(orderStatus(other)).isEqualTo("NEW");
+        assertThat(orderCount(trader)).isEqualTo(count);
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo(locked);
+    }
+
+    /** A retry of a replacement that passed gets its first answer while Spot is paused; a new one is refused. */
+    @Test
+    void B4_aReplayWhileSpotIsPaused_answersTheFirstReplacement_andANewOneIsRefused() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+        String body = "{\"price\": 85, \"newClientOrderId\": \"rep-p\"}";
+        String placed = JsonPath.read(
+                replace(trader, old, body)
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString(),
+                "$.placed.orderId");
+
+        health.startMaintenance(MarketType.SPOT, null, null);
+        try {
+            replace(trader, old, body)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.placed.orderId").value(placed));
+            replace(trader, placed, "{\"price\": 80, \"newClientOrderId\": \"rep-q\"}")
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.code").value("TRADING_PAUSED"));
+        } finally {
+            health.endMaintenance(MarketType.SPOT);
+            MarketIncidents.removeAll(sql);
+        }
+        assertThat(orderStatus(placed)).isEqualTo("NEW");
+    }
+
+    @Test
+    void B4_aNewClientOrderIdAnUnrelatedOrderHolds_isRefused_andTheOldOrderWorksOn() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+        place(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\", \"type\": \"LIMIT\","
+                                + " \"price\": 85, \"quantity\": 1, \"clientOrderId\": \"taken-1\"}")
+                .andExpect(status().isCreated());
+
+        replace(trader, old, "{\"price\": 85, \"newClientOrderId\": \"taken-1\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+
+        assertThat(orderStatus(old)).isEqualTo("NEW");
+        assertThat(orderCount(trader)).isEqualTo(2);
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo("175");
+        replace(trader, old, "{\"price\": 85, \"newClientOrderId\": \"bad key!\"}")
+                .andExpect(status().isBadRequest());
+    }
+
+    /** At the pair's open-order limit a replacement still passes: the old order is cancelled before the count. */
+    @Test
+    void B4_aReplacementAtTheOpenOrderLimit_passes_andTheCountStaysAtTheLimit() throws Exception {
+        UUID trader = trader();
+        price("100");
+        int limit = 3;
+        rule("spot_max_num_orders", String.valueOf(limit));
+        List<String> working = new ArrayList<>();
+        for (int i = 0; i < limit; i++) {
+            working.add(id(place(trader, limit("BUY", "90", "1", null))));
+        }
+        place(trader, limit("BUY", "90", "1", null))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAPER_MAX_NUM_ORDERS"));
+
+        replace(trader, working.getFirst(), "{\"price\": 85}").andExpect(status().isOk());
+
+        assertThat(orderStatus(working.getFirst())).isEqualTo("CANCELED");
+        assertThat(openOrderCount(trader)).isEqualTo(limit);
+        rule("spot_max_num_orders", "null");
+    }
+
+    private long openOrderCount(UUID trader) {
+        return sql.sql(
+                        "select count(*) from trade_order where user_id = ? and order_status in ('NEW', 'PARTIALLY_FILLED')")
+                .param(trader)
+                .query(Long.class)
+                .single();
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // History filters and CSV export (paper-trading-plan 20.2: B5, B6, B7)
+    // ------------------------------------------------------------------------------------------
+
+    /** The orders the history filter matrix places: id, type, side; two of them fill. */
+    private record Placed(String id, String type, String side) {}
+
+    private List<Placed> placeHistoryMatrix(UUID trader) throws Exception {
+        price("100");
+        List<Placed> placed = new ArrayList<>();
+        placed.add(new Placed(id(place(trader, market("BUY", "\"quantity\": 2"))), "MARKET", "BUY"));
+        placed.add(new Placed(id(place(trader, limit("BUY", "90", "1", null))), "LIMIT", "BUY"));
+        placed.add(new Placed(id(place(trader, limitMaker("BUY", "80", "1"))), "LIMIT_MAKER", "BUY"));
+        placed.add(new Placed(id(place(trader, market("SELL", "\"quantity\": 1"))), "MARKET", "SELL"));
+        placed.add(new Placed(id(place(trader, limit("SELL", "120", "0.5", null))), "LIMIT", "SELL"));
+        return placed;
+    }
+
+    @Test
+    void B6_theOrderHistory_returnsExactlyTheOrdersOfTheTypeAndSideAsked_forEveryCombination() throws Exception {
+        UUID trader = trader();
+        List<Placed> placed = placeHistoryMatrix(trader);
+
+        List<String> types = new ArrayList<>(List.of("MARKET", "LIMIT", "LIMIT_MAKER", "STOP_LOSS"));
+        types.add(null);
+        List<String> sides = new ArrayList<>(List.of("BUY", "SELL"));
+        sides.add(null);
+        List<String> pairs =
+                new ArrayList<>(List.of(pair.toString(), UUID.randomUUID().toString()));
+        pairs.add(null);
+        for (String type : types) {
+            for (String side : sides) {
+                for (String pairId : pairs) {
+                    MockHttpServletRequestBuilder request =
+                            get(PAPER + "/orders").param("pageSize", "100");
+                    if (type != null) {
+                        request.param("type", type);
+                    }
+                    if (side != null) {
+                        request.param("side", side);
+                    }
+                    if (pairId != null) {
+                        request.param("pairId", pairId);
+                    }
+                    List<String> expected = placed.stream()
+                            .filter(order -> type == null || order.type().equals(type))
+                            .filter(order -> side == null || order.side().equals(side))
+                            .filter(order -> pairId == null || pairId.equals(pair.toString()))
+                            .map(Placed::id)
+                            .toList()
+                            .reversed();
+                    String body = as(trader, request, null)
+                            .andExpect(status().isOk())
+                            .andReturn()
+                            .getResponse()
+                            .getContentAsString();
+                    List<String> found = JsonPath.read(body, "$.items[*].orderId");
+                    assertThat(found)
+                            .as("type %s, side %s, pair %s", type, side, pairId)
+                            .containsExactlyElementsOf(expected);
+                    assertThat((Integer) JsonPath.read(body, "$.total"))
+                            .as("total of type %s, side %s, pair %s", type, side, pairId)
+                            .isEqualTo(expected.size());
+                }
+            }
+        }
+        as(trader, get(PAPER + "/orders").param("type", "NOT_A_TYPE"), null).andExpect(status().isBadRequest());
+        as(trader, get(PAPER + "/orders").param("side", "LONG"), null).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void B5_theTradeHistoryOfOneOrder_holdsItsFillsOnly_andNoneOfAnotherTradersOrPair() throws Exception {
+        UUID trader = trader();
+        price("100");
+        depth(List.of(level("100", "1"), level("101", "1")), List.of(level("99", "5")));
+        String twoLevels = id(place(trader, market("BUY", "\"quantity\": 2")));
+        String oneLevel = id(place(trader, market("SELL", "\"quantity\": 1")));
+        UUID stranger = trader();
+
+        as(trader, get(PAPER + "/fills").param("orderId", twoLevels), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items[*].orderId", everyItem(is(twoLevels))));
+        as(trader, get(PAPER + "/fills").param("orderId", oneLevel), null)
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].side").value("SELL"));
+        as(trader, get(PAPER + "/fills").param("orderId", twoLevels).param("pairId", pair.toString()), null)
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.items[*].orderId", everyItem(is(twoLevels))));
+        as(
+                        trader,
+                        get(PAPER + "/fills")
+                                .param("orderId", twoLevels)
+                                .param("pairId", UUID.randomUUID().toString()),
+                        null)
+                .andExpect(jsonPath("$.items").isEmpty())
+                .andExpect(jsonPath("$.total").value(0));
+        as(trader, get(PAPER + "/fills").param("orderId", twoLevels).param("side", "SELL"), null)
+                .andExpect(jsonPath("$.total").value(0));
+        as(trader, get(PAPER + "/fills").param("side", "SELL"), null)
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].orderId").value(oneLevel));
+        as(trader, get(PAPER + "/fills").param("side", "BUY").param("pairId", pair.toString()), null)
+                .andExpect(jsonPath("$.total").value(2));
+        as(stranger, get(PAPER + "/fills").param("orderId", twoLevels), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+        as(trader, get(PAPER + "/fills").param("orderId", UUID.randomUUID().toString()), null)
+                .andExpect(jsonPath("$.total").value(0));
+        as(trader, get(PAPER + "/fills").param("orderId", "not-a-uuid"), null).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void B7_theCsvExports_holdTheRowsOfTheSameFilter_newestFirst_inTheirColumns() throws Exception {
+        UUID trader = trader();
+        List<Placed> placed = placeHistoryMatrix(trader);
+
+        MvcResult orders = as(trader, get(PAPER + "/orders/export").param("side", "BUY"), null)
+                .andExpect(status().isOk())
+                .andExpect(result ->
+                        assertThat(result.getResponse().getContentType()).startsWith("text/csv"))
+                .andExpect(result -> assertThat(result.getResponse().getHeader(HttpHeaders.CONTENT_DISPOSITION))
+                        .contains("attachment")
+                        .contains("cryptopilot-spot-orders.csv"))
+                .andExpect(result -> assertThat(result.getResponse().getHeader("X-Result-Truncated"))
+                        .isNull())
+                .andReturn();
+        List<String> lines = List.of(orders.getResponse().getContentAsString().split("\r\n"));
+        assertThat(lines.getFirst()).startsWith("placedAt,orderId,clientOrderId,symbol,side,type,");
+        List<String> buys = placed.stream()
+                .filter(order -> order.side().equals("BUY"))
+                .map(Placed::id)
+                .toList()
+                .reversed();
+        assertThat(lines.subList(1, lines.size()).stream()
+                        .map(line -> line.split(",", -1)[1])
+                        .toList())
+                .containsExactlyElementsOf(buys);
+        String[] market = lines.getLast().split(",", -1);
+        assertThat(market[3]).isEqualTo(symbol);
+        assertThat(market[5]).isEqualTo("MARKET");
+        assertThat(market[12]).as("executedQuantity").isEqualTo("2");
+        assertThat(market[15]).as("status").isEqualTo("FILLED");
+        assertThat(market).hasSize(20);
+
+        String fills = as(
+                        trader,
+                        get(PAPER + "/fills/export")
+                                .param("orderId", placed.getFirst().id()),
+                        null)
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        List<String> fillLines = List.of(fills.split("\r\n"));
+        assertThat(fillLines.getFirst())
+                .isEqualTo(
+                        "tradedAt,fillId,orderId,symbol,side,price,quantity,quoteAmount,fee,feeAsset,liquidity,source");
+        assertThat(fillLines).hasSize(2);
+        assertThat(fillLines.get(1).split(",", -1))
+                .containsSubsequence(
+                        placed.getFirst().id(), symbol, "BUY", "100", "2", "200", "0.002", base(), "TAKER", "LIVE");
+
+        as(
+                        trader,
+                        get(PAPER + "/orders/export")
+                                .param("from", Instant.now().plusSeconds(3600).toString()),
+                        null)
+                .andExpect(status().isOk())
+                .andExpect(result ->
+                        assertThat(result.getResponse().getContentAsString()).isEqualTo(lines.getFirst() + "\r\n"));
+        as(traderWithoutAccount(), get(PAPER + "/fills/export"), null).andExpect(status().isNotFound());
+        as(
+                        trader,
+                        get(PAPER + "/orders/export")
+                                .param("from", Instant.now().plusSeconds(60).toString())
+                                .param("to", Instant.now().toString()),
+                        null)
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void B7_aClientOrderIdThatStartsLikeAFormula_isExportedAsText() throws Exception {
+        UUID trader = trader();
+        price("100");
+        place(
+                        trader,
+                        "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\", \"type\": \"LIMIT\","
+                                + " \"price\": 90, \"quantity\": 1, \"clientOrderId\": \"-2.5:sum\"}")
+                .andExpect(status().isCreated());
+
+        String csv = as(trader, get(PAPER + "/orders/export"), null)
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(csv.split("\r\n")[1].split(",", -1)[2]).isEqualTo("'-2.5:sum");
     }
 
     @Test

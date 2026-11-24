@@ -2,11 +2,16 @@ package com.cryptopilot.market.client;
 
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpConnectTimeoutException;
 import java.net.http.WebSocket;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -28,6 +33,13 @@ import org.slf4j.LoggerFactory;
  *   <li><b>A silent connection is a dead one.</b> Every shard carries a once-a-second ticker or mark price, so
  *       no text for {@code idleTimeout} means a half-open connection the exchange will never close for us; it
  *       is aborted and reconnected.
+ *   <li><b>An attempt that never answers is given up.</b> The client's own connect timeout runs on its selector
+ *       thread and covers no upgrade answer, so a handshake in flight when that selector stopped, or one a host
+ *       accepted and never answered, stays pending for good. An attempt unanswered for {@code connectTimeout}
+ *       plus {@code idleTimeout} counts as failed and is retried (on a dead client the retry fails at once, which
+ *       replaces it), and its late answer is let go. A failure while the client is replaced, or a refusal
+ *       thrown at once, still schedules the next attempt: the shard always has a connection, an attempt in
+ *       flight or a retry scheduled.
  *   <li><b>Pings are answered.</b> The JDK {@link WebSocket} replies to every ping with a pong carrying the
  *       same payload by itself — Spot disconnects after a minute without one, futures after ten.
  *   <li><b>The reader is never blocked.</b> A frame is parsed and handed to the {@link Listener}, which must
@@ -69,7 +81,7 @@ public final class BinanceStreamShard implements AutoCloseable {
     private final String name;
     private final URI uri;
     private final List<String> streams;
-    private final HttpClient http;
+    private final StreamHttpClients http;
     private final BinanceStreamParser parser;
     private final ScheduledExecutorService timer;
     private final ReconnectBackoff backoff;
@@ -88,6 +100,23 @@ public final class BinanceStreamShard implements AutoCloseable {
     private ScheduledFuture<?> renewal;
     private ScheduledFuture<?> watchdog;
     private volatile Instant lastMessageAt;
+    private final Set<Attempt> inFlight = new HashSet<>();
+
+    /**
+     * A connection attempt not answered yet; its answer counts only while it is still in flight. Told apart by
+     * identity, not by value: two attempts on one client started at one instant are still two.
+     */
+    private static final class Attempt {
+        private final HttpClient client;
+        private final boolean renewing;
+        private final Instant startedAt;
+
+        Attempt(HttpClient client, boolean renewing, Instant startedAt) {
+            this.client = client;
+            this.renewing = renewing;
+            this.startedAt = startedAt;
+        }
+    }
 
     /**
      * A shard, not yet connected.
@@ -101,6 +130,21 @@ public final class BinanceStreamShard implements AutoCloseable {
             URI base,
             List<String> streams,
             HttpClient http,
+            BinanceStreamParser parser,
+            ScheduledExecutorService timer,
+            BinanceStreamProperties properties,
+            ReconnectBackoff backoff,
+            Clock clock,
+            Listener listener) {
+        this(name, base, streams, StreamHttpClients.fixed(http), parser, timer, properties, backoff, clock, listener);
+    }
+
+    /** A shard, not yet connected, opening its sockets with whichever client {@code http} holds at each attempt. */
+    public BinanceStreamShard(
+            String name,
+            URI base,
+            List<String> streams,
+            StreamHttpClients http,
             BinanceStreamParser parser,
             ScheduledExecutorService timer,
             BinanceStreamProperties properties,
@@ -159,6 +203,7 @@ public final class BinanceStreamShard implements AutoCloseable {
                 return;
             }
             closed = true;
+            inFlight.clear();
             cancel(pending);
             cancel(renewal);
             cancel(watchdog);
@@ -173,16 +218,52 @@ public final class BinanceStreamShard implements AutoCloseable {
 
     private void connect(boolean renewing) {
         Frames frames = new Frames();
-        http.newWebSocketBuilder()
-                .connectTimeout(connectTimeout)
-                .buildAsync(uri, frames)
-                .whenComplete((socket, failure) -> {
-                    if (failure != null) {
-                        failed(renewing, failure);
-                    } else {
-                        opened(socket, frames, renewing);
-                    }
-                });
+        HttpClient client = http.current();
+        Attempt attempt = new Attempt(client, renewing, clock.instant());
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            inFlight.add(attempt);
+        }
+        CompletableFuture<WebSocket> handshake;
+        try {
+            handshake =
+                    client.newWebSocketBuilder().connectTimeout(connectTimeout).buildAsync(uri, frames);
+        } catch (RuntimeException refused) {
+            handshake = CompletableFuture.failedFuture(refused);
+        }
+        handshake.whenComplete((socket, failure) -> {
+            if (!answered(attempt)) {
+                if (socket != null) {
+                    socket.abort();
+                }
+                return;
+            }
+            if (failure != null) {
+                attemptFailed(attempt, failure);
+            } else {
+                opened(socket, frames, renewing);
+            }
+        });
+    }
+
+    /** Takes the attempt out of those in flight; false when it was given up already. */
+    private synchronized boolean answered(Attempt attempt) {
+        return inFlight.remove(attempt);
+    }
+
+    /**
+     * The next attempt is scheduled even when telling the clients of the failure fails, e.g. when a new client
+     * cannot be built; nor does that failure reach the watchdog, whose later runs a throw would cancel.
+     */
+    private void attemptFailed(Attempt attempt, Throwable failure) {
+        try {
+            http.failed(attempt.client, failure);
+        } catch (RuntimeException | InternalError notReplaced) {
+            log.warn("NSF-03 {} could not replace its stream HTTP client ({})", name, notReplaced.toString());
+        }
+        failed(attempt.renewing, failure);
     }
 
     private void opened(WebSocket socket, Frames frames, boolean renewing) {
@@ -251,6 +332,7 @@ public final class BinanceStreamShard implements AutoCloseable {
     }
 
     private void checkIdle() {
+        giveUpUnanswered();
         WebSocket silent;
         Frames silentFrames;
         synchronized (this) {
@@ -263,6 +345,29 @@ public final class BinanceStreamShard implements AutoCloseable {
         }
         silent.abort();
         lost(silent, silentFrames, "silent for more than " + idleTimeout);
+    }
+
+    private void giveUpUnanswered() {
+        List<Attempt> expired = new ArrayList<>();
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            Instant now = clock.instant();
+            Duration patience = connectTimeout.plus(idleTimeout);
+            for (Attempt attempt : inFlight) {
+                if (now.isAfter(attempt.startedAt.plus(patience))) {
+                    expired.add(attempt);
+                }
+            }
+            expired.forEach(inFlight::remove);
+        }
+        for (Attempt attempt : expired) {
+            attemptFailed(
+                    attempt,
+                    new HttpConnectTimeoutException(
+                            "no answer to the handshake for " + Duration.between(attempt.startedAt, clock.instant())));
+        }
     }
 
     private static void cancel(ScheduledFuture<?> future) {

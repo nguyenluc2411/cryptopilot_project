@@ -12,12 +12,13 @@ import java.util.List;
  *
  * @param market {@code SPOT}, {@code FUTURES}, or {@code ALL} for both wallets together
  * @param days the length of the period, ending today
- * @param todayPnl today's PnL so far; {@code null} while today has no snapshot to measure from
+ * @param todayPnl today's PnL so far; {@code null} while today has no snapshot to measure from, or is not complete
  * @param cumulativePnl the PnL of the days of the period together
  * @param maxDrawdown the deepest fall of the running total from its highest point in the period, 0 or more
  * @param maxDrawdownPercent that fall as a percent of the worth at the highest point, 2 decimals; {@code null} when the
  *     worth there is not above 0
- * @param complete whether every coin held has a current price; when not, today's figures leave the unpriced coins out
+ * @param complete whether every coin of the wallets asked for has a current price (always, for Futures alone); when
+ *     not, today is not known and is left out of the figures
  * @param daily each day with a PnL, oldest first: a day without its snapshot, or without the next day's, is left out
  * @param trades the trades closed in the period: the Spot sale orders, the Futures positions, or both
  */

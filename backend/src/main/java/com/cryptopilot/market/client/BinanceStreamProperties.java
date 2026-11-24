@@ -81,6 +81,12 @@ public record BinanceStreamProperties(
      *     best bid and ask of the busiest pairs arrive hundreds of times a second each, and a connection carrying fifty
      *     pairs (thousands of messages a second) was closed by the exchange (1006) dozens of times a day, its reader
      *     falling behind; smaller connections spread them over more readers
+     * @param futuresBookTicker whether the Futures pairs also stream {@code <symbol>@bookTicker}; off by default. It is
+     *     the bulk of the {@code /public} data (BTCUSDT alone about 2,000 messages and 300 KB a second), and measured
+     *     on 2026-11-24 a bare client carrying it was closed (1006) every few seconds to a minute, even with one pair
+     *     on the connection, while the depth alone (about 9 KB a second a pair) stayed open. The paper engine reads
+     *     the depth first and falls back to the best bid and ask only without a current depth, which this same
+     *     connection would then lack too; the depth's best levels, every 100 ms, stand in for it
      */
     public record Trading(
             @DefaultValue("true") boolean enabled,
@@ -92,9 +98,10 @@ public record BinanceStreamProperties(
             @Min(5) @Max(20) @DefaultValue("20") int depthLevels,
             @NotNull @DefaultValue("10s") Duration maxAge,
             @Min(1) @Max(1000) @DefaultValue("50") int recentTrades,
-            @Min(2) @Max(1024) @DefaultValue("20") int publicStreamsPerConnection) {
+            @Min(2) @Max(1024) @DefaultValue("20") int publicStreamsPerConnection,
+            @DefaultValue("false") boolean futuresBookTicker) {
 
-        /** The settings with the default number of streams on a {@code /public} connection. */
+        /** The settings with the default number of streams on a {@code /public} connection, without the Futures best bid and ask. */
         public Trading(
                 boolean enabled,
                 boolean futures,
@@ -102,7 +109,27 @@ public record BinanceStreamProperties(
                 int depthLevels,
                 Duration maxAge,
                 int recentTrades) {
-            this(enabled, futures, futuresPublicUrl, depthLevels, maxAge, recentTrades, 20);
+            this(enabled, futures, futuresPublicUrl, depthLevels, maxAge, recentTrades, 20, false);
+        }
+
+        /** The settings without the Futures best bid and ask. */
+        public Trading(
+                boolean enabled,
+                boolean futures,
+                URI futuresPublicUrl,
+                int depthLevels,
+                Duration maxAge,
+                int recentTrades,
+                int publicStreamsPerConnection) {
+            this(
+                    enabled,
+                    futures,
+                    futuresPublicUrl,
+                    depthLevels,
+                    maxAge,
+                    recentTrades,
+                    publicStreamsPerConnection,
+                    false);
         }
 
         @ConstructorBinding
