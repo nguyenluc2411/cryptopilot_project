@@ -789,7 +789,8 @@ class MarketStreamSupervisorTest {
                         20,
                         Duration.ofSeconds(10),
                         50,
-                        publicStreamsPerConnection));
+                        publicStreamsPerConnection,
+                        true));
         trading = new TradingMarketData(properties, Clock.systemUTC());
         streams = new BinanceStreamClient(properties, JsonMapper.builder().build(), Clock.systemUTC());
         return new MarketStreamSupervisor(

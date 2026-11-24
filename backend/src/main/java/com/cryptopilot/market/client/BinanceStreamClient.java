@@ -102,14 +102,16 @@ public final class BinanceStreamClient implements AutoCloseable {
     }
 
     /**
-     * The streams of one pair the venue serves under the {@code /public} route only: the best bid and ask and the
-     * depth of a Futures pair when its trading streams are enabled (TR-38); none on Spot, whose host has no routes.
+     * The streams of one pair the venue serves under the {@code /public} route only: the depth of a Futures pair when
+     * its trading streams are enabled (TR-38), and its best bid and ask only when {@code futures-book-ticker} is on
+     * (too much data to keep a connection open, measured 2026-11-24); none on Spot, whose host has no routes.
      */
     public List<String> publicStreamsFor(BinanceVenue venue, String symbol) {
         if (venue == BinanceVenue.SPOT || !tradingOn(venue)) {
             return List.of();
         }
-        return bookStreams(symbol.toLowerCase(Locale.ROOT));
+        String s = symbol.toLowerCase(Locale.ROOT);
+        return properties.trading().futuresBookTicker() ? bookStreams(s) : List.of(depthStream(s));
     }
 
     private boolean tradingOn(BinanceVenue venue) {
@@ -118,7 +120,11 @@ public final class BinanceStreamClient implements AutoCloseable {
     }
 
     private List<String> bookStreams(String s) {
-        return List.of(s + "@bookTicker", s + "@depth" + properties.trading().depthLevels() + "@100ms");
+        return List.of(s + "@bookTicker", depthStream(s));
+    }
+
+    private String depthStream(String s) {
+        return s + "@depth" + properties.trading().depthLevels() + "@100ms";
     }
 
     /** The most streams one connection carries. */
