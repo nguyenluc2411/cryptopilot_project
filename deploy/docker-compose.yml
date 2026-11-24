@@ -92,6 +92,13 @@ services:
       DEMO_PASSWORD_HASH: ${DEMO_PASSWORD_HASH:-}
       # Caddy is the only proxy in front of the backend, on the fixed internal subnet below.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.0.0/24}
+      # SRS 4.2.4 limits (prod defaults). A load test (T-094) raises them for its run only: one load generator is one
+      # client address and a handful of accounts, which the limits would refuse long before the target load.
+      RATE_LIMIT_LOGIN: ${RATE_LIMIT_LOGIN:-10}
+      RATE_LIMIT_AUTH: ${RATE_LIMIT_AUTH:-20}
+      RATE_LIMIT_API: ${RATE_LIMIT_API:-120}
+      RATE_LIMIT_GUEST: ${RATE_LIMIT_GUEST:-300}
+      RATE_LIMIT_PAPER_ORDERS: ${RATE_LIMIT_PAPER_ORDERS:-50}
       CORS_ALLOWED_ORIGINS: https://${SITE_ADDRESS:?Set SITE_ADDRESS}
       PUBLIC_BASE_URL: https://${SITE_ADDRESS}
       AI_SERVICE_URL: http://ai-service:7070
