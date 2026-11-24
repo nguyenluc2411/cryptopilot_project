@@ -49,6 +49,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -165,22 +166,25 @@ public class PaperOrderServiceImpl implements PaperOrderService {
      * placement: a LIMIT price that crosses the book takes it now, a LIMIT_MAKER one is refused. With a
      * {@code newClientOrderId} the call is idempotent: sent again, e.g. after a timeout, it answers what the first one
      * did and changes nothing (Helland, P. (2012). Idempotence Is Not a Medical Condition. <i>ACM Queue</i>, 10(4)).
+     * A replay is answered even while trading is paused.
      */
     @Override
     @Transactional
     public ReplacedOrderResponse replace(UUID userId, UUID orderId, ReplaceOrderRequest request) {
         lock.lock(PaperAccountServiceImpl.LOCK_SCOPE, userId);
-        health.requireTrading(MarketType.SPOT);
         PaperAccount account = accountOf(userId);
-        PaperOrder old = orders.findByIdAndUserIdAndMarketType(orderId, account.userId(), MarketType.SPOT)
-                .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
         if (request.newClientOrderId() != null) {
             Optional<PaperOrder> placed =
                     orders.findByUserIdAndClientOrderId(account.userId(), request.newClientOrderId());
             if (placed.isPresent()) {
+                PaperOrder old = orders.findByIdAndUserIdAndMarketType(orderId, account.userId(), MarketType.SPOT)
+                        .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
                 return replayOf(old, placed.get(), request);
             }
         }
+        health.requireTrading(MarketType.SPOT);
+        PaperOrder old = orders.findByIdAndUserIdAndMarketType(orderId, account.userId(), MarketType.SPOT)
+                .orElseThrow(() -> new ResourceNotFoundException("PaperOrder", orderId));
         if (!old.isOpen()) {
             throw new BusinessException(
                     ErrorCode.PAPER_ORDER_NOT_OPEN,
@@ -825,11 +829,16 @@ public class PaperOrderServiceImpl implements PaperOrderService {
     /**
      * The answer to a replacement sent again with a {@code newClientOrderId} already used: what the first call did, when
      * the old order is cancelled and the order under the key has its pair, side and type and the asked price and
-     * quantity; else the key was used for other terms, refused as a reused {@code clientOrderId} is.
+     * quantity; else the key was used for other terms, refused as a reused {@code clientOrderId} is. The order under
+     * the key was created no earlier than the old order was cancelled.
      */
     private ReplacedOrderResponse replayOf(PaperOrder old, PaperOrder placed, ReplaceOrderRequest request) {
         BigDecimal left = old.getOrigQuantity().subtract(old.getExecutedQuantity());
         boolean same = old.getOrderStatus() == OrderStatus.CANCELED
+                && old.getClosedAt() != null
+                && !placed.getCreatedAt()
+                        .truncatedTo(ChronoUnit.MICROS)
+                        .isBefore(old.getClosedAt().truncatedTo(ChronoUnit.MICROS))
                 && placed.getMarketType() == MarketType.SPOT
                 && placed.getPairId().equals(old.getPairId())
                 && placed.getSide() == old.getSide()

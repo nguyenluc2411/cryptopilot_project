@@ -24,6 +24,7 @@ import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.event.SpotPairStoppedTrading;
 import com.cryptopilot.market.model.enums.ExchangeStatus;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.PriceCacheService;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.paper.PaperLedgerInvariant;
@@ -43,6 +44,7 @@ import com.cryptopilot.paper.model.enums.TriggerCondition;
 import com.cryptopilot.paper.service.PaperMatchingService;
 import com.cryptopilot.paper.service.PaperPnlService;
 import com.cryptopilot.support.InAppNotifications;
+import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
@@ -115,6 +117,9 @@ class PaperOrderApiTest {
 
     @Autowired
     private JwtEncoder jwtEncoder;
+
+    @Autowired
+    private MarketHealthService health;
 
     @Autowired
     private PriceCacheService prices;
@@ -2153,6 +2158,59 @@ class PaperOrderApiTest {
         replace(trader, old, "{\"price\": 80, \"newClientOrderId\": \"rep-1\"}")
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+        assertThat(orderStatus(placed)).isEqualTo("NEW");
+    }
+
+    @Test
+    void B4_aKeyOfAnOrderPlacedBeforeTheOldOneWasCancelled_isNotTakenAsItsReplacement() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+        String other = id(place(
+                trader,
+                "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"side\": \"BUY\", \"type\": \"LIMIT\","
+                        + " \"price\": 85, \"quantity\": 1, \"clientOrderId\": \"rep-x\"}"));
+        as(trader, post(PAPER + "/orders/" + old + "/cancel"), null).andExpect(status().isOk());
+        long count = orderCount(trader);
+        BigDecimal locked = locked(trader, "USDT");
+
+        replace(trader, old, "{\"price\": 85, \"newClientOrderId\": \"rep-x\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+
+        assertThat(orderStatus(old)).isEqualTo("CANCELED");
+        assertThat(orderStatus(other)).isEqualTo("NEW");
+        assertThat(orderCount(trader)).isEqualTo(count);
+        assertThat(locked(trader, "USDT")).isEqualByComparingTo(locked);
+    }
+
+    /** A retry of a replacement that passed gets its first answer while Spot is paused; a new one is refused. */
+    @Test
+    void B4_aReplayWhileSpotIsPaused_answersTheFirstReplacement_andANewOneIsRefused() throws Exception {
+        UUID trader = trader();
+        price("100");
+        String old = id(place(trader, limit("BUY", "90", "1", null)));
+        String body = "{\"price\": 85, \"newClientOrderId\": \"rep-p\"}";
+        String placed = JsonPath.read(
+                replace(trader, old, body)
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString(),
+                "$.placed.orderId");
+
+        health.startMaintenance(MarketType.SPOT, null, null);
+        try {
+            replace(trader, old, body)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.placed.orderId").value(placed));
+            replace(trader, placed, "{\"price\": 80, \"newClientOrderId\": \"rep-q\"}")
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.code").value("TRADING_PAUSED"));
+        } finally {
+            health.endMaintenance(MarketType.SPOT);
+            MarketIncidents.removeAll(sql);
+        }
         assertThat(orderStatus(placed)).isEqualTo("NEW");
     }
 
