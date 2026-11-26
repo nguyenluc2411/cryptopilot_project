@@ -115,6 +115,15 @@ healthy() {
 branch=$(be_branch)
 be_target=$(candidate backend "$BE_DIR" "$(tip "$BE_DIR" "$branch")")
 fe_target=$(candidate web "$FE_DIR" "$(tip "$FE_DIR" "$FE_BRANCH")")
+# A backend commit without the staging compose cannot run here (develop before T-004): never deploy one.
+if [ -n "$be_target" ]; then
+  git -C "$BE_DIR" fetch -q origin "$be_target"
+  if ! git -C "$BE_DIR" cat-file -e "$be_target:deploy/docker-compose.yml" 2>/dev/null; then
+    log "backend ${be_target:0:8} ($branch) has no deploy/docker-compose.yml, not deployed"
+    echo "$be_target" > "$STATE/backend.failed"
+    be_target=
+  fi
+fi
 [ -z "$be_target" ] && [ -z "$fe_target" ] && exit 0
 
 be_prev=$(git -C "$BE_DIR" rev-parse HEAD)
