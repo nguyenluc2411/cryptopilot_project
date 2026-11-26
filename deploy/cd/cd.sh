@@ -5,7 +5,8 @@
 # web repositories; when one has moved and GitHub reports that commit's checks as finished and green, it backs up the
 # database, checks the new commits out, rebuilds with deploy/docker-compose.yml and waits until every service is
 # healthy. When that fails it checks the previous commits out again, rebuilds them and never retries the failed
-# commit; the next commit on develop is tried as usual. Flyway migrations are not undone by a rollback: the dump taken
+# commit; the next commit on develop is tried as usual. A commit whose CI is red is asked about again on every pass,
+# so re-running a flaky job on GitHub is enough. Flyway migrations are not undone by a rollback: the dump taken
 # just before is in $CD_ROOT/backups.
 #
 # Nothing is stored on GitHub and no port is opened for it: both repositories are public, git ls-remote has no rate
@@ -88,7 +89,9 @@ candidate() {
     success) echo "$target" ;;
     pending) [ "$(cat "$STATE/$name.waiting" 2>/dev/null)" = "$target" ] || log "$name ${target:0:8}: waiting for CI"
              echo "$target" > "$STATE/$name.waiting" ;;
-    failure) log "$name ${target:0:8}: CI failed, not deployed"; echo "$target" > "$STATE/$name.failed" ;;
+    # Asked again on every pass: a re-run that turns green (a flaky test) is still deployed.
+    failure) [ "$(cat "$STATE/$name.cifailed" 2>/dev/null)" = "$target" ] || log "$name ${target:0:8}: CI failed, not deployed"
+             echo "$target" > "$STATE/$name.cifailed" ;;
   esac
 }
 
@@ -142,7 +145,7 @@ fi
 
 if compose up -d --build --remove-orphans >> "$STATE/build.log" 2>&1 && healthy; then
   log "deployed backend $(git -C "$BE_DIR" rev-parse --short HEAD), web $(git -C "$FE_DIR" rev-parse --short HEAD)"
-  rm -f "$STATE"/*.failed "$STATE"/*.waiting
+  rm -f "$STATE"/*.failed "$STATE"/*.waiting "$STATE"/*.cifailed
   docker image prune -f > /dev/null
   # A newer copy of this script comes with the backend; systemd runs the installed one.
   [ -w /usr/local/lib/cryptopilot-cd ] && install -m 755 "$BE_DIR/deploy/cd/cd.sh" /usr/local/lib/cryptopilot-cd/cd.sh

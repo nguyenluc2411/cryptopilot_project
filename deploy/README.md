@@ -56,7 +56,8 @@ The staging host deploys itself: a systemd timer runs `deploy/cd/cd.sh` every 3 
 in this repository or in the web repository has moved and GitHub reports that commit's checks as finished and green,
 it dumps the database to `~/cryptopilot/backups` (the last five are kept), checks the new commits out, runs
 `docker compose ... up -d --build` and waits until every service is healthy. If that fails it goes back to the
-previous commits and does not try the failed one again; the next commit on `develop` is tried as usual. A rollback
+previous commits and does not try the failed one again; the next commit on `develop` is tried as usual. A commit
+whose CI is red is not deployed but asked about again on every pass, so re-running a flaky job is enough. A rollback
 does not undo Flyway migrations: restore the dump taken just before when a migration has to go.
 
 Nothing is stored on GitHub and no port is opened for it, so a repository admin is not needed: both repositories are
