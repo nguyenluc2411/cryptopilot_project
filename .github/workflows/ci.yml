@@ -13,7 +13,7 @@
 # (tools/ci/coverage_gate.py; the fixed minimum of pom.xml still applies). And the container images of the
 # backend and the AI Service are built on every run; on a push to develop they are pushed to the GitHub
 # Container Registry with the run's own token (no stored secret), tagged with the commit and "develop".
-# Deploying stays manual (deploy/README.md "Staging").
+# The staging host deploys a green develop by itself (T-096, deploy/README.md "Continuous deployment").
 #
 # Tests tagged "live" call the real exchange and stay excluded, as in every local build: the Surefire
 # configuration excludes them, and a CI runner may be geo-blocked (HTTP 451) anyway.

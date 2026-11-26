@@ -37,7 +37,9 @@ HTTPS certificate by itself, and the web app's production build accepts only `ht
 2. On the server, clone this repository and the web repository side by side (or set `WEB_DIR`).
 3. `cp deploy/.env.example deploy/.env.staging` and fill it in. Required: `SITE_ADDRESS`, `DB_PASSWORD`, `JWT_SECRET`,
    `AI_SERVICE_SHARED_SECRET`, `LLM_API_KEY`, `SMTP_HOST`, `SMTP_FROM`, the three `CLOUDINARY_*`; the demonstration
-   also needs `ADMIN_PASSWORD_HASH` and `DEMO_PASSWORD_HASH`. Compose names any missing one and stops.
+   also needs `ADMIN_PASSWORD_HASH` and `DEMO_PASSWORD_HASH`. Compose names any missing one and stops. SePay also
+   needs `SEPAY_CHECKOUT_URL` and `SEPAY_API_URL` (the sandbox ones are in `application-dev.yml`): `prod` leaves them
+   empty, which switches SePay off.
 4. Start it:
 
    ```bash
@@ -47,6 +49,27 @@ HTTPS certificate by itself, and the web app's production build accepts only `ht
 
 5. Load the demonstration data from a developer machine with `demo/load-wf01.ps1 -BaseUrl https://<SITE_ADDRESS>`
    (below): it only calls the API.
+
+### Continuous deployment (T-096)
+
+The staging host deploys itself: a systemd timer runs `deploy/cd/cd.sh` every 3 minutes. When the tip of `develop`
+in this repository or in the web repository has moved and GitHub reports that commit's checks as finished and green,
+it dumps the database to `~/cryptopilot/backups` (the last five are kept), checks the new commits out, runs
+`docker compose ... up -d --build` and waits until every service is healthy. If that fails it goes back to the
+previous commits and does not try the failed one again; the next commit on `develop` is tried as usual. A rollback
+does not undo Flyway migrations: restore the dump taken just before when a migration has to go.
+
+Nothing is stored on GitHub and no port is opened for it, so a repository admin is not needed: both repositories are
+public, the host only reads them. Install once on the host, after step 4 with the two repositories cloned (not copied)
+into `~/cryptopilot`:
+
+```bash
+deploy/cd/install.sh                                  # the timer, settings in /etc/cryptopilot-cd.env
+journalctl -u cryptopilot-cd -f                       # what each pass did; also ~/cryptopilot/.cd/deploy.log
+deploy/cd/cd.sh --force                               # deploy the current tips now, without waiting for CI
+```
+
+`CD_BE_FALLBACK` names a branch to follow while `develop` has no `deploy/docker-compose.yml` yet; leave it empty.
 
 The payment gateways' IPN addresses are `https://<SITE_ADDRESS>/api/v1/billing/ipn/sepay` and `.../momo`. The memory
 limits suit a host with 8 GB (backend 2.5 GB, database 1.5 GB); `BACKEND_MEM_LIMIT` and `DB_MEM_LIMIT` change them.
