@@ -144,6 +144,9 @@ fi
 [ -n "$fe_target" ] && checkout "$FE_DIR" "$fe_target"
 
 if compose up -d --build --remove-orphans >> "$STATE/build.log" 2>&1 && healthy; then
+  # A newer TimescaleDB image only ships the library: the extension in the database follows here (a no-op otherwise).
+  docker exec cryptopilot-staging-db-1 psql -X -q -U cryptopilot -d cryptopilot -c 'ALTER EXTENSION timescaledb UPDATE' \
+    > /dev/null 2>&1 || log "ALTER EXTENSION timescaledb UPDATE failed: run it by hand"
   log "deployed backend $(git -C "$BE_DIR" rev-parse --short HEAD), web $(git -C "$FE_DIR" rev-parse --short HEAD)"
   rm -f "$STATE"/*.failed "$STATE"/*.waiting "$STATE"/*.cifailed
   docker image prune -f > /dev/null

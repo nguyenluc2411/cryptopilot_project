@@ -3,7 +3,7 @@
 #   docker build -t cryptopilot-backend backend
 # Tests are not run here: CI runs them before the image is built (T-009).
 
-FROM maven:3.9.11-eclipse-temurin-21 AS build
+FROM maven:3.9.16-eclipse-temurin-21 AS build
 WORKDIR /src
 COPY pom.xml lombok.config ./
 # Dependencies first, so a code change does not download them again.
@@ -12,8 +12,10 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.m2 mvn -q -B package -DskipTests \
     && cp target/cryptopilot-backend-*.jar /src/app.jar
 
-FROM eclipse-temurin:21.0.8_9-jre-noble
+# T-095: the distribution's security updates on top of the base image (Trivy HIGH findings in openssl, gnupg, apt).
+FROM eclipse-temurin:21.0.13.1_2-jre-noble
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system app && useradd --system --gid app --home /app app
