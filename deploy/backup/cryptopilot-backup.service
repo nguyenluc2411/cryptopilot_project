@@ -1,0 +1,10 @@
+# T-096: the daily database backup of staging (deploy/backup/backup.sh).
+[Unit]
+Description=CryptoPilot staging database backup
+After=docker.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+EnvironmentFile=-/etc/cryptopilot-cd.env
+ExecStart=/usr/local/lib/cryptopilot-cd/backup.sh

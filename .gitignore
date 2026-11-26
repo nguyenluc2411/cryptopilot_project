@@ -65,3 +65,6 @@ reviews/
 
 # Setup score calibration output (dev profile "calibration")
 calibration/
+
+# ---- Performance test output (tools/perf/README.md)
+perf-results/

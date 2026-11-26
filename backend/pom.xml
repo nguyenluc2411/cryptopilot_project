@@ -35,7 +35,12 @@
 		     selectors an administrator sets on a source. Neither is part of the Spring Boot BOM. Both lines were run
 		     against the real feeds of the seeded sources before they were added. -->
 		<rome.version>2.1.0</rome.version>
-		<jsoup.version>1.18.3</jsoup.version>
+		<jsoup.version>1.23.2</jsoup.version>
+		<!-- T-095: newer than Spring Boot 4.1.1 manages, for the Trivy findings in its versions (Tomcat 11.0.24
+		     CRITICAL, Jackson 2.21.5 and 3.1.5 HIGH). Drop each line once the parent manages that version or later. -->
+		<tomcat.version>11.0.25</tomcat.version>
+		<jackson-2-bom.version>2.21.7</jackson-2-bom.version>
+		<jackson-bom.version>3.1.7</jackson-bom.version>
 		<!-- The JUnit tags the default test run leaves out; see the Surefire configuration. -->
 		<surefire.excludedGroups>live,load</surefire.excludedGroups>
 	</properties>

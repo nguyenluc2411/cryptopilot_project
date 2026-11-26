@@ -1,0 +1,11 @@
+# T-096: look for a new green commit on develop every 3 minutes.
+[Unit]
+Description=CryptoPilot staging continuous deployment, every 3 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=3min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

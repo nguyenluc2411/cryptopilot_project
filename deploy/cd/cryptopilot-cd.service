@@ -1,0 +1,13 @@
+# T-096: one pass of the staging deployment (deploy/cd/cd.sh); started by cryptopilot-cd.timer.
+[Unit]
+Description=CryptoPilot staging continuous deployment
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+EnvironmentFile=-/etc/cryptopilot-cd.env
+ExecStart=/usr/local/lib/cryptopilot-cd/cd.sh
+TimeoutStartSec=45min
+Nice=5
