@@ -72,6 +72,28 @@ deploy/cd/cd.sh --force                               # deploy the current tips 
 
 `CD_BE_FALLBACK` names a branch to follow while `develop` has no `deploy/docker-compose.yml` yet; leave it empty.
 
+### Backup and restore (T-096, SRS 4.2.2)
+
+`install.sh` also enables `cryptopilot-backup.timer`: every day at 19:00 UTC (02:00 in Vietnam; a run missed while
+the host was off happens at boot) `deploy/backup/backup.sh` writes a custom-format dump to
+`~/cryptopilot/backups/daily-*.dump`, checks that `pg_restore` can read it and keeps the last seven. The deployment adds
+its own `pre-deploy-*.dump` before each pass.
+
+```bash
+deploy/backup/restore.sh --drill [dump]   # into a throw-away container, compared table by table with the live one
+deploy/backup/restore.sh --live dump      # replaces the live database; prints the recovery time
+```
+
+TimescaleDB needs `timescaledb_pre_restore()` / `timescaledb_post_restore()` around a **sequential** `pg_restore`
+(the script does both); a parallel restore (`-j`) breaks its catalog.
+
+Drill of 2026-11-26 on the EC2 host (m7i-flex.large, dump 136 MB, 68 tables, Flyway V76): the throw-away restore took
+31 s and matched the live database except the rows the market streams wrote after the dump; the live restore took
+42 s for the database and 13 s more until the backend was healthy, **RTO 55 s**. The RPO is the backup interval: one
+day, or the last deployment if that was later.
+
+The dumps live on the host's own disk. Copy one off the host (`scp`) before anything that replaces the disk.
+
 The payment gateways' IPN addresses are `https://<SITE_ADDRESS>/api/v1/billing/ipn/sepay` and `.../momo`. The memory
 limits suit a host with 8 GB (backend 2.5 GB, database 1.5 GB); `BACKEND_MEM_LIMIT` and `DB_MEM_LIMIT` change them.
 

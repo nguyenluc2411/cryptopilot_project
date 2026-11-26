@@ -151,7 +151,8 @@ if compose up -d --build --remove-orphans >> "$STATE/build.log" 2>&1 && healthy;
   rm -f "$STATE"/*.failed "$STATE"/*.waiting "$STATE"/*.cifailed
   docker image prune -f > /dev/null
   # A newer copy of this script comes with the backend; systemd runs the installed one.
-  [ -w /usr/local/lib/cryptopilot-cd ] && install -m 755 "$BE_DIR/deploy/cd/cd.sh" /usr/local/lib/cryptopilot-cd/cd.sh
+  [ -w /usr/local/lib/cryptopilot-cd ] && install -m 755 "$BE_DIR/deploy/cd/cd.sh" "$BE_DIR/deploy/backup/backup.sh" \
+    /usr/local/lib/cryptopilot-cd/
   exit 0
 fi
 

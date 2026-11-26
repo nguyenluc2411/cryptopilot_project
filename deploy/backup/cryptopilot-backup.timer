@@ -1,0 +1,10 @@
+# T-096: back up every day at 19:00 UTC (02:00 in Vietnam); a run missed while the host was off happens at boot.
+[Unit]
+Description=CryptoPilot staging database backup, daily
+
+[Timer]
+OnCalendar=*-*-* 19:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
