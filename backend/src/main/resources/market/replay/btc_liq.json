@@ -1,0 +1,11 @@
+{
+  "description": "DS-03a: BTCUSDT mark price from 60,000 to 59,000 in one minute, through the 59,036.2 liquidation price of the 50x demo Long, then held.",
+  "market": "FUTURES",
+  "symbol": "BTCUSDT",
+  "stepMillis": 1000,
+  "spread": "0.1",
+  "points": [
+    { "at": 0, "price": "60000.0" },
+    { "at": 60, "price": "59000.0" }
+  ]
+}

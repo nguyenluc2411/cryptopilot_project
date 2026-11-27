@@ -2,7 +2,8 @@
 #
 #   SPRING_PROFILES_ACTIVE=prod,demo     staging, for the WF-01 demonstration
 #
-# It changes one thing: Flyway also applies classpath:db/demo, the accounts the demonstration signs in with. The dev
+# It changes two things: Flyway also applies classpath:db/demo, the accounts the demonstration signs in with, and the
+# market test tools (RF-07 replay, RF-12 fault switch) are on for the demonstrations. The dev
 # profile already lists that location, so dev needs nothing from here. A production deployment runs "prod" alone and
 # never reaches the demo set; SeedDataTest and DemoProfileTest fail if the base or prod configuration ever lists it.
 # And if a production deployment lists demo anyway, DemoEnvironmentGuard stops the start before Flyway runs: this
@@ -14,3 +15,9 @@ spring:
   flyway:
     # The list replaces the base one rather than adding to it, which is why the production path is repeated here.
     locations: classpath:db/migration,classpath:db/demo
+cryptopilot:
+  market:
+    test-tools:
+      # RF-07 price replay and RF-12 stream fault switch for the demonstrations (DS-03a, DS-03b, DS-06a, DS-06b) and
+      # the NFR-06 measure; this profile runs on staging only (DemoEnvironmentGuard).
+      enabled: true

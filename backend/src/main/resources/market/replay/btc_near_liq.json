@@ -1,0 +1,12 @@
+{
+  "description": "DS-03b: BTCUSDT mark price dips from 60,000 to 59,150, short of the 59,036.2 liquidation price, then rebounds to 60,200 and is held.",
+  "market": "FUTURES",
+  "symbol": "BTCUSDT",
+  "stepMillis": 1000,
+  "spread": "0.1",
+  "points": [
+    { "at": 0, "price": "60000.0" },
+    { "at": 40, "price": "59150.0" },
+    { "at": 80, "price": "60200.0" }
+  ]
+}

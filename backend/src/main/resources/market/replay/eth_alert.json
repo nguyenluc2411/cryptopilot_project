@@ -1,0 +1,11 @@
+{
+  "description": "DS-06a: ETHUSDT Spot from 3,010 to 2,940 in one minute, through the alert threshold 2,950, then held.",
+  "market": "SPOT",
+  "symbol": "ETHUSDT",
+  "stepMillis": 1000,
+  "spread": "0.01",
+  "points": [
+    { "at": 0, "price": "3010.00" },
+    { "at": 60, "price": "2940.00" }
+  ]
+}

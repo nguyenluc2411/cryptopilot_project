@@ -216,6 +216,39 @@ public final class BinanceStreamShard implements AutoCloseable {
         log.info("NSF-03 {} closed", name);
     }
 
+    /**
+     * RF-12 fault switch: ends the open connection as a network loss would, and holds the next attempt back for
+     * {@code outage}; the shard then reconnects as after any loss, and reports that opening as following one, so the
+     * caller backfills what was missed. A renewal or an attempt in flight is given up and its late answer let go, so
+     * nothing ends the outage early. Closing the shard meanwhile stops the reconnection like any other.
+     *
+     * @param outage how long the connection stays down, zero or more
+     * @return whether a connection was open and has been cut; false on a closed shard or one without a connection
+     */
+    public boolean simulateLoss(Duration outage) {
+        if (outage.isNegative()) {
+            throw new IllegalArgumentException("an outage is zero or longer, not " + outage);
+        }
+        WebSocket cut;
+        synchronized (this) {
+            if (closed || current == null) {
+                return false;
+            }
+            cut = current;
+            currentFrames.ended = true;
+            current = null;
+            lostSinceLastOpen = true;
+            inFlight.clear();
+            cancel(renewal);
+            cancel(pending);
+            attempts = 0;
+            pending = timer.schedule(() -> connect(false), outage.toMillis(), TimeUnit.MILLISECONDS);
+        }
+        cut.abort();
+        log.warn("NSF-03 {} cut by the fault switch (RF-12); reconnecting in {}", name, outage);
+        return true;
+    }
+
     private void connect(boolean renewing) {
         Frames frames = new Frames();
         HttpClient client = http.current();
