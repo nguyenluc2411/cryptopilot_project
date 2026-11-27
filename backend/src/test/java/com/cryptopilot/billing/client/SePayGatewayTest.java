@@ -77,7 +77,8 @@ class SePayGatewayTest {
                 .containsEntry("operation", "PURCHASE")
                 .containsEntry("order_invoice_number", "CP261108030000ABCD")
                 .containsEntry("success_url", REQUEST.returnUrl().toString())
-                .containsEntry("cancel_url", REQUEST.returnUrl().toString());
+                .containsEntry("error_url", REQUEST.returnUrl() + "&result=error")
+                .containsEntry("cancel_url", REQUEST.returnUrl() + "&result=cancelled");
     }
 
     @Test
