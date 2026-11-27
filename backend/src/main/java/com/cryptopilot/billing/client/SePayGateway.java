@@ -102,7 +102,10 @@ public class SePayGateway implements PaymentGateway {
     }
 
     private static String withResult(URI returnUrl, String result) {
-        return UriComponentsBuilder.fromUri(returnUrl).queryParam("result", result).build().toUriString();
+        return UriComponentsBuilder.fromUri(returnUrl)
+                .queryParam("result", result)
+                .build()
+                .toUriString();
     }
 
     /**
