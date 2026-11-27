@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -42,6 +43,10 @@ public class SePayGateway implements PaymentGateway {
 
     /** The one SePay operation used: a one-time purchase. */
     static final String PURCHASE = "PURCHASE";
+    /** The {@code result} the return address carries when the Trader cancelled the SePay page. */
+    static final String RESULT_CANCELLED = "cancelled";
+    /** The {@code result} the return address carries when SePay reports the payment failed. */
+    static final String RESULT_ERROR = "error";
 
     /** The notification of a captured payment. */
     static final String ORDER_PAID = "ORDER_PAID";
@@ -77,6 +82,10 @@ public class SePayGateway implements PaymentGateway {
             throw new GatewayUnavailableException("SePay is not configured on this deployment");
         }
         String back = request.returnUrl().toString();
+        // SePay sends the browser back to one of three addresses; the result page tells a payment it waits for apart
+        // from a page the Trader cancelled or that failed, which would otherwise look like a slow confirmation.
+        String cancelled = withResult(request.returnUrl(), RESULT_CANCELLED);
+        String failed = withResult(request.returnUrl(), RESULT_ERROR);
         Map<String, String> fields = new LinkedHashMap<>();
         fields.put("order_amount", request.amount().toBigIntegerExact().toString());
         fields.put("merchant", properties.merchantId());
@@ -85,11 +94,15 @@ public class SePayGateway implements PaymentGateway {
         fields.put("order_description", request.description());
         fields.put("order_invoice_number", request.orderCode());
         fields.put("success_url", back);
-        fields.put("error_url", back);
-        fields.put("cancel_url", back);
+        fields.put("error_url", failed);
+        fields.put("cancel_url", cancelled);
         fields.put("lang", "vi");
         fields.put("signature", SePaySignature.sign(fields, properties.secretKey()));
         return Checkout.form(URI.create(properties.checkoutUrl()), fields);
+    }
+
+    private static String withResult(URI returnUrl, String result) {
+        return UriComponentsBuilder.fromUri(returnUrl).queryParam("result", result).build().toUriString();
     }
 
     /**
