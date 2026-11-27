@@ -640,7 +640,9 @@ class FuturesSettlement {
         if (position == null) {
             // A closed position takes its TP/SL with it: the closing conditional orders of the pair end (8.3 step 8).
             for (PaperOrder conditional : margins.openConditionalOrders(userId)) {
-                if (conditional.getPairId().equals(pairId)
+                // Ending one leg of a TP/SL group cancels its sibling, which this list still holds (DEF-01).
+                if (conditional.isOpen()
+                        && conditional.getPairId().equals(pairId)
                         && conditional.getPositionSide() == positionSide
                         && (conditional.isClosePosition() || conditional.reducing())) {
                     end(account, conditional, POSITION_CLOSED, at);

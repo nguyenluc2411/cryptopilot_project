@@ -1452,6 +1452,51 @@ class FuturesOrderApiTest {
                 .andExpect(jsonPath("$.length()").value(0));
     }
 
+    /**
+     * DEF-01: a position closed by hand takes its TP/SL with it whatever the shape, on every closing path. Each leg
+     * ends once (the first expires, its sibling is cancelled by the group), no order is left open, and nothing fails.
+     */
+    @ParameterizedTest(name = "{0} with {1}")
+    @CsvSource({
+        "CLOSE_ENDPOINT, TP",
+        "CLOSE_ENDPOINT, SL",
+        "CLOSE_ENDPOINT, TP_SL",
+        "OPPOSITE_MARKET, TP",
+        "OPPOSITE_MARKET, SL",
+        "OPPOSITE_MARKET, TP_SL"
+    })
+    void TR20_closingAPositionByHand_endsItsTpSl_onEveryPath(String path, String legs) throws Exception {
+        UUID trader = trader(true);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        String takeProfit = legs.contains("TP") ? ", \"takeProfitPrice\": \"110\"" : "";
+        String stopLoss = legs.contains("SL") ? ", \"stopLossPrice\": \"90\"" : "";
+        place(trader, """
+                        {"symbol": "%s", "side": "BUY", "type": "MARKET", "quantity": "1"%s%s,
+                         "tpSlWorkingType": "MARK_PRICE"}""".formatted(symbol, takeProfit, stopLoss)).andExpect(status().isOk());
+        String body = as(trader, get(FUTURES + "/openAlgoOrders"), null)
+                .andExpect(jsonPath("$.length()").value(legs.equals("TP_SL") ? 2 : 1))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        List<String> ids = JsonPath.read(body, "$[*].algoId");
+
+        if (path.equals("CLOSE_ENDPOINT")) {
+            close(trader, """
+                            {"symbol": "%s", "type": "MARKET"}""".formatted(symbol))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].status").value("FILLED"));
+        } else {
+            place(trader, market("SELL", "1")).andExpect(status().isOk());
+        }
+
+        assertThat(openPositions(trader)).isZero();
+        List<String> ended = ids.stream().map(this::statusOf).toList();
+        assertThat(ended).allMatch(status -> status.equals("EXPIRED") || status.equals("CANCELED"));
+        assertThat(ended).contains("EXPIRED");
+        as(trader, get(FUTURES + "/openAlgoOrders"), null)
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
     @Test
     void TR20_theTpSlOfAWaitingOrder_waitsWithIt_goesWithItsCancel_andIsCheckedForItsSide() throws Exception {
         UUID trader = trader(true);
