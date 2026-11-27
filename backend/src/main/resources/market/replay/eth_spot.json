@@ -1,0 +1,8 @@
+{
+  "description": "DS-01a: ETHUSDT Spot held at 3,000 while the plan (entry 3,000, SL 2,900, TP 3,300) is applied with a MARKET entry.",
+  "market": "SPOT",
+  "symbol": "ETHUSDT",
+  "stepMillis": 1000,
+  "spread": "0.01",
+  "points": [{ "at": 0, "price": "3000.00" }]
+}

@@ -1,0 +1,12 @@
+{
+  "description": "DS-02a: BTCUSDT Futures mark held at 60,000 for the plan's entry, then up to the 63,000 take profit in one minute, then held.",
+  "market": "FUTURES",
+  "symbol": "BTCUSDT",
+  "stepMillis": 1000,
+  "spread": "0.1",
+  "points": [
+    { "at": 0, "price": "60000.0" },
+    { "at": 30, "price": "60000.0" },
+    { "at": 90, "price": "63000.0" }
+  ]
+}
