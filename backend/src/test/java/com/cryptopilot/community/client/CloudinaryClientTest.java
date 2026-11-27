@@ -167,6 +167,8 @@ class CloudinaryClientTest {
 
         assertThat(stored.durationSeconds()).isEqualTo(300);
         assertThat(stored.thumbnailUrl()).endsWith(PUBLIC_ID + ".jpg");
+        // DEF-07: without media_metadata=true the Admin API leaves the duration out, and every video is refused.
+        assertThat(requests.getLast().query()).isEqualTo("media_metadata=true");
     }
 
     @Test

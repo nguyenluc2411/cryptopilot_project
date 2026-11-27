@@ -115,7 +115,9 @@ public class CloudinaryClient implements MediaStorage {
         try {
             body = rest.get()
                     .uri(URI.create(properties.apiBaseUrl() + "/v1_1/" + properties.cloudName() + "/resources/"
-                            + resourceType(type) + "/upload/" + id))
+                            + resourceType(type) + "/upload/" + id
+                            // The Admin API reports a video's duration only when asked for its media metadata.
+                            + (type == PostMediaType.VIDEO ? "?media_metadata=true" : "")))
                     .header(HttpHeaders.AUTHORIZATION, basicAuth)
                     .retrieve()
                     .body(JSON_OBJECT);
