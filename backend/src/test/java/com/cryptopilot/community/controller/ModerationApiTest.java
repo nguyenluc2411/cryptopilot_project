@@ -289,6 +289,34 @@ class ModerationApiTest {
         as(trader(), UserRole.TRADER, get(POSTS + "/" + post)).andExpect(status().isOk());
     }
 
+    /** DEF-04: a hidden post has no open report left, so the hidden list is the moderator's way back to it. */
+    @Test
+    void UC43_aHiddenPost_isListedForTheModerator_untilRestored() throws Exception {
+        UUID admin = admin();
+        String post = newPost(trader());
+        String shown = newPost(trader());
+        report(trader(), post, "SPAM");
+        decide(admin, post, "{\"action\": \"HIDE_POST\"}");
+
+        String body = as(
+                        admin, UserRole.ADMIN, get("/api/v1/admin/hidden-posts").param("pageSize", "100"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.id == '" + post + "')].status").value("HIDDEN"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertThat(body).doesNotContain(shown);
+        as(trader(), UserRole.TRADER, get("/api/v1/admin/hidden-posts")).andExpect(status().isForbidden());
+
+        as(admin, UserRole.ADMIN, post("/api/v1/admin/posts/" + post + "/restore"))
+                .andExpect(status().isOk());
+        assertThat(as(admin, UserRole.ADMIN, get("/api/v1/admin/hidden-posts").param("pageSize", "100"))
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString())
+                .doesNotContain(post);
+    }
+
     @Test
     void BR47_anAdministratorSeesADeletedPost() throws Exception {
         UUID admin = admin();

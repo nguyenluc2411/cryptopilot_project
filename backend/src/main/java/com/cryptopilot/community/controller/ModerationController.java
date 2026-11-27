@@ -10,6 +10,7 @@ import com.cryptopilot.community.dto.response.ModeratedCommentResponse;
 import com.cryptopilot.community.dto.response.ModerationCaseResponse;
 import com.cryptopilot.community.dto.response.ModerationDecisionResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
+import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.dto.response.QueueItemResponse;
 import com.cryptopilot.community.service.CommentModerationService;
 import com.cryptopilot.community.service.ModerationService;
@@ -89,6 +90,17 @@ public class ModerationController {
     @GetMapping("/posts/{id}")
     public PostDetailResponse post(@AuthenticationPrincipal Jwt caller, @PathVariable UUID id) {
         return service.post(callerOf(caller), id);
+    }
+
+    @Operation(summary = "The hidden posts, hidden most recently first, to restore one (UC-43)")
+    @ApiResponse(responseCode = "200", description = "The cards of the hidden posts")
+    @ApiResponse(responseCode = "401", description = "MSG44: no valid session")
+    @GetMapping("/hidden-posts")
+    public PageResponse<PostSummaryResponse> hidden(
+            @AuthenticationPrincipal Jwt caller,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize) {
+        return service.hidden(callerOf(caller), page, pageSize);
     }
 
     @Operation(summary = "Show a hidden post again (UC-43)")

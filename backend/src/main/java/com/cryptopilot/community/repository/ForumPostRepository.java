@@ -6,6 +6,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
@@ -34,6 +36,16 @@ public interface ForumPostRepository extends Repository<ForumPost, UUID> {
     /** The stored posts among these keys, in no particular order. */
     @Transactional(readOnly = true)
     List<ForumPost> findAllByIdIn(Collection<UUID> postIds);
+
+    /** The hidden posts, hidden most recently first: what a moderator may restore (UC-43, DEF-04). */
+    @Transactional(readOnly = true)
+    @Query(
+            value =
+                    "select p.id from ForumPost p where p.status = com.cryptopilot.community.model.enums.PostStatus.HIDDEN"
+                            + " order by p.updatedAt desc, p.id",
+            countQuery =
+                    "select count(p) from ForumPost p where p.status = com.cryptopilot.community.model.enums.PostStatus.HIDDEN")
+    Page<UUID> findHiddenIds(Pageable page);
 
     /** Writes a post and its coin tags. Not transactional here; the unit of work is the calling service's. */
     ForumPost save(ForumPost post);

@@ -5,6 +5,7 @@ import com.cryptopilot.community.dto.request.ModerationDecisionRequest;
 import com.cryptopilot.community.dto.response.ModerationCaseResponse;
 import com.cryptopilot.community.dto.response.ModerationDecisionResponse;
 import com.cryptopilot.community.dto.response.PostDetailResponse;
+import com.cryptopilot.community.dto.response.PostSummaryResponse;
 import com.cryptopilot.community.dto.response.QueueItemResponse;
 import java.util.UUID;
 
@@ -32,6 +33,9 @@ public interface ModerationService {
 
     /** Shows a hidden post again; {@code POST_NOT_HIDDEN} when it is not hidden, MSG41 when there is none. */
     PostDetailResponse restore(UUID moderator, UUID postId);
+
+    /** The hidden posts, hidden most recently first, each one restorable (UC-43). */
+    PageResponse<PostSummaryResponse> hidden(UUID moderator, Integer page, Integer pageSize);
 
     /** Any post, whatever its status (BR-47: Admin sees hidden and deleted posts). */
     PostDetailResponse post(UUID moderator, UUID postId);

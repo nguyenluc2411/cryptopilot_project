@@ -210,6 +210,14 @@ public class ModerationServiceImpl implements ModerationService {
 
     @Override
     @Transactional(readOnly = true)
+    public PageResponse<PostSummaryResponse> hidden(UUID moderator, Integer page, Integer pageSize) {
+        PageRequest request = Paging.of(page, pageSize);
+        Page<UUID> ids = posts.findHiddenIds(request);
+        return assembler.page(new FeedPage(ids.getContent(), ids.getTotalElements()), request, moderator);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public PostDetailResponse post(UUID moderator, UUID postId) {
         return assembler.detail(post(postId), moderator);
     }
