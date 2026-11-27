@@ -32,7 +32,6 @@ import com.cryptopilot.trading.dto.response.PositionResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanSummaryResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
-import com.cryptopilot.trading.event.PositionOpened;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.event.TradingPlanWithdrawn;
@@ -50,7 +49,6 @@ import com.cryptopilot.trading.model.PlanSnapshot;
 import com.cryptopilot.trading.model.PlanTerms;
 import com.cryptopilot.trading.model.RiskInput;
 import com.cryptopilot.trading.model.RiskProfileLimits;
-import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
@@ -136,8 +134,6 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     /** The positions of filled plans, implemented by the journal's owner (D-119). */
     private final TradeJournal journal;
 
-    private final PositionOpener positions;
-
     private final PositionViews positionViews;
 
     @Override
@@ -177,7 +173,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         TradingPlan plan = TradingPlan.draft(userId, request.pairId(), calculated, details);
         if (activate) {
             requireRoomForAnActivePlan(userId, exposure);
-            activate(plan, calculated, now, last, gate, Boolean.TRUE.equals(request.confirmDeviation()));
+            activate(plan, calculated, now, gate, Boolean.TRUE.equals(request.confirmDeviation()));
         }
         return detail(store(plan));
     }
@@ -206,7 +202,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         plan.updateDraft(calculated, details);
         if (activate) {
             requireRoomForAnActivePlan(userId, exposure);
-            activate(plan, calculated, now, last, gate, Boolean.TRUE.equals(request.confirmDeviation()));
+            activate(plan, calculated, now, gate, Boolean.TRUE.equals(request.confirmDeviation()));
         }
         return detail(store(plan));
     }
@@ -231,7 +227,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         CalculatedPlan calculated = calculate(userId, pair, terms(plan), false, last, exposure, gate);
         // After the calculation and its entitlement check, which answers MSG29 before a missing price answers 503.
         requireValidAtActivation(plan, last);
-        activate(plan, calculated, now, last, gate, confirmDeviation);
+        activate(plan, calculated, now, gate, confirmDeviation);
         return detail(store(plan));
     }
 
@@ -302,33 +298,9 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return PageResponse.of(found, plan -> PlanResponses.summary(plan, positionStatuses.get(plan.getId())));
     }
 
-    /**
-     * Saves the plan. A plan that filled at activation is written at once and its position opened in the journal in
-     * this transaction, so the fill and its record commit or roll back together (BR-34); after the commit the
-     * matching engine adds the position to its exit books ({@link PositionOpened}).
-     *
-     * <p>Rule: BR-33, BR-34, BR-35; D-119.
-     */
+    /** Saves the plan; it is never EXECUTED here, only by the paper order it is applied with (RF-33). */
     private TradingPlan store(TradingPlan plan) {
-        if (plan.getStatus() != PlanStatus.EXECUTED) {
-            return plans.save(plan);
-        }
-        TradingPlan stored = plans.saveAndFlush(plan);
-        TrackedPosition position = positions.open(stored);
-        events.publishEvent(new PositionOpened(
-                position.positionId(),
-                position.planId(),
-                position.userId(),
-                position.market(),
-                position.pairId(),
-                position.direction(),
-                position.entryPrice(),
-                position.entryTime(),
-                position.stopLoss(),
-                position.takeProfit(),
-                position.liquidationPrice(),
-                position.version()));
-        return stored;
+        return plans.save(plan);
     }
 
     /** The plan in full and, once it is EXECUTED, the position it opened (UC-20), see {@link PositionViews}. */
@@ -684,43 +656,20 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     }
 
     /**
-     * Activates the plan and fills its entry at once when it is MARKET, or when it is LIMIT and the current last price
-     * already reaches it (BR-33); otherwise it waits for the matching engine. A MARKET entry fills at the price the
-     * activation was calculated with: the last price on both markets (D-111 E2/E3), moved by the slippage. A LIMIT
-     * fills at the last price moved by the slippage, but never past its limit (D-112 note). A fill at activation took
-     * liquidity, so it is TAKER (D-111 E1, E5).
-     * A STOP waits: the matching engine triggers it (one already triggered was refused). The journal record of the
-     * fill is opened when the plan is stored, see {@link #store}. The setup score of the moment is kept beside the plan,
-     * see {@link #recordSetupScore}. {@code last} is the request's one read of the last price, see
-     * {@link #lastPriceRead}. A MARKET entry in the confirmation band of BR-69 needs {@code confirmDeviation}, asked
+     * Activates the plan (BR-32). It is not filled here: the Trader applies it, and the paper order that carries it out
+     * sets it EXECUTED when it fills (RF-33). The setup score of the moment is kept beside the plan, see
+     * {@link #recordSetupScore}. A MARKET entry in the confirmation band of BR-69 needs {@code confirmDeviation}, asked
      * for after the plan's other checks so the Trader never confirms a plan that is then refused, and before anything
      * changes.
      */
     private void activate(
-            TradingPlan plan,
-            CalculatedPlan calculated,
-            Instant now,
-            Optional<BigDecimal> last,
-            MarketEntryGate gate,
-            boolean confirmDeviation) {
+            TradingPlan plan, CalculatedPlan calculated, Instant now, MarketEntryGate gate, boolean confirmDeviation) {
         plan.requireActivatable(calculated.calculation(), calculated.warnings(), now);
         gate.requireConfirmed(calculated, confirmDeviation);
         plan.activate(calculated.calculation(), calculated.warnings(), now);
         recordSetupScore(plan, now);
-        Optional<BigDecimal> fillPrice = plan.getEntryType() == EntryType.STOP
-                ? Optional.empty()
-                : EntryFillRule.atActivation(
-                                plan.getEntryType(),
-                                plan.getDirection(),
-                                plan.getEntryPrice(),
-                                fillDecisionPrice(plan, last))
-                        .map(price -> takerFill(plan, price, calculated));
-        if (fillPrice.isPresent()) {
-            plan.markExecuted(now, fillPrice.get(), LiquidityRole.TAKER);
-            log.info("NSF-07 plan {} filled at activation at {}", plan.getId(), fillPrice.get());
-        } else {
-            publishActivated(plan);
-        }
+        // RF-33 (DEF-05): an active plan is filled only by the paper order it is applied with, never here.
+        publishActivated(plan);
     }
 
     /**
@@ -753,33 +702,6 @@ public class TradingPlanServiceImpl implements TradingPlanService {
                         : BigDecimal.valueOf(reading.score()).setScale(2),
                 reading.preset());
     }
-
-    /**
-     * The price a fill at activation pays. MARKET: the price it was calculated with, which already holds the slippage
-     * (D-112 R6). LIMIT: the last price moved by {@code SLIPPAGE_BPS}, read for this fill, and capped at the limit.
-     *
-     * <p>Rule: BR-33, BR-36; D-111 E5; D-112 R6 and its note.
-     */
-    private BigDecimal takerFill(TradingPlan plan, BigDecimal price, CalculatedPlan calculated) {
-        if (plan.getEntryType() == EntryType.MARKET) {
-            return price;
-        }
-        return SlippageCalculator.marketableLimitFill(
-                price,
-                plan.getEntryPrice(),
-                plan.getDirection(),
-                settings.integer(SLIPPAGE_BPS),
-                calculated.calculation().plan().filters().tickSize());
-    }
-
-    /**
-     * MARKET: the price the activation was just calculated with. LIMIT: the last price the validity checks read, or
-     * empty when the cache held no current one; the entry then waits for the matching engine.
-     */
-    private static Optional<BigDecimal> fillDecisionPrice(TradingPlan plan, Optional<BigDecimal> last) {
-        return plan.getEntryType() == EntryType.MARKET ? Optional.of(plan.getEntryPrice()) : last;
-    }
-
     /**
      * The price a MARKET entry executes at: the last trade price, on Futures the close of the latest 1-minute candle
      * update, only while the cache holds a current one. The mark price stays for liquidation and unrealized P/L.

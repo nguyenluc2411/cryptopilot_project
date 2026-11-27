@@ -48,6 +48,8 @@ import java.util.List;
  * @param levelWarnings the non-blocking warnings of the change just made, in its response only; empty on every read
  * @param levelsEffectiveFrom the open time of the first 1-minute candle the current levels act on, after the last
  *     change; {@code null} when the levels were never changed (D-124, Q-80)
+ * @param onDemoAccount whether the plan was applied with paper orders (RF-33): the position is closed and its levels
+ *     changed on the trading screen
  */
 public record PositionResponse(
         PositionStatus status,
@@ -76,4 +78,5 @@ public record PositionResponse(
         BigDecimal breakevenPrice,
         boolean breakevenProvisional,
         List<PlanWarningResponse> levelWarnings,
-        Instant levelsEffectiveFrom) {}
+        Instant levelsEffectiveFrom,
+        boolean onDemoAccount) {}

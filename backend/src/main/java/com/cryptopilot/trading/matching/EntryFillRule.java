@@ -122,30 +122,4 @@ public final class EntryFillRule {
                         : LiquidityRole.MAKER;
         };
     }
-
-    /**
-     * The fill price of an entry at its activation, or empty when it waits for the price.
-     *
-     * <p>Rule: BR-33.
-     *
-     * @param entryType MARKET fills at once; LIMIT only when the last price already reaches it; STOP never does: one
-     *     already triggered is refused before this is asked (D-112), one not triggered waits for the books
-     * @param direction LONG or SHORT
-     * @param entryPrice the LIMIT price; ignored for MARKET
-     * @param lastPrice the current last price; empty when none is known, and then a LIMIT entry waits
-     * @return the last price when the entry fills now
-     * @throws IllegalArgumentException for a MARKET entry without a last price, or for a STOP entry
-     */
-    public static Optional<BigDecimal> atActivation(
-            EntryType entryType, Direction direction, BigDecimal entryPrice, Optional<BigDecimal> lastPrice) {
-        Objects.requireNonNull(entryType, "entryType");
-        if (entryType == EntryType.STOP) {
-            throw new IllegalArgumentException("a STOP entry is never filled at activation; it waits for its trigger");
-        }
-        if (entryType == EntryType.MARKET) {
-            return Optional.of(lastPrice.orElseThrow(
-                    () -> new IllegalArgumentException("a MARKET entry needs the current last price")));
-        }
-        return lastPrice.filter(price -> reaches(direction, price, entryPrice));
-    }
 }

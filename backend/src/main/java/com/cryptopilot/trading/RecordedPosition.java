@@ -28,6 +28,8 @@ import java.util.UUID;
  * @param feeAmount the entry fee plus the exit fee, once CLOSED
  * @param fundingFeeAmount the signed funding known so far of a closed Futures position; {@code null} for Spot
  * @param fundingIncomplete whether a settlement of that funding may be missing, so the net is provisional
+ * @param onDemoAccount whether the position is a paper order's the plan was applied with (RF-33): it is closed and its
+ *     levels changed on the trading screen, not through the plan
  */
 public record RecordedPosition(
         UUID planId,
@@ -43,7 +45,42 @@ public record RecordedPosition(
         BigDecimal realizedPnl,
         BigDecimal feeAmount,
         BigDecimal fundingFeeAmount,
-        boolean fundingIncomplete) {
+        boolean fundingIncomplete,
+        boolean onDemoAccount) {
+
+    /** A position of the plans' own engine, from before plans were applied with paper orders. */
+    public RecordedPosition(
+            UUID planId,
+            PositionStatus status,
+            BigDecimal entryPrice,
+            BigDecimal quantity,
+            Instant entryTime,
+            BigDecimal entryFee,
+            BigDecimal liquidationPrice,
+            BigDecimal exitPrice,
+            Instant exitTime,
+            CloseReason closeReason,
+            BigDecimal realizedPnl,
+            BigDecimal feeAmount,
+            BigDecimal fundingFeeAmount,
+            boolean fundingIncomplete) {
+        this(
+                planId,
+                status,
+                entryPrice,
+                quantity,
+                entryTime,
+                entryFee,
+                liquidationPrice,
+                exitPrice,
+                exitTime,
+                closeReason,
+                realizedPnl,
+                feeAmount,
+                fundingFeeAmount,
+                fundingIncomplete,
+                false);
+    }
 
     public RecordedPosition {
         Objects.requireNonNull(planId, "planId");

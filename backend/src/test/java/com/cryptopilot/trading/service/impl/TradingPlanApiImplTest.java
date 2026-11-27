@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.PlanContext;
 import com.cryptopilot.trading.dto.response.PlanSnapshotResponse;
@@ -13,12 +14,15 @@ import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.WarningSeverity;
 import com.cryptopilot.trading.model.enums.WarningType;
+import com.cryptopilot.trading.repository.TradingPlanRepository;
 import com.cryptopilot.trading.service.TradingPlanService;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.List;
 import java.util.UUID;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 
 class TradingPlanApiImplTest {
 
@@ -27,7 +31,12 @@ class TradingPlanApiImplTest {
     private static final UUID PAIR = UUID.randomUUID();
 
     private final TradingPlanService service = mock(TradingPlanService.class);
-    private final TradingPlanApiImpl api = new TradingPlanApiImpl(service);
+    private final TradingPlanApiImpl api = new TradingPlanApiImpl(
+            service,
+            mock(TradingPlanRepository.class),
+            mock(MarketApi.class),
+            mock(ApplicationEventPublisher.class),
+            Clock.systemUTC());
 
     @Test
     void BR51_thePlanIsReadThroughTheOwnersView_keepingTheRatiosAndWarnings() {

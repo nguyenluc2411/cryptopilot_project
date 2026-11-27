@@ -9,6 +9,7 @@ import com.cryptopilot.paper.entity.PaperFill;
 import com.cryptopilot.paper.entity.PaperFill.Execution;
 import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
 import com.cryptopilot.paper.entity.PaperOrder;
+import com.cryptopilot.paper.event.PaperSpotFilled;
 import com.cryptopilot.paper.model.PaperAccount;
 import com.cryptopilot.paper.model.UsdtRate;
 import com.cryptopilot.paper.model.enums.FillSource;
@@ -18,11 +19,13 @@ import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.WalletType;
 import com.cryptopilot.paper.repository.PaperFillRepository;
+import com.cryptopilot.trading.TradingPlanApi;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,6 +63,8 @@ public class SpotSettlement {
     private final PaperOrderProperties fees;
     private final PaperUserFeed feed;
     private final QuoteUsdtRate usdtRates;
+    private final TradingPlanApi plans;
+    private final ApplicationEventPublisher events;
 
     /**
      * Executes {@code quantity} of the order at {@code price} and records the fill.
@@ -140,6 +145,23 @@ public class SpotSettlement {
         PaperFill saved = fills.save(fill);
         feed.fill(account, saved);
         feed.order(account, order);
+        boolean maker = liquidity == Liquidity.MAKER;
+        // RF-35: the journal records every fill in this transaction; a buy's fee, taken in the coin, at the fill price.
+        events.publishEvent(new PaperSpotFilled(
+                account.userId(),
+                order.getId(),
+                order.getPlanId(),
+                order.getPairId(),
+                buy,
+                order.getOrderType().name(),
+                maker,
+                price,
+                quantity,
+                Rounding.toAmount(buy ? fee.multiply(price) : fee),
+                tradedAt));
+        if (order.getPlanId() != null) {
+            plans.entryFilled(order.getPlanId(), order.getId(), buy, price, maker, tradedAt);
+        }
         return saved;
     }
 }

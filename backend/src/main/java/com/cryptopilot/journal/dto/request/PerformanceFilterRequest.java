@@ -31,7 +31,7 @@ public record PerformanceFilterRequest(
         @Parameter(description = "SPOT, FUTURES or ALL; default ALL")
         PerformanceMarket market,
 
-        @Parameter(description = "SIMULATED, MANUAL or ALL; default SIMULATED")
+        @Parameter(description = "SIMULATED (plans), DEMO_ORDER, MANUAL or ALL; default SIMULATED")
         PerformanceSource source,
 
         @Parameter(description = "Only this pair") UUID pairId,

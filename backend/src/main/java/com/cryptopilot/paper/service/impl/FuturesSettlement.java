@@ -13,6 +13,7 @@ import com.cryptopilot.paper.entity.PaperLedgerEntry;
 import com.cryptopilot.paper.entity.PaperLedgerEntry.Ref;
 import com.cryptopilot.paper.entity.PaperOrder;
 import com.cryptopilot.paper.event.FuturesAccountChanged;
+import com.cryptopilot.paper.event.PaperFuturesPositionFilled;
 import com.cryptopilot.paper.event.PaperOrderCanceled;
 import com.cryptopilot.paper.event.PaperPositionClosed;
 import com.cryptopilot.paper.matching.BookSweep;
@@ -35,6 +36,7 @@ import com.cryptopilot.paper.repository.FuturesMarginAdjustmentRepository;
 import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperFillRepository;
 import com.cryptopilot.paper.service.FuturesCommissionPolicy;
+import com.cryptopilot.trading.TradingPlanApi;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -99,6 +101,7 @@ class FuturesSettlement {
     private final FuturesOrderLists tpSl;
     private final EntityManager entityManager;
     private final FuturesCommissionPolicy commission;
+    private final TradingPlanApi plans;
 
     /**
      * Executes up to {@code quantity} of the order at {@code price}.
@@ -246,6 +249,27 @@ class FuturesSettlement {
         if (!funded && order.isOpen()) {
             end(account, order, MARGIN_INSUFFICIENT, at);
         }
+        if (closed.signum() > 0) {
+            positionFilled(order, position, price, liquidity, false, at);
+        }
+        if (opened.signum() > 0 && funded) {
+            positionFilled(
+                    order,
+                    margins.openPosition(userId, order.getPairId(), order.getPositionSide()),
+                    price,
+                    liquidity,
+                    true,
+                    at);
+            if (order.getPlanId() != null) {
+                plans.entryFilled(
+                        order.getPlanId(),
+                        order.getId(),
+                        order.getSide() == OrderSide.BUY,
+                        price,
+                        liquidity == Liquidity.MAKER,
+                        at);
+            }
+        }
         feed.futuresOrder(account, order);
         if (closed.signum() > 0) {
             trimReduceOnly(account, order.getPairId(), order.getPositionSide(), at);
@@ -332,6 +356,7 @@ class FuturesSettlement {
         position.reduce(quantity, mark, realized, PositionCloseReason.LIQUIDATION, at);
         position.addLiquidationFee(fee);
         publishIfClosed(position);
+        positionFilled(order, position, mark, Liquidity.TAKER, false, at);
         order.fill(quantity, mark, Rounding.toAmount(mark.multiply(quantity)), at);
         feed.futuresOrder(account, order);
         trimReduceOnly(account, order.getPairId(), order.getPositionSide(), at);
@@ -387,6 +412,7 @@ class FuturesSettlement {
         position.reduce(quantity, mark, realized, PositionCloseReason.LIQUIDATION, at);
         position.addLiquidationFee(fee);
         publishIfClosed(position);
+        positionFilled(order, position, mark, Liquidity.TAKER, false, at);
         order.fill(quantity, mark, Rounding.toAmount(mark.multiply(quantity)), at);
         feed.futuresOrder(account, order);
         entityManager.flush();
@@ -711,6 +737,47 @@ class FuturesSettlement {
             tpSl.settle(account, order, at);
         }
         events.publishEvent(new PaperOrderCanceled(order.getId()));
+    }
+
+    /**
+     * Tells the journal how the fill left the position (RF-35), in this transaction. A position the fill closed in
+     * full is read as it was closed; one it opened, as it now stands.
+     */
+    private void positionFilled(
+            PaperOrder order,
+            FuturesPosition position,
+            BigDecimal price,
+            Liquidity liquidity,
+            boolean opened,
+            Instant at) {
+        if (position == null) {
+            return;
+        }
+        events.publishEvent(new PaperFuturesPositionFilled(
+                position.getUserId(),
+                position.getId(),
+                position.getPairId(),
+                order.getId(),
+                order.getPlanId(),
+                order.getOrderType().name(),
+                liquidity == Liquidity.MAKER,
+                price,
+                opened,
+                position.getDirection() == PositionDirection.LONG,
+                position.getLeverage(),
+                position.getEntryPrice(),
+                position.getMaxQuantity(),
+                position.isOpen(),
+                position.getCloseAvgPrice(),
+                position.getClosedQuantity(),
+                position.getRealizedPnlAmount(),
+                position.getCommissionAmount().add(position.getLiquidationFeeAmount()),
+                position.getFundingAmount(),
+                position.getCloseReason() == null
+                        ? null
+                        : position.getCloseReason().name(),
+                position.getOpenedAt(),
+                at));
     }
 
     /** What an order of {@code side} can close of a one-way position of signed {@code size}: the opposite side's. */

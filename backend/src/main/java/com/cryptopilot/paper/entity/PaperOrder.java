@@ -15,6 +15,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -77,8 +78,8 @@ public class PaperOrder extends BaseEntity {
     private UUID listId;
 
     /**
-     * The trading plan the order carries out, or {@code null} for an order placed on the trading screen. Plans do not
-     * place paper orders yet: the plan matching engine fills them itself until the two engines are one (D-117).
+     * The trading plan the order carries out, or {@code null} for an order placed on the trading screen. Set when the
+     * order is stored inside a {@link PlanOrderScope}: the plan was applied with it (D-117; RF-33).
      */
     @Column(name = "plan_id", updatable = false)
     private UUID planId;
@@ -203,6 +204,14 @@ public class PaperOrder extends BaseEntity {
 
     /** For JPA only. */
     protected PaperOrder() {}
+
+    /** An order stored while a plan is applied carries the plan (RF-33). */
+    @PrePersist
+    void takePlanOfScope() {
+        if (planId == null) {
+            planId = PlanOrderScope.current();
+        }
+    }
 
     private PaperOrder(
             UUID userId,

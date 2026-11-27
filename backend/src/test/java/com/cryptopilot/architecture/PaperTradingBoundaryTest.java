@@ -17,11 +17,12 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
- * Paper trading and the plan module stay apart until their matching engines are one: neither depends on the other,
- * and only paper trading names the tables it owns. A trade order already names the plan it carries out (D-117), so
- * the link exists in the schema; the code that uses it is the merge of the engines, made in one change across both.
+ * Paper trading and the plan module have one matching engine since RF-33: a plan is carried out by the paper orders it
+ * is applied with. Paper trading reaches the plan module through its API only ({@code TradingPlanApi}, its records and
+ * enums), never its services, entities or repositories; the plan module never reaches paper trading. Only paper
+ * trading names the tables it owns.
  *
- * <p>Rule: TR-02; D-117.
+ * <p>Rule: TR-02; D-117; RF-33.
  */
 @AnalyzeClasses(packages = LayerRulesTest.ROOT, importOptions = ImportOption.DoNotIncludeTests.class)
 class PaperTradingBoundaryTest {
@@ -42,12 +43,18 @@ class PaperTradingBoundaryTest {
             .resideInAPackage("com.cryptopilot.paper..");
 
     @ArchTest
-    static final ArchRule paper_doesNotReachTrading = noClasses()
+    static final ArchRule paper_reachesTradingThroughItsApiOnly = noClasses()
             .that()
             .resideInAPackage("com.cryptopilot.paper..")
             .should()
             .dependOnClassesThat()
-            .resideInAPackage("com.cryptopilot.trading..");
+            .resideInAnyPackage(
+                    "com.cryptopilot.trading.service..",
+                    "com.cryptopilot.trading.entity..",
+                    "com.cryptopilot.trading.repository..",
+                    "com.cryptopilot.trading.matching..",
+                    "com.cryptopilot.trading.job..",
+                    "com.cryptopilot.trading.controller..");
 
     @Test
     void onlyPaperTrading_namesItsTables() throws IOException {

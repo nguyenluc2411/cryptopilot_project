@@ -47,6 +47,14 @@ public interface PaperOrderRepository extends Repository<PaperOrder, UUID> {
     @Transactional(readOnly = true)
     Optional<PaperOrder> findByUserIdAndClientOrderId(UUID userId, String clientOrderId);
 
+    /** Whether an order placed with the plan still works or waits to be placed (RF-33). */
+    @Transactional(readOnly = true)
+    boolean existsByPlanIdAndOrderStatusIn(UUID planId, Collection<OrderStatus> statuses);
+
+    /** The orders a plan was applied with, oldest first (RF-33). */
+    @Transactional(readOnly = true)
+    List<PaperOrder> findByPlanIdOrderByCreatedAtAsc(UUID planId);
+
     /** The working GTD orders whose date has come, earliest first (TR-44). */
     @Transactional(readOnly = true)
     List<PaperOrder> findByGoodTillDateLessThanEqualAndOrderStatusInOrderByGoodTillDateAsc(

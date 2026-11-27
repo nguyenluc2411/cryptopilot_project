@@ -96,35 +96,11 @@ public final class WaitingPlanRule {
         if (!EntryFillRule.mayAct(entry, range)) {
             return Optional.empty();
         }
+        // RF-33 (DEF-05): the entry is no longer filled here; only a reached invalidation level decides the plan.
         Side side = invalidationSide(entry);
-        Optional<Level> reached = invalidationLevels(entry).stream()
+        return invalidationLevels(entry).stream()
                 .filter(level -> side.reachedBy(range.low(), range.high(), level.price()))
-                .findFirst();
-        boolean entered = EntryFillRule.entryReached(entry, range);
-        if (reached.isEmpty()) {
-            return entered ? Optional.of(EntryFillRule.byRange(entry, range)) : Optional.empty();
-        }
-        Invalidation invalidation = new Invalidation(entry, reached.get().reason(), range.from());
-        if (!entered) {
-            return Optional.of(invalidation);
-        }
-        BigDecimal open = range.open();
-        if (open == null) {
-            log.info(
-                    "D-112 R4 plan {} on {} {}: the candle opened at {} reached its entry and its {} with an unknown"
-                            + " open; invalidation wins",
-                    entry.planId(),
-                    entry.market(),
-                    entry.pairId(),
-                    range.from(),
-                    reached.get().reason());
-            return Optional.of(invalidation);
-        }
-        boolean openedPastEntry =
-                EntryFillRule.entrySide(entry.entryType(), entry.direction()).reachedAt(open, entry.entryPrice());
-        if (openedPastEntry && !side.reachedAt(open, reached.get().price())) {
-            return Optional.of(EntryFillRule.byRange(entry, range));
-        }
-        return Optional.of(invalidation);
+                .findFirst()
+                .map(level -> new Invalidation(entry, level.reason(), range.from()));
     }
 }

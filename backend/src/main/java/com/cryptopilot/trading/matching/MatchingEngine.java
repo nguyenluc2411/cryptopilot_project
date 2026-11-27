@@ -467,8 +467,8 @@ public final class MatchingEngine {
         }
     }
 
+    /** Only the invalidation levels: an entry is filled by the paper order the plan is applied with (RF-33). */
     private static void place(Books pair, TrackedEntry entry) {
-        pair.of(EntryFillRule.entrySide(entry.entryType(), entry.direction())).add(entry.entryPrice(), entry.planId());
         PriceLevelBook opposite = pair.of(WaitingPlanRule.invalidationSide(entry));
         for (Level level : WaitingPlanRule.invalidationLevels(entry)) {
             opposite.add(level.price(), entry.planId());
@@ -476,8 +476,6 @@ public final class MatchingEngine {
     }
 
     private static void remove(Books pair, TrackedEntry entry) {
-        pair.of(EntryFillRule.entrySide(entry.entryType(), entry.direction()))
-                .remove(entry.entryPrice(), entry.planId());
         PriceLevelBook opposite = pair.of(WaitingPlanRule.invalidationSide(entry));
         for (Level level : WaitingPlanRule.invalidationLevels(entry)) {
             opposite.remove(level.price(), entry.planId());

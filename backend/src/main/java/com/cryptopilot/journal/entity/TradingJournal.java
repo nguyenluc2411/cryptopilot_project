@@ -229,8 +229,67 @@ public class TradingJournal extends BaseEntity {
     @Column(name = "max_favorable_price", precision = 28, scale = 12, updatable = false)
     private BigDecimal maxFavorablePrice;
 
+    /** The Spot buy order a record from paper trading was opened by (RF-35); {@code null} otherwise. */
+    @Column(name = "paper_order_id", updatable = false)
+    private UUID paperOrderId;
+
+    /** The paper Futures position a record follows (RF-35); {@code null} otherwise. */
+    @Column(name = "paper_position_id", updatable = false)
+    private UUID paperPositionId;
+
+    /** What a sale has closed of an OPEN Spot record so far; written by the repository only (RF-35). */
+    @Column(name = "exit_quantity", insertable = false, updatable = false)
+    private BigDecimal exitQuantity;
+
     /** For JPA only. */
     protected TradingJournal() {}
+
+    /**
+     * The OPEN record of a paper fill (RF-35): a plan's order (SIMULATED, its plan's levels) or a demo order
+     * (DEMO_ORDER, no levels: the dashboard flags it as without a stop loss).
+     *
+     * @param planId the plan the order carries out, or {@code null} for a demo order
+     * @param paperOrderId the Spot buy order, or {@code null} for a Futures position
+     * @param paperPositionId the Futures position, or {@code null} for a Spot buy
+     */
+    public static TradingJournal openFromPaper(
+            UUID userId,
+            UUID pairId,
+            UUID planId,
+            MarketType market,
+            Direction direction,
+            Integer leverage,
+            BigDecimal entryPrice,
+            BigDecimal quantity,
+            Instant entryTime,
+            LiquidityRole entryLiquidity,
+            BigDecimal entryFee,
+            BigDecimal stopLoss,
+            BigDecimal takeProfit,
+            UUID paperOrderId,
+            UUID paperPositionId) {
+        TradingJournal record = new TradingJournal();
+        record.userId = userId;
+        record.pairId = pairId;
+        record.planId = planId;
+        record.source = planId == null ? TradeSource.DEMO_ORDER : TradeSource.SIMULATED;
+        record.market = market;
+        record.direction = direction;
+        record.leverage = leverage;
+        record.entryPrice = entryPrice;
+        record.quantity = quantity;
+        record.entryTime = entryTime.truncatedTo(ChronoUnit.MICROS);
+        record.entryLiquidity = entryLiquidity;
+        record.entryFee = entryFee;
+        record.stopLoss = stopLoss;
+        record.takeProfit = takeProfit;
+        record.originalStopLoss = stopLoss;
+        record.originalTakeProfit = takeProfit;
+        record.status = PositionStatus.OPEN;
+        record.paperOrderId = paperOrderId;
+        record.paperPositionId = paperPositionId;
+        return record;
+    }
 
     /**
      * The OPEN record of a plan that has just filled (BR-34): the fill's price, time and liquidity role, the plan
@@ -296,7 +355,8 @@ public class TradingJournal extends BaseEntity {
                 realizedPnl,
                 feeAmount,
                 fundingFeeAmount,
-                fundingIncomplete);
+                fundingIncomplete,
+                paperOrderId != null || paperPositionId != null);
     }
 
     /** The current and original levels of the record, with the history of their changes, oldest first (D-124). */

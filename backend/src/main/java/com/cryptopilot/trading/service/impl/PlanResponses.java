@@ -143,7 +143,8 @@ final class PlanResponses {
                 warnings(levelWarnings),
                 levels == null || levels.changes().isEmpty()
                         ? null
-                        : levels.changes().getLast().effectiveFrom());
+                        : levels.changes().getLast().effectiveFrom(),
+                position.onDemoAccount());
     }
 
     /** A row of the list; the warnings are not read. {@code positionStatus} is its position's, or {@code null}. */

@@ -86,7 +86,8 @@ public class JournalController {
                     @RequestParam(required = false)
                     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
                     LocalDate to,
-            @Parameter(description = "SIMULATED, MANUAL or ALL; default ALL") @RequestParam(required = false)
+            @Parameter(description = "SIMULATED (plans), DEMO_ORDER, MANUAL or ALL; default ALL")
+                    @RequestParam(required = false)
                     PerformanceSource source,
             @Parameter(description = "Only this strategy") @RequestParam(required = false) UUID strategyId,
             @Parameter(description = "WIN, LOSS or BREAKEVEN by net P/L; only CLOSED trades match")
