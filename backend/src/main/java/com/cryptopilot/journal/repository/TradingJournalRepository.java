@@ -24,18 +24,6 @@ import org.springframework.transaction.annotation.Transactional;
  */
 public interface TradingJournalRepository extends Repository<TradingJournal, UUID> {
 
-    /**
-     * The monotonic merge of a stored most adverse and most favourable price with new ones, by the row's direction:
-     * PostgreSQL's {@code least} and {@code greatest} skip a null, so a missing new value keeps the stored one and a
-     * missing stored value takes the new one (BR-70).
-     */
-    String WIDEN_EXCURSIONS = "max_adverse_price = case direction when 'LONG'"
-            + " then least(max_adverse_price, cast(:adverse as numeric))"
-            + " else greatest(max_adverse_price, cast(:adverse as numeric)) end,"
-            + " max_favorable_price = case direction when 'LONG'"
-            + " then greatest(max_favorable_price, cast(:favorable as numeric))"
-            + " else least(max_favorable_price, cast(:favorable as numeric)) end";
-
     /** The rows of {@link #search}, for its page and its count; a result only ever matches a CLOSED row (BR-42). */
     String SEARCHED_ROWS = " from trading_journal where user_id = :userId and trade_status in (:statuses)"
             + " and market_type in (:markets) and source in (:sources)"
@@ -86,26 +74,11 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     @Transactional(readOnly = true)
     Optional<TradingJournal> findByPlanId(UUID planId);
 
-    /** The plans of the user's OPEN SIMULATED records (BR-62); manual records are not positions the system holds. */
-    @Transactional(readOnly = true)
-    @Query("select j.planId from TradingJournal j where j.userId = :userId"
-            + " and j.status = com.cryptopilot.trading.model.enums.PositionStatus.OPEN"
-            + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED")
-    List<UUID> findOpenPlanIds(UUID userId);
-
     /** The plan and position status of each record of these plans. */
     @Transactional(readOnly = true)
     @Query("select new com.cryptopilot.journal.model.PlanPosition(j.planId, j.status)"
             + " from TradingJournal j where j.planId in :planIds")
     List<PlanPosition> findStatuses(Collection<UUID> planIds);
-
-    /** Every OPEN SIMULATED record, oldest entry first: the positions the matching engine tracks. */
-    @Transactional(readOnly = true)
-    @Query("select j from TradingJournal j"
-            + " where j.status = com.cryptopilot.trading.model.enums.PositionStatus.OPEN"
-            + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED"
-            + " and j.paperOrderId is null and j.paperPositionId is null order by j.entryTime, j.id")
-    List<TradingJournal> findOpenSimulated();
 
     /** The record if it is an OPEN SIMULATED one, a plan's on the demo account included (RF-33). */
     @Transactional(readOnly = true)
@@ -113,64 +86,6 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             + " and j.status = com.cryptopilot.trading.model.enums.PositionStatus.OPEN"
             + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED")
     Optional<TradingJournal> findOpenSimulated(UUID id);
-
-    /** The record of the plan if it is an OPEN SIMULATED one. */
-    @Transactional(readOnly = true)
-    @Query("select j from TradingJournal j where j.planId = :planId"
-            + " and j.status = com.cryptopilot.trading.model.enums.PositionStatus.OPEN"
-            + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED"
-            + " and j.paperOrderId is null and j.paperPositionId is null")
-    Optional<TradingJournal> findOpenSimulatedOfPlan(UUID planId);
-
-    /**
-     * Compare-and-set OPEN to CLOSED at one version, with the exit and the amounts: of two writers that read the same
-     * version, exactly one changes the row; the other, and a replay of the same exit, see 0. The missing funding times
-     * are a PostgreSQL array literal, or {@code null} for none; the extremes are merged as {@link #WIDEN_EXCURSIONS}
-     * does, or kept when {@code null}.
-     *
-     * @return 1 when the record was OPEN at that version and is now CLOSED, otherwise 0
-     */
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
-    @Query(
-            value = "update trading_journal set trade_status = 'CLOSED', exit_price = :exitPrice,"
-                    + " exit_time = :exitTime, close_reason = :reason, realized_pnl = :realizedPnl,"
-                    + " fee_amount = :feeAmount, funding_fee_amount = :fundingFeeAmount,"
-                    + " funding_incomplete = :fundingIncomplete,"
-                    + " missing_funding_times = cast(:missingFundingTimes as timestamptz[]), "
-                    + WIDEN_EXCURSIONS
-                    + ", updated_at = :now, version = version + 1"
-                    + " where journal_id = :id and trade_status = 'OPEN' and source = 'SIMULATED' and paper_order_id is null and paper_position_id is null"
-                    + " and version = :version",
-            nativeQuery = true)
-    int closeIfOpen(
-            UUID id,
-            long version,
-            BigDecimal exitPrice,
-            Instant exitTime,
-            String reason,
-            BigDecimal realizedPnl,
-            BigDecimal feeAmount,
-            BigDecimal fundingFeeAmount,
-            boolean fundingIncomplete,
-            String missingFundingTimes,
-            BigDecimal adverse,
-            BigDecimal favorable,
-            Instant now);
-
-    /**
-     * Widens the extremes of an OPEN SIMULATED record, see {@link #WIDEN_EXCURSIONS}. The version and the levels stay,
-     * so a close or a change of the levels racing it is never refused; nor does {@code updated_at} move, as nothing the
-     * Trader changed did.
-     *
-     * @return 1 when the record was OPEN, otherwise 0
-     */
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
-    @Query(
-            value =
-                    "update trading_journal set " + WIDEN_EXCURSIONS
-                            + " where journal_id = :id and trade_status = 'OPEN' and source = 'SIMULATED' and paper_order_id is null and paper_position_id is null",
-            nativeQuery = true)
-    int widenExcursionIfOpen(UUID id, BigDecimal adverse, BigDecimal favorable);
 
     /**
      * The user's OPEN SIMULATED records, oldest entry first: the positions whose current risk BR-29 counts and whose
@@ -376,7 +291,7 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     List<TradingJournal> findOpenPaperSpot(UUID userId, UUID pairId);
 
     /** A later fill of the same Spot buy order: the quantity grows and the entry becomes their average. */
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Modifying(flushAutomatically = true)
     @Query(
             value = "update trading_journal set"
                     + " entry_price = (entry_price * quantity + :price * :quantity) / (quantity + :quantity),"
@@ -388,7 +303,7 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     int addToEntry(UUID id, BigDecimal price, BigDecimal quantity, BigDecimal fee, Instant now);
 
     /** Part of a sale taken by an OPEN Spot record: what it closed, at what notional, realised and paid. */
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Modifying(flushAutomatically = true)
     @Query(
             value = "update trading_journal set exit_quantity = exit_quantity + :quantity,"
                     + " exit_notional = exit_notional + :notional,"
@@ -400,7 +315,7 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     int addExit(UUID id, BigDecimal quantity, BigDecimal notional, BigDecimal realized, BigDecimal fee, Instant now);
 
     /** Closes a Spot record sold out: its exit is the average of the sales, its fees the entry's and the sales'. */
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Modifying(flushAutomatically = true)
     @Query(
             value = "update trading_journal set trade_status = 'CLOSED',"
                     + " exit_price = round(exit_notional / exit_quantity, 12), exit_time = :exitTime,"
@@ -412,7 +327,7 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     int closeSoldOut(UUID id, Instant exitTime, String reason, Instant now);
 
     /** An OPEN Futures record follows its position: the largest quantity, the average entry and the leverage. */
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Modifying(flushAutomatically = true)
     @Query(
             value = "update trading_journal set quantity = :quantity, entry_price = :entryPrice,"
                     + " leverage = :leverage, updated_at = :now, version = version + 1"
@@ -421,7 +336,7 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
     int followPosition(UUID id, BigDecimal quantity, BigDecimal entryPrice, int leverage, Instant now);
 
     /** Closes a Futures record with its position's own exit figures. */
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Modifying(flushAutomatically = true)
     @Query(
             value = "update trading_journal set trade_status = 'CLOSED', quantity = :quantity,"
                     + " entry_price = :entryPrice, exit_price = :exitPrice, exit_time = :exitTime,"

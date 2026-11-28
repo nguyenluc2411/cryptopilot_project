@@ -9,7 +9,6 @@ import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.SimulatedFillLearning;
-import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
@@ -187,38 +186,38 @@ public class TradingJournal extends BaseEntity {
     private Instant[] missingFundingTimes;
 
     /** The entered price for LIMIT and STOP, the reference price of the last draft save for MARKET (BR-69). */
-    @Column(name = "planned_entry_price", precision = 28, scale = 12, updatable = false)
+    @Column(name = "planned_entry_price", precision = 28, scale = 12)
     private BigDecimal plannedEntryPrice;
 
     /** The deviation of the fill from the planned entry in R; positive is a worse entry (BR-69). */
-    @Column(name = "entry_deviation_r", precision = 20, scale = 8, updatable = false)
+    @Column(name = "entry_deviation_r", precision = 20, scale = 8)
     private BigDecimal entryDeviationR;
 
     /** The loss at the stop loss the plan was sized on: the denominator of every R (BR-70). */
-    @Column(name = "risk_amount", precision = 28, scale = 8, updatable = false)
+    @Column(name = "risk_amount", precision = 28, scale = 8)
     private BigDecimal riskAmount;
 
     /** The plan's chart timeframe, the one the fill's indicators are read on (D-112). */
-    @Column(name = "analysis_timeframe", length = 32, updatable = false)
+    @Column(name = "analysis_timeframe", length = 32)
     private String analysisTimeframe;
 
     /** The preset name and version both setup scores use, e.g. {@code DAY_TRADING v1} (D-112). */
-    @Column(name = "setup_score_preset", length = 32, updatable = false)
+    @Column(name = "setup_score_preset", length = 32)
     private String setupScorePreset;
 
-    @Column(name = "setup_score_at_plan", precision = 5, scale = 2, updatable = false)
+    @Column(name = "setup_score_at_plan", precision = 5, scale = 2)
     private BigDecimal setupScoreAtPlan;
 
-    @Column(name = "setup_score_at_fill", precision = 5, scale = 2, updatable = false)
+    @Column(name = "setup_score_at_fill", precision = 5, scale = 2)
     private BigDecimal setupScoreAtFill;
 
     /** Whether the score fell by at least {@code SETUP_SCORE_DROP_WARN}; {@code null} when nothing was compared. */
-    @Column(name = "setup_score_drop_warned", updatable = false)
+    @Column(name = "setup_score_drop_warned")
     private Boolean setupScoreDropWarned;
 
     /** The indicators at the fill as JSON, see {@link FillIndicators}; {@code null} when none were read. */
     @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "fill_indicators", updatable = false)
+    @Column(name = "fill_indicators")
     private String fillIndicators;
 
     /** The most adverse price while open; widened by a monotonic update in the repository only (BR-70). */
@@ -292,46 +291,22 @@ public class TradingJournal extends BaseEntity {
     }
 
     /**
-     * The OPEN record of a plan that has just filled (BR-34): the fill's price, time and liquidity role, the plan
-     * snapshot's quantity and the entry fee, as the plan's module computed them.
+     * The learning data of the plan's entry fill (BR-70), added to the record its paper fill opened (RF-33).
+     *
+     * <p>Rule: BR-69, BR-70; D-111 (M2, M3, M4), D-112.
      */
-    public static TradingJournal openSimulated(SimulatedTradeOpening opening) {
-        TradingJournal record = new TradingJournal();
-        record.userId = opening.userId();
-        record.pairId = opening.pairId();
-        record.planId = opening.planId();
-        record.source = TradeSource.SIMULATED;
-        record.market = opening.market();
-        record.direction = opening.direction();
-        record.leverage = opening.leverage();
-        record.entryPrice = opening.entryPrice();
-        record.stopLoss = opening.stopLoss();
-        record.takeProfit = opening.takeProfit();
-        record.originalStopLoss = opening.stopLoss();
-        record.originalTakeProfit = opening.takeProfit();
-        record.quantity = opening.quantity();
-        // To the microsecond, like the column, so the record reads back as it was written.
-        record.entryTime = opening.entryTime().truncatedTo(ChronoUnit.MICROS);
-        record.entryLiquidity = opening.entryLiquidity();
-        record.entryFee = opening.entryFee();
-        record.liquidationPrice = opening.liquidationPrice();
-        record.status = PositionStatus.OPEN;
-        SimulatedFillLearning learning = opening.learning();
-        record.plannedEntryPrice = learning.plannedEntryPrice();
-        record.entryDeviationR = learning.entryDeviationR();
-        record.riskAmount = learning.riskAmount();
-        record.analysisTimeframe = learning.analysisTimeframe();
-        record.setupScorePreset = learning.setupScorePreset();
-        record.setupScoreAtPlan = learning.setupScoreAtPlan();
-        record.setupScoreAtFill = learning.setupScoreAtFill();
-        record.setupScoreDropWarned = learning.setupScoreDropWarned();
-        record.fillIndicators = learning.indicators() == null
+    public void recordFillLearning(SimulatedFillLearning learning) {
+        plannedEntryPrice = learning.plannedEntryPrice();
+        entryDeviationR = learning.entryDeviationR();
+        riskAmount = learning.riskAmount();
+        analysisTimeframe = learning.analysisTimeframe();
+        setupScorePreset = learning.setupScorePreset();
+        setupScoreAtPlan = learning.setupScoreAtPlan();
+        setupScoreAtFill = learning.setupScoreAtFill();
+        setupScoreDropWarned = learning.setupScoreDropWarned();
+        fillIndicators = learning.indicators() == null
                 ? null
                 : FillIndicators.of(learning.indicators()).toJson();
-        // Both extremes start at the fill price (D-112 R5).
-        record.maxAdversePrice = opening.entryPrice();
-        record.maxFavorablePrice = opening.entryPrice();
-        return record;
     }
 
     /** The indicators stored at the fill, or {@code null} when none were read. */

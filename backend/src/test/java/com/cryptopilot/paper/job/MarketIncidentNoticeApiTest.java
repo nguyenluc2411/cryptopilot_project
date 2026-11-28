@@ -138,6 +138,7 @@ class MarketIncidentNoticeApiTest {
         for (UUID account : accounts) {
             sql.sql("delete from notification where user_id = ?").param(account).update();
             for (String table : List.of(
+                    "trading_journal",
                     "order_fill",
                     "futures_position",
                     "futures_symbol_config",

@@ -4,11 +4,14 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.trading.PlanContext;
 import com.cryptopilot.trading.PlanOrderTerms;
+import com.cryptopilot.trading.SimulatedFillLearning;
+import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.TradingPlanApi;
 import com.cryptopilot.trading.dto.response.PlanSnapshotResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.PlanFilled;
+import com.cryptopilot.trading.event.SetupScoreDropped;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
@@ -45,6 +48,8 @@ public class TradingPlanApiImpl implements TradingPlanApi {
     private final TradingPlanRepository stored;
     private final MarketApi market;
     private final ApplicationEventPublisher events;
+    private final TradeJournal journal;
+    private final FillLearningCapture learning;
     private final Clock clock;
 
     @Override
@@ -74,20 +79,50 @@ public class TradingPlanApiImpl implements TradingPlanApi {
         TradingPlan plan = found.get();
         plan.markExecuted(at, price, liquidity);
         log.info("RF-33 plan {} executed by paper order {} at {} ({})", planId, orderId, price, liquidity);
+        String symbol = market.tradablePair(plan.getPairId(), plan.getMarket())
+                .map(TradablePair::symbol)
+                .orElse(null);
+        // BR-70: the fill's learning data goes into the record the paper fill opened just before.
+        SimulatedFillLearning fillLearning = learningOf(plan);
+        UUID positionId = journal.recordFillLearning(planId, fillLearning).orElse(orderId);
         events.publishEvent(new PlanFilled(
                 planId,
                 orderId,
                 plan.getUserId(),
                 plan.getMarket(),
                 plan.getDirection(),
-                market.tradablePair(plan.getPairId(), plan.getMarket())
-                        .map(TradablePair::symbol)
-                        .orElse(null),
+                symbol,
                 price,
                 plan.getSnapshot().positionQuantity(),
                 liquidity,
                 at));
+        if (Boolean.TRUE.equals(fillLearning.setupScoreDropWarned())) {
+            log.info(
+                    "BR-70 plan {} filled with setup score {}, down from {}",
+                    planId,
+                    fillLearning.setupScoreAtFill(),
+                    fillLearning.setupScoreAtPlan());
+            events.publishEvent(new SetupScoreDropped(
+                    planId,
+                    positionId,
+                    plan.getUserId(),
+                    plan.getDirection(),
+                    symbol,
+                    fillLearning.setupScoreAtPlan(),
+                    fillLearning.setupScoreAtFill(),
+                    plan.getExecutedAt()));
+        }
         return true;
+    }
+
+    /** The learning data of the fill; whatever goes wrong taking it, the fill goes on without it (BR-70). */
+    private SimulatedFillLearning learningOf(TradingPlan plan) {
+        try {
+            return learning.of(plan);
+        } catch (RuntimeException e) {
+            log.warn("BR-70 plan {} filled without learning data: {}", plan.getId(), e.toString());
+            return SimulatedFillLearning.none();
+        }
     }
 
     static PlanOrderTerms termsOf(TradingPlan plan) {

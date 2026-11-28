@@ -395,24 +395,6 @@ class TradingPlanRepositoryTest {
                 .isEqualTo("INVALIDATED");
     }
 
-    @Test
-    void BR36_executeIfActive_recordsTheLiquidityRole() {
-        UUID id = inTransaction(() -> {
-                    TradingPlan plan = TradingPlan.draft(
-                            SEEDED_ACCOUNT, pair, PlanFixture.futuresLong().build(), LIMIT, List.of());
-                    plan.activate(PlanFixture.futuresLong().build(), List.of(), NOW);
-                    return plans.save(plan);
-                })
-                .getId();
-
-        int filled = inTransaction(() -> plans.executeIfActive(
-                id, NOW.plusSeconds(60), new BigDecimal("100"), LiquidityRole.MAKER, NOW.plusSeconds(61)));
-
-        assertThat(filled).isEqualTo(1);
-        assertThat(inTransaction(() -> plans.findById(id).orElseThrow().getFillLiquidity()))
-                .isEqualTo(LiquidityRole.MAKER);
-    }
-
     /**
      * The books are rebuilt from every waiting plan: an ACTIVE STOP plan, also one activated before the engine knew
      * STOP entries and so never tracked, comes back with its levels; a DRAFT does not (BR-33, BR-68).

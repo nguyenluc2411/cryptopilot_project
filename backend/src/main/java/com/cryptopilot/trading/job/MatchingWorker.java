@@ -1,23 +1,15 @@
 package com.cryptopilot.trading.job;
 
 import com.cryptopilot.market.model.enums.MarketType;
-import com.cryptopilot.trading.PositionExcursion;
-import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.config.MatchingProperties;
-import com.cryptopilot.trading.event.PositionClosed;
-import com.cryptopilot.trading.event.PositionLevelsChanged;
-import com.cryptopilot.trading.event.PositionOpened;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.event.TradingPlanCancelled;
 import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.matching.MatchingEngine;
-import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanOutcome;
-import com.cryptopilot.trading.model.PositionExit;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
-import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.PriceSource;
 import com.cryptopilot.trading.service.MatchingService;
@@ -57,19 +49,18 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * {@link MatchingEngine}. A pair always lands in the same partition (by market and pair), so its books see the
  * updates in arrival order without locks, while different pairs are matched in parallel.
  *
- * <p>Commands: track an activated plan, untrack a cancelled or expired plan, open a position filled at activation,
- * close a position closed elsewhere, and a price range of last or mark prices. Track, untrack and open wait for room in the channel, because losing one would leave
- * the books wrong. A range never waits and is never lost: when the channel is full it waits as a pending range of its
- * pair (see {@link #submit}). An outcome the engine decided, a fill, an invalidation or an exit, that fails to be
- * stored is kept as it is and tried again on the pair's next range once its back-off has passed, until a deadline. A
- * fill that is stored opens its position in the engine at once, and the range that filled it is applied to the
- * position (an exit in the entry candle, Q-59).
+ * <p>Commands: track an activated plan, untrack a cancelled or expired plan, and a price range of last or mark
+ * prices. Track and untrack wait for room in the channel, because losing one would leave the books wrong. A range
+ * never waits and is never lost: when the channel is full it waits as a pending range of its pair (see
+ * {@link #submit}). An invalidation the engine decided that fails to be stored is kept as it is and tried again on
+ * the pair's next range once its back-off has passed, until a deadline. The entries and exits of plans are paper
+ * orders since RF-33 (D-117, one engine): only invalidations are decided here.
  *
- * <p>Each start builds new partitions from the waiting plans (ACTIVE LIMIT and STOP, with their invalidation levels)
- * and the OPEN positions of the journal (their stop loss, take profit and liquidation price), written straight into
- * each engine before its consumer starts, and never while a consumer of the previous run is still alive.
+ * <p>Each start builds new partitions from the waiting plans (ACTIVE LIMIT and STOP, with their invalidation levels),
+ * written straight into each engine before its consumer starts, and never while a consumer of the previous run is
+ * still alive.
  *
- * <p>Rule: NSF-07, BR-33, BR-35, BR-68; TECHNICAL_DESIGN 7.7 and 10; D-09, D-77, D-78; D-111 (M1, M3); D-119.
+ * <p>Rule: NSF-07, BR-68; TECHNICAL_DESIGN 7.7 and 10; D-09, D-77; D-111 (M3); D-117; RF-33.
  *
  * <p>Reference: Goetz, B. et al. (2006). <i>Java Concurrency in Practice</i>. Addison-Wesley, ch. 5.3
  * (producer-consumer with bounded blocking queues) and ch. 7 (cancellation and shutdown).
@@ -142,28 +133,16 @@ public class MatchingWorker {
         // Set before the rebuild, so an activation or cancel committed during it is queued and applied after it.
         running = true;
         List<TrackedEntry> entries = matching.activeEntries();
-        List<TrackedPosition> open = matching.openPositions();
-        Map<UUID, List<PositionLevelChange>> levelChanges = matching.openLevelChanges();
         // Straight into the engines, never through the bounded channels: no consumer runs yet to empty them.
         entries.forEach(
                 entry -> partitionOf(entry.market(), entry.pairId()).engine.track(entry));
-        open.forEach(position -> {
-            MatchingEngine engine = partitionOf(position.market(), position.pairId()).engine;
-            engine.open(position);
-            // The levels a replayed candle older than a change is decided by (D-124).
-            levelChanges.getOrDefault(position.positionId(), List.of()).forEach(engine::recordLevelChange);
-        });
         for (int i = 0; i < fresh.size(); i++) {
             Thread consumer = threads.newThread(fresh.get(i)::drain);
             consumer.setName("trading-matching-" + i);
             consumer.start();
             consumers.add(consumer);
         }
-        log.info(
-                "NSF-07 matching started with {} entries and {} open positions in {} partitions",
-                entries.size(),
-                open.size(),
-                fresh.size());
+        log.info("NSF-07 matching started with {} entries in {} partitions", entries.size(), fresh.size());
     }
 
     /** Stops the consumers and waits up to {@code stopTimeout} for them to end; the books are rebuilt at the next start. */
@@ -225,46 +204,6 @@ public class MatchingWorker {
         }
     }
 
-    /**
-     * A plan filled at its activation opens its position in the exit books of its pair's partition (BR-35); a fill the
-     * engine decides opens it there directly.
-     */
-    @TransactionalEventListener
-    public void onPositionOpened(PositionOpened event) {
-        if (running) {
-            TrackedPosition position = new TrackedPosition(
-                    event.positionId(),
-                    event.planId(),
-                    event.userId(),
-                    event.market(),
-                    event.pairId(),
-                    event.direction(),
-                    event.entryPrice(),
-                    event.entryTime(),
-                    event.stopLoss(),
-                    event.takeProfit(),
-                    event.liquidationPrice(),
-                    event.version());
-            PairKey key = new PairKey(event.market(), event.pairId());
-            Partition partition = partitionOf(event.market(), event.pairId());
-            partition.put(new Command.Open(key, partition.seal(key), position));
-        }
-    }
-
-    /**
-     * A change of an open position's levels replaces them in the exit books of its pair's partition, in the order of
-     * the pair's ranges, and keeps the earlier levels for the candles that opened before it (D-124).
-     */
-    @TransactionalEventListener
-    public void onLevelsChanged(PositionLevelsChanged event) {
-        if (running) {
-            TrackedPosition position = event.position();
-            PairKey key = new PairKey(position.market(), position.pairId());
-            Partition partition = partitionOf(position.market(), position.pairId());
-            partition.put(new Command.ChangeLevels(key, partition.seal(key), position, event.change()));
-        }
-    }
-
     /** A cancelled plan leaves the books of its pair's partition. */
     @TransactionalEventListener
     public void onCancelled(TradingPlanCancelled event) {
@@ -275,20 +214,6 @@ public class MatchingWorker {
     @TransactionalEventListener
     public void onExpired(TradingPlanExpired event) {
         untrack(event.market(), event.pairId(), event.planId());
-    }
-
-    /**
-     * A closed position leaves the exit and mark books of its pair's partition: one the Trader closed (UC-21) would
-     * otherwise wait there until a range reached its levels. An exit the engine decided has left them already, and a
-     * second removal does nothing.
-     */
-    @TransactionalEventListener
-    public void onPositionClosed(PositionClosed event) {
-        if (running) {
-            PairKey key = new PairKey(event.market(), event.pairId());
-            Partition partition = partitionOf(event.market(), event.pairId());
-            partition.put(new Command.Close(key, partition.seal(key), event.positionId()));
-        }
     }
 
     private void untrack(MarketType market, UUID pairId, UUID planId) {
@@ -523,23 +448,8 @@ public class MatchingWorker {
                     dueRanges(untrack).forEach(this::onRange);
                     engine.untrack(untrack.planId());
                     retries.values()
-                            .forEach(waiting -> waiting.removeIf(p -> !(p.outcome() instanceof PositionExit)
-                                    && p.outcome().planId().equals(untrack.planId())));
-                }
-                case Command.Open open -> {
-                    dueRanges(open).forEach(this::onRange);
-                    engine.open(open.position());
-                }
-                case Command.Close close -> {
-                    dueRanges(close).forEach(this::onRange);
-                    engine.close(close.positionId());
-                    retries.values()
-                            .forEach(waiting -> waiting.removeIf(p -> p.outcome() instanceof PositionExit exit
-                                    && exit.position().positionId().equals(close.positionId())));
-                }
-                case Command.ChangeLevels change -> {
-                    dueRanges(change).forEach(this::onRange);
-                    engine.changeLevels(change.position(), change.change());
+                            .forEach(waiting ->
+                                    waiting.removeIf(p -> p.outcome().planId().equals(untrack.planId())));
                 }
                 case Command.Range range -> {
                     onRange(range.range());
@@ -618,35 +528,13 @@ public class MatchingWorker {
         private void onRange(PriceRange range) {
             PairKey key = new PairKey(range.market(), range.pairId());
             retryDue(key);
-            engine.onRange(range).forEach(outcome -> store(key, outcome, null, range));
-            storeExcursions(key);
+            engine.onRange(range).forEach(outcome -> store(key, outcome, null));
             // The watermark follows the last price candles; the mark price candles of a replay come with them.
             if (range.closed()
                     && range.source() == PriceSource.LAST
                     && !retries.containsKey(key)
                     && !watermarkHeld.contains(key)) {
                 advanceWatermark(range);
-            }
-        }
-
-        /**
-         * Stores the excursions the range widened. A failure is logged and not retried: the engine keeps the cumulative
-         * extremes, so the next widening or the close stores them (BR-70).
-         */
-        private void storeExcursions(PairKey key) {
-            List<PositionExcursion> widened = engine.drainWidenedExcursions();
-            if (widened.isEmpty()) {
-                return;
-            }
-            try {
-                matching.widenExcursions(widened);
-            } catch (RuntimeException failure) {
-                log.warn(
-                        "BR-70 {} {} excursions of {} positions not stored: {}",
-                        key.market(),
-                        key.pairId(),
-                        widened.size(),
-                        failure.toString());
             }
         }
 
@@ -668,7 +556,7 @@ public class MatchingWorker {
             if (waiting.isEmpty()) {
                 retries.remove(key);
             }
-            due.forEach(retry -> store(key, retry.outcome(), retry, null));
+            due.forEach(retry -> store(key, retry.outcome(), retry));
         }
 
         /**
@@ -690,33 +578,17 @@ public class MatchingWorker {
         }
 
         /**
-         * Stores an outcome: a fill or an invalidation, each a compare-and-set on the plan's status, or an exit, a
-         * compare-and-set on the journal row's. A stored fill opens its position here, and the range that filled it,
-         * when known, is applied to the position at once. A failure of any kind keeps the outcome in the retry list
-         * with an exponential back-off; once the deadline since its first failure has passed it is logged once as an
-         * error and dropped, and the plan stays ACTIVE, or the position OPEN, in the database for a person to handle.
+         * Stores an invalidation, a compare-and-set on the plan's status. A failure of any kind keeps it in the retry
+         * list with an exponential back-off; once the deadline since its first failure has passed it is logged once as
+         * an error and dropped, and the plan stays ACTIVE in the database for a person to handle.
          *
          * @param previous the retry this try comes from, or {@code null} for a first try
-         * @param range the range that decided the outcome, or {@code null} for a retry
          */
-        private void store(PairKey key, PlanOutcome outcome, PendingOutcome previous, PriceRange range) {
+        private void store(PairKey key, PlanOutcome outcome, PendingOutcome previous) {
             try {
                 boolean stored =
                         switch (outcome) {
-                            case Fill fill -> {
-                                Optional<TrackedPosition> opened = matching.fill(fill);
-                                opened.ifPresent(position -> {
-                                    if (range == null) {
-                                        engine.open(position);
-                                    } else {
-                                        engine.openAfterFill(position, range)
-                                                .forEach(exit -> store(key, exit, null, range));
-                                    }
-                                });
-                                yield opened.isPresent();
-                            }
                             case Invalidation invalidation -> matching.invalidate(invalidation);
-                            case PositionExit exit -> matching.close(exit);
                         };
                 if (!stored) {
                     log.debug("NSF-07 {} of plan {} changed nothing: decided first", kind(outcome), outcome.planId());
@@ -739,7 +611,7 @@ public class MatchingWorker {
                             kind(outcome),
                             failures,
                             firstFailedAt,
-                            outcome instanceof PositionExit ? "position stays OPEN" : "plan stays ACTIVE",
+                            "plan stays ACTIVE",
                             properties.replay().maxWindow(),
                             failure);
                     return;
@@ -759,9 +631,7 @@ public class MatchingWorker {
 
         private static String kind(PlanOutcome outcome) {
             return switch (outcome) {
-                case Fill fill -> "fill";
                 case Invalidation invalidation -> "invalidation";
-                case PositionExit exit -> "exit";
             };
         }
     }
@@ -816,19 +686,9 @@ public class MatchingWorker {
         record Track(PairKey key, long number, TrackedEntry entry) implements PairCommand {}
 
         record Untrack(PairKey key, long number, UUID planId) implements PairCommand {}
-
-        record Open(PairKey key, long number, TrackedPosition position) implements PairCommand {}
-
-        record Close(PairKey key, long number, UUID positionId) implements PairCommand {}
-
-        record ChangeLevels(PairKey key, long number, TrackedPosition position, PositionLevelChange change)
-                implements PairCommand {}
     }
 
-    /**
-     * An activation, a cancel or expiry, a position opened at activation or closed, or a change of its levels, of
-     * one pair, with its number.
-     */
+    /** An activation, a cancel or an expiry of one pair, with its number. */
     private sealed interface PairCommand extends Command {
 
         PairKey key();

@@ -1,6 +1,7 @@
 package com.cryptopilot.paper.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -9,10 +10,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.client.StreamMessage.MarkPriceMessage;
 import com.cryptopilot.market.client.StreamMessage.TickerMessage;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.paper.job.PaperMatchingWorker;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -79,6 +82,9 @@ class PlanPaperOrdersApiTest {
 
     @Autowired
     private StringRedisTemplate redis;
+
+    @Autowired
+    private PaperMatchingWorker paperWorker;
 
     private final List<UUID> traders = new ArrayList<>();
     private final List<String> preStoredCoins = new ArrayList<>();
@@ -302,6 +308,7 @@ class PlanPaperOrdersApiTest {
                 .andExpect(jsonPath("$.status").value("EXECUTED")));
         assertThat((String) JsonPath.read(closed, "$.position.status")).isEqualTo("CLOSED");
         assertThat((String) JsonPath.read(closed, "$.position.closeReason")).isEqualTo("MANUAL");
+        await().atMost(Duration.ofSeconds(10)).until(() -> closedNotices(trader) == 1);
 
         assertThat(ordersOf(plan))
                 .extracting(row -> row.get("order_status"))
@@ -370,6 +377,51 @@ class PlanPaperOrdersApiTest {
                         .query(String.class)
                         .single())
                 .isEqualTo("CLOSED");
+    }
+
+    /**
+     * BR-35 on the demo account: the take profit of the plan's OCO fills on a trade through it. The stop expires and
+     * gives the coin back, the journal record closes as a take profit, and MSG23 is sent once.
+     */
+    @Test
+    void BR35_theTakeProfitOfASpotPlan_fillsOnPaper_closesTheRecord_andSendsMsg23() throws Exception {
+        UUID trader = traderWithAccount();
+        spotLast("100");
+        UUID plan = executedSpotMarket(trader);
+
+        paperWorker.onTrade(new MarketTrade(
+                MarketType.SPOT,
+                pair,
+                TICKS.incrementAndGet(),
+                new BigDecimal("110.01"),
+                BigDecimal.ONE,
+                Instant.now().plusSeconds(1),
+                false,
+                Instant.now().plusSeconds(1)));
+
+        await().atMost(Duration.ofSeconds(10)).until(() -> "CLOSED"
+                .equals(sql.sql("select trade_status from trading_journal where plan_id = ?")
+                        .param(plan)
+                        .query(String.class)
+                        .single()));
+        assertThat(sql.sql("select close_reason from trading_journal where plan_id = ?")
+                        .param(plan)
+                        .query(String.class)
+                        .single())
+                .isEqualTo("TAKE_PROFIT");
+        assertThat(locked(trader, base())).as("the stop's lock given back").isZero();
+        assertThat(spot(trader, base())).as("all of the coin sold").isZero();
+        assertThat(ordersOf(plan))
+                .extracting(row -> row.get("order_status"))
+                .doesNotContain("NEW", "PENDING_NEW", "PARTIALLY_FILLED");
+        await().atMost(Duration.ofSeconds(10)).until(() -> closedNotices(trader) == 1);
+    }
+
+    private long closedNotices(UUID trader) {
+        return sql.sql("select count(*) from notification where user_id = ? and source_key like 'POSITION_CLOSED:%'")
+                .param(trader)
+                .query(Long.class)
+                .single();
     }
 
     private UUID executedSpotMarket(UUID trader) throws Exception {

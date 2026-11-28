@@ -5,13 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.matching.PriceLevelBook.Side;
-import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntries;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
-import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -56,22 +54,6 @@ class EntryFillRuleTest {
                 .isFalse();
     }
 
-    @Test
-    void BR33_D78_D111E7_aRestingLimit_fillsAsMakerAtItsOwnPrice_alsoThroughAGap_atTheOpenTimeOfTheCandle() {
-        PriceRange gapped = new PriceRange(
-                MarketType.SPOT,
-                PAIR,
-                new BigDecimal("88"),
-                new BigDecimal("80"),
-                new BigDecimal("90"),
-                MINUTE,
-                MINUTE.plusSeconds(42),
-                false);
-        TrackedEntry entry = entryActivatedAt(MINUTE.minusSeconds(60));
-
-        assertThat(EntryFillRule.byRange(entry, gapped)).isEqualTo(new Fill(entry, LiquidityRole.MAKER, ENTRY, MINUTE));
-    }
-
     @ParameterizedTest(name = "{0} {1}")
     @CsvSource({"LIMIT, LONG, BELOW", "LIMIT, SHORT, ABOVE", "STOP, LONG, ABOVE", "STOP, SHORT, BELOW"})
     void BR33_anEntryWaits_onItsBookSide(EntryType entryType, Direction direction, Side side) {
@@ -82,44 +64,6 @@ class EntryFillRuleTest {
     void BR33_aMarketEntry_hasNoBookSide() {
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> EntryFillRule.entrySide(EntryType.MARKET, Direction.LONG));
-    }
-
-    /** A STOP LONG triggers when the high is at or above its stop, a STOP SHORT when the low is at or below it. */
-    @ParameterizedTest(name = "{0} stop 100, range {1}..{2}: {3}")
-    @CsvSource({
-        "LONG, 95, 99.99, false",
-        "LONG, 95, 100, true",
-        "LONG, 95, 101, true",
-        "SHORT, 100.01, 105, false",
-        "SHORT, 100, 105, true",
-        "SHORT, 99, 105, true"
-    })
-    void BR33_aStopEntry_triggersAtOrThroughItsStopPrice(Direction direction, String low, String high, boolean hit) {
-        TrackedEntry stop = stopEntry(direction);
-
-        assertThat(EntryFillRule.entryReached(stop, range(null, low, high))).isEqualTo(hit);
-    }
-
-    /** Opened short of the stop, or with an unknown open: the stop price; opened at or past it: the open. */
-    @ParameterizedTest(name = "{0} stop 100, open {1}: fills at {4}")
-    @CsvSource({
-        "LONG, 99.5, 99, 101, 100",
-        "LONG, 100, 100, 101, 100",
-        "LONG, 102, 101.5, 103, 102",
-        "LONG, , 99, 101, 100",
-        "SHORT, 100.5, 99, 101, 100",
-        "SHORT, 97, 96, 98, 97",
-        "SHORT, , 99, 101, 100"
-    })
-    void BR33_D112R6_aTriggeredStop_isTaker_atItsStopPrice_orAtTheOpenOfAGap(
-            Direction direction, String open, String low, String high, String price) {
-        TrackedEntry stop = stopEntry(direction);
-
-        Fill fill = EntryFillRule.byRange(stop, range(open, low, high));
-
-        assertThat(fill.liquidity()).isEqualTo(LiquidityRole.TAKER);
-        assertThat(fill.price()).isEqualByComparingTo(price);
-        assertThat(fill.executedAt()).isEqualTo(MINUTE);
     }
 
     private static PriceRange range(String open, String low, String high) {

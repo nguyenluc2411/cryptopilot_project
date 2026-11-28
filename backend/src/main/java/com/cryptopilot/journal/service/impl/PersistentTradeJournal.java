@@ -5,22 +5,17 @@ import com.cryptopilot.journal.model.PlanPosition;
 import com.cryptopilot.journal.repository.LevelChangeLog;
 import com.cryptopilot.journal.repository.TradingJournalRepository;
 import com.cryptopilot.trading.OpenTrade;
-import com.cryptopilot.trading.PositionExcursion;
-import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.RecordedPosition;
+import com.cryptopilot.trading.SimulatedFillLearning;
 import com.cryptopilot.trading.SimulatedLevelChange;
-import com.cryptopilot.trading.SimulatedTradeClosing;
-import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.model.enums.PositionStatus;
 import java.time.Clock;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.AccessLevel;
@@ -53,71 +48,6 @@ public class PersistentTradeJournal implements TradeJournal {
     private final TradingJournalRepository records;
     private final LevelChangeLog levelChanges;
     private final Clock clock;
-
-    /** Joins the fill's transaction and never starts one: a record without its fill must not commit. */
-    @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public OpenTrade openSimulatedTrade(SimulatedTradeOpening opening) {
-        TradingJournal record = records.saveAndFlush(TradingJournal.openSimulated(opening));
-        log.info("BR-34 journal {} opened for plan {} at {}", record.getId(), opening.planId(), opening.entryPrice());
-        return record.toOpenTrade();
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public List<OpenTrade> openSimulatedTrades() {
-        return records.findOpenSimulated().stream()
-                .map(TradingJournal::toOpenTrade)
-                .toList();
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public Optional<OpenTrade> openTrade(UUID positionId) {
-        return records.findOpenSimulated(positionId).map(TradingJournal::toOpenTrade);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public Optional<OpenTrade> openTradeOfPlan(UUID planId) {
-        return records.findOpenSimulatedOfPlan(planId).map(TradingJournal::toOpenTrade);
-    }
-
-    /** Joins the exit's transaction and never starts one: the close and its event commit together. */
-    @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public boolean closeSimulatedTrade(SimulatedTradeClosing closing) {
-        boolean closed = records.closeIfOpen(
-                        closing.positionId(),
-                        closing.version(),
-                        closing.exitPrice(),
-                        closing.exitTime(),
-                        closing.reason().name(),
-                        closing.realizedPnl(),
-                        closing.feeAmount(),
-                        closing.fundingFeeAmount(),
-                        closing.fundingIncomplete(),
-                        MissingFundingTimes.literal(closing.missingFundingTimes()),
-                        closing.excursion() == null ? null : closing.excursion().adverse(),
-                        closing.excursion() == null ? null : closing.excursion().favorable(),
-                        clock.instant())
-                == 1;
-        if (closed) {
-            log.info(
-                    "BR-35 journal {} closed by {} at {}{}",
-                    closing.positionId(),
-                    closing.reason(),
-                    closing.exitPrice(),
-                    closing.fundingIncomplete() ? ", funding incomplete" : "");
-        }
-        return closed;
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public Set<UUID> openPositionPlans(UUID userId) {
-        return new HashSet<>(records.findOpenPlanIds(userId));
-    }
 
     @Override
     @Transactional(readOnly = true)
@@ -176,17 +106,13 @@ public class PersistentTradeJournal implements TradeJournal {
         return records.findByPlanId(planId).map(record -> record.toLevels(levelChanges.of(record.getId())));
     }
 
+    /** Joins the fill's transaction and never starts one: the fill and its learning data commit together. */
     @Override
-    @Transactional(readOnly = true)
-    public Map<UUID, List<PositionLevelChange>> openLevelChanges() {
-        return levelChanges.ofOpenSimulated();
-    }
-
-    @Override
-    @Transactional
-    public void widenExcursions(Collection<PositionExcursion> excursions) {
-        for (PositionExcursion excursion : excursions) {
-            records.widenExcursionIfOpen(excursion.positionId(), excursion.adverse(), excursion.favorable());
-        }
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Optional<UUID> recordFillLearning(UUID planId, SimulatedFillLearning learning) {
+        return records.findByPlanId(planId).map(record -> {
+            record.recordFillLearning(learning);
+            return record.getId();
+        });
     }
 }

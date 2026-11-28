@@ -8,7 +8,6 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
-import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -112,18 +111,6 @@ class MatchingRecordsTest {
         assertThat(next.mergedWith(known).open()).isEqualByComparingTo("99");
         assertThat(first.mergedWith(next).open()).isNull();
         assertThat(new PriceRange(MarketType.SPOT, ID, P, P, AT).open()).isNull();
-    }
-
-    @Test
-    void BR33_aFill_needsEveryField() {
-        TrackedEntry entry = entry(ID, ID, EntryType.LIMIT, P, P, AT);
-        assertThatNullPointerException().isThrownBy(() -> new Fill(null, LiquidityRole.MAKER, P, AT));
-        assertThatNullPointerException().isThrownBy(() -> new Fill(entry, null, P, AT));
-        assertThatNullPointerException().isThrownBy(() -> new Fill(entry, LiquidityRole.MAKER, null, AT));
-        assertThatNullPointerException().isThrownBy(() -> new Fill(entry, LiquidityRole.MAKER, P, null));
-        Fill fill = new Fill(entry, LiquidityRole.TAKER, P, AT);
-        assertThat(fill.at()).isEqualTo(AT);
-        assertThat(fill.planId()).isEqualTo(ID);
     }
 
     @Test

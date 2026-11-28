@@ -96,6 +96,7 @@ class FuturesConfigApiTest {
     void removeRows() {
         for (UUID trader : traders) {
             for (String table : List.of(
+                    "trading_journal",
                     "futures_margin_adjustment",
                     "futures_position",
                     "futures_symbol_config",

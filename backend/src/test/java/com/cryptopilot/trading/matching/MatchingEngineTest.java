@@ -6,16 +6,13 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.cryptopilot.market.model.enums.MarketType;
-import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
-import com.cryptopilot.trading.model.PlanOutcome;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntries;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
-import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -65,132 +62,6 @@ class MatchingEngineTest {
     }
 
     @Test
-    void BR33_aLongEntry_fillsWhenTheLowReachesIt_inclusive_andOnlyOnce() {
-        TrackedEntry entry = entry(MarketType.SPOT, PAIR, Direction.LONG, "100");
-        engine.track(entry);
-
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "100.01", "105")))
-                .isEmpty();
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "100", "105"))).containsExactly(fill(entry));
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "90", "105"))).isEmpty();
-        assertThat(engine.size()).isZero();
-    }
-
-    @Test
-    void BR33_aShortEntry_fillsWhenTheHighReachesIt_inclusive() {
-        TrackedEntry entry = entry(MarketType.FUTURES, PAIR, Direction.SHORT, "100");
-        engine.track(entry);
-
-        assertThat(engine.onRange(range(MarketType.FUTURES, PAIR, "95", "99.99")))
-                .isEmpty();
-        assertThat(engine.onRange(range(MarketType.FUTURES, PAIR, "95", "100"))).containsExactly(fill(entry));
-    }
-
-    @Test
-    void BR33_aCandleThatGapsThroughTheEntry_fillsAtTheEntryPrice() {
-        TrackedEntry longEntry = entry(MarketType.SPOT, PAIR, Direction.LONG, "100");
-        TrackedEntry shortEntry = entry(MarketType.SPOT, OTHER_PAIR, Direction.SHORT, "100");
-        engine.track(longEntry);
-        engine.track(shortEntry);
-
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "90", "95")))
-                .singleElement()
-                .satisfies(fill -> assertThat(((Fill) fill).price()).isEqualByComparingTo("100"));
-        assertThat(engine.onRange(range(MarketType.SPOT, OTHER_PAIR, "105", "110")))
-                .singleElement()
-                .satisfies(fill -> assertThat(((Fill) fill).price()).isEqualByComparingTo("100"));
-    }
-
-    @Test
-    void D78_aFill_isRecordedAtTheOpenTimeOfItsCandle_notAtTheUpdateTime() {
-        TrackedEntry entry = entry(MarketType.SPOT, PAIR, Direction.LONG, "100");
-        engine.track(entry);
-
-        PriceRange update = new PriceRange(
-                MarketType.SPOT, PAIR, new BigDecimal("99"), new BigDecimal("101"), MINUTE, MINUTE.plusSeconds(37));
-
-        assertThat(engine.onRange(update))
-                .containsExactly(new Fill(entry, LiquidityRole.MAKER, new BigDecimal("100"), MINUTE));
-    }
-
-    @Test
-    void D77_aCandleThatOpenedBeforeTheActivation_doesNotFill_andTheEntryWaitsForTheNextCandle() {
-        Instant activated = MINUTE.plusSeconds(30);
-        TrackedEntry entry = TrackedEntries.limit(
-                UUID.randomUUID(), MarketType.SPOT, PAIR, Direction.LONG, new BigDecimal("100"), activated);
-        engine.track(entry);
-
-        PriceRange sameMinute = new PriceRange(
-                MarketType.SPOT, PAIR, new BigDecimal("99"), new BigDecimal("101"), MINUTE, MINUTE.plusSeconds(45));
-        PriceRange nextMinute = new PriceRange(
-                MarketType.SPOT, PAIR, new BigDecimal("99"), new BigDecimal("101"), MINUTE.plusSeconds(60));
-
-        assertThat(engine.onRange(sameMinute)).isEmpty();
-        assertThat(engine.size()).isEqualTo(1);
-        assertThat(engine.onRange(nextMinute))
-                .containsExactly(new Fill(entry, LiquidityRole.MAKER, new BigDecimal("100"), MINUTE.plusSeconds(60)));
-    }
-
-    @Test
-    void D77_aCandleThatOpenedAtTheActivationInstant_fills() {
-        TrackedEntry entry = TrackedEntries.limit(
-                UUID.randomUUID(), MarketType.SPOT, PAIR, Direction.SHORT, new BigDecimal("100"), MINUTE);
-        engine.track(entry);
-
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "99", "101"))).containsExactly(fill(entry));
-    }
-
-    @Test
-    void D77_anEntryHeldBackByItsActivation_doesNotHoldBackOlderEntriesOfTheSameLevel() {
-        TrackedEntry older = entry(MarketType.SPOT, PAIR, Direction.LONG, "100");
-        TrackedEntry newer = TrackedEntries.limit(
-                UUID.randomUUID(), MarketType.SPOT, PAIR, Direction.LONG, new BigDecimal("100"), MINUTE.plusSeconds(1));
-        engine.track(older);
-        engine.track(newer);
-
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "99", "101"))).containsExactly(fill(older));
-        engine.untrack(newer.planId());
-        assertThat(engine.size()).isZero();
-    }
-
-    @Test
-    void NSF07_aWideRange_fillsBothSides() {
-        TrackedEntry longEntry = entry(MarketType.FUTURES, PAIR, Direction.LONG, "98");
-        TrackedEntry shortEntry = entry(MarketType.FUTURES, PAIR, Direction.SHORT, "102");
-        engine.track(longEntry);
-        engine.track(shortEntry);
-
-        assertThat(engine.onRange(range(MarketType.FUTURES, PAIR, "97", "103")))
-                .containsExactlyInAnyOrder(fill(longEntry), fill(shortEntry));
-    }
-
-    @Test
-    void NSF07_aRange_fillsOnlyItsOwnMarketAndPair() {
-        TrackedEntry spot = entry(MarketType.SPOT, PAIR, Direction.LONG, "100");
-        TrackedEntry futures = entry(MarketType.FUTURES, PAIR, Direction.LONG, "100");
-        TrackedEntry other = entry(MarketType.SPOT, OTHER_PAIR, Direction.LONG, "100");
-        engine.track(spot);
-        engine.track(futures);
-        engine.track(other);
-
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "90", "110"))).containsExactly(fill(spot));
-        assertThat(engine.size()).isEqualTo(2);
-    }
-
-    @Test
-    void NSF07_anUntrackedPlan_neverFills() {
-        TrackedEntry entry = entry(MarketType.SPOT, PAIR, Direction.LONG, "100");
-        TrackedEntry kept = entry(MarketType.SPOT, PAIR, Direction.SHORT, "100");
-        engine.track(entry);
-        engine.track(kept);
-
-        engine.untrack(entry.planId());
-        engine.untrack(UUID.randomUUID());
-
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "90", "100"))).containsExactly(fill(kept));
-    }
-
-    @Test
     void NSF07_untrackingTheLastEntryOfAPair_dropsItsBooks() {
         TrackedEntry entry = entry(MarketType.SPOT, PAIR, Direction.LONG, "100");
         engine.track(entry);
@@ -199,66 +70,6 @@ class MatchingEngineTest {
 
         assertThat(engine.size()).isZero();
         assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "90", "110"))).isEmpty();
-    }
-
-    @Test
-    void NSF07_trackingAPlanAgain_replacesItsEntry() {
-        UUID planId = UUID.randomUUID();
-        engine.track(
-                TrackedEntries.limit(planId, MarketType.SPOT, PAIR, Direction.LONG, new BigDecimal("100"), ACTIVATED));
-        TrackedEntry moved =
-                TrackedEntries.limit(planId, MarketType.SPOT, PAIR, Direction.LONG, new BigDecimal("90"), ACTIVATED);
-
-        engine.track(moved);
-
-        assertThat(engine.size()).isEqualTo(1);
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "95", "110"))).isEmpty();
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "90", "110"))).containsExactly(fill(moved));
-    }
-
-    @Test
-    void NSF07_aRangeThatFillsOneSide_keepsTheOther() {
-        TrackedEntry longEntry = entry(MarketType.SPOT, PAIR, Direction.LONG, "98");
-        TrackedEntry shortEntry = entry(MarketType.SPOT, PAIR, Direction.SHORT, "102");
-        engine.track(longEntry);
-        engine.track(shortEntry);
-
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "97", "100"))).containsExactly(fill(longEntry));
-        assertThat(engine.onRange(range(MarketType.SPOT, PAIR, "101", "102"))).containsExactly(fill(shortEntry));
-    }
-
-    @Test
-    void BR33_aStopLong_waitsAbove_andFillsAsTakerAtItsStopWhenTheHighReachesIt() {
-        TrackedEntry stop = plan(EntryType.STOP, Direction.LONG, "100", "95", "110", null);
-        engine.track(stop);
-
-        assertThat(engine.onRange(range("99", "98", "99.99"))).isEmpty();
-        assertThat(engine.onRange(range("99.5", "99", "100")))
-                .containsExactly(new Fill(stop, LiquidityRole.TAKER, new BigDecimal("100"), MINUTE));
-        assertThat(engine.size()).isZero();
-    }
-
-    @Test
-    void BR33_aStopShort_waitsBelow_andFillsAsTakerAtItsStopWhenTheLowReachesIt() {
-        TrackedEntry stop = plan(EntryType.STOP, Direction.SHORT, "100", "105", "90", null);
-        engine.track(stop);
-
-        assertThat(engine.onRange(range("101", "100.01", "102"))).isEmpty();
-        assertThat(engine.onRange(range("100.5", "100", "101")))
-                .containsExactly(new Fill(stop, LiquidityRole.TAKER, new BigDecimal("100"), MINUTE));
-    }
-
-    @Test
-    void BR33_aStopTheCandleOpenedPast_fillsAtTheOpen() {
-        TrackedEntry longStop = plan(EntryType.STOP, Direction.LONG, "100", "95", "110", null);
-        TrackedEntry shortStop = plan(EntryType.STOP, Direction.SHORT, "100", "105", "90", null, OTHER_PAIR);
-        engine.track(longStop);
-        engine.track(shortStop);
-
-        assertThat(engine.onRange(range("102", "101", "103")))
-                .containsExactly(new Fill(longStop, LiquidityRole.TAKER, new BigDecimal("102"), MINUTE));
-        assertThat(engine.onRange(range(OTHER_PAIR, "97", "96", "98")))
-                .containsExactly(new Fill(shortStop, LiquidityRole.TAKER, new BigDecimal("97"), MINUTE));
     }
 
     @ParameterizedTest(name = "LIMIT {0} entry {1}, TP {2}: range {3}..{4}")
@@ -316,28 +127,24 @@ class MatchingEngineTest {
     }
 
     /**
-     * One candle reaching the entry and an invalidation level: the open decides when it lies at or past one of them;
-     * opened between them, invalidation wins (D-111 E6).
+     * One candle reaching the entry and an invalidation level, whatever its open: the engine invalidates, and the
+     * plan's status decides. Its entry is a paper order (RF-33); one that filled first made the plan EXECUTED, and the
+     * invalidation's compare-and-set then changes nothing (BR-68, D-117).
      */
-    @ParameterizedTest(name = "{0} {1}, open {2}: {3}")
+    @ParameterizedTest(name = "{0} {1}, open {2}")
     @CsvSource({
-        "LIMIT, LONG, 111, INVALIDATED",
-        "LIMIT, LONG, 110, INVALIDATED",
-        "LIMIT, LONG, 99, FILLED",
-        "LIMIT, LONG, 100, FILLED",
-        "LIMIT, LONG, 105, INVALIDATED",
-        "LIMIT, SHORT, 89, INVALIDATED",
-        "LIMIT, SHORT, 101, FILLED",
-        "LIMIT, SHORT, 95, INVALIDATED",
-        "STOP, LONG, 89, INVALIDATED",
-        "STOP, LONG, 101, FILLED",
-        "STOP, LONG, 95, INVALIDATED",
-        "STOP, SHORT, 111, INVALIDATED",
-        "STOP, SHORT, 99, FILLED",
-        "STOP, SHORT, 105, INVALIDATED"
+        "LIMIT, LONG, 111",
+        "LIMIT, LONG, 99",
+        "LIMIT, LONG, 105",
+        "LIMIT, SHORT, 101",
+        "LIMIT, SHORT, 95",
+        "STOP, LONG, 101",
+        "STOP, LONG, 95",
+        "STOP, SHORT, 99",
+        "STOP, SHORT, 105"
     })
-    void BR68_E6_aCandleReachingTheEntryAndAnInvalidationLevel_isDecidedByItsOpen_elseInvalidationWins(
-            EntryType entryType, Direction direction, String open, String outcome) {
+    void BR68_RF33_aCandleReachingTheEntryAndAnInvalidationLevel_invalidates(
+            EntryType entryType, Direction direction, String open) {
         // Every plan has its entry at 100 and its invalidation level at 110 or 90, on the side opposite the entry.
         boolean entryBelow = (entryType == EntryType.LIMIT) == (direction == Direction.LONG);
         String level = entryBelow ? "110" : "90";
@@ -347,32 +154,8 @@ class MatchingEngineTest {
                 : plan(entryType, direction, "100", level, other, null);
         engine.track(plan);
 
-        List<PlanOutcome> outcomes = engine.onRange(range(open, "89", "111"));
-
-        assertThat(outcomes).singleElement().satisfies(decided -> {
-            if (outcome.equals("FILLED")) {
-                Fill fill = (Fill) decided;
-                // A LIMIT keeps its own price (E7); a STOP the candle opened past fills at the open.
-                assertThat(fill.price())
-                        .isEqualByComparingTo(
-                                entryType == EntryType.LIMIT ? new BigDecimal("100") : new BigDecimal(open));
-            } else {
-                assertThat(decided).isInstanceOf(Invalidation.class);
-            }
-        });
-        assertThat(logged()).isEmpty();
-    }
-
-    /** D-112 R4: the same candle with an unknown open counts as invalidation first, and the case is logged. */
-    @Test
-    void D112R4_aCandleReachingTheEntryAndAnInvalidationLevelWithAnUnknownOpen_invalidates_andIsLogged() {
-        TrackedEntry limit = plan(EntryType.LIMIT, Direction.LONG, "100", "95", "110", null);
-        engine.track(limit);
-
-        assertThat(engine.onRange(range(null, "99", "111")))
-                .containsExactly(new Invalidation(limit, InvalidationReason.TAKE_PROFIT_REACHED, MINUTE));
-        assertThat(logged()).singleElement().satisfies(event -> assertThat(event.getFormattedMessage())
-                .contains(limit.planId().toString(), PAIR.toString(), MINUTE.toString(), "unknown open"));
+        assertThat(engine.onRange(range(open, "89", "111"))).singleElement().isInstanceOf(Invalidation.class);
+        assertThat(engine.onRange(range(null, "89", "111"))).isEmpty();
     }
 
     /** D-77 (D-112 R3): a candle that opened before the activation does not invalidate either. */
@@ -517,10 +300,5 @@ class MatchingEngineTest {
 
     private static PriceRange range(MarketType market, UUID pair, String low, String high) {
         return new PriceRange(market, pair, new BigDecimal(low), new BigDecimal(high), MINUTE);
-    }
-
-    /** The fill of an entry reached by a range of {@link #MINUTE}: the entry price at the candle's open time. */
-    private static Fill fill(TrackedEntry entry) {
-        return new Fill(entry, LiquidityRole.MAKER, entry.entryPrice(), MINUTE);
     }
 }

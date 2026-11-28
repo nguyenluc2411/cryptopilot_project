@@ -29,16 +29,13 @@ import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.job.MatchingWorker;
 import com.cryptopilot.trading.job.MinuteKlineFeed;
-import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PlanOutcome;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
-import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
-import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import com.cryptopilot.user.model.enums.UserRole;
@@ -96,25 +93,19 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   <li>MISSING_CLOSE: the closed update of minute 3 never arrives; the feed replays the minute;
  *   <li>DROP_THEN_CRASH: the stream loses minutes 3 and 4, the exchange refuses the replay, and the engine crashes in
  *       minute 6; the restart replays the hole;
- *   <li>GIVE_UP_THEN_CRASH: the fill of one plan fails until it is given up, and the engine crashes later; the restart
- *       fills it at the candle that reached it.
+ *   <li>GIVE_UP_THEN_CRASH: the invalidation of one plan fails until it is given up, and the engine crashes later;
+ *       the restart invalidates it at the candle that reached it.
  * </ul>
  *
- * Besides the LIMIT entries, the recording triggers a STOP at its stop (minute 6) and a STOP through a gap at the open
- * (minute 8), invalidates a LIMIT by its take profit (minute 6), a STOP by its stop loss and a LIMIT by its
- * invalidation price (minute 8), most of them during the downtime of the crashes. Slippage is 10 bps, so the STOP fills
- * are stored at the slipped price. The STOP plans, activated before the start, are rebuilt into the books at each
- * start, as the ACTIVE STOP plans activated before the engine knew STOP entries are. Three plans are activated during
- * the run, one in the middle of a minute whose low already reached its entry (D-77), one a STOP that a crash's replay
- * receives while it runs. Every run must leave every plan with the same status, fill price, liquidity role and
- * {@code executed_at}, or the same invalidation reason and {@code invalidated_at}, act on no plan from a candle that
- * opened before its activation, apply each closed minute once (one watermark advance per minute) and store each outcome
- * once. The positions the fills open exit the same way: the STOP filled at minute 6 is stopped at minute 8, and a LIMIT
- * at 20x is liquidated by the mark price of minute 7, both during the downtime of the crashes, so the mark price candles
- * are replayed beside the last price ones; every run must leave every journal row with the same exit, and a crash the
- * same amounts as live. {@code SLIPPAGE_BPS} is changed through the admin endpoint, so the setting reader's cache is evicted as it
- * would be in use, and restored after each test. No network: the exchange is a stub of {@link MarketApi}. One partition, so the order of the engine's work is
- * the order of the recording.
+ * Since RF-33 the entries and exits of plans are paper orders (D-117, one engine): the engine decides invalidations
+ * only. The recording reaches the invalidation levels of LIMIT and STOP plans at several minutes, most of them during
+ * the downtime of the crashes; the STOP plans, activated before the start, are rebuilt into the books at each start.
+ * Three plans are activated during the run, one in the middle of a minute whose low already reached its level (D-77),
+ * one a STOP that a crash's replay receives while it runs. Every run must leave every plan with the same status, or
+ * the same invalidation reason and {@code invalidated_at}, act on no plan from a candle that opened before its
+ * activation, apply each closed minute once (one watermark advance per minute) and store each outcome once. No
+ * network: the exchange is a stub of {@link MarketApi}. One partition, so the order of the engine's work is the order
+ * of the recording.
  *
  * <p>Rule: NSF-07, BR-33, BR-35, BR-36, BR-68; A-04; D-77, D-78, D-79; D-111 (M1, M3, E5); D-112 (R6); Q-59;
  * ADR-011.
@@ -163,25 +154,23 @@ class MatchingReplayTest {
         "100", "100", "100", "100", "100", "100", "100", "96.2", "100", "100", "100", "100"
     };
 
-    /** The exits: the reason, the stored exit price and the exit time of each position that closes. */
-    private static final Map<String, Exited> EXITED = Map.of(
-            // Stopped at 97.5 by minute 8's low of 97, sold 10 bps lower: 97.4025 rounded down to the tick.
-            "stopLong104.5", new Exited(CloseReason.STOP_LOSS, new BigDecimal("97.4"), minute(8)),
-            // 2 at 101, 20x: (202 − 10.1) / (2 × 0.996) = 96.335…, up to the tick; liquidated there, no slippage.
-            "long101x20", new Exited(CloseReason.LIQUIDATION, new BigDecimal("96.34"), minute(7)));
+    /** The plan whose invalidation fails until it is given up, in GIVE_UP_THEN_CRASH. */
+    private static final String GIVEN_UP = "limitLong96";
 
+    /**
+     * What every run leaves each plan with. The entries are paper orders now, so a plan the recording only brings to
+     * its entry stays ACTIVE here; one whose invalidation level the recording reaches is INVALIDATED at that candle.
+     */
     private static final Map<String, Outcome> EXPECTED = Map.ofEntries(
-            Map.entry("long98", Outcome.filled("98", minute(1))),
-            Map.entry("long101x20", Outcome.filled("101", minute(0))),
-            Map.entry("short105", Outcome.filled("105", minute(6))),
-            Map.entry("long99MidMinute3", Outcome.filled("99", minute(5))),
-            Map.entry("short103AtMinute4", Outcome.filled("103", minute(4))),
-            Map.entry("long97", Outcome.filled("97", minute(8))),
+            Map.entry("long98", Outcome.active()),
+            Map.entry("long101x20", Outcome.active()),
+            Map.entry("short105", Outcome.active()),
+            Map.entry("long99MidMinute3", Outcome.active()),
+            Map.entry("short103AtMinute4", Outcome.active()),
+            Map.entry("long97", Outcome.active()),
             Map.entry("long90", Outcome.active()),
-            // Triggered at 104.5 by minute 6's high, bought 10 bps higher: 104.6045 rounded up to the tick.
-            Map.entry("stopLong104.5", Outcome.takerFilled("104.61", minute(6))),
-            // Minute 8 opened at 103, past the stop: sold at the open, 10 bps lower, 102.897 rounded down.
-            Map.entry("stopShort103.2AtMinute7", Outcome.takerFilled("102.89", minute(8))),
+            Map.entry("stopLong104.5", Outcome.invalidated(InvalidationReason.STOP_LOSS_REACHED, minute(8))),
+            Map.entry("stopShort103.2AtMinute7", Outcome.active()),
             Map.entry("limitLong96", Outcome.invalidated(InvalidationReason.TAKE_PROFIT_REACHED, minute(6))),
             Map.entry("stopLong106", Outcome.invalidated(InvalidationReason.STOP_LOSS_REACHED, minute(8))),
             Map.entry("limitShort106", Outcome.invalidated(InvalidationReason.INVALIDATION_PRICE, minute(8))));
@@ -242,14 +231,13 @@ class MatchingReplayTest {
     /** The closed mark price candles the exchange stub serves, three a page. */
     private final List<MinuteKline> servedMarks = new CopyOnWriteArrayList<>();
 
-    private final Map<UUID, Fill> fills = new ConcurrentHashMap<>();
     private final Map<UUID, Invalidation> invalidations = new ConcurrentHashMap<>();
     private final List<Instant> pagesAskedFrom = new CopyOnWriteArrayList<>();
 
     /** While set, the exchange refuses every page. */
     private volatile boolean refusing;
 
-    /** While set, the fill of this plan fails. */
+    /** While set, the invalidation of this plan fails. */
     private volatile UUID failing;
 
     /** Called once by the exchange stub, while a replay fetches its first page. */
@@ -308,19 +296,9 @@ class MatchingReplayTest {
         when(market.fundingHistory(any(), any(), any()))
                 .thenReturn(new FundingHistory(List.of(), List.of(), List.of(), List.of(), List.of()));
         doAnswer(call -> {
-                    Fill fill = call.getArgument(0);
-                    if (fill.planId().equals(failing)) {
+                    if (((Invalidation) call.getArgument(0)).planId().equals(failing)) {
                         throw new IllegalStateException("database down");
                     }
-                    Optional<?> filled = (Optional<?>) call.callRealMethod();
-                    if (filled.isPresent()) {
-                        fills.put(fill.planId(), fill);
-                    }
-                    return filled;
-                })
-                .when(matching)
-                .fill(any());
-        doAnswer(call -> {
                     boolean invalidated = (boolean) call.callRealMethod();
                     if (invalidated) {
                         Invalidation invalidation = call.getArgument(0);
@@ -359,10 +337,6 @@ class MatchingReplayTest {
         Run replayed = run(Loss.CRASH);
 
         assertThat(replayed.outcomes()).isEqualTo(live.outcomes()).isEqualTo(EXPECTED);
-        assertThat(replayed.journal())
-                .as("an exit during the downtime gives the same journal row as live processing")
-                .isEqualTo(live.journal());
-        assertExits(live);
         assertThat(pagesAskedFrom)
                 .as("the restart replays from the minute after the watermark, three candles a page")
                 .containsSubsequence(minute(5), minute(8), minute(10));
@@ -380,15 +354,14 @@ class MatchingReplayTest {
         Run run = run(loss);
 
         assertThat(run.outcomes()).isEqualTo(EXPECTED);
-        assertExits(run);
         assertEachMinuteAppliedOnce(run);
         assertOneStoreCallPerPlan(
-                run, loss == Loss.GIVE_UP_THEN_CRASH ? run.ids().get("long98") : null);
+                run, loss == Loss.GIVE_UP_THEN_CRASH ? run.ids().get(GIVEN_UP) : null);
     }
 
     /**
-     * D-79: a Trader's cancel while the pair replays wins over a fill or an invalidation the replay would make from an
-     * older candle: a LIMIT it would fill, a STOP it would trigger, a LIMIT whose take profit it would reach.
+     * D-79: a Trader's cancel while the pair replays wins over an invalidation the replay would make from an older
+     * candle; a plan not cancelled is decided as live processing decides it.
      */
     @Test
     void D79_aCancelDuringTheReplay_winsOverTheReplayedCandleThatWouldFillOrInvalidateThePlan() {
@@ -411,10 +384,9 @@ class MatchingReplayTest {
             assertThat(plan.getExecutedAt()).isNull();
             assertThat(plan.getFillPrice()).isNull();
             assertThat(plan.getInvalidatedAt()).isNull();
-            assertThat(fills).doesNotContainKey(id);
             assertThat(invalidations).doesNotContainKey(id);
         }
-        assertThat(plan(kept).getExecutedAt()).isEqualTo(minute(6));
+        assertThat(plan(kept).getStatus()).as("its entry is a paper order now").isEqualTo(PlanStatus.ACTIVE);
         assertThat(plan(keptInvalidated).getInvalidatedAt()).isEqualTo(minute(8));
     }
 
@@ -447,7 +419,7 @@ class MatchingReplayTest {
         ids.put("stopLong106", activePlan(Direction.LONG, EntryType.STOP, "106", "97.5", "116", null, BEFORE));
         ids.put("limitShort106", activePlan(Direction.SHORT, EntryType.LIMIT, "106", "111", "90", "97.5", BEFORE));
         if (loss == Loss.GIVE_UP_THEN_CRASH) {
-            failing = ids.get("long98");
+            failing = ids.get(GIVEN_UP);
         }
         // Live up to the recording: the stub serves no candle before it, and a replay that cannot reach M0 retries.
         OffsetDateTime beforeRecording = M0.minus(Duration.ofMinutes(1)).atOffset(ZoneOffset.UTC);
@@ -515,7 +487,9 @@ class MatchingReplayTest {
             steps.subList(0, crashAt).forEach(Runnable::run);
             if (loss == Loss.GIVE_UP_THEN_CRASH) {
                 // The given-up fill holds the watermark, so wait for every outcome stored before the crash instead.
-                awaitStoredUpTo(ids, lastClosedBeforeCrash, ids.get("long98"));
+                awaitStoredUpTo(ids, lastClosedBeforeCrash, ids.get(GIVEN_UP));
+                // The given-up invalidation holds the watermark on the candle before the one that decided it.
+                awaitWatermark(EXPECTED.get(GIVEN_UP).decidedAt().minus(Duration.ofMinutes(1)));
             } else {
                 awaitWatermark(lastClosedBeforeCrash);
             }
@@ -539,12 +513,7 @@ class MatchingReplayTest {
             steps.subList(steps.size() - (SECONDS.length + 1), steps.size()).forEach(Runnable::run);
         }
         awaitWatermark(minute(LAST));
-        awaitExits(ids);
-        return new Run(
-                ids,
-                outcomes(ids),
-                journal(ids),
-                List.copyOf(mockingDetails(matching).getInvocations()));
+        return new Run(ids, outcomes(ids), List.copyOf(mockingDetails(matching).getInvocations()));
     }
 
     /** Where the engine crashes: inside minute 5, inside minute 6, or at the start of minute 7. */
@@ -569,68 +538,9 @@ class MatchingReplayTest {
         jdbc.sql("delete from matching_watermark where pair_id = ?").param(pair).update();
         served.clear();
         servedMarks.clear();
-        fills.clear();
         invalidations.clear();
         pagesAskedFrom.clear();
         clearInvocations(matching);
-    }
-
-    /** The positions that close do so at the expected reason, price and time; the others stay OPEN. */
-    private void assertExits(Run run) {
-        run.journal().forEach((label, row) -> {
-            Exited exited = EXITED.get(label);
-            if (exited == null) {
-                assertThat(row.status()).as("%s stays open", label).isEqualTo("OPEN");
-                return;
-            }
-            assertThat(row.status()).as("%s closes", label).isEqualTo("CLOSED");
-            assertThat(row.closeReason())
-                    .as("%s close reason", label)
-                    .isEqualTo(exited.reason().name());
-            assertThat(row.exitPrice()).as("%s exit price", label).isEqualByComparingTo(exited.price());
-            assertThat(row.exitTime()).as("%s exit time", label).isEqualTo(exited.at());
-        });
-    }
-
-    /** Waits until the positions that close are committed CLOSED; an exit is stored after the candle's watermark. */
-    private void awaitExits(Map<String, UUID> ids) {
-        List<UUID> closing = EXITED.keySet().stream().map(ids::get).toList();
-        awaitUntil(
-                () -> jdbc.sql(
-                                        "select count(*) from trading_journal where plan_id in (:ids) and trade_status = 'CLOSED'")
-                                .param("ids", closing)
-                                .query(Long.class)
-                                .single()
-                        == closing.size(),
-                "the exits committed");
-    }
-
-    /** The journal row of each filled plan: what its position closed with, or OPEN. */
-    private Map<String, JournalRow> journal(Map<String, UUID> ids) {
-        Map<String, JournalRow> rows = new LinkedHashMap<>();
-        ids.forEach((label, id) -> jdbc.sql("""
-                                select trade_status, close_reason, exit_price, exit_time, realized_pnl, fee_amount,
-                                       funding_fee_amount, funding_incomplete
-                                  from trading_journal where plan_id = ?""")
-                .param(id)
-                .query((row, number) -> new JournalRow(
-                        row.getString("trade_status"),
-                        row.getString("close_reason"),
-                        stripped(row.getBigDecimal("exit_price")),
-                        row.getTimestamp("exit_time") == null
-                                ? null
-                                : row.getTimestamp("exit_time").toInstant(),
-                        stripped(row.getBigDecimal("realized_pnl")),
-                        stripped(row.getBigDecimal("fee_amount")),
-                        stripped(row.getBigDecimal("funding_fee_amount")),
-                        row.getBoolean("funding_incomplete")))
-                .optional()
-                .ifPresent(row -> rows.put(label, row)));
-        return rows;
-    }
-
-    private static BigDecimal stripped(BigDecimal value) {
-        return value == null ? null : value.stripTrailingZeros();
     }
 
     /** R1, R5: every closed minute reaches the engine once: one watermark advance per minute, none skipped. */
@@ -652,25 +562,17 @@ class MatchingReplayTest {
                 .containsExactlyInAnyOrderElementsOf(everyMinute);
     }
 
-    /**
-     * R5: each filled plan's fill and each invalidated plan's invalidation is called once, and no plan gets the other
-     * call; the plan whose fill failed once more.
-     */
+    /** R5: each invalidated plan's invalidation is called once, the plan whose invalidation failed once more. */
     private void assertOneStoreCallPerPlan(Run run, UUID failedOnce) {
-        Map<UUID, Integer> fillCalls = calls(run, "fill");
         Map<UUID, Integer> invalidateCalls = calls(run, "invalidate");
         run.ids().forEach((label, id) -> {
-            PlanStatus status = EXPECTED.get(label).status();
-            int expected = status == PlanStatus.EXECUTED ? 1 : 0;
+            int expected = EXPECTED.get(label).status() == PlanStatus.INVALIDATED ? 1 : 0;
             if (id.equals(failedOnce)) {
                 expected = 2;
             }
-            assertThat(fillCalls.getOrDefault(id, 0))
-                    .as("fill calls of %s", label)
-                    .isEqualTo(expected);
             assertThat(invalidateCalls.getOrDefault(id, 0))
                     .as("invalidate calls of %s", label)
-                    .isEqualTo(status == PlanStatus.INVALIDATED ? 1 : 0);
+                    .isEqualTo(expected);
         });
     }
 
@@ -686,31 +588,16 @@ class MatchingReplayTest {
         Map<String, Outcome> outcomes = new LinkedHashMap<>();
         ids.forEach((label, id) -> {
             TradingPlan plan = plan(id);
-            if (plan.getExecutedAt() != null) {
-                assertThat(plan.getExecutedAt())
-                        .as("%s is never filled by a candle that opened before its activation", label)
-                        .isAfterOrEqualTo(plan.getActivatedAt());
-                assertThat(plan.getFillLiquidity())
-                        .as("%s keeps the liquidity role the engine decided", label)
-                        .isEqualTo(fills.get(id).liquidity());
-            }
+            assertThat(plan.getExecutedAt())
+                    .as("%s is never filled by the engine", label)
+                    .isNull();
             if (plan.getInvalidatedAt() != null) {
                 assertThat(plan.getInvalidatedAt())
                         .as("%s is never invalidated by a candle that opened before its activation", label)
                         .isAfterOrEqualTo(plan.getActivatedAt())
                         .isEqualTo(invalidations.get(id).invalidatedAt());
             }
-            outcomes.put(
-                    label,
-                    new Outcome(
-                            plan.getStatus(),
-                            plan.getFillPrice() == null
-                                    ? null
-                                    : plan.getFillPrice().stripTrailingZeros(),
-                            plan.getExecutedAt(),
-                            plan.getFillLiquidity(),
-                            plan.getInvalidationReason(),
-                            plan.getInvalidatedAt()));
+            outcomes.put(label, new Outcome(plan.getStatus(), plan.getInvalidationReason(), plan.getInvalidatedAt()));
         });
         return outcomes;
     }
@@ -847,7 +734,7 @@ class MatchingReplayTest {
      * Waits until every plan that the candles up to {@code minute} decide, except {@code skipped}, is no longer ACTIVE
      * in the database. One candle can decide several plans, stored one after another in an order the books do not
      * fix, so waiting for one of them would let a stop interrupt the store of another. It reads the committed rows,
-     * not {@link #fills} or {@link #invalidations}: the spy records an outcome before its transaction commits.
+     * not {@link #invalidations}: the spy records an outcome before its transaction commits.
      */
     private void awaitStoredUpTo(Map<String, UUID> ids, Instant minute, UUID skipped) {
         List<UUID> decided = ids.entrySet().stream()
@@ -858,6 +745,9 @@ class MatchingReplayTest {
                 })
                 .map(Map.Entry::getValue)
                 .toList();
+        if (decided.isEmpty()) {
+            return;
+        }
         awaitUntil(
                 () -> jdbc.sql("select count(*) from trading_plan where plan_id in (:ids) and plan_status = 'ACTIVE'")
                                 .param("ids", decided)
@@ -1013,69 +903,23 @@ class MatchingReplayTest {
         return new TransactionTemplate(transactions).execute(status -> work.get());
     }
 
-    /** A run: the plans by label, what it left them and their journal rows with, and every call on the service. */
-    private record Run(
-            Map<String, UUID> ids,
-            Map<String, Outcome> outcomes,
-            Map<String, JournalRow> journal,
-            List<Invocation> invocations) {}
-
-    /** What a run left a journal row with. */
-    private record JournalRow(
-            String status,
-            String closeReason,
-            BigDecimal exitPrice,
-            Instant exitTime,
-            BigDecimal realizedPnl,
-            BigDecimal feeAmount,
-            BigDecimal fundingFeeAmount,
-            boolean fundingIncomplete) {}
-
-    /** How a position closed. */
-    private record Exited(CloseReason reason, BigDecimal price, Instant at) {}
+    /** A run: the plans by label, what it left them with, and every call on the service. */
+    private record Run(Map<String, UUID> ids, Map<String, Outcome> outcomes, List<Invocation> invocations) {}
 
     /** What a run left a plan with. */
-    private record Outcome(
-            PlanStatus status,
-            BigDecimal fillPrice,
-            Instant executedAt,
-            LiquidityRole fillLiquidity,
-            InvalidationReason invalidationReason,
-            Instant invalidatedAt) {
-
-        /** A resting LIMIT reached by a candle: maker, at its own price. */
-        static Outcome filled(String price, Instant at) {
-            return new Outcome(
-                    PlanStatus.EXECUTED,
-                    new BigDecimal(price).stripTrailingZeros(),
-                    at,
-                    LiquidityRole.MAKER,
-                    null,
-                    null);
-        }
-
-        /** A triggered STOP: taker, at the slipped price. */
-        static Outcome takerFilled(String price, Instant at) {
-            return new Outcome(
-                    PlanStatus.EXECUTED,
-                    new BigDecimal(price).stripTrailingZeros(),
-                    at,
-                    LiquidityRole.TAKER,
-                    null,
-                    null);
-        }
+    private record Outcome(PlanStatus status, InvalidationReason invalidationReason, Instant invalidatedAt) {
 
         static Outcome invalidated(InvalidationReason reason, Instant at) {
-            return new Outcome(PlanStatus.INVALIDATED, null, null, null, reason, at);
+            return new Outcome(PlanStatus.INVALIDATED, reason, at);
         }
 
         static Outcome active() {
-            return new Outcome(PlanStatus.ACTIVE, null, null, null, null, null);
+            return new Outcome(PlanStatus.ACTIVE, null, null);
         }
 
-        /** The open time of the candle that filled or invalidated the plan, or {@code null} when none did. */
+        /** The open time of the candle that invalidated the plan, or {@code null} when none did. */
         Instant decidedAt() {
-            return executedAt != null ? executedAt : invalidatedAt;
+            return invalidatedAt;
         }
     }
 }

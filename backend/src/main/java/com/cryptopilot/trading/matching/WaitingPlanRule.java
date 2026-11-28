@@ -13,38 +13,30 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
- * What one price range does to a waiting plan: fill its entry, invalidate it, or nothing.
+ * What one price range does to a waiting plan: invalidate it, or nothing. Its entry is a paper order since RF-33
+ * (D-117, one engine), so a fill is not decided here: an entry that filled first made the plan EXECUTED, and the
+ * invalidation's compare-and-set on the plan's status then changes nothing.
  *
  * <p>A waiting plan has up to two invalidation levels, both on the book side opposite its entry, so the price can
  * reach them before the entry: a LIMIT plan's take profit (the move it waited for happened without it), a STOP plan's
  * stop loss (the breakout failed before it triggered), and the plan's own invalidation price.
  *
  * <ul>
- *   <li>Only an invalidation level reached: the plan is invalidated, with the reason of the nearest level reached.
- *   <li>Only the entry reached: it fills by {@link EntryFillRule#byRange}.
- *   <li>Both in one candle: a 1-minute candle hides the order of its prices, so its open decides when it already lies
- *       at or past one of them (an invalidation level: invalidated; the entry: filled). Otherwise, or when the open is
- *       unknown, invalidation wins, the pessimistic choice also made for a stop loss before a take profit (BR-35). An
- *       unknown open is logged with the plan, the pair and the candle's open time. The open cannot lie past both,
- *       because the entry and the invalidation levels were on opposite sides of the price at activation.
- *   <li>A candle that opened before the activation does neither (D-77).
+ *   <li>An invalidation level reached: the plan is invalidated, with the reason of the nearest level reached.
+ *   <li>A candle that opened before the activation does nothing (D-77).
  *   <li>The outcome is recorded at the candle's open time (D-78), so live updates and the replayed closed candle give
  *       the same outcome.
  * </ul>
  *
- * <p>Rule: BR-33, BR-35, BR-68; NSF-07; TECHNICAL_DESIGN 7.7; D-77, D-78; D-111 (M1, M3, E6); D-112 (R3, R4).
+ * <p>Rule: BR-68; NSF-07; TECHNICAL_DESIGN 7.7; D-77, D-78; D-111 (M3); D-112 (R3); D-117; RF-33.
  *
  * <p>Reference: Harris, L. (2003). <i>Trading and Exchanges: Market Microstructure for Practitioners</i>. Oxford
  * University Press, ch. 4 (limit and stop orders).
  * <p>Reference: Binance FAQ, <i>Types of Order on Binance Futures</i> (a stop-market order triggers on the last price).
  */
 public final class WaitingPlanRule {
-
-    private static final Logger log = LoggerFactory.getLogger(WaitingPlanRule.class);
 
     /** A price that invalidates a waiting plan, and the reason it gives. */
     public record Level(BigDecimal price, InvalidationReason reason) {
@@ -90,7 +82,7 @@ public final class WaitingPlanRule {
     /**
      * What the range does to the plan, or empty when it does nothing.
      *
-     * <p>Rule: BR-33, BR-68; D-77, D-78; D-111 (M3, E6); D-112 (R3, R4).
+     * <p>Rule: BR-68; D-77, D-78; D-111 (M3); D-112 (R3).
      */
     public static Optional<PlanOutcome> decide(TrackedEntry entry, PriceRange range) {
         if (!EntryFillRule.mayAct(entry, range)) {

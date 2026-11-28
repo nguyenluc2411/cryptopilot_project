@@ -10,6 +10,7 @@ import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.MarketHealthService;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.paper.service.PaperAccountService;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.MarketIncidents;
 import com.cryptopilot.support.StreamedPrices;
@@ -81,11 +82,20 @@ class PlanPauseGateApiTest {
     private MarketHealthService health;
 
     private final List<UUID> accounts = new ArrayList<>();
+    private final List<String> preStoredCoins = new ArrayList<>();
+
+    @Autowired
+    private PaperAccountService paperAccounts;
+
     private UUID pair;
     private String symbol;
 
     @BeforeEach
     void insertPair() {
+        preStoredCoins.clear();
+        preStoredCoins.addAll(sql.sql("select symbol from coin where symbol in ('USDT', 'BTC', 'ETH', 'BNB')")
+                .query(String.class)
+                .list());
         symbol = "PP" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
         pair = new MarketTestData(sql, Instant.now()).pair(symbol, true, true, "TRADING", "TRADING", 0);
         sql.sql("""
@@ -118,6 +128,21 @@ class PlanPauseGateApiTest {
             sql.sql("delete from trading_journal where user_id = ?")
                     .param(account)
                     .update();
+            for (String table : List.of(
+                    "futures_margin_adjustment",
+                    "order_fill",
+                    "futures_position",
+                    "futures_symbol_config",
+                    "futures_account_config",
+                    "trade_order",
+                    "order_list",
+                    "wallet_ledger_entry",
+                    "wallet_balance",
+                    "equity_snapshot")) {
+                sql.sql("delete from " + table + " where user_id = ?")
+                        .param(account)
+                        .update();
+            }
             sql.sql("delete from trading_plan where user_id = ?").param(account).update();
             sql.sql("""
                             delete from user_subscription
@@ -131,7 +156,19 @@ class PlanPauseGateApiTest {
         }
         sql.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         sql.sql("delete from trading_plan where pair_id = ?").param(pair).update();
+        sql.sql("delete from order_matching_watermark where pair_id = ?")
+                .param(pair)
+                .update();
         new MarketTestData(sql, Instant.now()).remove(pair);
+        // The seed and schema tests expect no coin they did not write: the coins an opening granted go again.
+        for (String coin : List.of("USDT", "BTC", "ETH", "BNB")) {
+            if (!preStoredCoins.contains(coin)) {
+                sql.sql("delete from coin where symbol = ? and not exists (select 1 from crypto_pair p where"
+                                + " p.base_coin_id = coin.coin_id or p.quote_coin_id = coin.coin_id)")
+                        .param(coin)
+                        .update();
+            }
+        }
     }
 
     /** A draft touches no price: created, edited and cancelled while both markets are paused. */
@@ -289,6 +326,8 @@ class PlanPauseGateApiTest {
                                                   updated_at)
                         values (?, 'Trader', 1000, 'BALANCED', ?, ?)""").params(id, now(), now()).update();
         subscribeToPro(id);
+        // RF-33: an activated plan is carried out on the demo account (BR-68).
+        paperAccounts.open(id);
         return id;
     }
 

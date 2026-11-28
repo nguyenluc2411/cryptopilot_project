@@ -17,7 +17,6 @@ import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.SimulatedLevelChange;
-import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
@@ -25,14 +24,13 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
  * TP-E, the journal's side of a change of an open position's levels: the compare-and-set, the history row written only
- * when it wins, the original levels kept at the open, and the reads the plan detail and the engine use.
+ * when it wins, the original levels kept at the open, and the reads the plan detail uses.
  *
  * <p>Rule: BR-35, BR-42; D-119 (5), D-124.
  */
@@ -50,7 +48,7 @@ class PersistentTradeJournalLevelsTest {
     /** The compare-and-set wins: the history row is written and the position answered at its new version. */
     @Test
     void D124_aChangeThatWins_writesItsHistory_andAnswersThePosition() {
-        TradingJournal record = TradingJournal.openSimulated(opening());
+        TradingJournal record = record();
         SimulatedLevelChange change = change(record.getId(), true);
         when(records.changeLevelsIfOpen(record.getId(), 3L, new BigDecimal("93"), new BigDecimal("110"), true, NOW))
                 .thenReturn(1);
@@ -77,7 +75,7 @@ class PersistentTradeJournalLevelsTest {
     /** The open keeps the plan's levels as the original ones, which no change moves. */
     @Test
     void D124_theOpen_keepsTheOriginalLevels_andTheLevelsReadBackWithTheirHistory() {
-        TradingJournal record = TradingJournal.openSimulated(opening());
+        TradingJournal record = record();
         List<PositionLevelChange> history =
                 List.of(change(record.getId(), false).history());
         when(records.findByPlanId(PLAN)).thenReturn(Optional.of(record));
@@ -95,17 +93,13 @@ class PersistentTradeJournalLevelsTest {
     }
 
     @Test
-    void D124_theUsersOpenTrades_andTheOpenHistory_areReadFromTheJournal() {
-        TradingJournal record = TradingJournal.openSimulated(opening());
+    void D124_theUsersOpenTrades_areReadFromTheJournal() {
+        TradingJournal record = record();
         when(records.findOpenSimulatedOf(USER)).thenReturn(List.of(record));
-        Map<UUID, List<PositionLevelChange>> open =
-                Map.of(record.getId(), List.of(change(record.getId(), false).history()));
-        when(levelChanges.ofOpenSimulated()).thenReturn(open);
 
         assertThat(journal.openSimulatedTrades(USER))
                 .extracting(OpenTrade::planId)
                 .containsExactly(PLAN);
-        assertThat(journal.openLevelChanges()).isEqualTo(open);
     }
 
     private static SimulatedLevelChange change(UUID positionId, boolean widens) {
@@ -120,21 +114,23 @@ class PersistentTradeJournalLevelsTest {
                 NOW.minusSeconds(30));
     }
 
-    private static SimulatedTradeOpening opening() {
-        return new SimulatedTradeOpening(
-                PLAN,
+    /** The plan's record as its paper entry fill opens it (RF-35): Spot LONG 2 at 100, maker, SL 95, TP 110. */
+    private static TradingJournal record() {
+        return TradingJournal.openFromPaper(
                 USER,
                 UUID.randomUUID(),
+                PLAN,
                 MarketType.SPOT,
                 Direction.LONG,
                 null,
                 new BigDecimal("100"),
-                Instant.parse("2026-10-25T08:00:00Z"),
                 new BigDecimal("2"),
+                Instant.parse("2026-10-25T08:00:00Z"),
                 LiquidityRole.MAKER,
                 new BigDecimal("0.2"),
                 new BigDecimal("95"),
                 new BigDecimal("110"),
+                null,
                 null);
     }
 }

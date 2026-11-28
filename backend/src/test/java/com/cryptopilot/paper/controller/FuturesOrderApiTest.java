@@ -200,6 +200,7 @@ class FuturesOrderApiTest {
         for (UUID trader : traders) {
             sql.sql("delete from notification where user_id = ?").param(trader).update();
             for (String table : List.of(
+                    "trading_journal",
                     "futures_margin_adjustment",
                     "order_fill",
                     "futures_position",
@@ -2831,6 +2832,7 @@ class FuturesOrderApiTest {
     /** Removes the Trader's rows first, as they point at the second pair, then the pair. */
     private void removeSecondPair(UUID trader, UUID otherPair) {
         for (String table : List.of(
+                "trading_journal",
                 "futures_margin_adjustment",
                 "order_fill",
                 "futures_position",

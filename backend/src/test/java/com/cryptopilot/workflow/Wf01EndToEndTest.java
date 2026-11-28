@@ -29,9 +29,6 @@ import com.cryptopilot.support.StreamedPrices;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.job.MatchingWorker;
 import com.cryptopilot.trading.job.MinuteKlineFeed;
-import com.cryptopilot.trading.model.Fill;
-import com.cryptopilot.trading.model.TrackedEntry;
-import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.service.MatchingService;
 import com.jayway.jsonpath.JsonPath;
 import java.math.BigDecimal;
@@ -478,41 +475,6 @@ class Wf01EndToEndTest {
         String open = journal(pro, "OPEN");
         assertThat((String) JsonPath.read(open, "$.items[0].planId")).isEqualTo(id);
         assertDecimal(open, "$.items[0].entryFee", "1.9998");
-    }
-
-    /**
-     * DS-01b, MSG22 on an engine fill (Q-81): the resting LIMIT filled by the 07:59 candle tells the Trader once. The
-     * same candle replayed after a restart of the engine, and the same fill handed to the matching service again, as a
-     * replay after a crash would, find the plan EXECUTED and write nothing more. The watermark never moves back, so the
-     * test knows the replayed candle was matched when the candle after it moves the watermark: the pair's candles are
-     * matched in order.
-     */
-    @Test
-    void DS01b_anEngineFill_sendsMsg22Once_evenWhenItsCandleIsReplayed() throws Exception {
-        futuresLast("100000");
-        String id = id(call(pro, post(PLANS), futures("LIMIT", "99000", "98010", "101970", 5, true))
-                .andExpect(jsonPath("$.status").value("ACTIVE")));
-        TrackedEntry resting = matching.activeEntries().stream()
-                .filter(entry -> entry.planId().toString().equals(id))
-                .findFirst()
-                .orElseThrow();
-
-        feedClosed(MarketType.FUTURES, BTC, 1, "99500", "98900", "99600");
-
-        assertThat(notification(pro, id, ENTRY_FILLED)).isEqualTo("BTCUSDT LONG entry filled at 99000.");
-        feed.stop();
-        worker.stop();
-        feed.start();
-        feed.onMinuteKline(
-                ClosedKlines.closed(MarketType.FUTURES, pairs.get(BTC), minute(1), "99500", "98900", "99600"));
-        feedClosed(MarketType.FUTURES, BTC, 2, "99500", "99400", "99600");
-        awaitWatermark(MarketType.FUTURES, BTC, minute(2));
-        assertThat(matching.fill(new Fill(resting, LiquidityRole.MAKER, new BigDecimal("99000"), minute(1))))
-                .as("the compare-and-set refuses a plan already EXECUTED")
-                .isEmpty();
-        InAppNotifications.awaitDeliveries(sql);
-        assertThat(notifications(pro, id, ENTRY_FILLED)).hasSize(1);
-        assertThat((String) JsonPath.read(plan(pro, id), "$.position.status")).isEqualTo("OPEN");
     }
 
     // ------------------------------------------------------------------------------------------

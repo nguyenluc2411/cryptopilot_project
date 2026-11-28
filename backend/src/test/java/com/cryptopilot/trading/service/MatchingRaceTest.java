@@ -7,21 +7,19 @@ import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.support.PlanNotifications;
 import com.cryptopilot.support.TestcontainersConfig;
+import com.cryptopilot.trading.TradingPlanApi;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanActivated;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.job.MatchingWorker;
-import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanDetails;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
-import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
-import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import java.math.BigDecimal;
@@ -79,6 +77,9 @@ class MatchingRaceTest {
     private TradingPlanService tradingPlans;
 
     @Autowired
+    private TradingPlanApi planApi;
+
+    @Autowired
     private TradingPlanRepository plans;
 
     @Autowired
@@ -127,14 +128,14 @@ class MatchingRaceTest {
     }
 
     @Test
-    void NSF07_anActivePlan_isFilledOnce_withItsFillInstantAndANewVersion() {
+    void NSF07_RF33_anActivePlan_isExecutedOnceByItsPaperFill_withItsFillInstantAndANewVersion() {
         UUID id = activePlan(LIMIT);
         long version = plan(id).getVersion();
 
-        assertThat(matching.fill(fill(id, FILLED_AT))).isPresent();
-        assertThat(matching.fill(fill(id, FILLED_AT.plusSeconds(60))))
+        assertThat(filled(id, FILLED_AT)).isTrue();
+        assertThat(filled(id, FILLED_AT.plusSeconds(60)))
                 .as("a second fill finds nothing ACTIVE")
-                .isEmpty();
+                .isFalse();
 
         TradingPlan filled = plan(id);
         assertThat(filled.getStatus()).isEqualTo(PlanStatus.EXECUTED);
@@ -151,8 +152,8 @@ class MatchingRaceTest {
         UUID cancelled = activePlan(LIMIT);
         tradingPlans.cancel(SEEDED_ACCOUNT, cancelled);
 
-        assertThat(matching.fill(fill(draft, FILLED_AT))).isEmpty();
-        assertThat(matching.fill(fill(cancelled, FILLED_AT))).isEmpty();
+        assertThat(filled(draft, FILLED_AT)).isFalse();
+        assertThat(filled(cancelled, FILLED_AT)).isFalse();
         assertThat(plan(draft).getStatus()).isEqualTo(PlanStatus.DRAFT);
         assertThat(plan(cancelled).getStatus()).isEqualTo(PlanStatus.CANCELLED);
     }
@@ -186,7 +187,7 @@ class MatchingRaceTest {
         assertThat(matching.invalidate(invalidation(id)))
                 .as("a second invalidation finds nothing ACTIVE")
                 .isFalse();
-        assertThat(matching.fill(fill(id, FILLED_AT))).as("nor does a fill").isEmpty();
+        assertThat(filled(id, FILLED_AT)).as("nor does a fill").isFalse();
 
         TradingPlan invalidated = plan(id);
         assertThat(invalidated.getStatus()).isEqualTo(PlanStatus.INVALIDATED);
@@ -201,8 +202,7 @@ class MatchingRaceTest {
         UUID id = activePlan(STOP);
         Invalidation invalidation = invalidation(id);
 
-        List<Boolean> won =
-                race(() -> matching.fill(fill(id, FILLED_AT)).isPresent(), () -> matching.invalidate(invalidation));
+        List<Boolean> won = race(() -> filled(id, FILLED_AT), () -> matching.invalidate(invalidation));
 
         assertThat(won).containsExactlyInAnyOrder(true, false);
         TradingPlan after = plan(id);
@@ -277,7 +277,7 @@ class MatchingRaceTest {
         CyclicBarrier together = new CyclicBarrier(2);
         Callable<Boolean> fill = () -> {
             together.await();
-            return matching.fill(fill(id, FILLED_AT)).isPresent();
+            return filled(id, FILLED_AT);
         };
         Callable<IllegalPlanStateException> cancel = () -> {
             together.await();
@@ -314,14 +314,15 @@ class MatchingRaceTest {
     }
 
     /**
-     * The fill happens on a worker thread, so the test waits for it with a bound instead of polling the wall clock.
+     * The engine works on a worker thread, so the test waits for its decision with a bound instead of polling the wall
+     * clock: a LIMIT plan activated after the start is invalidated by a range that reaches its take profit (BR-68).
      *
      * <p>Reference: Freeman, S., &amp; Pryce, N. (2009). <i>Growing Object-Oriented Software, Guided by Tests</i>.
      * Addison-Wesley, ch. 27 (testing asynchronous code); Luo, Q., Hariri, F., Eloussi, L., &amp; Marinov, D. (2014).
      * An Empirical Analysis of Flaky Tests. FSE 2014.
      */
     @Test
-    void NSF07_aLimitPlanActivatedAfterStart_isFilledByARangeThatReachesIt() {
+    void BR68_aLimitPlanActivatedAfterStart_isInvalidatedByARangeThatReachesItsTakeProfit() {
         UUID id = activePlan(LIMIT);
         inTransaction(() -> {
             events.publishEvent(activated(id));
@@ -330,14 +331,18 @@ class MatchingRaceTest {
 
         // The listener queued the entry on commit, so this range reaches its partition after it.
         assertThat(worker.submit(new PriceRange(
-                        MarketType.FUTURES, pair, new BigDecimal("99"), new BigDecimal("101"), FILLED_AT)))
+                        MarketType.FUTURES,
+                        pair,
+                        plan(id).getTakeProfit(),
+                        plan(id).getTakeProfit().add(BigDecimal.ONE),
+                        FILLED_AT)))
                 .isTrue();
 
-        await("plan executed")
+        await("plan invalidated")
                 .atMost(Duration.ofSeconds(10))
                 .pollInterval(Duration.ofMillis(20))
-                .until(() -> plan(id).getStatus() == PlanStatus.EXECUTED);
-        assertThat(plan(id).getExecutedAt()).isEqualTo(FILLED_AT);
+                .until(() -> plan(id).getStatus() == PlanStatus.INVALIDATED);
+        assertThat(plan(id).getInvalidatedAt()).isEqualTo(FILLED_AT);
     }
 
     private TradingPlanActivated activated(UUID id) {
@@ -393,20 +398,12 @@ class MatchingRaceTest {
         return new Invalidation(entry, reason, FILLED_AT);
     }
 
-    private static Fill fill(UUID id, Instant at) {
-        TrackedEntry entry = new TrackedEntry(
-                id,
-                SEEDED_ACCOUNT,
-                MarketType.FUTURES,
-                UUID.randomUUID(),
-                Direction.LONG,
-                EntryType.LIMIT,
-                new BigDecimal("100"),
-                new BigDecimal("95"),
-                new BigDecimal("110"),
-                null,
-                NOW);
-        return new Fill(entry, LiquidityRole.MAKER, new BigDecimal("100"), at);
+    /**
+     * The plan's paper entry order filling at 100 as a maker at {@code at}, in a transaction of its own, as a paper
+     * fill reports it (RF-33): whether it made the plan EXECUTED.
+     */
+    private boolean filled(UUID id, Instant at) {
+        return inTransaction(() -> planApi.entryFilled(id, UUID.randomUUID(), true, new BigDecimal("100"), true, at));
     }
 
     private UUID activePlan(PlanDetails details) {

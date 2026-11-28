@@ -161,6 +161,7 @@ class PaperUserQueueTest {
         for (UUID trader : traders) {
             // The notices of TR-29 are written after the commit; awaited by the tests that expect one.
             for (String table : List.of(
+                    "trading_journal",
                     "notification",
                     "order_fill",
                     "trade_order",

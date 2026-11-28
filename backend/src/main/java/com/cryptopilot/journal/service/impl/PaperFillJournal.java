@@ -3,14 +3,18 @@ package com.cryptopilot.journal.service.impl;
 import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.journal.entity.TradingJournal;
 import com.cryptopilot.journal.repository.TradingJournalRepository;
+import com.cryptopilot.market.MarketApi;
+import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.paper.event.PaperFuturesPositionFilled;
 import com.cryptopilot.paper.event.PaperSpotFilled;
 import com.cryptopilot.trading.PlanOrderTerms;
 import com.cryptopilot.trading.TradingPlanApi;
+import com.cryptopilot.trading.event.PositionClosed;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
+import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.time.Clock;
@@ -21,6 +25,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -52,6 +57,9 @@ public class PaperFillJournal {
 
     private final TradingJournalRepository records;
     private final TradingPlanApi plans;
+    private final MarketApi market;
+    private final ApplicationEventPublisher events;
+    private final EntityManager entities;
     private final Clock clock;
 
     /** A Spot fill: a buy opens or adds to its order's record; a sale closes open records, oldest first. */
@@ -98,9 +106,10 @@ public class PaperFillJournal {
         }
         if (fill.open()) {
             records.followPosition(id, fill.maxQuantity(), fill.entryPrice(), fill.leverage(), clock.instant());
+            refreshed(id);
             return;
         }
-        records.closePosition(
+        int closed = records.closePosition(
                 id,
                 fill.maxQuantity(),
                 fill.entryPrice(),
@@ -111,6 +120,10 @@ public class PaperFillJournal {
                 Rounding.toAmount(fill.feeAmount()),
                 fill.fundingAmount() == null ? null : Rounding.toAmount(fill.fundingAmount()),
                 clock.instant());
+        TradingJournal record = refreshed(id);
+        if (closed == 1) {
+            announceClose(record);
+        }
         log.info("RF-35 journal {} closed with Futures position {}", id, fill.positionId());
     }
 
@@ -118,6 +131,7 @@ public class PaperFillJournal {
         Optional<TradingJournal> found = records.findByPaperOrderId(fill.orderId());
         if (found.isPresent()) {
             records.addToEntry(found.get().getId(), fill.price(), fill.baseHeld(), fill.feeInQuote(), clock.instant());
+            refreshed(found.get().getId());
             return;
         }
         Optional<PlanOrderTerms> plan = planOf(fill.planId());
@@ -164,11 +178,54 @@ public class PaperFillJournal {
                     Rounding.toAmount(realized),
                     Rounding.toAmount(fill.feeInQuote().multiply(share)),
                     now);
-            if (taken.compareTo(open) == 0 && records.closeSoldOut(record.getId(), fill.at(), reason, now) == 1) {
+            boolean soldOut =
+                    taken.compareTo(open) == 0 && records.closeSoldOut(record.getId(), fill.at(), reason, now) == 1;
+            TradingJournal current = refreshed(record.getId());
+            if (soldOut) {
+                announceClose(current);
                 log.info("RF-35 journal {} closed by Spot order {} ({})", record.getId(), fill.orderId(), reason);
             }
             left = left.subtract(taken);
         }
+    }
+
+    /**
+     * The record as the update left it. The updates run inside the paper fill and do not clear the persistence
+     * context, which holds the fill's wallet balances still to be written (RF-33); only this record is read again.
+     */
+    private TradingJournal refreshed(UUID id) {
+        TradingJournal record = entities.find(TradingJournal.class, id);
+        entities.refresh(record);
+        return record;
+    }
+
+    /**
+     * A plan's position closed on the demo account: announced as any closed plan position is, for MSG23 and the
+     * Trader's live position feed (BR-35, BR-38). A demo order's record has no plan and announces nothing.
+     */
+    private void announceClose(TradingJournal record) {
+        if (record.getPlanId() == null) {
+            return;
+        }
+        BigDecimal realized = record.getRealizedPnl() == null ? BigDecimal.ZERO : record.getRealizedPnl();
+        BigDecimal fees = record.getFeeAmount() == null ? BigDecimal.ZERO : record.getFeeAmount();
+        BigDecimal funding = record.getFundingFeeAmount() == null ? BigDecimal.ZERO : record.getFundingFeeAmount();
+        events.publishEvent(new PositionClosed(
+                record.getId(),
+                record.getPlanId(),
+                record.getUserId(),
+                record.getMarket(),
+                record.getPairId(),
+                market.tradablePair(record.getPairId(), record.getMarket())
+                        .map(TradablePair::symbol)
+                        .orElse(null),
+                record.getCloseReason(),
+                record.getExitPrice(),
+                record.getRealizedPnl(),
+                record.getFeeAmount(),
+                Rounding.toAmount(realized.subtract(fees).add(funding)),
+                record.isFundingIncomplete(),
+                record.getExitTime()));
     }
 
     /** The plan of the order, when it has none recorded yet: a plan results in one trade. */

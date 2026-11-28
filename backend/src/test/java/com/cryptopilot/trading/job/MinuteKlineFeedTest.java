@@ -30,7 +30,6 @@ import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntries;
 import com.cryptopilot.trading.model.TrackedEntry;
-import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.PriceSource;
 import com.cryptopilot.trading.service.MatchingService;
@@ -89,8 +88,6 @@ class MinuteKlineFeedTest {
 
     /** The closed mark price candles the exchange stub serves. */
     private final List<MinuteKline> marks = new CopyOnWriteArrayList<>();
-
-    private final List<TrackedPosition> positions = new ArrayList<>();
 
     private MinuteKlineFeed feed;
 
@@ -1042,21 +1039,14 @@ class MinuteKlineFeedTest {
         when(matching.activeEntries()).thenReturn(List.copyOf(entries));
     }
 
-    private void openPosition(UUID pair, Instant entryTime) {
-        positions.add(new TrackedPosition(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                TrackedEntries.OWNER,
-                MarketType.FUTURES,
-                pair,
-                Direction.LONG,
-                new BigDecimal("100"),
-                entryTime,
-                new BigDecimal("90"),
-                new BigDecimal("120"),
-                new BigDecimal("80"),
-                0));
-        when(matching.openPositions()).thenReturn(List.copyOf(positions));
+    /**
+     * A Futures plan of the pair waiting since {@code activatedAt}: its pair is replayed from that minute. Positions are
+     * the demo account's since RF-33, so only waiting plans start replays here.
+     */
+    private void openPosition(UUID pair, Instant activatedAt) {
+        entries.add(TrackedEntries.limit(
+                UUID.randomUUID(), MarketType.FUTURES, pair, Direction.LONG, new BigDecimal("100"), activatedAt));
+        when(matching.activeEntries()).thenReturn(List.copyOf(entries));
     }
 
     private static MinuteKline futuresUpdate(Instant open, String low, String high, boolean closed, long seconds) {

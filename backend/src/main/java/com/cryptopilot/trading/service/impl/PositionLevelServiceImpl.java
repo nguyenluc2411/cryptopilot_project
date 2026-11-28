@@ -18,11 +18,9 @@ import com.cryptopilot.trading.calculator.warning.WidenedStopRule;
 import com.cryptopilot.trading.dto.request.ChangePositionLevelsRequest;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
-import com.cryptopilot.trading.event.PositionLevelsChanged;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.model.InputViolation;
 import com.cryptopilot.trading.model.PlanWarning;
-import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import com.cryptopilot.trading.service.PositionLevelService;
@@ -41,7 +39,6 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,7 +47,8 @@ import org.springframework.transaction.annotation.Transactional;
  * rounded to the pair's tick and checked against the current last price, never the mark price; the change is a
  * compare-and-set on the journal row's version through {@link TradeJournal}, so a change racing an exit (take profit,
  * stop loss, liquidation or a manual close) has one outcome: the writer that commits first wins and the other changes
- * nothing. After the commit the matching engine replaces the levels in its books ({@link PositionLevelsChanged}).
+ * nothing. The position's take profit and stop loss orders on the demo account are then replaced in the same
+ * transaction (RF-33).
  *
  * <ul>
  *   <li>The change runs under the D-63 lock of the Trader: a stop moved away raises the open risk that the Trader's
@@ -59,8 +57,8 @@ import org.springframework.transaction.annotation.Transactional;
  *       answers non-blocking warnings; it is stored anyway (Q-79).
  *   <li>{@code stop_widened} is set when the new stop loss is further from the entry than the ORIGINAL one; the
  *       realized R keeps the original planned risk (BR-42).
- *   <li>Exit pricing does not change (D-122): a moved stop loss exits as a taker with slippage, a moved take profit as
- *       a resting maker order at its price.
+ *   <li>Exit pricing does not change (D-122): on the demo account a moved stop loss is a stop order that executes
+ *       against the market (taker), a moved take profit a resting order at its price (maker).
  * </ul>
  *
  * <p>Rule: BR-22, BR-28, BR-29, BR-30, BR-35, BR-42; UC-21; D-63, D-119 (5), D-122, D-124; Q-79.
@@ -84,7 +82,6 @@ public class PositionLevelServiceImpl implements PositionLevelService {
     private final RiskProfileApi riskProfiles;
     private final UserLock userLock;
     private final PositionViews positionViews;
-    private final ApplicationEventPublisher events;
     private final Clock clock;
     /** The demo account a plan's position is held on since RF-33, whose take profit and stop loss orders change. */
     private final ObjectProvider<PlanOrderPlacer> orderPlacer;
@@ -131,12 +128,8 @@ public class PositionLevelServiceImpl implements PositionLevelService {
         OpenTrade updated = journal.changeSimulatedLevels(change)
                 .orElseThrow(() -> new IllegalPlanStateException(
                         planId, plan.getStatus(), "change the levels of a position that closed meanwhile"));
-        if (journal.positionOf(planId).map(RecordedPosition::onDemoAccount).orElse(false)) {
-            // RF-33: the paper take profit and stop loss orders are replaced; the plans' engine does not track it.
-            orderPlacer.getObject().replaceLevels(userId, trade, stopLoss, takeProfit);
-        } else {
-            events.publishEvent(new PositionLevelsChanged(TrackedPosition.of(updated), change.history()));
-        }
+        // RF-33: the paper take profit and stop loss orders follow the stored levels.
+        orderPlacer.getObject().replaceLevels(userId, trade, stopLoss, takeProfit);
         log.info(
                 "D-124 plan {} position {} levels: stop loss {} -> {}, take profit {} -> {}",
                 planId,
@@ -155,13 +148,20 @@ public class PositionLevelServiceImpl implements PositionLevelService {
         return PlanResponses.detail(stored, positionViews.of(stored, recorded, warnings));
     }
 
-    /** The OPEN position of an EXECUTED plan; any other plan, or a closed position, answers MSG43. */
+    /**
+     * The OPEN position of an EXECUTED plan on the demo account; any other plan, a closed position, or a record of the
+     * former engine from before V77 answers MSG43.
+     */
     private OpenTrade openTrade(TradingPlan plan) {
         if (plan.getStatus() != PlanStatus.EXECUTED) {
             throw new IllegalPlanStateException(plan.getId(), plan.getStatus(), "change the levels of its position");
         }
+        boolean onDemoAccount = journal.positionOf(plan.getId())
+                .map(RecordedPosition::onDemoAccount)
+                .orElse(false);
         return journal.openSimulatedTrades(plan.getUserId()).stream()
                 .filter(trade -> trade.planId().equals(plan.getId()))
+                .filter(trade -> onDemoAccount)
                 .findFirst()
                 .orElseThrow(() -> new IllegalPlanStateException(
                         plan.getId(), plan.getStatus(), "change the levels of a position that is not OPEN"));

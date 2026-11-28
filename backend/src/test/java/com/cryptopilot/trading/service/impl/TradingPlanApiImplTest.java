@@ -8,6 +8,7 @@ import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.PlanContext;
+import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.dto.response.PlanSnapshotResponse;
 import com.cryptopilot.trading.dto.response.PlanWarningResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
@@ -36,6 +37,8 @@ class TradingPlanApiImplTest {
             mock(TradingPlanRepository.class),
             mock(MarketApi.class),
             mock(ApplicationEventPublisher.class),
+            mock(TradeJournal.class),
+            mock(FillLearningCapture.class),
             Clock.systemUTC());
 
     @Test

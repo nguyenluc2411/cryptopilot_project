@@ -6,24 +6,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.StompRecorder;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.entity.TradingPlan;
-import com.cryptopilot.trading.model.Excursion;
-import com.cryptopilot.trading.model.Exit;
-import com.cryptopilot.trading.model.Fill;
+import com.cryptopilot.trading.event.PositionClosed;
 import com.cryptopilot.trading.model.PlanDetails;
-import com.cryptopilot.trading.model.PositionExit;
-import com.cryptopilot.trading.model.TrackedEntry;
-import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
-import com.cryptopilot.trading.service.MatchingService;
 import com.cryptopilot.user.model.enums.UserRole;
 import com.jayway.jsonpath.JsonPath;
 import java.lang.reflect.Type;
@@ -45,6 +40,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -95,7 +91,7 @@ class PositionUserQueueTest {
     private JwtEncoder jwtEncoder;
 
     @Autowired
-    private MatchingService matching;
+    private ApplicationEventPublisher events;
 
     @Autowired
     private TradingPlanRepository plans;
@@ -168,20 +164,32 @@ class PositionUserQueueTest {
         UUID other = trader();
         List<String> ownerInbox = subscribed(owner);
         List<String> otherInbox = subscribed(other);
-        TrackedPosition position = openPosition(owner);
+        UUID planId = executedPlan(owner);
+        UUID positionId = UUID.randomUUID();
 
-        assertThat(matching.close(new PositionExit(
-                        position,
-                        new Exit(position.planId(), CloseReason.TAKE_PROFIT, new BigDecimal("115"), Instant.now()),
-                        Excursion.at(position.entryPrice()))))
-                .isTrue();
+        // RF-33: the journal announces the close of a plan's paper position in the fill's transaction.
+        inTransaction(() -> {
+            events.publishEvent(new PositionClosed(
+                    positionId,
+                    planId,
+                    owner,
+                    MarketType.SPOT,
+                    pair,
+                    symbol,
+                    CloseReason.TAKE_PROFIT,
+                    new BigDecimal("115"),
+                    new BigDecimal("30"),
+                    new BigDecimal("0.43"),
+                    new BigDecimal("29.57"),
+                    false,
+                    Instant.now()));
+            return null;
+        });
 
         await(() -> !ownerInbox.isEmpty(), "the owner's position update");
         String body = ownerInbox.getFirst();
-        assertThat((String) JsonPath.read(body, "$.positionId"))
-                .isEqualTo(position.positionId().toString());
-        assertThat((String) JsonPath.read(body, "$.planId"))
-                .isEqualTo(position.planId().toString());
+        assertThat((String) JsonPath.read(body, "$.positionId")).isEqualTo(positionId.toString());
+        assertThat((String) JsonPath.read(body, "$.planId")).isEqualTo(planId.toString());
         assertThat((String) JsonPath.read(body, "$.status")).isEqualTo("CLOSED");
         assertThat((String) JsonPath.read(body, "$.closeReason")).isEqualTo("TAKE_PROFIT");
         assertThat((String) JsonPath.read(body, "$.symbol")).isEqualTo(symbol);
@@ -215,40 +223,28 @@ class PositionUserQueueTest {
         client.recorder().awaitRefused(client.session(), "not a public market topic");
     }
 
-    /** A Spot LIMIT LONG of the Trader, 2 at 100 (SL 95, TP 115), filled by the engine: its OPEN position. */
-    private TrackedPosition openPosition(UUID trader) {
+    /** A Spot LIMIT LONG of the Trader, 2 at 100 (SL 95, TP 115), its paper entry filled: an EXECUTED plan. */
+    private UUID executedPlan(UUID trader) {
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         PlanFixture fixture = PlanFixture.spot().takeProfit("115");
-        TradingPlan plan = inTransaction(() -> {
-            TradingPlan draft = TradingPlan.draft(
-                    trader,
-                    pair,
-                    fixture.build(),
-                    new PlanDetails(
-                            EntryType.LIMIT,
-                            now.plus(Duration.ofDays(7)),
-                            null,
-                            null,
-                            null,
-                            AnalysisTimeframe.ONE_HOUR),
-                    List.of());
-            draft.activate(fixture.build(), List.of(), now);
-            return plans.save(draft);
-        });
-        TrackedEntry entry = new TrackedEntry(
-                plan.getId(),
-                trader,
-                plan.getMarket(),
-                pair,
-                plan.getDirection(),
-                plan.getEntryType(),
-                plan.getEntryPrice(),
-                plan.getStopLoss(),
-                plan.getTakeProfit(),
-                null,
-                now);
-        return matching.fill(new Fill(entry, LiquidityRole.MAKER, new BigDecimal("100"), now))
-                .orElseThrow();
+        return inTransaction(() -> {
+                    TradingPlan draft = TradingPlan.draft(
+                            trader,
+                            pair,
+                            fixture.build(),
+                            new PlanDetails(
+                                    EntryType.LIMIT,
+                                    now.plus(Duration.ofDays(7)),
+                                    null,
+                                    null,
+                                    null,
+                                    AnalysisTimeframe.ONE_HOUR),
+                            List.of());
+                    draft.activate(fixture.build(), List.of(), now);
+                    draft.markExecuted(now, new BigDecimal("100"), LiquidityRole.MAKER);
+                    return plans.save(draft);
+                })
+                .getId();
     }
 
     /** A session of the Trader subscribed to the position queue, once the broker holds the subscription. */

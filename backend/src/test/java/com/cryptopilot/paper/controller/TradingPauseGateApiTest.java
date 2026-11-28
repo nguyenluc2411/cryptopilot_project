@@ -205,6 +205,7 @@ class TradingPauseGateApiTest {
         MarketIncidents.removeAll(sql);
         for (UUID trader : traders) {
             for (String table : List.of(
+                    "trading_journal",
                     "futures_margin_adjustment",
                     "order_fill",
                     "futures_position",

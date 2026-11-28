@@ -6,11 +6,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -55,20 +52,6 @@ public class LevelChangeLog {
                 .param(journalId)
                 .query(LevelChangeLog::change)
                 .list();
-    }
-
-    /** The changes of every OPEN simulated position, oldest first per position. */
-    public Map<UUID, List<PositionLevelChange>> ofOpenSimulated() {
-        return sql
-                .sql("select " + COLUMNS.replace("journal_id", "c.journal_id")
-                        + " from trading_journal_level_change c join trading_journal j on j.journal_id = c.journal_id"
-                        + " where j.trade_status = 'OPEN' and j.source = 'SIMULATED'"
-                        + " order by c.journal_id, c.changed_at, c.level_change_id")
-                .query(LevelChangeLog::change)
-                .list()
-                .stream()
-                .collect(Collectors.groupingBy(
-                        PositionLevelChange::positionId, LinkedHashMap::new, Collectors.toList()));
     }
 
     private static PositionLevelChange change(ResultSet row, int ignored) throws SQLException {

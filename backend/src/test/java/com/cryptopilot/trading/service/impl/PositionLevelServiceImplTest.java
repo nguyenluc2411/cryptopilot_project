@@ -3,6 +3,7 @@ package com.cryptopilot.trading.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.inOrder;
@@ -33,7 +34,6 @@ import com.cryptopilot.trading.dto.request.ChangePositionLevelsRequest;
 import com.cryptopilot.trading.dto.response.PlanWarningResponse;
 import com.cryptopilot.trading.dto.response.PositionResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
-import com.cryptopilot.trading.event.PositionLevelsChanged;
 import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.model.FundingFee;
 import com.cryptopilot.trading.model.PlanDetails;
@@ -41,6 +41,7 @@ import com.cryptopilot.trading.model.enums.AnalysisTimeframe;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
+import com.cryptopilot.trading.model.enums.PositionStatus;
 import com.cryptopilot.trading.model.enums.WarningType;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import com.cryptopilot.trading.service.FundingService;
@@ -64,7 +65,6 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.context.ApplicationEventPublisher;
 
 /**
  * TP-E: changing the stop loss and take profit of an open position. Futures LONG 2 at 100 (stop 95, take profit 110,
@@ -89,7 +89,7 @@ class PositionLevelServiceImplTest {
     private final RiskProfileApi riskProfiles = mock(RiskProfileApi.class);
     private final UserLock lock = mock(UserLock.class);
     private final SystemSettingApi settings = mock(SystemSettingApi.class);
-    private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    private final PlanOrderPlacer placer = mock(PlanOrderPlacer.class);
     private final FundingService funding = mock(FundingService.class);
 
     @SuppressWarnings("unchecked")
@@ -103,7 +103,6 @@ class PositionLevelServiceImplTest {
             riskProfiles,
             lock,
             new PositionViews(journal, market, new FeeRates(settings), funding, settings, placers),
-            events,
             Clock.fixed(NOW, ZoneOffset.UTC),
             placers);
 
@@ -112,6 +111,7 @@ class PositionLevelServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        when(placers.getObject()).thenReturn(placer);
         given(executed(PlanFixture.spot().stop("95").takeProfit("110")));
         trade = trade(Direction.LONG, MarketType.SPOT, "95", "110", null, 3);
         when(journal.openSimulatedTrades(USER)).thenReturn(List.of(trade));
@@ -130,10 +130,10 @@ class PositionLevelServiceImplTest {
 
     /**
      * A tightened stop and a new take profit, rounded to the tick: stored with a compare-and-set at the version read,
-     * the change instant to the microsecond, and the engine told after the commit with the row's new version.
+     * the change instant to the microsecond, and the position's paper take profit and stop loss replaced with them.
      */
     @Test
-    void D124_aValidChange_isStoredAtTheVersionRead_andTheEngineIsTold() {
+    void D124_aValidChange_isStoredAtTheVersionRead_andThePaperOrdersFollow() {
         PositionResponse position = service.changeLevels(USER, plan.getId(), request("97.004", "112.006"))
                 .position();
 
@@ -146,11 +146,12 @@ class PositionLevelServiceImplTest {
         assertThat(change.newTakeProfit()).isEqualByComparingTo("112.01");
         assertThat(change.widensStop()).isFalse();
         assertThat(change.changedAt()).isEqualTo(Instant.parse("2026-10-25T09:00:30.123456Z"));
-        ArgumentCaptor<PositionLevelsChanged> told = ArgumentCaptor.forClass(PositionLevelsChanged.class);
-        verify(events).publishEvent(told.capture());
-        assertThat(told.getValue().position().version()).isEqualTo(4);
-        assertThat(told.getValue().position().stopLoss()).isEqualByComparingTo("97");
-        assertThat(told.getValue().change()).isEqualTo(change.history());
+        verify(placer)
+                .replaceLevels(
+                        eq(USER),
+                        eq(trade),
+                        argThat(level -> level.compareTo(new BigDecimal("97")) == 0),
+                        argThat(level -> level.compareTo(new BigDecimal("112.01")) == 0));
         assertThat(position.levelWarnings()).isEmpty();
     }
 
@@ -196,7 +197,7 @@ class PositionLevelServiceImplTest {
         service.changeLevels(USER, plan.getId(), request("95.001", "110"));
 
         verify(journal, never()).changeSimulatedLevels(any());
-        verifyNoInteractions(events);
+        verifyNoInteractions(placer);
     }
 
     @Test
@@ -244,7 +245,7 @@ class PositionLevelServiceImplTest {
         assertThatThrownBy(() -> service.changeLevels(USER, plan.getId(), request("97", null)))
                 .isInstanceOfSatisfying(BusinessException.class, refused -> assertThat(refused.errorCode())
                         .isEqualTo(ErrorCode.TRADING_PLAN_STATUS_TRANSITION_INVALID));
-        verifyNoInteractions(events);
+        verifyNoInteractions(placer);
     }
 
     @Test
@@ -357,9 +358,24 @@ class PositionLevelServiceImplTest {
         plan = executed;
         when(plans.findByIdAndUserId(plan.getId(), USER)).thenReturn(Optional.of(plan));
         when(plans.findById(plan.getId())).thenReturn(Optional.of(plan));
+        // RF-33: the plan's position is held on the demo account.
         when(journal.positionOf(plan.getId()))
-                .thenReturn(Optional.of(RecordedPosition.open(
-                        plan.getId(), new BigDecimal("100"), new BigDecimal("2"), NOW, new BigDecimal("0.2"), null)));
+                .thenReturn(Optional.of(new RecordedPosition(
+                        plan.getId(),
+                        PositionStatus.OPEN,
+                        new BigDecimal("100"),
+                        new BigDecimal("2"),
+                        NOW,
+                        new BigDecimal("0.2"),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        false,
+                        true)));
     }
 
     private SimulatedLevelChange stored() {

@@ -44,7 +44,6 @@ import com.cryptopilot.trading.OpenTrade;
 import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.PlanOrderTerms;
 import com.cryptopilot.trading.RecordedPosition;
-import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.warning.PlanFixture;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
@@ -185,7 +184,6 @@ class TradingPlanServiceImplTest {
                 })
                 .when(placer)
                 .place(any());
-        when(journal.openSimulatedTrade(any())).thenAnswer(call -> recorded(call.getArgument(0)));
         when(styleProvider.getIfAvailable()).thenReturn(styles);
         when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_BLOCK_R)).thenReturn(new BigDecimal("0.75"));
         when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_CONFIRM_R)).thenReturn(new BigDecimal("0.25"));
@@ -1017,7 +1015,6 @@ class TradingPlanServiceImplTest {
         assertThat(terms.stopLoss()).isEqualByComparingTo("95");
         assertThat(terms.takeProfit()).isEqualByComparingTo("110");
         assertThat(terms.leverage()).isNull();
-        verify(journal, never()).openSimulatedTrade(any());
     }
 
     /** RF-33: a Futures plan is placed with its leverage. */
@@ -1355,26 +1352,6 @@ class TradingPlanServiceImplTest {
     // Helpers
     // ------------------------------------------------------------------------------------------
 
-    /** The journal's answer to an opening: the same values, a new id, version 0. */
-    private static OpenTrade recorded(SimulatedTradeOpening opening) {
-        return new OpenTrade(
-                UUID.randomUUID(),
-                opening.planId(),
-                opening.userId(),
-                opening.pairId(),
-                opening.market(),
-                opening.direction(),
-                opening.entryPrice(),
-                opening.entryTime(),
-                opening.quantity(),
-                opening.entryLiquidity(),
-                opening.entryFee(),
-                opening.stopLoss(),
-                opening.takeProfit(),
-                opening.liquidationPrice(),
-                0);
-    }
-
     @SuppressWarnings({"unchecked", "rawtypes"}) // A captor of a generic type has no class literal (T-039).
     private static ArgumentCaptor<Collection<PlanStatus>> statusCaptor() {
         return (ArgumentCaptor) ArgumentCaptor.forClass(Collection.class);
@@ -1502,7 +1479,6 @@ class TradingPlanServiceImplTest {
                 .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
         verify(events, never()).publishEvent(any(TradingPlanActivated.class));
-        verify(journal, never()).openSimulatedTrade(any());
         verify(market, never()).currentMarkPrice(any());
     }
 
@@ -1542,7 +1518,6 @@ class TradingPlanServiceImplTest {
         assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .satisfies(e -> assertFields(e, Map.of("stopLoss", "MSG16")));
         assertThat(plan.getStatus()).isEqualTo(PlanStatus.DRAFT);
-        verify(journal, never()).openSimulatedTrade(any());
         verify(this.market, never()).currentMarkPrice(any());
     }
 
@@ -2326,7 +2301,6 @@ class TradingPlanServiceImplTest {
         currentPrice(market(direction), fill);
         assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
                 .isInstanceOf(EntryDeviationException.class);
-        verify(journal, never()).openSimulatedTrade(any());
 
         service.activate(USER, plan.getId(), true);
 

@@ -26,14 +26,12 @@ import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.StreamedPrices;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
-import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanListQuery;
 import com.cryptopilot.trading.model.TrackedEntry;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
-import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.service.MatchingService;
 import com.cryptopilot.trading.service.PlanExpiryService;
 import com.cryptopilot.trading.service.TradingPlanService;
@@ -44,7 +42,6 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -1263,7 +1260,7 @@ class TradingPlanApiTest {
         assertThat(decimal(closed, "$.position.netPnl")).isEqualByComparingTo(decimal(estimate, "$.estimatedNetPnl"));
         assertThat(decimal(estimate, "$.estimatedNetPnl")).isEqualByComparingTo("-0.3998");
         assertThat(awaitNotification(UUID.fromString(id)))
-                .isEqualTo(symbol + " position closed by manual close at 100. P/L: -0.4.");
+                .isEqualTo(symbol + " position closed by manual close at 100. P/L: -0.3998.");
     }
 
     /** UC-21: a position already closed (by the engine or a first close) answers 409 MSG43 to both calls. */
@@ -1595,81 +1592,6 @@ class TradingPlanApiTest {
         as(trader(), post(PLANS), spotStop("{\"activate\": true}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("ACTIVE"));
-    }
-
-    /**
-     * BR-36, D-112 R6: a STOP the engine triggers is stored in the same compare-and-set as a LIMIT fill, at its stop
-     * moved by {@code SLIPPAGE_BPS} against the Trader (10 bps: 100 to 100.10, rounded to the tick), as TAKER, at the
-     * open time of the candle that triggered it; the journal record of T-048a starts from these columns. The setting is
-     * changed through the admin endpoint, so the setting reader's cache is evicted as it would be in use.
-     */
-    @Test
-    void BR36_aStopTheEngineTriggers_isStoredAtTheSlippedPrice_asTaker_atItsCandle() throws Exception {
-        lastPrice("99");
-        String id = id(as(trader(), post(PLANS), spotStop("{\"activate\": true}"))
-                .andExpect(jsonPath("$.status").value("ACTIVE")));
-        Instant candle = Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(60);
-        UUID admin = account(UserRole.ADMIN);
-        Map<String, Object> audit = sql.sql(
-                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
-                .query()
-                .singleRow();
-        changeSetting(admin, "SLIPPAGE_BPS", "10");
-        try {
-            assertThat(matching.fill(new Fill(waiting(id), LiquidityRole.TAKER, new BigDecimal("100"), candle)))
-                    .isPresent();
-        } finally {
-            changeSetting(admin, "SLIPPAGE_BPS", "0");
-            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
-                    .params(audit.get("updated_by"), audit.get("updated_at"))
-                    .update();
-            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
-        }
-
-        assertFill(id, "100.10", "TAKER");
-        assertThat(sql.sql("select executed_at from trading_plan where plan_id = ?")
-                        .param(UUID.fromString(id))
-                        .query(Timestamp.class)
-                        .single()
-                        .toInstant())
-                .isEqualTo(candle);
-    }
-
-    /**
-     * BR-34, BR-36: the STOP fill of the engine opens the journal in the same call as the LIMIT fill, at the price the
-     * plan stored. At 10 bps a LONG STOP at 100 is stored at 100.10 as TAKER, and the journal entry is the same 100.10,
-     * TAKER, at the triggering candle's open time, not the stop of 100 before slippage.
-     */
-    @Test
-    void BR34_aStopTheEngineTriggers_opensTheJournalAtTheStoredSlippedPrice() throws Exception {
-        lastPrice("99");
-        String id = id(as(trader(), post(PLANS), spotStop("{\"activate\": true}"))
-                .andExpect(jsonPath("$.status").value("ACTIVE")));
-        Instant candle = Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(60);
-        UUID admin = account(UserRole.ADMIN);
-        Map<String, Object> audit = sql.sql(
-                        "select updated_by, updated_at from system_setting where setting_key = 'SLIPPAGE_BPS'")
-                .query()
-                .singleRow();
-        changeSetting(admin, "SLIPPAGE_BPS", "10");
-        try {
-            assertThat(matching.fill(new Fill(waiting(id), LiquidityRole.TAKER, new BigDecimal("100"), candle)))
-                    .isPresent();
-        } finally {
-            changeSetting(admin, "SLIPPAGE_BPS", "0");
-            sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
-                    .params(audit.get("updated_by"), audit.get("updated_at"))
-                    .update();
-            sql.sql("delete from audit_log where user_id = ?").param(admin).update();
-        }
-
-        assertJournalEntry(id, "100.10");
-        assertThat(sql.sql("select entry_time from trading_journal where plan_id = ?")
-                        .param(UUID.fromString(id))
-                        .query(Timestamp.class)
-                        .single()
-                        .toInstant())
-                .isEqualTo(candle);
     }
 
     /**

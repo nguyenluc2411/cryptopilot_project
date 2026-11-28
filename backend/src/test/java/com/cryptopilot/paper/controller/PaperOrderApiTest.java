@@ -172,6 +172,7 @@ class PaperOrderApiTest {
     void removeRows() {
         for (UUID trader : traders) {
             for (String table : List.of(
+                    "trading_journal",
                     "order_fill",
                     "trade_order",
                     "order_list",

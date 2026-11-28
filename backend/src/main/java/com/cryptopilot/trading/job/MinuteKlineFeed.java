@@ -13,7 +13,6 @@ import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.config.MatchingProperties;
 import com.cryptopilot.trading.model.PriceRange;
 import com.cryptopilot.trading.model.TrackedEntry;
-import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.service.MatchingService;
 import com.cryptopilot.trading.service.ReplayLockService;
 import jakarta.annotation.PreDestroy;
@@ -55,7 +54,7 @@ import org.springframework.stereotype.Component;
  *   <li>A futures mark price becomes a mark {@link PriceRange} of one price in the minute it was produced; the
  *       engine liquidates on it only. Mark prices are held and dropped with the last prices of their pair and minute,
  *       and a held minute hands its last prices before its mark prices.
- *   <li>At start, every pair with a waiting plan (ACTIVE LIMIT or STOP) or an OPEN position is replayed from the later
+ *   <li>At start, every pair with a waiting plan (ACTIVE LIMIT or STOP) is replayed from the later
  *       of the candle after its watermark and the minute of its first activation or entry, at most
  *       {@code replay.max-window} back (A-04, Q-34). Older candles are skipped with a warning: nothing is ever filled,
  *       invalidated or closed from a guessed price.
@@ -239,16 +238,15 @@ public class MinuteKlineFeed implements MinuteKlineListener, MarkPriceListener, 
         return locks.isReplaying(market, pairId);
     }
 
-    /** Where each pair with a waiting plan (ACTIVE LIMIT or STOP) or an OPEN position starts its replay. */
+    /**
+     * Where each pair with a waiting plan (ACTIVE LIMIT or STOP) starts its replay; positions are the demo account's
+     * since RF-33, and paper trading replays them.
+     */
     private List<Replay> startupReplays() {
         Map<PairKey, Instant> firstActivation = new HashMap<>();
         for (TrackedEntry entry : matching.activeEntries()) {
             firstActivation.merge(
                     new PairKey(entry.market(), entry.pairId()), entry.activatedAt(), MinuteKlineFeed::earlier);
-        }
-        for (TrackedPosition position : matching.openPositions()) {
-            firstActivation.merge(
-                    new PairKey(position.market(), position.pairId()), position.entryTime(), MinuteKlineFeed::earlier);
         }
         List<Replay> startup = new ArrayList<>();
         firstActivation.forEach((key, activated) -> {

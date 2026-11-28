@@ -1,13 +1,7 @@
 package com.cryptopilot.journal.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -16,10 +10,7 @@ import com.cryptopilot.journal.model.PlanPosition;
 import com.cryptopilot.journal.repository.LevelChangeLog;
 import com.cryptopilot.journal.repository.TradingJournalRepository;
 import com.cryptopilot.market.model.enums.MarketType;
-import com.cryptopilot.trading.OpenTrade;
-import com.cryptopilot.trading.SimulatedTradeClosing;
-import com.cryptopilot.trading.SimulatedTradeOpening;
-import com.cryptopilot.trading.model.enums.CloseReason;
+import com.cryptopilot.trading.SimulatedFillLearning;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PositionStatus;
@@ -30,12 +21,10 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
-/** The journal's answers to the plans and the matching engine, with the repository replaced. */
+/** The journal's answers to the plans, with the repository replaced. */
 class PersistentTradeJournalTest {
 
     private static final UUID PLAN = UUID.fromString("019b76da-a800-7000-8000-0000000000e1");
@@ -49,89 +38,24 @@ class PersistentTradeJournalTest {
     private final PersistentTradeJournal journal =
             new PersistentTradeJournal(records, levelChanges, Clock.fixed(NOW, ZoneOffset.UTC));
 
+    /** BR-70: the learning data of the plan's fill goes into its record, which is answered by id. */
     @Test
-    void BR34_anOpening_isWrittenAtOnceAsAnOpenRecord_andAnsweredAsTheEngineTracksIt() {
-        when(records.saveAndFlush(any())).thenAnswer(call -> call.getArgument(0));
+    void BR70_theFillLearning_isAddedToThePlansRecord_orFindsNone() {
+        TradingJournal record = record();
+        when(records.findByPlanId(PLAN)).thenReturn(Optional.of(record));
+        when(records.findByPlanId(OTHER_PLAN)).thenReturn(Optional.empty());
+        SimulatedFillLearning learning = new SimulatedFillLearning(
+                new BigDecimal("100"), new BigDecimal("0.2"), BigDecimal.TEN, "1h", "SWING v1", null, null, null, null);
 
-        OpenTrade opened = journal.openSimulatedTrade(opening());
-
-        ArgumentCaptor<TradingJournal> written = ArgumentCaptor.forClass(TradingJournal.class);
-        verify(records).saveAndFlush(written.capture());
-        assertThat(written.getValue().getPlanId()).isEqualTo(PLAN);
-        assertThat(written.getValue().getStatus()).isEqualTo(PositionStatus.OPEN);
-        assertThat(opened).isEqualTo(written.getValue().toOpenTrade());
-    }
-
-    @Test
-    void NSF07_theOpenTrades_areTheOpenSimulatedRecords() {
-        TradingJournal record = TradingJournal.openSimulated(opening());
-        when(records.findOpenSimulated()).thenReturn(List.of(record));
-        when(records.findOpenSimulated(record.getId())).thenReturn(Optional.of(record));
-
-        assertThat(journal.openSimulatedTrades()).containsExactly(record.toOpenTrade());
-        assertThat(journal.openTrade(record.getId())).contains(record.toOpenTrade());
-    }
-
-    @Test
-    void BR35_aClose_isOneCompareAndSet_withTheMissingFundingTimesAsAnArray() {
-        UUID position = UUID.randomUUID();
-        when(records.closeIfOpen(
-                        eq(position),
-                        eq(3L),
-                        any(),
-                        any(),
-                        eq("STOP_LOSS"),
-                        any(),
-                        any(),
-                        any(),
-                        eq(true),
-                        eq("{\"2026-10-25T08:00:00Z\",\"2026-10-25T16:00:00Z\"}"),
-                        isNull(),
-                        isNull(),
-                        eq(NOW)))
-                .thenReturn(1);
-
-        assertThat(journal.closeSimulatedTrade(closing(
-                        position,
-                        new BigDecimal("-0.5"),
-                        true,
-                        List.of(Instant.parse("2026-10-25T08:00:00Z"), Instant.parse("2026-10-25T16:00:00Z")))))
-                .isTrue();
-    }
-
-    @Test
-    void BR35_aCloseThatChangedNothing_answersFalse_andAFundingWithNothingMissingWritesNoArray() {
-        UUID position = UUID.randomUUID();
-        when(records.closeIfOpen(
-                        eq(position),
-                        anyLong(),
-                        any(),
-                        any(),
-                        any(),
-                        any(),
-                        any(),
-                        any(),
-                        anyBoolean(),
-                        isNull(),
-                        any(),
-                        any(),
-                        any()))
-                .thenReturn(0);
-
-        assertThat(journal.closeSimulatedTrade(closing(position, null, false, List.of())))
-                .isFalse();
-    }
-
-    @Test
-    void BR62_theOpenPositions_areThePlansOfTheOpenRecords() {
-        when(records.findOpenPlanIds(USER)).thenReturn(List.of(PLAN, OTHER_PLAN));
-
-        assertThat(journal.openPositionPlans(USER)).isEqualTo(Set.of(PLAN, OTHER_PLAN));
+        assertThat(journal.recordFillLearning(PLAN, learning)).contains(record.getId());
+        assertThat(record.getPlannedEntryPrice()).isEqualByComparingTo("100");
+        assertThat(record.getAnalysisTimeframe()).isEqualTo("1h");
+        assertThat(journal.recordFillLearning(OTHER_PLAN, learning)).isEmpty();
     }
 
     @Test
     void UC20_thePositionOfAPlan_isItsRecord_orNothing() {
-        TradingJournal record = TradingJournal.openSimulated(opening());
+        TradingJournal record = record();
         when(records.findByPlanId(PLAN)).thenReturn(Optional.of(record));
         when(records.findByPlanId(OTHER_PLAN)).thenReturn(Optional.empty());
 
@@ -154,36 +78,23 @@ class PersistentTradeJournalTest {
         verifyNoInteractions(records);
     }
 
-    private static SimulatedTradeOpening opening() {
-        return new SimulatedTradeOpening(
-                PLAN,
+    /** The plan's record as its paper entry fill opens it (RF-35): Spot LONG 2 at 100, maker, SL 95, TP 110. */
+    private static TradingJournal record() {
+        return TradingJournal.openFromPaper(
                 USER,
                 UUID.randomUUID(),
+                PLAN,
                 MarketType.SPOT,
                 Direction.LONG,
                 null,
                 new BigDecimal("100"),
-                Instant.parse("2026-10-25T08:00:00Z"),
                 new BigDecimal("2"),
+                Instant.parse("2026-10-25T08:00:00Z"),
                 LiquidityRole.MAKER,
                 new BigDecimal("0.2"),
                 new BigDecimal("95"),
                 new BigDecimal("110"),
+                null,
                 null);
-    }
-
-    private static SimulatedTradeClosing closing(
-            UUID position, BigDecimal funding, boolean incomplete, List<Instant> missing) {
-        return new SimulatedTradeClosing(
-                position,
-                3,
-                new BigDecimal("95"),
-                Instant.parse("2026-10-25T17:00:00Z"),
-                CloseReason.STOP_LOSS,
-                new BigDecimal("-10"),
-                new BigDecimal("0.2"),
-                funding,
-                incomplete,
-                missing);
     }
 }

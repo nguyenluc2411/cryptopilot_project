@@ -7,15 +7,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.cryptopilot.auth.config.JwtConfig;
+import com.cryptopilot.journal.entity.TradingJournal;
+import com.cryptopilot.journal.repository.TradingJournalRepository;
 import com.cryptopilot.market.ClosedCandleIndicators;
 import com.cryptopilot.market.MarketTestData;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.OpenTrade;
-import com.cryptopilot.trading.PositionExcursion;
 import com.cryptopilot.trading.SimulatedFillLearning;
-import com.cryptopilot.trading.SimulatedTradeClosing;
-import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
@@ -67,6 +66,9 @@ class JournalLearningTest {
 
     @Autowired
     private TradeJournal journal;
+
+    @Autowired
+    private TradingJournalRepository records;
 
     @Autowired
     private FillLearningReader reader;
@@ -128,14 +130,12 @@ class JournalLearningTest {
                 .andExpect(jsonPath("$.learning.indicators.rsi14").value("48.25"))
                 .andExpect(jsonPath("$.learning.indicators.ema200").value("90.1234567891"))
                 .andExpect(jsonPath("$.learning.indicators.macdHistogram").value("-0.04"))
-                .andExpect(jsonPath("$.learning.maxAdversePrice").value("101.000000000000"))
-                .andExpect(jsonPath("$.learning.maxFavorablePrice").value("101.000000000000"))
                 .andExpect(jsonPath("$.learning.rMultiple").doesNotExist());
     }
 
-    /** BR-34, BR-70: a replayed fill of the same plan is refused, so its learning data is stored once. */
+    /** BR-34, BR-70: a second record of the same plan is refused, so its learning data is stored once. */
     @Test
-    void BR70_aReplayedFill_storesItsLearningDataOnce() {
+    void BR70_aSecondRecordOfThePlan_isRefused_andTheLearningDataStaysOnce() {
         UUID plan = plan(trader);
         OpenTrade first = open(plan, learning("70.00", "55.00", true));
 
@@ -161,52 +161,6 @@ class JournalLearningTest {
         detail(trader, opened.positionId())
                 .andExpect(jsonPath("$.learning.setupScoreAtFill").doesNotExist())
                 .andExpect(jsonPath("$.learning.setupScoreDropWarned").doesNotExist());
-    }
-
-    /** BR-70: the extremes of an open LONG only ever widen, and the row's version, read by every close, stays. */
-    @Test
-    void BR70_theExtremesOfAnOpenLong_onlyWiden_andKeepTheVersion() {
-        OpenTrade opened = open(plan(trader), learning("70.00", "55.00", true));
-        UUID id = opened.positionId();
-
-        widen(id, "97", "105");
-        assertExtremes(id, "97", "105");
-        widen(id, "98", "104");
-        assertExtremes(id, "97", "105");
-        widen(id, "96", "104");
-        assertExtremes(id, "96", "105");
-        assertThat(((Number) row(id).get("version")).longValue()).isEqualTo(opened.version());
-    }
-
-    /** BR-70: for a SHORT the adverse extreme is the highest price and the favourable one the lowest. */
-    @Test
-    void BR70_theExtremesOfAnOpenShort_areMirrored() {
-        OpenTrade opened = open(plan(trader), Direction.SHORT, learning("70.00", "55.00", true));
-        UUID id = opened.positionId();
-
-        widen(id, "104", "95");
-        widen(id, "103", "96");
-
-        assertExtremes(id, "104", "95");
-    }
-
-    /**
-     * BR-70: the close keeps the wider of the stored extremes and those up to the exit; the detail then derives R from
-     * them: net (24 − 0.2) / 10 = 2.38 R, MAE (101 − 95) × 2 / 10 = 1.2 R, MFE (113 − 101) × 2 / 10 = 2.4 R.
-     */
-    @Test
-    void BR70_theClose_keepsTheWiderExtremes_andTheDetailDerivesR() throws Exception {
-        OpenTrade opened = open(plan(trader), learning("70.00", "55.00", true));
-        widen(opened.positionId(), "95", "110");
-
-        close(opened, "97", "113");
-
-        assertExtremes(opened.positionId(), "95", "113");
-        detail(trader, opened.positionId())
-                .andExpect(jsonPath("$.status").value("CLOSED"))
-                .andExpect(jsonPath("$.learning.rMultiple").value("2.38000000"))
-                .andExpect(jsonPath("$.learning.maeR").value("1.20000000"))
-                .andExpect(jsonPath("$.learning.mfeR").value("2.40000000"));
     }
 
     /** BR-41: a manual trade has no fill the system saw, so neither a learning block nor a reading. */
@@ -253,57 +207,52 @@ class JournalLearningTest {
         return open(plan, Direction.LONG, learning);
     }
 
+    /**
+     * The plan's record as its paper entry fill opens it (RF-35), then the learning data its plan adds in the same
+     * transaction (BR-70): 2 at 101, taker, entry fee 0.2.
+     */
     private OpenTrade open(UUID plan, Direction direction, SimulatedFillLearning learning) {
-        return new TransactionTemplate(transactions)
-                .execute(status -> journal.openSimulatedTrade(new SimulatedTradeOpening(
-                        plan,
-                        trader,
-                        pair,
-                        // Spot is LONG only; the SHORT is a Futures position at 5x.
-                        direction == Direction.LONG ? MarketType.SPOT : MarketType.FUTURES,
-                        direction,
-                        direction == Direction.LONG ? null : 5,
-                        new BigDecimal("101"),
-                        FILLED_AT,
-                        new BigDecimal("2"),
-                        LiquidityRole.TAKER,
-                        new BigDecimal("0.2"),
-                        direction == Direction.LONG ? new BigDecimal("95") : new BigDecimal("106"),
-                        direction == Direction.LONG ? new BigDecimal("120") : new BigDecimal("80"),
-                        null,
-                        learning)));
+        return new TransactionTemplate(transactions).execute(status -> {
+            TradingJournal record = records.saveAndFlush(TradingJournal.openFromPaper(
+                    trader,
+                    pair,
+                    plan,
+                    // Spot is LONG only; the SHORT is a Futures position at 5x.
+                    direction == Direction.LONG ? MarketType.SPOT : MarketType.FUTURES,
+                    direction,
+                    direction == Direction.LONG ? null : 5,
+                    new BigDecimal("101"),
+                    new BigDecimal("2"),
+                    FILLED_AT,
+                    LiquidityRole.TAKER,
+                    new BigDecimal("0.2"),
+                    direction == Direction.LONG ? new BigDecimal("95") : new BigDecimal("106"),
+                    direction == Direction.LONG ? new BigDecimal("120") : new BigDecimal("80"),
+                    null,
+                    null));
+            assertThat(journal.recordFillLearning(plan, learning)).contains(record.getId());
+            return record.toOpenTrade();
+        });
     }
 
     private void close(OpenTrade trade, String adverse, String favorable) {
         close(trade, adverse, favorable, FILLED_AT.plusSeconds(3600));
     }
 
+    /** The record closed at the take profit of 113 at {@code exitTime}, as a paper close stores it (RF-35). */
     private void close(OpenTrade trade, String adverse, String favorable, Instant exitTime) {
-        new TransactionTemplate(transactions)
-                .executeWithoutResult(status -> assertThat(journal.closeSimulatedTrade(new SimulatedTradeClosing(
-                                trade.positionId(),
-                                trade.version(),
-                                new BigDecimal("113"),
-                                exitTime,
-                                CloseReason.TAKE_PROFIT,
-                                new BigDecimal("24"),
-                                new BigDecimal("0.2"),
-                                null,
-                                false,
-                                List.of(),
-                                new PositionExcursion(
-                                        trade.positionId(), new BigDecimal(adverse), new BigDecimal(favorable)))))
-                        .isTrue());
-    }
-
-    private void widen(UUID id, String adverse, String favorable) {
-        journal.widenExcursions(List.of(new PositionExcursion(id, new BigDecimal(adverse), new BigDecimal(favorable))));
-    }
-
-    private void assertExtremes(UUID id, String adverse, String favorable) {
-        Map<String, Object> row = row(id);
-        assertThat((BigDecimal) row.get("max_adverse_price")).isEqualByComparingTo(adverse);
-        assertThat((BigDecimal) row.get("max_favorable_price")).isEqualByComparingTo(favorable);
+        new TransactionTemplate(transactions).executeWithoutResult(status -> assertThat(records.closePosition(
+                        trade.positionId(),
+                        trade.quantity(),
+                        trade.entryPrice(),
+                        new BigDecimal("113"),
+                        exitTime,
+                        CloseReason.TAKE_PROFIT.name(),
+                        new BigDecimal("24"),
+                        new BigDecimal("0.4"),
+                        null,
+                        exitTime))
+                .isEqualTo(1));
     }
 
     private Map<String, Object> row(UUID id) {
