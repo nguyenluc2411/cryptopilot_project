@@ -242,6 +242,45 @@ class PlanPaperOrdersApiTest {
                 .doesNotContain("NEW", "PENDING_NEW", "PARTIALLY_FILLED");
     }
 
+    /**
+     * A Futures STOP plan waits as a STOP_MARKET conditional order. A trade through the entry triggers it; the MARKET
+     * order it places carries the plan, so the fill makes the plan EXECUTED and opens its journal record.
+     */
+    @Test
+    void RF33_aFuturesStopPlan_isExecutedWhenItsStopTriggers() throws Exception {
+        UUID trader = traderWithAccount();
+        futuresLast("100");
+        String created = body(as(trader, post(PLANS), futuresStop())
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("ACTIVE")));
+        UUID plan = UUID.fromString(JsonPath.read(created, "$.id"));
+
+        futuresLast("102.5");
+        paperWorker.onTrade(new MarketTrade(
+                MarketType.FUTURES,
+                pair,
+                TICKS.incrementAndGet(),
+                new BigDecimal("102.5"),
+                BigDecimal.ONE,
+                Instant.now().plusSeconds(1),
+                false,
+                Instant.now().plusSeconds(1)));
+
+        await().atMost(Duration.ofSeconds(10)).until(() -> "EXECUTED"
+                .equals(sql.sql("select plan_status from trading_plan where plan_id = ?")
+                        .param(plan)
+                        .query(String.class)
+                        .single()));
+        assertThat(ordersOf(plan))
+                .extracting(row -> row.get("order_type") + " " + row.get("order_status"))
+                .contains("STOP_MARKET FILLED", "MARKET FILLED");
+        assertThat(sql.sql("select source from trading_journal where plan_id = ?")
+                        .param(plan)
+                        .query(String.class)
+                        .list())
+                .containsExactly("SIMULATED");
+    }
+
     /** BR-68: without a demo account the activation is refused, and no plan and no order is stored. */
     @Test
     void BR68_withoutADemoAccount_theActivationIsRefused_andNothingIsStored() throws Exception {
@@ -448,6 +487,12 @@ class PlanPaperOrdersApiTest {
         return "{\"pairId\": \"" + pair + "\", \"market\": \"SPOT\", \"direction\": \"LONG\", \"entryType\": \""
                 + entryType + "\"" + (entry == null ? "" : ", \"entryPrice\": " + entry)
                 + ", \"stopLoss\": 95, \"takeProfit\": 110, \"activate\": " + activate + "}";
+    }
+
+    private String futuresStop() {
+        return "{\"pairId\": \"" + pair + "\", \"market\": \"FUTURES\", \"direction\": \"LONG\","
+                + " \"entryType\": \"STOP\", \"entryPrice\": 102, \"stopLoss\": 97, \"takeProfit\": 110,"
+                + " \"leverage\": 5, \"activate\": true}";
     }
 
     private String futuresLimit() {

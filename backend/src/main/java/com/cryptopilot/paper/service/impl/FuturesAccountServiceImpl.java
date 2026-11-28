@@ -23,6 +23,7 @@ import com.cryptopilot.paper.model.FuturesAccountMargin;
 import com.cryptopilot.paper.model.FuturesCrossState;
 import com.cryptopilot.paper.model.enums.LedgerEntryType;
 import com.cryptopilot.paper.model.enums.LedgerRefType;
+import com.cryptopilot.paper.model.enums.Liquidity;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
 import com.cryptopilot.paper.model.enums.PositionDirection;
@@ -32,6 +33,7 @@ import com.cryptopilot.paper.repository.FuturesPositionRepository;
 import com.cryptopilot.paper.repository.PaperAccountRepository;
 import com.cryptopilot.paper.repository.PaperLedgerEntryRepository;
 import com.cryptopilot.paper.service.FuturesAccountService;
+import com.cryptopilot.paper.service.FuturesCommissionPolicy;
 import com.cryptopilot.paper.service.impl.FuturesMargins.Pending;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -105,6 +107,7 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
     private final FuturesMargins margins;
     private final MarketApi market;
     private final Clock clock;
+    private final FuturesCommissionPolicy commission;
 
     @Override
     @Transactional(readOnly = true)
@@ -454,7 +457,7 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
                 position.getPositionSide(),
                 position.signedQuantity(),
                 position.getEntryPrice(),
-                position.getEntryPrice(),
+                breakEven(position),
                 valued.mark(),
                 valued.unrealized(),
                 liquidation,
@@ -473,6 +476,22 @@ public class FuturesAccountServiceImpl implements FuturesAccountService {
                 position.getLeverage(),
                 ratio,
                 position.getUpdatedAt());
+    }
+
+    /**
+     * The price a close at the market makes nothing at, the opening fee and the closing fee at the taker rate counted
+     * (TR-44): {@code (P − E) × q = t × E × q + t × P × q}, so {@code E × (1 + t) / (1 − t)} for a LONG and
+     * {@code E × (1 − t) / (1 + t)} for a SHORT; the entry price itself while the rate is zero.
+     */
+    private BigDecimal breakEven(FuturesPosition position) {
+        BigDecimal taker = commission.rate(position.getUserId(), position.getPairId(), Liquidity.TAKER);
+        if (taker.signum() == 0) {
+            return position.getEntryPrice();
+        }
+        BigDecimal up = BigDecimal.ONE.add(taker);
+        BigDecimal down = BigDecimal.ONE.subtract(taker);
+        boolean isLong = position.getDirection() == PositionDirection.LONG;
+        return Rounding.divide(position.getEntryPrice().multiply(isLong ? up : down), isLong ? down : up);
     }
 
     /** The value at their limit prices of a side's open orders that are not reduce-only. */

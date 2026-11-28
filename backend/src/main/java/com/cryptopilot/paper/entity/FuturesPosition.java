@@ -247,6 +247,14 @@ public class FuturesPosition extends BaseEntity {
     }
 
     /** Adds the clearance fee its liquidation took (TR-22). */
+    /** Adds the commission of one of the position's fills (TR-44). */
+    public void addCommission(BigDecimal fee) {
+        if (fee.signum() < 0) {
+            throw new IllegalArgumentException("a commission is not negative, was " + fee.toPlainString());
+        }
+        commissionAmount = commissionAmount.add(fee);
+    }
+
     public void addLiquidationFee(BigDecimal fee) {
         if (fee.signum() < 0) {
             throw new IllegalArgumentException("a liquidation fee is not negative, was " + fee.toPlainString());

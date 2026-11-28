@@ -28,6 +28,7 @@ import com.cryptopilot.paper.model.enums.MarginAdjustmentRefType;
 import com.cryptopilot.paper.model.enums.MarginAdjustmentType;
 import com.cryptopilot.paper.model.enums.MarginType;
 import com.cryptopilot.paper.model.enums.OrderSide;
+import com.cryptopilot.paper.model.enums.OrderType;
 import com.cryptopilot.paper.model.enums.PositionCloseReason;
 import com.cryptopilot.paper.model.enums.PositionDirection;
 import com.cryptopilot.paper.model.enums.PositionSide;
@@ -72,8 +73,9 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>The cross wallet left below zero with no cross position open is made good by an insurance cover (4.3 rule 5).
  * </ol>
  *
- * <p>Fees are zero for now (plan 2.3): a fill asks {@link FuturesCommissionPolicy}, which returns zero, and records a
- * commission of zero in USDT.
+ * <p>Commission (TR-44): a fill asks {@link FuturesCommissionPolicy} for its rate and pays its value times it in USDT,
+ * as a FEE ledger row. An opening fill pays it from the cross wallet (an isolated one must find its margin and the fee
+ * in the cross wallet's free cash); a closing fill counts it in the closing event of rule (A) with the realized result.
  *
  * <p>Rule: TR-16; D-127.
  */
@@ -454,9 +456,11 @@ class FuturesSettlement {
                     LedgerEntryType.REALIZED_PNL,
                     Ref.to(LedgerRefType.FILL, fill.getId()));
         }
+        BigDecimal fee = fill.getFeeAmount();
+        payCommission(account, position, usdt, fee, fill);
         if (position.getMarginType() == MarginType.ISOLATED) {
-            IsolatedCashFlow flow = FuturesMarginMath.closeFlow(
-                    position.getIsolatedWalletAmount(), closed, sizeBefore, realized, BigDecimal.ZERO);
+            IsolatedCashFlow flow =
+                    FuturesMarginMath.closeFlow(position.getIsolatedWalletAmount(), closed, sizeBefore, realized, fee);
             PaperLedgerEntry cover = null;
             if (flow.insuranceCover().signum() > 0) {
                 cover = wallets.changeFutures(
@@ -607,11 +611,14 @@ class FuturesSettlement {
         FuturesSymbolConfig config = margining.config();
         PositionDirection direction = PositionDirection.openedBy(order.getSide());
         BigDecimal margin = BigDecimal.ZERO;
+        PaperFill.Execution execution =
+                execution(price, opened, liquidity, source, at, usdt, commissionOf(commission, order, liquidity));
         if (margining.isolated()) {
-            // A FOK slice was funded whole beforehand, at the check's mark; any other fill is funded now.
+            // A FOK slice was funded whole beforehand, at the check's mark; any other fill is funded now, its fee with
+            // it, both from the cross wallet's free cash.
             Optional<BigDecimal> mark = whole.isPresent() ? whole.get().mark() : market.currentMarkPrice(pair.symbol());
             margin = isolatedMargin(margining, order, opened, price, mark);
-            if (whole.isEmpty() && margin.compareTo(crossFreeCash(userId, order)) > 0) {
+            if (whole.isEmpty() && margin.add(execution.feeAmount()).compareTo(crossFreeCash(userId, order)) > 0) {
                 return false;
             }
         }
@@ -634,14 +641,10 @@ class FuturesSettlement {
                     .entryPriceAfter();
             target.increase(opened, entry);
         }
-        PaperFill fill = fills.save(PaperFill.futures(
-                        order,
-                        execution(
-                                price, opened, liquidity, source, at, usdt, commissionOf(commission, order, liquidity)),
-                        target.getId(),
-                        BigDecimal.ZERO)
+        PaperFill fill = fills.save(PaperFill.futures(order, execution, target.getId(), BigDecimal.ZERO)
                 .takenFrom(candleTime));
         feed.futuresFill(account, order, fill);
+        payCommission(account, target, usdt, fill.getFeeAmount(), fill);
         if (margin.signum() > 0) {
             target.adjustIsolatedWallet(margin);
             adjustments.save(FuturesMarginAdjustment.of(
@@ -759,7 +762,7 @@ class FuturesSettlement {
                 position.getPairId(),
                 order.getId(),
                 order.getPlanId(),
-                order.getOrderType().name(),
+                placingType(order).name(),
                 liquidity == Liquidity.MAKER,
                 price,
                 opened,
@@ -780,6 +783,18 @@ class FuturesSettlement {
                 at));
     }
 
+    /**
+     * The type that names why the order filled: a MARKET or LIMIT order placed by a triggered conditional order is its
+     * take profit or stop (F-19, RF-36), so the conditional order's type; any other order's own.
+     */
+    private OrderType placingType(PaperOrder order) {
+        if (order.getParentOrderId() == null) {
+            return order.getOrderType();
+        }
+        PaperOrder conditional = entityManager.find(PaperOrder.class, order.getParentOrderId());
+        return conditional == null ? order.getOrderType() : conditional.getOrderType();
+    }
+
     /** What an order of {@code side} can close of a one-way position of signed {@code size}: the opposite side's. */
     static BigDecimal closableBy(OrderSide side, BigDecimal size) {
         boolean closesLong = side == OrderSide.SELL;
@@ -789,19 +804,37 @@ class FuturesSettlement {
     }
 
     /**
-     * The commission of an ordinary fill, from {@link FuturesCommissionPolicy} (TR-44). Only zero is settled for now
-     * (plan 2.3): a rate other than zero is refused here rather than taken without its FEE ledger row and its share of
-     * the isolated cash flow, which the fee work adds with it.
+     * The commission rate of an ordinary fill, from {@link FuturesCommissionPolicy} (TR-44).
      *
-     * @return the commission rate, zero
+     * @return the rate, zero or more
+     * @throws IllegalStateException when the policy answers a negative rate
      */
     static BigDecimal commissionOf(FuturesCommissionPolicy commission, PaperOrder order, Liquidity liquidity) {
         BigDecimal rate = commission.rate(order.getUserId(), order.getPairId(), liquidity);
-        if (rate.signum() != 0) {
-            throw new IllegalStateException("a Futures commission of " + rate.toPlainString()
-                    + " is not settled yet (plan 2.3): FuturesCommissionPolicy must return zero");
+        if (rate.signum() < 0) {
+            throw new IllegalStateException("a Futures commission rate is not negative, was " + rate.toPlainString());
         }
         return rate;
+    }
+
+    /**
+     * Pays a fill's commission: a FEE ledger row of the Futures wallet (so the cross wallet, the wallet less the
+     * isolated wallets, pays it) and the position's running commission. Nothing for a fee of zero: the ledger holds no
+     * zero row.
+     */
+    private void payCommission(
+            PaperAccount account, FuturesPosition position, CoinListing usdt, BigDecimal fee, PaperFill fill) {
+        if (fee.signum() <= 0) {
+            return;
+        }
+        wallets.changeFutures(
+                account,
+                position.getPairId(),
+                usdt,
+                fee.negate(),
+                LedgerEntryType.FEE,
+                Ref.to(LedgerRefType.FILL, fill.getId()));
+        position.addCommission(fee);
     }
 
     private static PaperFill.Execution execution(

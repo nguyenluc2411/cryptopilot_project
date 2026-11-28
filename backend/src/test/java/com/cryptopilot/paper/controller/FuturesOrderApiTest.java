@@ -15,6 +15,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.cryptopilot.admin.service.impl.StoredSettings;
+import com.cryptopilot.admin.service.impl.SystemSettingReader;
 import com.cryptopilot.auth.config.JwtConfig;
 import com.cryptopilot.market.BookTop;
 import com.cryptopilot.market.MarketTestData;
@@ -60,6 +62,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -109,7 +112,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * waiting order, the calculator and the order form's risk warnings; the warnings of held positions; GTD orders and
  * the commission; a pair taken out of service.
  *
- * <p>The Futures wallet is opened with 5,000 USDT; fees are zero.
+ * <p>The Futures wallet is opened with 5,000 USDT. The commission is set to zero for these tests, so the amounts of
+ * the margin, liquidation and funding rules read plainly; {@code FuturesCommissionApiTest} settles it at its rates.
  *
  * <p>Rule: TR-15, TR-16, TR-17, TR-18, TR-19, TR-20, TR-21, TR-22, TR-22a, TR-24, TR-25, TR-26, TR-27, TR-41, TR-44, TR-46; D-127; Q-T10.
  */
@@ -169,6 +173,26 @@ class FuturesOrderApiTest {
     private final List<String> preStoredCoins = new ArrayList<>();
     private UUID pair;
     private String symbol;
+
+    @Autowired
+    private SystemSettingReader settingReader;
+
+    private StoredSettings settings;
+    private final Map<String, String> feesBefore = new LinkedHashMap<>();
+
+    @BeforeEach
+    void noCommission() {
+        settings = new StoredSettings(sql, settingReader);
+        for (String key : List.of("FUTURES_MAKER_FEE", "FUTURES_TAKER_FEE")) {
+            feesBefore.put(key, settings.get(key));
+            settings.set(key, "0");
+        }
+    }
+
+    @AfterEach
+    void commissionBack() {
+        feesBefore.forEach(settings::set);
+    }
 
     @BeforeEach
     void insertPair() {
@@ -3518,15 +3542,137 @@ class FuturesOrderApiTest {
         assertThat(futuresOrders.dueGoodTill(now)).doesNotContain(UUID.fromString(id));
     }
 
+    /** The rates the plan estimates with, for the TR-44 tests; set back after each test. */
+    private void binanceRates() {
+        settings.set("FUTURES_MAKER_FEE", "0.0002");
+        settings.set("FUTURES_TAKER_FEE", "0.0005");
+    }
+
+    private List<Map<String, Object>> feeRows(UUID trader) {
+        return sql.sql("""
+                        select amount from wallet_ledger_entry
+                         where user_id = ? and wallet_type = 'FUTURES' and entry_type = 'FEE'
+                         order by created_at, entry_id""").param(trader).query().listOfRows();
+    }
+
+    private List<BigDecimal> fillFees(UUID trader) {
+        return sql.sql("select fee_amount from order_fill where user_id = ? order by created_at, fill_id")
+                .param(trader)
+                .query(BigDecimal.class)
+                .list();
+    }
+
+    /**
+     * TR-44 I1-I3, cross: a taker buy of 2 at 100 pays 200 × 0.05 % = 0.1, a sale of 2 at 110 pays 0.11; each is a FEE
+     * row, the fill's fee and the position's commission; the wallet is 5,000 − 0.1 + 20 − 0.11 and equals its ledger.
+     */
     @Test
-    void TR44_theCommissionRate_isZero_untilConfigured() throws Exception {
+    void TR44_aCrossTrade_paysTheTakerFee_onEachFill() throws Exception {
         UUID trader = trader(true);
+        binanceRates();
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        place(trader, market("BUY", "2")).andExpect(status().isOk());
+        UUID positionId = (UUID) position(trader).get("position_id");
+        assertThat((BigDecimal) position(trader).get("commission_amount")).isEqualByComparingTo("0.1");
+        assertThat(wallet(trader)).isEqualByComparingTo("4999.9");
+
+        depth(List.of(level("110.1", "5")), List.of(level("110", "5")));
+        place(trader, market("SELL", "2")).andExpect(status().isOk());
+
+        assertThat(openPositions(trader)).isZero();
+        assertThat(fillFees(trader))
+                .usingElementComparator(BigDecimal::compareTo)
+                .containsExactly(new BigDecimal("0.1"), new BigDecimal("0.11"));
+        assertThat(feeRows(trader))
+                .extracting(row -> ((BigDecimal) row.get("amount")).stripTrailingZeros())
+                .containsExactly(new BigDecimal("-0.1"), new BigDecimal("-0.11"));
+        assertThat(sql.sql("select commission_amount from futures_position where position_id = ?")
+                        .param(positionId)
+                        .query(BigDecimal.class)
+                        .single())
+                .isEqualByComparingTo("0.21");
+        assertThat(wallet(trader)).isEqualByComparingTo("5019.79");
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+    }
+
+    /**
+     * TR-44 I3-I4, isolated, branch RELEASE: 2 at 100 at 10x take 20 of margin into the isolated wallet and 0.1 of fee
+     * from the cross wallet; closed at 95 the loss 10 and the fee 0.095 come out of the released 20, and the cross
+     * wallet gets 9.905 back.
+     */
+    @Test
+    void TR44_anIsolatedClose_countsItsFeeInTheClosingEvent() throws Exception {
+        UUID trader = trader(true);
+        binanceRates();
+        isolated(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+
+        place(trader, market("BUY", "2")).andExpect(status().isOk());
+        assertThat((BigDecimal) position(trader).get("isolated_wallet_amount")).isEqualByComparingTo("20");
+        assertThat(wallet(trader)).isEqualByComparingTo("4999.9");
+
+        depth(List.of(level("95.1", "5")), List.of(level("95", "5")));
+        place(trader, market("SELL", "2")).andExpect(status().isOk());
+
+        assertThat(openPositions(trader)).isZero();
+        // 4,999.9 − 10 − 190 × 0.0005 (0.095).
+        assertThat(wallet(trader)).isEqualByComparingTo("4989.805");
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+    }
+
+    /**
+     * TR-44 I4, isolated, branch INSURANCE: closed at 89 the loss 22 and the fee 0.089 are beyond the 20 of margin; the
+     * position loses exactly its isolated wallet, and the 2.089 beyond it is an insurance cover, not the cross
+     * wallet's.
+     */
+    @Test
+    void TR44_aFeeBeyondTheIsolatedWallet_isCovered_andNeverReachesTheCrossWallet() throws Exception {
+        UUID trader = trader(true);
+        binanceRates();
+        isolated(trader, 10);
+        depth(List.of(level("100", "5")), List.of(level("99.9", "5")));
+        place(trader, market("BUY", "2")).andExpect(status().isOk());
+
+        depth(List.of(level("89.1", "5")), List.of(level("89", "5")));
+        place(trader, market("SELL", "2")).andExpect(status().isOk());
+
+        assertThat(openPositions(trader)).isZero();
+        assertThat(wallet(trader)).as("4,999.9 less the isolated 20").isEqualByComparingTo("4979.9");
+        assertThat(sql.sql("""
+                        select sum(amount) from wallet_ledger_entry
+                         where user_id = ? and entry_type = 'INSURANCE_COVER'""").param(trader).query(BigDecimal.class).single()).isEqualByComparingTo("2.089");
+        assertThat(ledgerSum(trader)).isEqualByComparingTo(wallet(trader));
+    }
+
+    /**
+     * TR-44 I3: an isolated fill must find its margin and its fee in the cross wallet's free cash. 50 at 100 at 1x is
+     * a margin of 5,000, the whole wallet, and the fee of 2.5 does not fit: nothing is opened and nothing is paid.
+     */
+    @Test
+    void TR44_anIsolatedFill_whoseMarginAndFeeDoNotFit_opensNothing() throws Exception {
+        UUID trader = trader(true);
+        binanceRates();
+        isolated(trader, 1);
+        depth(List.of(level("100", "60")), List.of(level("99.9", "60")));
+
+        place(trader, market("BUY", "50"));
+
+        assertThat(openPositions(trader)).isZero();
+        assertThat(feeRows(trader)).isEmpty();
+        assertThat(wallet(trader)).isEqualByComparingTo("5000");
+    }
+
+    @Test
+    void TR44_theCommissionRate_isTheConfiguredOne() throws Exception {
+        UUID trader = trader(true);
+        binanceRates();
 
         as(trader, get(FUTURES + "/commissionRate").param("symbol", symbol), null)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.symbol").value(symbol))
-                .andExpect(jsonPath("$.makerCommissionRate").value(numeric("0")))
-                .andExpect(jsonPath("$.takerCommissionRate").value(numeric("0")));
+                .andExpect(jsonPath("$.makerCommissionRate").value(numeric("0.0002")))
+                .andExpect(jsonPath("$.takerCommissionRate").value(numeric("0.0005")));
     }
 
     /**

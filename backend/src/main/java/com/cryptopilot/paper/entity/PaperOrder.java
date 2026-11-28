@@ -510,12 +510,19 @@ public class PaperOrder extends BaseEntity {
         return order;
     }
 
-    /** Marks the order as placed by a triggered Futures conditional order. Called before it is first stored. */
+    /**
+     * Marks the order as placed by a triggered Futures conditional order, carrying the conditional order's plan: it
+     * triggers on the matching thread, outside the {@link PlanOrderScope} the plan was applied in (RF-33). Called before
+     * it is first stored.
+     */
     public PaperOrder placedBy(PaperOrder conditional) {
         if (!conditional.getOrderType().isFuturesConditional() || marketType != MarketType.FUTURES) {
             throw new IllegalArgumentException("only a Futures conditional order places a Futures order");
         }
         this.parentOrderId = conditional.getId();
+        if (planId == null) {
+            this.planId = conditional.getPlanId();
+        }
         return this;
     }
 

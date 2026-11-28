@@ -3,7 +3,6 @@ package com.cryptopilot.workflow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -12,14 +11,15 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.cryptopilot.market.FundingHistory;
+import com.cryptopilot.market.MarkPrice;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketTestData;
+import com.cryptopilot.market.MarketTrade;
 import com.cryptopilot.market.MinuteKlineBatch;
-import com.cryptopilot.market.SettledFunding;
 import com.cryptopilot.market.dto.request.LeverageBracketsRequest;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.paper.job.PaperMatchingWorker;
 import com.cryptopilot.schema.DemoWf01Data;
 import com.cryptopilot.support.ClosedKlines;
 import com.cryptopilot.support.InAppNotifications;
@@ -29,7 +29,6 @@ import com.cryptopilot.support.StreamedPrices;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.job.MatchingWorker;
 import com.cryptopilot.trading.job.MinuteKlineFeed;
-import com.cryptopilot.trading.service.MatchingService;
 import com.jayway.jsonpath.JsonPath;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -41,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -72,26 +72,35 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Workflow WF-01 end to end (E2E-WF01): the demo scenarios DS-01a to DS-01g, and a change of the levels of an open
- * position, driven through the public HTTP API as the web app calls it, by the demo accounts of DEMO-01 signed in with
- * their passwords.
+ * Workflow WF-01 end to end (E2E-WF01) on the one engine of D-117 (RF-33): a plan is carried out by paper orders on the
+ * Trader's demo account, driven through the public HTTP API as the web app calls it, by the demo accounts of DEMO-01
+ * signed in with their passwords.
+ *
+ * <p>BM04 DS-01a is the main scenario: activate → the MARKET entry fills → plan EXECUTED, the entry order FILLED, the
+ * demo wallet changed, the journal record SIMULATED. The Spot fee is taken in the coin the fill brings in (TR-13, as
+ * the exchange does), so the wallet holds 4,000 USDT and 2.998 ETH after the buy of 2 ETH at 3,000 (BM04 counts the
+ * same 6 USDT of fee in USDT: 3,994 USDT and 3 ETH). The other tests keep the Design Brief scenarios on the demo
+ * account: a Futures plan closed by hand, a LIMIT plan resting in the paper book, the refusals on the plan itself, a
+ * moved MARKET entry (BR-69), the plan limit of FREE (BR-62), an invalidated LIMIT and new levels of an open position.
  *
  * <p>The backend runs on the {@code demo} profile, on a database of its own, so Flyway applies the demo accounts:
  * demo.free (FREE, CONSERVATIVE, 10,000 at 1 %), demo.pro (PRO, BALANCED, 10,000 at 1 %) and the administrator. The
- * administrator sets the pairs up as the loader does, through the admin API: BTCUSDT and ETHUSDT switched on with the
- * leverage brackets of {@code deploy/demo/wf01.json}; {@code SLIPPAGE_BPS} is changed through the same API.
+ * administrator sets the pairs up as the loader does, through the admin API; {@code SLIPPAGE_BPS} is changed through
+ * the same API and prices the plan panel only (decision A of RF-33): the order fills at the paper price like any other.
+ * Each test opens the demo accounts of both Traders (10,000 USDT, 0.1 BTC, 1 ETH, 10 BNB on Spot; 5,000 USDT on
+ * Futures) and removes them afterwards.
  *
- * <p>No network. What the exchange would send is handed in by the test: the pairs as the symbol synchronisation lists
- * them (Spot tick 0.01, step 0.00001; Futures tick 0.1, step 0.001, minimum notional 100), last and mark prices into
- * the price cache, closed 1-minute candles to the running matching feed, and the funding settlements the market port
- * answers. The clock is the test's: every test starts at 07:58:30 on 2026-11-02 and the clock moves with the candles.
- * Fees are the seeded ones: Futures maker 0.02 %, taker 0.05 %; Spot 0.1 %.
+ * <p>No network. What the exchange would send is handed in by the test: the pairs (Spot tick 0.01, step 0.00001;
+ * Futures tick 0.1, step 0.001, minimum notional 100), last and mark prices into the price cache, trades and mark
+ * prices to the paper matching consumer, and closed 1-minute candles to the plan feed that invalidates waiting plans.
+ * The clock is the test's: every test starts at 07:58:30 on 2026-11-02. Fees are the seeded ones, charged on the demo
+ * account and estimated by the plan panel alike: Futures maker 0.02 %, taker 0.05 % (TR-44); Spot 0.1 %.
  *
- * <p>NFR N3 of the Design Brief: a fill or an exit decided by a candle is visible through the API at most 3 s after the
- * candle is handed to the matching feed; each measurement is logged.
+ * <p>NFR N3 of the Design Brief: a fill or an exit decided by the market is visible through the API at most 3 s after
+ * the price reached the engine; each measurement is logged.
  *
- * <p>Rule: WF-01; UC-16 to UC-21; BR-23 to BR-39, BR-62, BR-68, BR-69; NSF-07; MSG16, MSG18, MSG22, MSG23, MSG27, MSG29,
- * MSG51, MSG52, MSG54; D-111, D-112, D-120, D-122, D-124; Q-81.
+ * <p>Rule: WF-01; UC-16 to UC-21; BR-23 to BR-39, BR-62, BR-68, BR-69, BR-71; NSF-07; MSG16, MSG18, MSG22, MSG23,
+ * MSG27, MSG51, MSG52, MSG54; D-117, D-124; RF-33; BM04 DS-01a.
  */
 @SpringBootTest(
         properties = {
@@ -115,21 +124,33 @@ class Wf01EndToEndTest {
     private static final String DEMO_PASSWORD = "demo-password-for-the-wf01-test";
     private static final UUID DEMO_FREE = UUID.fromString("019b76da-a800-7d04-8000-000000000001");
     private static final UUID DEMO_PRO = UUID.fromString("019b76da-a800-7d04-8000-000000000002");
+    private static final List<UUID> TRADERS = List.of(DEMO_FREE, DEMO_PRO);
 
     private static final String PLANS = "/api/v1/plans";
     private static final String BTC = "BTCUSDT";
     private static final String ETH = "ETHUSDT";
+    private static final AtomicLong TRADE_IDS = new AtomicLong();
+
+    /** The paper rows of a Trader, children first. */
+    private static final List<String> PAPER_TABLES = List.of(
+            "futures_margin_adjustment",
+            "order_fill",
+            "futures_position",
+            "futures_symbol_config",
+            "futures_account_config",
+            "trade_order",
+            "order_list",
+            "wallet_ledger_entry",
+            "wallet_balance",
+            "equity_snapshot");
 
     /** The minute the clock starts in; a test starts 30 s into it. */
     private static final Instant MINUTE_0 = Instant.parse("2026-11-02T07:58:00Z");
 
     private static final Instant START = MINUTE_0.plusSeconds(30);
-    private static final Instant EIGHT = Instant.parse("2026-11-02T08:00:00Z");
     private static final Duration N3 = Duration.ofSeconds(3);
     private static final String ENTRY_FILLED = "Entry filled";
     private static final String POSITION_CLOSED = "Position closed";
-    private static final FundingHistory NO_FUNDING =
-            new FundingHistory(List.of(), List.of(), List.of(), List.of(), List.of());
 
     @DynamicPropertySource
     static void passwords(DynamicPropertyRegistry registry) {
@@ -162,14 +183,13 @@ class Wf01EndToEndTest {
     private MatchingWorker worker;
 
     @Autowired
-    private MutableTestClock clock;
+    private PaperMatchingWorker paper;
 
     @Autowired
-    private MatchingService matching;
+    private MutableTestClock clock;
 
     private final DemoWf01Data data = DemoWf01Data.read();
     private final Map<String, UUID> pairs = new LinkedHashMap<>();
-    private final AtomicReference<List<SettledFunding>> settlements = new AtomicReference<>(List.of());
 
     private String admin;
     private String pro;
@@ -215,43 +235,74 @@ class Wf01EndToEndTest {
     }
 
     @BeforeEach
-    void startTheEngine() throws Exception {
+    void openTheDemoAccounts() throws Exception {
         feed.stop();
         worker.stop();
         clock.set(START);
         removeCachedPrices();
-        settlements.set(List.of());
-        doAnswer(call -> funding(call.getArgument(1), call.getArgument(2)))
-                .when(market)
-                .fundingHistory(any(), any(), any());
         doReturn(MinuteKlineBatch.of(List.of())).when(market).closedMinuteKlines(any(), any(), any());
         doReturn(MinuteKlineBatch.of(List.of())).when(market).closedMarkPriceKlines(any(), any());
         feed.start();
         admin = signIn(ADMIN_EMAIL, ADMIN_PASSWORD);
         pro = signIn(PRO_EMAIL, DEMO_PASSWORD);
         free = signIn(FREE_EMAIL, DEMO_PASSWORD);
+        for (String token : List.of(pro, free)) {
+            call(token, post("/api/v1/paper/account"), null).andExpect(status().isCreated());
+        }
         slippageChanged = false;
     }
 
+    /**
+     * Ends what still works through the API first, so the paper book in memory lets go of the orders, then removes the
+     * plans, the journal and the demo accounts.
+     */
     @AfterEach
     void removeWhatTheTestWrote() throws Exception {
+        endWhatStillWorks();
         feed.stop();
         worker.stop();
         if (slippageChanged) {
             changeSetting("SLIPPAGE_BPS", "0");
         }
-        InAppNotifications.remove(sql, List.of(DEMO_FREE, DEMO_PRO));
-        for (UUID trader : List.of(DEMO_FREE, DEMO_PRO)) {
+        InAppNotifications.awaitDeliveries(sql);
+        InAppNotifications.remove(sql, TRADERS);
+        for (UUID trader : TRADERS) {
             sql.sql("""
                             delete from trading_journal_level_change where journal_id in
                                    (select journal_id from trading_journal where user_id = ?)""").param(trader).update();
             sql.sql("delete from trading_journal where user_id = ?")
                     .param(trader)
                     .update();
+            for (String table : PAPER_TABLES) {
+                sql.sql("delete from " + table + " where user_id = ?")
+                        .param(trader)
+                        .update();
+            }
             sql.sql("delete from trading_plan where user_id = ?").param(trader).update();
         }
+        sql.sql("update user_profile set default_capital = 10000 where user_id = ?")
+                .param(DEMO_PRO)
+                .update();
         sql.sql("delete from matching_watermark").update();
+        sql.sql("delete from order_matching_watermark").update();
         removeCachedPrices();
+    }
+
+    private void endWhatStillWorks() throws Exception {
+        for (String token : List.of(pro, free)) {
+            List<Map<String, Object>> items = JsonPath.read(
+                    json(call(token, get(PLANS).param("pageSize", "100"), null).andExpect(status().isOk())),
+                    "$.items[*]");
+            for (Map<String, Object> item : items) {
+                String id = String.valueOf(item.get("id"));
+                if ("ACTIVE".equals(item.get("status"))) {
+                    call(token, post(PLANS + "/" + id + "/cancel"), null);
+                } else if ("EXECUTED".equals(item.get("status"))
+                        && "OPEN".equals(JsonPath.read(plan(token, id), "$.position.status"))) {
+                    call(token, post(PLANS + "/" + id + "/close-position"), null);
+                }
+            }
+        }
     }
 
     /**
@@ -267,18 +318,105 @@ class Wf01EndToEndTest {
     }
 
     // ------------------------------------------------------------------------------------------
-    // DS-01a: a MARKET Futures plan to a closed journal entry (main scenario)
+    // BM04 DS-01a: a Spot MARKET plan filled on the demo wallet (main scenario)
     // ------------------------------------------------------------------------------------------
 
     /**
-     * DS-01a. demo.pro plans BTCUSDT Futures MARKET LONG, SL 99,500, TP 101,500, leverage 5, risk 1 % (100) with the
-     * last price at 100,000 and {@code SLIPPAGE_BPS} 10. Saved and activated, it fills at once as a taker at 100,100;
-     * a funding settlement at 08:00 is paid while it is open; at 08:05 the Trader estimates and closes it by hand with
-     * the last price at 100,600. The plan stays EXECUTED, the journal entry is CLOSED with the amounts below, and MSG23
-     * names the close.
+     * BM04 DS-01a. demo.pro, capital 20,000 at 1 %, demo wallet opened (BR-68), ETHUSDT at 3,000: entry 3,000, SL
+     * 2,900, TP 3,300. Created and activated, the MARKET entry fills at once: quantity 2 ETH, cost 6,000, max loss 200,
+     * R/R 3.0; the plan EXECUTED, the order FILLED, the wallet 4,000 USDT and 2.998 ETH (the 0.1 % fee of 0.002 ETH,
+     * 6 USDT at the price, taken from the coin bought), the take profit and stop loss waiting as an OCO sale of the
+     * 1.998 ETH; the journal record SIMULATED; MSG22 sent.
      */
     @Test
-    void DS01a_marketFuturesPlan_toClosedJournalEntry() throws Exception {
+    void DS01a_spotMarketPlan_fillsOnTheDemoWallet() throws Exception {
+        sql.sql("update user_profile set default_capital = 20000 where user_id = ?")
+                .param(DEMO_PRO)
+                .update();
+        spotLast(ETH, "3000");
+        String body = spotMarket(ETH, "2900", "3300", true);
+
+        String panel = json(call(pro, post(PLANS + "/calculate"), body).andExpect(status().isOk()));
+        // 20,000 × 1 % = 200 at risk over a stop 100 below 3,000: 2 ETH, 6,000.
+        assertDecimal(panel, "$.snapshot.positionQuantity", "2");
+        assertDecimal(panel, "$.snapshot.notionalValue", "6000");
+        assertDecimal(panel, "$.snapshot.riskAmount", "200");
+        // (3,300 − 3,000) / (3,000 − 2,900) = 3.
+        assertDecimal(panel, "$.snapshot.riskRewardRatio", "3");
+        assertThat((Boolean) JsonPath.read(panel, "$.blocksActivation")).isFalse();
+
+        String created = json(call(pro, post(PLANS), body)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("EXECUTED"))
+                .andExpect(jsonPath("$.position.status").value("OPEN")));
+        String id = JsonPath.read(created, "$.id");
+        assertThat(statuses(created)).containsExactly("DRAFT", "ACTIVE", "EXECUTED");
+        assertDecimal(created, "$.position.fillPrice", "3000");
+
+        List<Map<String, Object>> orders = ordersOf(id);
+        assertThat(orders)
+                .extracting(row -> row.get("order_type") + " " + row.get("order_status"))
+                .containsExactly("MARKET FILLED", "LIMIT_MAKER NEW", "STOP_LOSS NEW");
+        assertThat((BigDecimal) orders.getFirst().get("executed_quantity")).isEqualByComparingTo("2");
+
+        String wallet = spotWallet(pro);
+        assertDecimal(wallet, "$.balances[?(@.asset == 'USDT')].total", "4000");
+        assertDecimal(wallet, "$.balances[?(@.asset == 'ETH')].total", "2.998");
+        assertDecimal(wallet, "$.balances[?(@.asset == 'ETH')].locked", "1.998");
+
+        String open = journal(pro, "OPEN");
+        assertThat((String) JsonPath.read(open, "$.items[0].planId")).isEqualTo(id);
+        assertThat((String) JsonPath.read(open, "$.items[0].source")).isEqualTo("SIMULATED");
+        assertDecimal(open, "$.items[0].entryPrice", "3000");
+        assertThat(notification(pro, id, ENTRY_FILLED)).isEqualTo("ETHUSDT LONG entry filled at 3000.");
+    }
+
+    /**
+     * DS-01a, the exit: a trade through 3,300 fills the take profit of the OCO as a maker at its price. The stop loss
+     * expires, the 1.998 ETH are sold, the journal record closes as TAKE_PROFIT and MSG23 names the close.
+     */
+    @Test
+    void DS01a2_spotPlan_closedByTakeProfit_onTheDemoWallet() throws Exception {
+        sql.sql("update user_profile set default_capital = 20000 where user_id = ?")
+                .param(DEMO_PRO)
+                .update();
+        spotLast(ETH, "3000");
+        String id = id(call(pro, post(PLANS), spotMarket(ETH, "2900", "3300", true))
+                .andExpect(jsonPath("$.status").value("EXECUTED")));
+
+        clock.set(START.plusSeconds(20));
+        long handed = trade(MarketType.SPOT, ETH, "3300.01");
+        String closed = awaitVisible("the take profit exit", handed, () -> plan(pro, id), "CLOSED");
+
+        assertThat((String) JsonPath.read(closed, "$.position.closeReason")).isEqualTo("TAKE_PROFIT");
+        assertDecimal(closed, "$.position.exitPrice", "3300");
+        String wallet = spotWallet(pro);
+        // 1 ETH of the grant left; 4,000 + 3,300 × 1.998 × (1 − 0.001) = 4,000 + 6,586.8066.
+        assertDecimal(wallet, "$.balances[?(@.asset == 'ETH')].total", "1");
+        assertDecimal(wallet, "$.balances[?(@.asset == 'USDT')].total", "10586.8066");
+        assertThat(ordersOf(id))
+                .extracting(row -> row.get("order_status"))
+                .doesNotContain("NEW", "PENDING_NEW", "PARTIALLY_FILLED");
+        String entry = journal(pro, "CLOSED");
+        assertThat((String) JsonPath.read(entry, "$.items[0].planId")).isEqualTo(id);
+        assertThat((String) JsonPath.read(entry, "$.items[0].closeReason")).isEqualTo("TAKE_PROFIT");
+        assertThat(notification(pro, id, POSITION_CLOSED))
+                .startsWith("ETHUSDT position closed by take profit at 3300.");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // A Futures MARKET plan closed by hand
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * demo.pro plans BTCUSDT Futures MARKET LONG, SL 99,500, TP 101,500, leverage 5, risk 1 % (100) with the last price
+     * at 100,000 and {@code SLIPPAGE_BPS} 10. The panel prices the entry 10 bps higher; saved and activated, the plan's
+     * MARKET order fills on the demo account at the paper price, 100,000, as a taker at the 0.05 % its panel estimated
+     * (TR-44). At 08:05 the Trader estimates and
+     * closes the position at 100,600; the plan stays EXECUTED and the journal entry is CLOSED as MANUAL.
+     */
+    @Test
+    void DS01a3_futuresMarketPlan_closedByHand() throws Exception {
         slippage("10");
         futuresLast("100000");
         String body = futures("MARKET", null, "99500", "101500", 5, true);
@@ -287,13 +425,6 @@ class Wf01EndToEndTest {
         // 100,000 × 1.001 = 100,100.0; 100 / (100,100 − 99,500) = 0.1666… → 0.166 on the step 0.001.
         assertDecimal(panel, "$.expectedFillPrice", "100100");
         assertDecimal(panel, "$.snapshot.positionQuantity", "0.166");
-        // 0.166 × 100,100 = 16,616.6; margin at 5x 3,323.32.
-        assertDecimal(panel, "$.snapshot.notionalValue", "16616.6");
-        assertDecimal(panel, "$.snapshot.initialMargin", "3323.32");
-        // (16,616.6 − 3,323.32) / (0.166 × (1 − 0.004)) = 80,401.606… → up to the tick 0.1: 80,401.7, 19.7 % below.
-        assertDecimal(panel, "$.snapshot.estimatedLiquidationPrice", "80401.7");
-        // (101,500 − 100,100) / (100,100 − 99,500) = 2.33333333.
-        assertDecimal(panel, "$.snapshot.riskRewardRatio", "2.33333333");
         assertThat((Boolean) JsonPath.read(panel, "$.blocksActivation")).isFalse();
 
         String created = json(call(pro, post(PLANS), body)
@@ -301,142 +432,57 @@ class Wf01EndToEndTest {
                 .andExpect(jsonPath("$.status").value("EXECUTED"))
                 .andExpect(jsonPath("$.position.status").value("OPEN")));
         String id = JsonPath.read(created, "$.id");
-        assertDecimal(created, "$.position.fillPrice", "100100");
+        assertDecimal(created, "$.position.fillPrice", "100000");
         assertDecimal(created, "$.position.quantity", "0.166");
-        // Taker: 16,616.6 × 0.0005 = 8.3083.
-        assertDecimal(created, "$.position.entryFee", "8.3083");
-        assertDecimal(created, "$.position.liquidationPrice", "80401.7");
-        assertThat(Instant.parse(JsonPath.read(created, "$.position.entryTime")))
-                .isEqualTo(START);
+        // Taker: 0.166 × 100,000 × 0.0005 = 8.3.
+        assertDecimal(created, "$.position.entryFee", "8.3");
         assertThat(statuses(created)).containsExactly("DRAFT", "ACTIVE", "EXECUTED");
-        String open = journal(pro, "OPEN");
-        assertThat((String) JsonPath.read(open, "$.items[0].planId")).isEqualTo(id);
-        assertDecimal(open, "$.items[0].entryPrice", "100100");
+        assertThat(ordersOf(id))
+                .extracting(row -> row.get("order_type") + " " + row.get("order_status"))
+                .containsExactlyInAnyOrder("MARKET FILLED", "TAKE_PROFIT_MARKET NEW", "STOP_MARKET NEW");
 
-        // LONG pays 0.166 × 100,200 × 0.0001 = 1.66332 at 08:00.
-        settlements.set(List.of(new SettledFunding(EIGHT, new BigDecimal("0.0001"), new BigDecimal("100200"))));
         clock.set(Instant.parse("2026-11-02T08:05:00Z"));
         futuresLast("100600");
-
         String estimate =
                 json(call(pro, get(PLANS + "/" + id + "/close-estimate"), null).andExpect(status().isOk()));
-        // Sold 10 bps lower: 100,600 × 0.999 = 100,499.4.
-        assertDecimal(estimate, "$.estimatedExitPrice", "100499.4");
-        // (100,499.4 − 100,100) × 0.166 = 66.3004.
-        assertDecimal(estimate, "$.priceResult", "66.3004");
-        assertDecimal(estimate, "$.entryFee", "8.3083");
-        // 100,499.4 × 0.166 × 0.0005 = 8.3414502.
-        assertDecimal(estimate, "$.estimatedExitFee", "8.3414502");
-        assertDecimal(estimate, "$.fundingSoFar", "-1.66332");
-        // 66.3004 − 8.3083 − 8.3414502 − 1.66332 = 47.9873298.
-        assertDecimal(estimate, "$.estimatedNetPnl", "47.9873298");
+        // (100,600 − 100,000) × 0.166 = 99.6; exit fee 100,600 × 0.166 × 0.0005 = 8.3498.
+        assertDecimal(estimate, "$.priceResult", "99.6");
+        assertDecimal(estimate, "$.estimatedExitFee", "8.3498");
 
         String closed = json(call(pro, post(PLANS + "/" + id + "/close-position"), null)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("EXECUTED"))
                 .andExpect(jsonPath("$.position.status").value("CLOSED"))
-                .andExpect(jsonPath("$.position.closeReason").value("MANUAL"))
-                .andExpect(jsonPath("$.position.provisional").value(false)));
-        assertDecimal(closed, "$.position.exitPrice", "100499.4");
-        assertDecimal(closed, "$.position.netPnl", "47.9873298");
+                .andExpect(jsonPath("$.position.closeReason").value("MANUAL")));
+        assertDecimal(closed, "$.position.exitPrice", "100600");
 
         String entry = journal(pro, "CLOSED");
         assertThat((String) JsonPath.read(entry, "$.items[0].planId")).isEqualTo(id);
         assertThat((String) JsonPath.read(entry, "$.items[0].closeReason")).isEqualTo("MANUAL");
-        assertDecimal(entry, "$.items[0].entryPrice", "100100");
-        assertDecimal(entry, "$.items[0].exitPrice", "100499.4");
+        assertDecimal(entry, "$.items[0].entryPrice", "100000");
+        assertDecimal(entry, "$.items[0].exitPrice", "100600");
         assertDecimal(entry, "$.items[0].quantity", "0.166");
-        assertDecimal(entry, "$.items[0].entryFee", "8.3083");
-        // Both fees: 8.3083 + 8.3414502.
-        assertDecimal(entry, "$.items[0].feeAmount", "16.6497502");
-        assertDecimal(entry, "$.items[0].fundingFeeAmount", "-1.66332");
-        assertDecimal(entry, "$.items[0].realizedPnl", "66.3004");
-        assertDecimal(entry, "$.items[0].netPnl", "47.9873298");
-        assertThat((Boolean) JsonPath.read(entry, "$.items[0].provisional")).isFalse();
+        // 99.6 − 8.3 − 8.3498 = 82.9502.
+        assertDecimal(entry, "$.items[0].netPnl", "82.9502");
         assertThat(notification(pro, id, POSITION_CLOSED))
-                .isEqualTo("BTCUSDT position closed by manual close at 100499.4. P/L: 47.9873298.");
-    }
-
-    /**
-     * DS-01a, the fill: the Trader receives MSG22 "{pair} {direction} entry filled at {price}." when the entry fills
-     * (SRS 3.5, UC-20).
-     */
-    @Test
-    void DS01a_aFill_sendsMsg22() throws Exception {
-        futuresLast("100000");
-        String id = JsonPath.read(
-                json(call(pro, post(PLANS), futures("MARKET", null, "99500", "101500", 5, true))
-                        .andExpect(status().isCreated())
-                        .andExpect(jsonPath("$.status").value("EXECUTED"))),
-                "$.id");
-
-        assertThat(notification(pro, id, ENTRY_FILLED)).isEqualTo("BTCUSDT LONG entry filled at 100000.");
-    }
-
-    /**
-     * DS-01a-2. The plan of DS-01a closed by the engine: at the take profit by a candle that trades through it (a
-     * resting limit order: maker, at its price), and, for a second plan, at the stop loss by a candle that opens below
-     * it (a stop-market order: taker, at the open, sold 10 bps lower).
-     */
-    @Test
-    void DS01a2_closedByTakeProfit_andByStopLossOnAGap() throws Exception {
-        slippage("10");
-        futuresLast("100000");
-        String body = futures("MARKET", null, "99500", "101500", 5, true);
-        String byTakeProfit =
-                id(call(pro, post(PLANS), body).andExpect(jsonPath("$.status").value("EXECUTED")));
-
-        long handed = feedClosed(MarketType.FUTURES, BTC, 1, "101000", "100900", "101600");
-        String first = awaitVisible("the take profit exit", handed, () -> positionStatus(pro, byTakeProfit), "CLOSED");
-
-        assertThat((String) JsonPath.read(first, "$.position.closeReason")).isEqualTo("TAKE_PROFIT");
-        assertDecimal(first, "$.position.exitPrice", "101500");
-        assertThat(Instant.parse(JsonPath.read(first, "$.position.exitTime"))).isEqualTo(minute(1));
-        // (101,500 − 100,100) × 0.166 = 232.4.
-        assertDecimal(first, "$.position.realizedPnl", "232.4");
-        // Maker exit: 101,500 × 0.166 × 0.0002 = 3.3698; with the entry 8.3083 + 3.3698 = 11.6781.
-        assertDecimal(first, "$.position.feeAmount", "11.6781");
-        // 232.4 − 11.6781 = 220.7219, no funding.
-        assertDecimal(first, "$.position.netPnl", "220.7219");
-        assertThat(notification(pro, byTakeProfit, POSITION_CLOSED))
-                .isEqualTo("BTCUSDT position closed by take profit at 101500. P/L: 220.7219.");
-
-        clock.set(EIGHT.plusSeconds(10));
-        futuresLast("100000");
-        String byStopLoss =
-                id(call(pro, post(PLANS), body).andExpect(jsonPath("$.status").value("EXECUTED")));
-        feedClosed(MarketType.FUTURES, BTC, 2, "100050", "100000", "100150");
-        handed = feedClosed(MarketType.FUTURES, BTC, 3, "99400", "99300", "99450");
-        String second = awaitVisible("the stop loss exit", handed, () -> positionStatus(pro, byStopLoss), "CLOSED");
-
-        assertThat((String) JsonPath.read(second, "$.position.closeReason")).isEqualTo("STOP_LOSS");
-        // Gap: the open 99,400 sold 10 bps lower, 99,300.6.
-        assertDecimal(second, "$.position.exitPrice", "99300.6");
-        assertThat(Instant.parse(JsonPath.read(second, "$.position.exitTime"))).isEqualTo(minute(3));
-        // (99,300.6 − 100,100) × 0.166 = −132.7004.
-        assertDecimal(second, "$.position.realizedPnl", "-132.7004");
-        // Taker exit: 99,300.6 × 0.166 × 0.0005 = 8.2419498; with the entry 16.5502498.
-        assertDecimal(second, "$.position.feeAmount", "16.5502498");
-        // −132.7004 − 16.5502498 = −149.2506498.
-        assertDecimal(second, "$.position.netPnl", "-149.2506498");
-        assertThat(notification(pro, byStopLoss, POSITION_CLOSED))
-                .isEqualTo("BTCUSDT position closed by stop loss at 99300.6. P/L: -149.2506498.");
-        assertThat(JsonPath.<List<String>>read(journal(pro, "CLOSED"), "$.items[*].planId"))
-                .containsExactlyInAnyOrder(byTakeProfit, byStopLoss);
+                .isEqualTo("BTCUSDT position closed by manual close at 100600. P/L: 82.9502.");
+        assertThat(JsonPath.<List<Object>>read(futuresPositions(pro), "$[?(@.positionAmt != 0)]"))
+                .as("nothing left open on the demo account")
+                .isEmpty();
     }
 
     // ------------------------------------------------------------------------------------------
-    // DS-01b: a LIMIT plan resting in the book (main scenario)
+    // DS-01b: a LIMIT plan resting in the paper book
     // ------------------------------------------------------------------------------------------
 
     /**
      * DS-01b. demo.pro plans BTCUSDT Futures LIMIT LONG at 99,000 (SL 98,010, TP 101,970, leverage 5) with the last
      * price at 100,000. An invalidation price below the price is MSG16 on its field; at 102,000 the plan is ACTIVE with
-     * the default expiry of 7 days and rests while the candle of 07:59 stays above it. The candle of 08:00 trades
-     * through 99,000 and fills it there as a maker.
+     * the default expiry of 7 days and its LIMIT order rests in the paper book. A trade at 98,990 fills it at 99,000 as
+     * a maker, and the plan is EXECUTED.
      */
     @Test
-    void DS01b_limitPlan_restsUntilACandleReachesIt() throws Exception {
+    void DS01b_limitPlan_restsInThePaperBook_untilATradeReachesIt() throws Exception {
         futuresLast("100000");
         call(
                         pro,
@@ -459,22 +505,22 @@ class Wf01EndToEndTest {
         assertThat(Instant.parse(JsonPath.read(created, "$.expiresAt"))).isEqualTo(START.plus(Duration.ofDays(7)));
         // 100 / (99,000 − 98,010) = 0.10101… → 0.101.
         assertDecimal(created, "$.snapshot.positionQuantity", "0.101");
+        assertThat(ordersOf(id))
+                .extracting(row -> row.get("order_type") + " " + row.get("order_status"))
+                .contains("LIMIT NEW");
 
-        feedClosed(MarketType.FUTURES, BTC, 1, "99800", "99500", "100100");
-        long handed = feedClosed(MarketType.FUTURES, BTC, 2, "99500", "98900", "99600");
+        clock.set(START.plusSeconds(20));
+        long handed = trade(MarketType.FUTURES, BTC, "98990");
         String filled = awaitVisible("the LIMIT fill", handed, () -> plan(pro, id), "$.status", "EXECUTED");
 
         assertThat(statuses(filled)).containsExactly("DRAFT", "ACTIVE", "EXECUTED");
         assertThat((String) JsonPath.read(filled, "$.position.status")).isEqualTo("OPEN");
         assertDecimal(filled, "$.position.fillPrice", "99000");
-        assertThat(Instant.parse(JsonPath.read(filled, "$.position.entryTime")))
-                .as("the open of the candle that reached it, not the 07:59 one")
-                .isEqualTo(minute(2));
         // Maker: 99,000 × 0.101 × 0.0002 = 1.9998.
         assertDecimal(filled, "$.position.entryFee", "1.9998");
         String open = journal(pro, "OPEN");
         assertThat((String) JsonPath.read(open, "$.items[0].planId")).isEqualTo(id);
-        assertDecimal(open, "$.items[0].entryFee", "1.9998");
+        assertThat((String) JsonPath.read(open, "$.items[0].source")).isEqualTo("SIMULATED");
     }
 
     // ------------------------------------------------------------------------------------------
@@ -484,7 +530,8 @@ class Wf01EndToEndTest {
     /**
      * DS-01c. demo.pro plans BTCUSDT Futures LIMIT LONG at 99,000 with SL 94,050 and leverage 50 (tier 1 of the demo
      * brackets: up to 125x, MMR 0.004). The liquidation price lies above the stop loss: BLOCKING, plus a WARNING for
-     * leverage above BALANCED's 5x. The draft is saved with them; activation is MSG18 and it stays DRAFT.
+     * leverage above BALANCED's 5x. The draft is saved with them; activation is MSG18, it stays DRAFT and no order is
+     * placed.
      */
     @Test
     void DS01c_stopBeyondLiquidation_isBlocked() throws Exception {
@@ -506,7 +553,6 @@ class Wf01EndToEndTest {
                 .andExpect(jsonPath("$.status").value("DRAFT"))
                 .andExpect(jsonPath("$.blocksActivation").value(true)));
         String id = JsonPath.read(draft, "$.id");
-        assertThat(severities(draft)).containsEntry("SL_BEYOND_LIQUIDATION", "BLOCKING");
 
         call(pro, post(PLANS + "/" + id + "/activate"), null)
                 .andExpect(status().isConflict())
@@ -515,7 +561,7 @@ class Wf01EndToEndTest {
         String after = plan(pro, id);
         assertThat((String) JsonPath.read(after, "$.status")).isEqualTo("DRAFT");
         assertThat(statuses(after)).containsExactly("DRAFT");
-        assertThat(severities(after)).containsEntry("SL_BEYOND_LIQUIDATION", "BLOCKING");
+        assertThat(ordersOf(id)).isEmpty();
     }
 
     /**
@@ -538,9 +584,9 @@ class Wf01EndToEndTest {
 
     /**
      * DS-01e. Three demo.pro drafts of BTCUSDT Futures MARKET LONG, SL 99,000, TP 102,000, saved with the last price at
-     * 100,000 (1R = 1,000; {@code SLIPPAGE_BPS} 0). At 100,500 (0.5R) activation is MSG51 with the recalculated plan
-     * until confirmed, then fills at 100,500; at 101,000 (1R, beyond 0.75R) it is MSG52 even confirmed and stays a
-     * draft; at 100,200 (0.2R, under 0.25R) it fills directly.
+     * 100,000 (1R = 1,000). At 100,500 (0.5R) activation is MSG51 with the recalculated plan until confirmed, then
+     * fills at 100,500 on the demo account; at 101,000 (1R, beyond 0.75R) it is MSG52 even confirmed and stays a draft
+     * with no order; at 100,200 (0.2R, under 0.25R) it fills directly.
      */
     @Test
     void DS01e_movedMarketEntry_confirmOrRefuse() throws Exception {
@@ -566,10 +612,10 @@ class Wf01EndToEndTest {
         // 500 / 1,000 = 0.5R; 100 / 1,500 = 0.0666… → 0.066; (102,000 − 100,500) / 1,500 = 1.
         assertDecimal(required, "$.deviationR", "0.5");
         assertDecimal(required, "$.maxDeviationR", "0.75");
-        assertDecimal(required, "$.expectedFillPrice", "100500");
         assertDecimal(required, "$.positionQuantity", "0.066");
         assertDecimal(required, "$.riskRewardRatio", "1");
         assertThat((String) JsonPath.read(plan(pro, drafts.get(0)), "$.status")).isEqualTo("DRAFT");
+        assertThat(ordersOf(drafts.get(0))).isEmpty();
         String confirmed =
                 json(call(pro, post(PLANS + "/" + drafts.get(0) + "/activate").param("confirmDeviation", "true"), null)
                         .andExpect(status().isOk())
@@ -588,13 +634,7 @@ class Wf01EndToEndTest {
         assertDecimal(refused, "$.messageArgs[0]", "1");
         assertDecimal(refused, "$.messageArgs[1]", "0.75");
         assertThat((String) JsonPath.read(plan(pro, drafts.get(1)), "$.status")).isEqualTo("DRAFT");
-
-        clock.set(START.plusSeconds(30));
-        futuresLast("100200");
-        String direct = json(call(pro, post(PLANS + "/" + drafts.get(2) + "/activate"), null)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("EXECUTED")));
-        assertDecimal(direct, "$.position.fillPrice", "100200");
+        assertThat(ordersOf(drafts.get(1))).isEmpty();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -602,30 +642,36 @@ class Wf01EndToEndTest {
     // ------------------------------------------------------------------------------------------
 
     /**
-     * DS-01f. demo.free holds three ACTIVE Spot plans: two of the loader (BTCUSDT and ETHUSDT, far below the price)
-     * and a BTCUSDT LIMIT LONG at 99,000 (SL 98,010, TP 101,970, risk 0.5 %), so a fourth is MSG27. The Spot candle of
-     * 07:59 rises from 100,500 to 102,100 without coming down to 99,000: the take profit is reached first, the plan is
-     * INVALIDATED with that reason, MSG54 tells the Trader, and its slot is free for the fourth plan.
+     * DS-01f. demo.free holds three ACTIVE Spot plans, each with its limit buy resting on the demo account: two of the
+     * loader (BTCUSDT and ETHUSDT, far below the price) and a BTCUSDT LIMIT LONG at 99,000 (SL 98,010, TP 101,970,
+     * risk 0.5 %), so a fourth is MSG27. The Spot candle of 07:59 rises from 100,500 to 102,100 without coming down to
+     * 99,000: the take profit is reached first, the plan is INVALIDATED with that reason, its orders are cancelled and
+     * the USDT they locked is free again, MSG54 tells the Trader, and its slot is free for the fourth plan.
      */
     @Test
     void DS01f_limitInvalidated_whenTakeProfitReachedFirst() throws Exception {
         spotLast(BTC, "100000");
         spotLast(ETH, "4000");
         loaderPlansOfDemoFree(2);
+        BigDecimal lockedBefore = usdtLocked(free);
         String limit = id(call(free, post(PLANS), spot(BTC, "99000", "98010", "101970", "0.5", true))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("ACTIVE")));
+        assertThat(usdtLocked(free)).as("the limit buy locks its cost").isGreaterThan(lockedBefore);
         String fourth = loaderPlan(BTC, false);
         call(free, post(PLANS + "/" + fourth + "/activate"), null)
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.messageCode").value("MSG27"));
 
-        long handed = feedClosed(MarketType.SPOT, BTC, 1, "100500", "100400", "102100");
-        String invalidated =
-                awaitVisible("the invalidation", handed, () -> plan(free, limit), "$.status", "INVALIDATED");
+        feedClosed(MarketType.SPOT, BTC, 1, "100500", "100400", "102100");
+        String invalidated = awaitPlan(free, limit, "INVALIDATED");
 
         assertThat((String) JsonPath.read(invalidated, "$.invalidationReason")).isEqualTo("TAKE_PROFIT_REACHED");
         assertThat(statuses(invalidated)).containsExactly("DRAFT", "ACTIVE", "INVALIDATED");
+        assertThat(ordersOf(limit))
+                .extracting(row -> row.get("order_status"))
+                .doesNotContain("NEW", "PENDING_NEW", "PARTIALLY_FILLED");
+        assertThat(usdtLocked(free)).isEqualByComparingTo(lockedBefore);
         assertThat(notification(free, limit, "Plan invalidated"))
                 .isEqualTo("BTCUSDT LONG plan was invalidated before its entry was filled: the take profit was reached"
                         + " first.");
@@ -636,8 +682,8 @@ class Wf01EndToEndTest {
 
     /**
      * DS-01g. demo.free holds the three ACTIVE plans of the loader. A fourth by Save and Activate is MSG27 with the
-     * limit 3 and the tier FREE, and nothing is saved; a saved draft stays DRAFT when activated. demo.pro activates
-     * the same plan.
+     * limit 3 and the tier FREE, and nothing is saved or placed; a saved draft stays DRAFT when activated. demo.pro
+     * activates the same plan.
      */
     @Test
     void DS01g_freeFourthActivePlan_isRefused() throws Exception {
@@ -645,6 +691,7 @@ class Wf01EndToEndTest {
         spotLast(ETH, "4000");
         loaderPlansOfDemoFree(3);
         String fourth = loaderBody(BTC, true);
+        long ordersBefore = orderCount(DEMO_FREE);
 
         call(free, post(PLANS), fourth)
                 .andExpect(status().isConflict())
@@ -653,6 +700,7 @@ class Wf01EndToEndTest {
                 .andExpect(jsonPath("$.messageArgs[0]").value("3"))
                 .andExpect(jsonPath("$.messageArgs[2]").value("FREE"));
         assertThat(planCount(free)).isEqualTo(3);
+        assertThat(orderCount(DEMO_FREE)).isEqualTo(ordersBefore);
 
         String draft = loaderPlan(BTC, false);
         call(free, post(PLANS + "/" + draft + "/activate"), null)
@@ -666,89 +714,98 @@ class Wf01EndToEndTest {
     }
 
     // ------------------------------------------------------------------------------------------
-    // TP-E: the levels of an open position changed from the next candle on
+    // TP-E: new levels of an open position (D-124)
     // ------------------------------------------------------------------------------------------
 
     /**
-     * TP-E. The DS-01a position (filled at 100,100, SL 99,500) has its stop loss raised to 99,800 at 07:59:30; the
-     * change takes effect from the candle of 08:00. The candle of 07:59 trades down to 99,700, below the new stop, and
-     * closes nothing; the candle of 08:00 opens at 99,900 and trades down to 99,750: the stop-market exit at 99,800 is
-     * sold 10 bps lower, at 99,700.2.
+     * TP-E. The Futures position of a MARKET plan (filled at 100,000, SL 99,500) has its stop loss raised to 99,800:
+     * the stop-market order of the plan is replaced by one at 99,800. A mark price of 99,750 triggers it, the position
+     * is sold at the market, and the journal entry closes as STOP_LOSS with the new stop on record.
      */
     @Test
-    void TPE_aStopLossChange_actsFromTheNextCandle() throws Exception {
-        slippage("10");
+    void TPE_aStopLossChange_replacesTheStopOrder() throws Exception {
         futuresLast("100000");
         String id = id(call(pro, post(PLANS), futures("MARKET", null, "99500", "101500", 5, true))
                 .andExpect(jsonPath("$.status").value("EXECUTED")));
 
-        clock.set(minute(1).plusSeconds(30));
+        clock.set(START.plusSeconds(30));
+        futuresLast("100000");
         String changed = json(call(pro, patch(PLANS + "/" + id + "/position-levels"), "{\"stopLoss\": 99800}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.position.levelChangeCount").value(1))
                 .andExpect(jsonPath("$.position.stopWidened").value(false)));
-        assertThat(Instant.parse(JsonPath.read(changed, "$.position.levelsEffectiveFrom")))
-                .isEqualTo(minute(2));
         assertDecimal(changed, "$.position.stopLoss", "99800");
         assertDecimal(changed, "$.position.originalStopLoss", "99500");
+        List<Map<String, Object>> live =
+                sql.sql("""
+                        select order_type, stop_price from trade_order
+                         where plan_id = ? and order_status = 'NEW' order by order_type""").param(UUID.fromString(id)).query().listOfRows();
+        assertThat(live).extracting(row -> row.get("order_type")).containsExactly("STOP_MARKET", "TAKE_PROFIT_MARKET");
+        assertThat((BigDecimal) live.getFirst().get("stop_price")).isEqualByComparingTo("99800");
 
-        feedClosed(MarketType.FUTURES, BTC, 1, "100050", "99700", "100150");
-        long handed = feedClosed(MarketType.FUTURES, BTC, 2, "99900", "99750", "99950");
-        String closed = awaitVisible("the exit at the new stop", handed, () -> positionStatus(pro, id), "CLOSED");
+        clock.set(START.plusSeconds(40));
+        futuresLast("99750");
+        long handed = mark(BTC, "99750");
+        String closed = awaitVisible("the exit at the new stop", handed, () -> plan(pro, id), "CLOSED");
 
         assertThat((String) JsonPath.read(closed, "$.position.closeReason")).isEqualTo("STOP_LOSS");
-        assertThat(Instant.parse(JsonPath.read(closed, "$.position.exitTime")))
-                .as("closed by the 08:00 candle, not by the 07:59 one that also traded below 99,800")
-                .isEqualTo(minute(2));
-        // 99,800 × 0.999 = 99,700.2.
-        assertDecimal(closed, "$.position.exitPrice", "99700.2");
-        // (99,700.2 − 100,100) × 0.166 = −66.3668.
-        assertDecimal(closed, "$.position.realizedPnl", "-66.3668");
-        // 8.3083 + 99,700.2 × 0.166 × 0.0005 (8.2751166) = 16.5834166; net −66.3668 − 16.5834166 = −82.9502166.
-        assertDecimal(closed, "$.position.feeAmount", "16.5834166");
-        assertDecimal(closed, "$.position.netPnl", "-82.9502166");
-        assertThat(notification(pro, id, POSITION_CLOSED))
-                .isEqualTo("BTCUSDT position closed by stop loss at 99700.2. P/L: -82.9502166.");
+        assertDecimal(closed, "$.position.stopLoss", "99800");
+        String entry = journal(pro, "CLOSED");
+        assertThat((String) JsonPath.read(entry, "$.items[0].planId")).isEqualTo(id);
+        assertThat((String) JsonPath.read(entry, "$.items[0].closeReason"))
+                .as("the MARKET order the stop placed closes as the stop (F-19)")
+                .isEqualTo("STOP_LOSS");
+        assertThat(notification(pro, id, POSITION_CLOSED)).startsWith("BTCUSDT position closed by stop loss at ");
     }
 
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
 
-    /** The answer of the market port for the funding of a position held in {@code (after, upTo]}: the settlements set. */
-    private FundingHistory funding(Instant after, Instant upTo) {
-        List<SettledFunding> within = settlements.get().stream()
-                .filter(settled -> settled.fundingTime().isAfter(after)
-                        && !settled.fundingTime().isAfter(upTo))
-                .toList();
-        if (within.isEmpty()) {
-            return NO_FUNDING;
-        }
-        return new FundingHistory(
-                within, within.stream().map(SettledFunding::fundingTime).toList(), List.of(), List.of(), List.of());
-    }
-
-    /**
-     * Hands the closed candle of minute {@code n} of the pair to the matching feed, after the clock moved to its end,
-     * and answers when it was handed, for N3.
-     */
-    private long feedClosed(MarketType marketType, String symbol, int n, String open, String low, String high) {
-        if (clock.instant().isBefore(minute(n + 1))) {
-            clock.set(minute(n + 1));
-        }
+    /** Hands a market trade at the clock's instant to the paper matching consumer and answers when, for N3. */
+    private long trade(MarketType marketType, String symbol, String price) {
         long handed = System.nanoTime();
-        feed.onMinuteKline(ClosedKlines.closed(marketType, pairs.get(symbol), minute(n), open, low, high));
+        paper.onTrade(new MarketTrade(
+                marketType,
+                pairs.get(symbol),
+                TRADE_IDS.incrementAndGet(),
+                new BigDecimal(price),
+                BigDecimal.ONE,
+                clock.instant(),
+                false,
+                clock.instant()));
         return handed;
     }
 
-    /** Waits until the matching engine recorded the candle of {@code openTime} of the pair as fully matched. */
-    private void awaitWatermark(MarketType marketType, String symbol, Instant openTime) {
-        await("the watermark at " + openTime)
+    /** The Futures mark price at the clock's instant, into the cache and to the paper consumer; answers when, for N3. */
+    private long mark(String symbol, String price) {
+        new StreamedPrices(prices).mark(symbol, new BigDecimal(price), clock.instant());
+        long handed = System.nanoTime();
+        paper.onMarkPrice(new MarkPrice(pairs.get(symbol), new BigDecimal(price), clock.instant()));
+        return handed;
+    }
+
+    /**
+     * Hands the closed candle of minute {@code n} of the pair to the plan feed, which invalidates waiting plans, after
+     * the clock moved to its end.
+     */
+    private void feedClosed(MarketType marketType, String symbol, int n, String open, String low, String high) {
+        if (clock.instant().isBefore(minute(n + 1))) {
+            clock.set(minute(n + 1));
+        }
+        feed.onMinuteKline(ClosedKlines.closed(marketType, pairs.get(symbol), minute(n), open, low, high));
+    }
+
+    private String awaitPlan(String token, String id, String expected) {
+        AtomicReference<String> seen = new AtomicReference<>();
+        await("plan " + id + " " + expected)
                 .atMost(Duration.ofSeconds(20))
                 .pollInterval(Duration.ofMillis(20))
-                .until(() -> matching.watermark(marketType, pairs.get(symbol))
-                        .filter(at -> !at.isBefore(openTime))
-                        .isPresent());
+                .until(() -> {
+                    seen.set(plan(token, id));
+                    return expected.equals(JsonPath.read(seen.get(), "$.status"));
+                });
+        return seen.get();
     }
 
     /**
@@ -766,10 +823,7 @@ class Wf01EndToEndTest {
                     return expected.equals(JsonPath.read(answer, path));
                 });
         Duration took = Duration.ofNanos(System.nanoTime() - handed);
-        log.info(
-                "N3 {}: visible through the API {} ms after its candle was handed to the engine",
-                what,
-                took.toMillis());
+        log.info("N3 {}: visible through the API {} ms after the price reached the engine", what, took.toMillis());
         assertThat(took).as("N3: " + what).isLessThanOrEqualTo(N3);
         return seen.get();
     }
@@ -777,11 +831,6 @@ class Wf01EndToEndTest {
     /** {@link #awaitVisible(String, long, Callable, String, String)} on the position status of a plan's detail. */
     private String awaitVisible(String what, long handed, Callable<String> plan, String positionStatus) {
         return awaitVisible(what, handed, plan, "$.position.status", positionStatus);
-    }
-
-    /** The plan's detail, which carries its position once filled. */
-    private String positionStatus(String token, String id) throws Exception {
-        return plan(token, id);
     }
 
     private String plan(String token, String id) throws Exception {
@@ -796,6 +845,34 @@ class Wf01EndToEndTest {
     private String journal(String token, String status) throws Exception {
         return json(call(token, get("/api/v1/journal").param("status", status), null)
                 .andExpect(status().isOk()));
+    }
+
+    private String spotWallet(String token) throws Exception {
+        return json(call(token, get("/api/v1/paper/wallets/SPOT"), null).andExpect(status().isOk()));
+    }
+
+    private BigDecimal usdtLocked(String token) throws Exception {
+        List<Object> locked = JsonPath.read(spotWallet(token), "$.balances[?(@.asset == 'USDT')].locked");
+        return new BigDecimal(String.valueOf(locked.getFirst()));
+    }
+
+    private String futuresPositions(String token) throws Exception {
+        return json(call(token, get("/api/v1/paper/futures/positionRisk").param("symbol", BTC), null)
+                .andExpect(status().isOk()));
+    }
+
+    /** The plan's paper orders, oldest first. */
+    private List<Map<String, Object>> ordersOf(String planId) {
+        return sql.sql("""
+                        select order_type, order_status, executed_quantity from trade_order
+                         where plan_id = ? order by created_at, order_id""").param(UUID.fromString(planId)).query().listOfRows();
+    }
+
+    private long orderCount(UUID trader) {
+        return sql.sql("select count(*) from trade_order where user_id = ?")
+                .param(trader)
+                .query(Long.class)
+                .single();
     }
 
     /**
@@ -876,14 +953,22 @@ class Wf01EndToEndTest {
                 + ", \"activate\": " + activate + "}";
     }
 
+    private String spotMarket(String symbol, String stop, String takeProfit, boolean activate) {
+        return "{\"pairId\": \"" + pairs.get(symbol) + "\", \"market\": \"SPOT\", \"direction\": \"LONG\","
+                + " \"entryType\": \"MARKET\", \"stopLoss\": " + stop + ", \"takeProfit\": " + takeProfit
+                + ", \"activate\": " + activate + "}";
+    }
+
     /** {@code body} with one more field, its value written as JSON. */
     private static String withField(String body, String field, String value) {
         return body.substring(0, body.length() - 1) + ", \"" + field + "\": " + value + "}";
     }
 
-    /** The BTCUSDT Futures last price at the clock's instant, as the stream's forming 1-minute candle sends it. */
+    /** The BTCUSDT Futures last and mark price at the clock's instant, as the streams send them. */
     private void futuresLast(String price) {
-        new StreamedPrices(prices).last(MarketType.FUTURES, BTC, new BigDecimal(price), clock.instant());
+        StreamedPrices streamed = new StreamedPrices(prices);
+        streamed.last(MarketType.FUTURES, BTC, new BigDecimal(price), clock.instant());
+        streamed.mark(BTC, new BigDecimal(price), clock.instant());
     }
 
     private void spotLast(String symbol, String price) {
@@ -941,8 +1026,13 @@ class Wf01EndToEndTest {
         return severities;
     }
 
+    /** A decimal at {@code path}; a filter path answers a list, whose one element is compared. */
     private static void assertDecimal(String json, String path, String expected) {
         Object value = JsonPath.read(json, path);
+        if (value instanceof List<?> list) {
+            assertThat(list).as(path).hasSize(1);
+            value = list.getFirst();
+        }
         assertThat(value).as(path).isNotNull();
         assertThat(new BigDecimal(String.valueOf(value))).as(path).isEqualByComparingTo(expected);
     }

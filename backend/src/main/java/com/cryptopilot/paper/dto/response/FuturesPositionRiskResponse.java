@@ -14,7 +14,7 @@ import java.time.Instant;
  * @param positionSide BOTH in one-way mode
  * @param positionAmt the size, negative for a short
  * @param entryPrice the average entry price
- * @param breakEvenPrice the price at which closing makes nothing, the entry price while fees are zero
+ * @param breakEvenPrice the price at which a close at the market makes nothing after the opening and closing taker fees
  * @param markPrice the mark price the figures are at
  * @param unRealizedProfit the profit or loss at the mark
  * @param liquidationPrice where the position would be liquidated, zero when no price can
