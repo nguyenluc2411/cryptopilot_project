@@ -40,6 +40,7 @@ import com.cryptopilot.market.service.impl.StreamCandleServiceImpl;
 import com.cryptopilot.market.service.impl.TradingMarketData;
 import com.cryptopilot.support.TestcontainersConfig;
 import java.lang.reflect.Proxy;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -741,6 +742,116 @@ class MarketStreamSupervisorTest {
     }
 
     /** The event publisher of the services under test: records the event and wakes the waits. */
+    /**
+     * RF-07: a pair under replay takes the replay's prices only; the exchange's are dropped, yet still prove the
+     * market's stream live, and the other market's prices of the same pair go on as before.
+     */
+    @Test
+    void RF07_aReplayedPair_takesTheReplaysPricesOnly_andItsStreamStillProvesLiveness() {
+        supervisor = supervisor(true, 100);
+        supervisor.start();
+        server.awaitConnection(2);
+        Connection futures = connection("/market/stream");
+        Connection spot = connection("/stream");
+
+        assertThat(supervisor.beginReplay(MarketType.FUTURES, "BTCUSDT")).contains(new StreamTarget(btc, "BTCUSDT"));
+        assertThat(supervisor.isReplayed(MarketType.FUTURES, "BTCUSDT")).isTrue();
+        futures.send(StreamFrames.markPrice("BTCUSDT", AT));
+        await(() -> liveness.lastLiveAt(MarketType.FUTURES) != null, "the live message to prove the stream");
+        assertThat(marks).isEmpty();
+        assertThat(latest.markPrice(btc)).isEmpty();
+
+        supervisor.replay(MarketType.FUTURES, replayedMark("60000.0"));
+        assertThat(marks).singleElement().satisfies(mark -> assertThat(mark.price())
+                .isEqualByComparingTo("60000"));
+        assertThat(latest.markPrice(btc))
+                .hasValueSatisfying(mark -> assertThat(mark.markPrice()).isEqualByComparingTo("60000"));
+
+        spot.send(StreamFrames.kline("BTCUSDT", MarketInterval.ONE_MINUTE, AT, false));
+        await(() -> minutes.size() == 1, "the Spot candle of the same pair");
+        assertThat(minutes.getFirst().market()).isEqualTo(MarketType.SPOT);
+    }
+
+    /** RF-07: a replayed message of a pair not under replay, or of a pair not streamed, reaches nothing. */
+    @Test
+    void RF07_aReplay_reachesOnlyAStreamedPairUnderReplay() {
+        supervisor = supervisor(true, 100);
+        supervisor.start();
+        server.awaitConnection(2);
+
+        supervisor.replay(MarketType.FUTURES, replayedMark("60000.0"));
+
+        assertThat(marks).isEmpty();
+        assertThat(supervisor.beginReplay(MarketType.FUTURES, "DOGEUSDT")).isEmpty();
+        assertThat(supervisor.isReplayed(MarketType.FUTURES, "DOGEUSDT")).isFalse();
+    }
+
+    /**
+     * RF-07: ending a replay gives the pair the exchange's prices back from a clean slate, so the replay's book update
+     * numbers never hold the exchange's back.
+     */
+    @Test
+    void RF07_endingAReplay_givesTheExchangesPricesBack_fromACleanSlate() {
+        supervisor = supervisor(true, 100);
+        supervisor.start();
+        server.awaitConnection(2);
+        Connection futures = connection("/market/stream");
+        supervisor.beginReplay(MarketType.FUTURES, "BTCUSDT");
+        supervisor.replay(
+                MarketType.FUTURES,
+                new StreamMessage.BookTickerMessage(
+                        "BTCUSDT",
+                        Long.MAX_VALUE,
+                        new BigDecimal("59999.95"),
+                        BigDecimal.TEN,
+                        new BigDecimal("60000.05"),
+                        BigDecimal.TEN,
+                        Instant.now()));
+        assertThat(trading.currentBookTop(MarketType.FUTURES, btc)).isPresent();
+
+        supervisor.endReplay(MarketType.FUTURES, "BTCUSDT");
+        supervisor.endReplay(MarketType.FUTURES, "BTCUSDT");
+
+        assertThat(supervisor.isReplayed(MarketType.FUTURES, "BTCUSDT")).isFalse();
+        assertThat(trading.currentBookTop(MarketType.FUTURES, btc)).isEmpty();
+        futures.send(StreamFrames.markPrice("BTCUSDT", AT));
+        await(() -> marks.size() == 1, "the exchange's mark price again");
+    }
+
+    /**
+     * RF-12: the fault switch cuts every open connection of one market, the other stays, and the cut ones come back by
+     * themselves after the outage, announcing the reconnection like any loss (NSF-02 then backfills).
+     */
+    @Test
+    void RF12_theFaultSwitch_cutsOneMarketsConnections_whichReconnectByThemselves() {
+        supervisor = supervisor(true, 100);
+        assertThat(supervisor.simulateLoss(MarketType.FUTURES, Duration.ZERO)).isZero();
+        supervisor.start();
+        server.awaitConnection(2);
+        await(
+                () -> supervisor.shards(MarketType.FUTURES).stream().allMatch(BinanceStreamShard::isConnected)
+                        && supervisor.shards(MarketType.SPOT).stream().allMatch(BinanceStreamShard::isConnected),
+                "both markets connected");
+
+        int cut = supervisor.simulateLoss(MarketType.FUTURES, Duration.ofMillis(200));
+
+        assertThat(cut).isEqualTo(supervisor.shards(MarketType.FUTURES).size()).isPositive();
+        assertThat(supervisor.shards(MarketType.FUTURES)).noneMatch(BinanceStreamShard::isConnected);
+        assertThat(supervisor.shards(MarketType.SPOT)).allMatch(BinanceStreamShard::isConnected);
+        server.awaitConnection(3);
+        await(() -> events.contains(new MarketStreamReconnected(MarketType.FUTURES)), "the reconnection");
+        assertThat(events).doesNotContain(new MarketStreamReconnected(MarketType.SPOT));
+        await(
+                () -> supervisor.shards(MarketType.FUTURES).stream().allMatch(BinanceStreamShard::isConnected),
+                "the futures connections back");
+    }
+
+    private static StreamMessage replayedMark(String price) {
+        BigDecimal at = new BigDecimal(price);
+        return new StreamMessage.MarkPriceMessage(
+                "BTCUSDT", at, at, BigDecimal.ZERO, Instant.now().plusSeconds(3600), Instant.now());
+    }
+
     private void publish(Object event) {
         events.add(event);
         signal();

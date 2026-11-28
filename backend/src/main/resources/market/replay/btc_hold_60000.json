@@ -1,0 +1,8 @@
+{
+  "description": "DS-03a/b setup: BTCUSDT Futures held at 60,000 while the demonstration opens its Long 0.1 BTC at 50x.",
+  "market": "FUTURES",
+  "symbol": "BTCUSDT",
+  "stepMillis": 1000,
+  "spread": "0.1",
+  "points": [{ "at": 0, "price": "60000.0" }]
+}

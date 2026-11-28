@@ -41,7 +41,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
@@ -123,6 +125,8 @@ public class MarketStreamSupervisor {
     private final Map<MarketType, Integer> nextConnection = new EnumMap<>(MarketType.class);
     /** Per market, whether a refresh for pairs turned on is scheduled and not yet started. */
     private final Map<MarketType, AtomicBoolean> enableQueued = new EnumMap<>(MarketType.class);
+    /** RF-07: the pairs whose prices come from a replay rather than the exchange, read on the readers' threads. */
+    private final Set<Replayed> replayed = ConcurrentHashMap.newKeySet();
 
     public MarketStreamSupervisor(
             BinanceStreamClient streams,
@@ -317,6 +321,77 @@ public class MarketStreamSupervisor {
                 : current.connections().stream().map(Connection::shard).toList();
     }
 
+    /**
+     * RF-12 fault switch: cuts every open connection of the market, price and book alike, each held down for
+     * {@code outage} before it reconnects by itself; the other market is untouched. The cut connections stay this
+     * market's, so the pairs, the liveness and the routing are as before once they are back.
+     *
+     * @return how many connections were cut
+     */
+    public synchronized int simulateLoss(MarketType market, Duration outage) {
+        int cut = 0;
+        for (BinanceStreamShard shard : shards(market)) {
+            if (shard.simulateLoss(outage)) {
+                cut++;
+            }
+        }
+        log.warn("NSF-03 {}: {} connections cut by the fault switch (RF-12) for {}", market, cut, outage);
+        return cut;
+    }
+
+    /**
+     * RF-07: from now on the pair takes its prices from a replay, through {@link #replay}, and the exchange's are
+     * dropped; its trading data held so far is forgotten, so the replay's book updates are not held back by the
+     * exchange's numbering. Only a pair this market streams now can be replayed.
+     *
+     * @return the pair, or empty when the market does not stream it
+     */
+    public synchronized Optional<StreamTarget> beginReplay(MarketType market, String symbol) {
+        Optional<StreamTarget> target = streamed(market, symbol);
+        target.ifPresent(found -> {
+            replayed.add(new Replayed(market, symbol));
+            trading.forget(market, found.pairId());
+        });
+        return target;
+    }
+
+    /**
+     * RF-07: routes one replayed message as the stream's own would be routed, to the engines, the latest prices and
+     * the market topics; ignored unless its pair is under replay and still streamed. A 1-minute candle reaches the
+     * matching engine and the alerts only and is never stored, as a streamed one.
+     */
+    public void replay(MarketType market, StreamMessage message) {
+        if (!replayed.contains(new Replayed(market, message.symbol()))) {
+            return;
+        }
+        Optional<StreamTarget> target;
+        synchronized (this) {
+            target = streamed(market, message.symbol());
+        }
+        target.ifPresent(found -> new Router(market, Map.of(found.symbol(), found), null).deliver(found, message));
+    }
+
+    /** RF-07: the pair takes the exchange's prices again, from a clean slate. */
+    public synchronized void endReplay(MarketType market, String symbol) {
+        if (replayed.remove(new Replayed(market, symbol))) {
+            streamed(market, symbol).ifPresent(found -> trading.forget(market, found.pairId()));
+        }
+    }
+
+    /** Whether the pair's prices come from a replay now. */
+    public boolean isReplayed(MarketType market, String symbol) {
+        return replayed.contains(new Replayed(market, symbol));
+    }
+
+    private Optional<StreamTarget> streamed(MarketType market, String symbol) {
+        MarketStreams current = running.get(market);
+        return current == null
+                ? Optional.empty()
+                : current.targets().stream()
+                        .filter(target -> target.symbol().equals(symbol))
+                        .findFirst();
+    }
+
     /** Closes every connection and stops the pipeline. */
     @PreDestroy
     public synchronized void stop() {
@@ -406,6 +481,9 @@ public class MarketStreamSupervisor {
         }
     }
 
+    /** A pair under replay (RF-07). */
+    private record Replayed(MarketType market, String symbol) {}
+
     /** What one market streams now. */
     private record MarketStreams(List<StreamTarget> targets, List<Connection> connections) {}
 
@@ -439,9 +517,15 @@ public class MarketStreamSupervisor {
             // D-159: any message proves the market's stream is live, a pair's or not, and its connection's pairs.
             liveness.record(market, connection, clock.instant());
             StreamTarget target = bySymbol.get(message.symbol());
-            if (target == null) {
+            if (target == null || replayed.contains(new Replayed(market, message.symbol()))) {
+                // RF-07: a pair under replay takes its prices from the replay only; its stream still proves liveness.
                 return;
             }
+            deliver(target, message);
+        }
+
+        /** Routes one message of a pair this router carries, wherever it came from. */
+        private void deliver(StreamTarget target, StreamMessage message) {
             if (message instanceof KlineMessage kline && kline.interval() == MarketInterval.ONE_MINUTE) {
                 toMinuteListeners(target, kline);
                 return;

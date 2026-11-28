@@ -1,0 +1,8 @@
+{
+  "description": "DS-06a setup: ETHUSDT Spot held at 3,010 while the demonstration sets its alert below 2,950.",
+  "market": "SPOT",
+  "symbol": "ETHUSDT",
+  "stepMillis": 1000,
+  "spread": "0.01",
+  "points": [{ "at": 0, "price": "3010.00" }]
+}

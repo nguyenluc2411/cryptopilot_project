@@ -70,6 +70,9 @@ cryptopilot:
       # NSF-17 runs in this profile: expired refresh tokens are deleted daily.
       enabled: true
   market:
+    test-tools:
+      # RF-07 price replay and RF-12 stream fault switch (application.yml).
+      enabled: true
     fallback:
       # D-159: display-only reference prices while a market's exchange data is lost (application.yml).
       enabled: true

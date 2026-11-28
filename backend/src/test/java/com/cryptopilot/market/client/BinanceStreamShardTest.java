@@ -362,6 +362,78 @@ class BinanceStreamShardTest {
         assertThatThrownBy(() -> shard(properties, server.baseUrl(""), tooMany)).hasMessageContaining("not 101");
     }
 
+    /**
+     * RF-12: the fault switch ends the open connection at once, holds every attempt back for the outage, then the
+     * shard reconnects by itself and reports the opening as following a loss.
+     */
+    @Test
+    void RF12_aSimulatedLoss_endsTheConnection_holdsForTheOutage_thenReconnectsAsAfterALoss() {
+        ManualScheduler virtualTime = new ManualScheduler();
+        shard = shard(properties(Duration.ofHours(23), Duration.ofHours(1)), server.baseUrl(""), STREAMS, virtualTime);
+        shard.start();
+        Connection first = server.awaitConnection(1);
+        await(() -> openings.size() == 1, "the first connection to be reported");
+
+        assertThat(shard.simulateLoss(Duration.ofSeconds(30))).isTrue();
+
+        assertThat(shard.isConnected()).isFalse();
+        await(first::ended, "the cut connection to end");
+        virtualTime.advance(Duration.ofSeconds(29));
+        assertThat(http.webSocketBuilds()).isOne();
+        virtualTime.advance(Duration.ofSeconds(1));
+        Connection second = server.awaitConnection(2);
+        await(() -> openings.size() == 2, "the reconnection");
+        assertThat(openings).containsExactly(false, true);
+        second.send(StreamFrames.markPrice("BTCUSDT", AT));
+        await(() -> messages.size() == 1, "a message on the new connection");
+    }
+
+    /** RF-12: a renewal falling due during the outage does not end it early; a zero outage reconnects at once. */
+    @Test
+    void RF12_aRenewalDueDuringTheOutage_doesNotEndItEarly() {
+        Duration renewAfter = Duration.ofSeconds(5);
+        ManualScheduler virtualTime = new ManualScheduler();
+        shard = shard(properties(renewAfter, Duration.ofHours(1)), server.baseUrl(""), STREAMS, virtualTime);
+        shard.start();
+        server.awaitConnection(1);
+        await(() -> openings.size() == 1, "the first connection to be reported");
+
+        shard.simulateLoss(Duration.ofSeconds(20));
+        virtualTime.advance(Duration.ofSeconds(19));
+
+        assertThat(http.webSocketBuilds()).isOne();
+        virtualTime.advance(Duration.ofSeconds(1));
+        server.awaitConnection(2);
+        await(() -> openings.size() == 2, "the reconnection");
+
+        shard.simulateLoss(Duration.ZERO);
+        virtualTime.advance(Duration.ZERO);
+        server.awaitConnection(3);
+        await(() -> openings.size() == 3, "the reconnection after a zero outage");
+        assertThat(openings).containsExactly(false, true, true);
+    }
+
+    /** RF-12: nothing to cut on a shard not connected or closed; closing it during the outage stops the reconnection. */
+    @Test
+    void RF12_aShardNotConnectedOrClosed_isNotCut_andClosingDuringTheOutageStopsTheReconnection() {
+        ManualScheduler virtualTime = new ManualScheduler();
+        shard = shard(properties(Duration.ofHours(23), Duration.ofHours(1)), server.baseUrl(""), STREAMS, virtualTime);
+        assertThat(shard.simulateLoss(Duration.ZERO)).isFalse();
+        assertThatThrownBy(() -> shard.simulateLoss(Duration.ofSeconds(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        shard.start();
+        server.awaitConnection(1);
+        await(() -> openings.size() == 1, "the first connection to be reported");
+
+        assertThat(shard.simulateLoss(Duration.ofSeconds(10))).isTrue();
+        assertThat(shard.simulateLoss(Duration.ofSeconds(10))).isFalse();
+        shard.close();
+        virtualTime.advance(Duration.ofDays(1));
+
+        assertThat(http.webSocketBuilds()).isOne();
+        assertThat(shard.simulateLoss(Duration.ZERO)).isFalse();
+    }
+
     private BinanceStreamShard started() {
         BinanceStreamShard started = shard(properties(Duration.ofHours(23), Duration.ofHours(1)), server.baseUrl(""));
         started.start();

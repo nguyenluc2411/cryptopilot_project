@@ -120,6 +120,17 @@ public class TradingMarketData {
         }
     }
 
+    /**
+     * Forgets everything held for one pair (RF-07): a price replay starts and ends on an empty slate, so the book
+     * update numbers of one source never hold back those of the other.
+     */
+    public void forget(MarketType market, UUID pairId) {
+        Key key = key(market, pairId);
+        for (Map<Key, ?> held : List.of(bookTops, depths, trades, closedMinutes)) {
+            held.remove(key);
+        }
+    }
+
     private boolean fresh(Instant at) {
         return !at.isBefore(clock.instant().minus(maxAge));
     }
