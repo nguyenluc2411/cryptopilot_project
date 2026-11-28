@@ -34,10 +34,10 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
     TradingPlan save(TradingPlan plan);
 
     /**
-     * As {@link #save}, and writes the plan at once: a plan that filled at activation must be stored before the journal
-     * inserts the record that refers to it (BR-34).
+     * Writes what is saved at once: a plan being activated is stored before the paper orders that name it (RF-33,
+     * {@code trade_order.plan_id}).
      */
-    TradingPlan saveAndFlush(TradingPlan plan);
+    void flush();
 
     @Transactional(readOnly = true)
     Optional<TradingPlan> findById(UUID id);
@@ -52,6 +52,11 @@ public interface TradingPlanRepository extends Repository<TradingPlan, UUID> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select p from TradingPlan p where p.id = :id and p.userId = :userId")
     Optional<TradingPlan> findForUpdate(UUID id, UUID userId);
+
+    /** The plan, row-locked until the transaction ends: a paper fill of its entry and a cancel are serialized. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select p from TradingPlan p where p.id = :id")
+    Optional<TradingPlan> lockById(UUID id);
 
     /**
      * The ACTIVE plans of one pair's market, row-locked until the transaction ends, so a fill in progress finishes

@@ -14,7 +14,6 @@ import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -43,69 +42,7 @@ class EntryFillRuleTest {
                 .isEqualTo(reached);
     }
 
-    @Test
-    void BR33_aMarketEntry_fillsAtActivationAtTheLastPrice_whateverItsDirection() {
-        Optional<BigDecimal> last = Optional.of(new BigDecimal("123.45"));
-
-        assertThat(EntryFillRule.atActivation(EntryType.MARKET, Direction.LONG, ENTRY, last))
-                .isEqualTo(last);
-        assertThat(EntryFillRule.atActivation(EntryType.MARKET, Direction.SHORT, ENTRY, last))
-                .isEqualTo(last);
-    }
-
-    @Test
-    void BR33_aMarketEntry_withoutALastPrice_isAProgrammingError() {
-        assertThatIllegalArgumentException()
-                .isThrownBy(
-                        () -> EntryFillRule.atActivation(EntryType.MARKET, Direction.LONG, ENTRY, Optional.empty()));
-    }
-
-    @ParameterizedTest
-    @CsvSource({
-        "LONG, 99, true",
-        "LONG, 100, true",
-        "LONG, 101, false",
-        "SHORT, 101, true",
-        "SHORT, 100, true",
-        "SHORT, 99, false"
-    })
-    void BR33_aLimitEntryAlreadyReachedAtActivation_fillsAtTheLastPrice_otherwiseItWaits(
-            Direction direction, String last, boolean fills) {
-        Optional<BigDecimal> lastPrice = Optional.of(new BigDecimal(last));
-
-        Optional<BigDecimal> fill = EntryFillRule.atActivation(EntryType.LIMIT, direction, ENTRY, lastPrice);
-
-        assertThat(fill).isEqualTo(fills ? lastPrice : Optional.empty());
-    }
-
     /** Below and above the stop: a STOP never fills at activation; one already triggered is refused before (D-112). */
-    @ParameterizedTest(name = "{0} at {1}")
-    @CsvSource({"LONG, 95", "LONG, 105", "SHORT, 95", "SHORT, 105"})
-    void BR33_aStopEntry_isNeverAskedAtActivation(Direction direction, String last) {
-        assertThatIllegalArgumentException()
-                .isThrownBy(() ->
-                        EntryFillRule.atActivation(EntryType.STOP, direction, ENTRY, Optional.of(new BigDecimal(last))))
-                .withMessageContaining("STOP");
-    }
-
-    @Test
-    void BR33_marketAndLimit_atActivation_areUnchangedByTheStopGuard() {
-        Optional<BigDecimal> last = Optional.of(new BigDecimal("99"));
-
-        assertThat(EntryFillRule.atActivation(EntryType.MARKET, Direction.LONG, null, last))
-                .isEqualTo(last);
-        assertThat(EntryFillRule.atActivation(EntryType.LIMIT, Direction.LONG, ENTRY, last))
-                .isEqualTo(last);
-        assertThat(EntryFillRule.atActivation(EntryType.LIMIT, Direction.SHORT, ENTRY, last))
-                .isEmpty();
-    }
-
-    @Test
-    void BR33_aLimitEntryWithoutALastPrice_waits() {
-        assertThat(EntryFillRule.atActivation(EntryType.LIMIT, Direction.LONG, ENTRY, Optional.empty()))
-                .isEmpty();
-    }
-
     @Test
     void D77_onlyARangeWhoseCandleOpenedAtOrAfterTheActivation_mayAct() {
         PriceRange range = new PriceRange(MarketType.SPOT, PAIR, ENTRY, ENTRY, MINUTE, MINUTE.plusSeconds(59));

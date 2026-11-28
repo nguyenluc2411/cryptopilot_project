@@ -18,6 +18,7 @@ import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.SimulatedTradeClosing;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.dto.response.CloseEstimateResponse;
@@ -43,6 +44,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
@@ -69,8 +71,19 @@ class PositionServiceImplTest {
     private final TradingPlanService tradingPlans = mock(TradingPlanService.class);
     private final PositionCloser closer = new PositionCloser(
             journal, new FeeRates(settings), funding, new TakerSlippage(settings, market), market, events);
+
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<PlanOrderPlacer> placers = mock(ObjectProvider.class);
+
     private final PositionServiceImpl service = new PositionServiceImpl(
-            plans, journal, closer, market, mock(MarketHealth.class), tradingPlans, Clock.fixed(NOW, ZoneOffset.UTC));
+            plans,
+            journal,
+            closer,
+            market,
+            mock(MarketHealth.class),
+            tradingPlans,
+            Clock.fixed(NOW, ZoneOffset.UTC),
+            placers);
 
     @BeforeEach
     void setUp() {
@@ -210,7 +223,7 @@ class PositionServiceImplTest {
     /** A plan never filled, or whose position is closed, has no OPEN position: 409 MSG43. */
     @Test
     void UC21_aPlanWithoutAnOpenPosition_isMsg43Conflict() {
-        when(journal.openTradeOfPlan(PLAN)).thenReturn(Optional.empty());
+        when(journal.openSimulatedTrades(USER)).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.closeEstimate(USER, PLAN)).isInstanceOf(IllegalPlanStateException.class);
         assertThatThrownBy(() -> service.closePosition(USER, PLAN)).isInstanceOf(IllegalPlanStateException.class);
@@ -234,7 +247,7 @@ class PositionServiceImplTest {
     }
 
     private void open(OpenTrade trade) {
-        when(journal.openTradeOfPlan(PLAN)).thenReturn(Optional.of(trade));
+        when(journal.openSimulatedTrades(USER)).thenReturn(List.of(trade));
         when(journal.openTrade(trade.positionId())).thenReturn(Optional.of(trade));
     }
 

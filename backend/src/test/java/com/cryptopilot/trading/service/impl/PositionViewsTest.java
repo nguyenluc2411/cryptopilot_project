@@ -11,6 +11,7 @@ import com.cryptopilot.admin.SystemSettingApi;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.RecordedPosition;
@@ -34,6 +35,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 
 /**
  * TP-E: the position block of an executed plan carries its current and original levels, the history of their changes
@@ -51,7 +53,12 @@ class PositionViewsTest {
     private final MarketApi market = mock(MarketApi.class);
     private final SystemSettingApi settings = mock(SystemSettingApi.class);
     private final FundingService funding = mock(FundingService.class);
-    private final PositionViews views = new PositionViews(journal, market, new FeeRates(settings), funding, settings);
+
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<PlanOrderPlacer> placers = mock(ObjectProvider.class);
+
+    private final PositionViews views =
+            new PositionViews(journal, market, new FeeRates(settings), funding, settings, placers);
 
     private TradingPlan plan;
 

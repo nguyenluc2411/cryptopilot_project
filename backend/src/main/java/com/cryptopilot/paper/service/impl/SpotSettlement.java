@@ -158,6 +158,7 @@ public class SpotSettlement {
                 price,
                 quantity,
                 Rounding.toAmount(buy ? fee.multiply(price) : fee),
+                buy ? quantity.subtract(fee) : quantity,
                 tradedAt));
         if (order.getPlanId() != null) {
             plans.entryFilled(order.getPlanId(), order.getId(), buy, price, maker, tradedAt);

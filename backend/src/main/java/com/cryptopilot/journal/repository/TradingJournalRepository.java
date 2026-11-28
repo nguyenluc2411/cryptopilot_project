@@ -107,12 +107,11 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             + " and j.paperOrderId is null and j.paperPositionId is null order by j.entryTime, j.id")
     List<TradingJournal> findOpenSimulated();
 
-    /** The record if it is an OPEN SIMULATED one. */
+    /** The record if it is an OPEN SIMULATED one, a plan's on the demo account included (RF-33). */
     @Transactional(readOnly = true)
     @Query("select j from TradingJournal j where j.id = :id"
             + " and j.status = com.cryptopilot.trading.model.enums.PositionStatus.OPEN"
-            + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED"
-            + " and j.paperOrderId is null and j.paperPositionId is null")
+            + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED")
     Optional<TradingJournal> findOpenSimulated(UUID id);
 
     /** The record of the plan if it is an OPEN SIMULATED one. */
@@ -173,12 +172,15 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             nativeQuery = true)
     int widenExcursionIfOpen(UUID id, BigDecimal adverse, BigDecimal favorable);
 
-    /** The user's OPEN SIMULATED records, oldest entry first: the positions whose current risk BR-29 counts. */
+    /**
+     * The user's OPEN SIMULATED records, oldest entry first: the positions whose current risk BR-29 counts and whose
+     * slots BR-62 keeps, those of plans carried out on the demo account included (RF-33).
+     */
     @Transactional(readOnly = true)
     @Query("select j from TradingJournal j where j.userId = :userId"
             + " and j.status = com.cryptopilot.trading.model.enums.PositionStatus.OPEN"
             + " and j.source = com.cryptopilot.journal.model.enums.TradeSource.SIMULATED"
-            + " and j.paperOrderId is null and j.paperPositionId is null order by j.entryTime, j.id")
+            + " order by j.entryTime, j.id")
     List<TradingJournal> findOpenSimulatedOf(UUID userId);
 
     /**
@@ -192,7 +194,7 @@ public interface TradingJournalRepository extends Repository<TradingJournal, UUI
             value = "update trading_journal set stop_loss_price = :stopLoss, take_profit_price = :takeProfit,"
                     + " stop_widened = stop_widened or :widensStop, level_change_count = level_change_count + 1,"
                     + " updated_at = :now, version = version + 1"
-                    + " where journal_id = :id and trade_status = 'OPEN' and source = 'SIMULATED' and paper_order_id is null and paper_position_id is null"
+                    + " where journal_id = :id and trade_status = 'OPEN' and source = 'SIMULATED'"
                     + " and version = :version",
             nativeQuery = true)
     int changeLevelsIfOpen(

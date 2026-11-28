@@ -3,6 +3,7 @@ package com.cryptopilot.trading.service.impl;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.TradablePair;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
@@ -15,6 +16,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
@@ -43,6 +45,8 @@ public class PlanExpiryServiceImpl implements PlanExpiryService {
     private final MarketHealth health;
     private final ApplicationEventPublisher events;
     private final Clock clock;
+    /** The plan's entry order waiting in the paper book, cancelled with it (RF-33). */
+    private final ObjectProvider<PlanOrderPlacer> orderPlacer;
 
     @Override
     @Transactional
@@ -67,6 +71,7 @@ public class PlanExpiryServiceImpl implements PlanExpiryService {
                 continue;
             }
             expired++;
+            orderPlacer.getObject().cancel(plan.getUserId(), plan.getId());
             events.publishEvent(new TradingPlanExpired(
                     plan.getId(),
                     plan.getUserId(),

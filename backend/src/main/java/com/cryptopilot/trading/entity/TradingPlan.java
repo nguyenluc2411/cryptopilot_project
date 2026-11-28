@@ -379,6 +379,7 @@ public class TradingPlan extends BaseEntity {
         executedAt = now.truncatedTo(ChronoUnit.MICROS);
         fillPrice = price;
         fillLiquidity = liquidity;
+        markUpdated(executedAt);
     }
 
     /**

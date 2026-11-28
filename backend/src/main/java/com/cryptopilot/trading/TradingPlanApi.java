@@ -21,14 +21,6 @@ public interface TradingPlanApi {
      */
     PlanContext planContext(UUID userId, UUID planId);
 
-    /**
-     * The terms the Trader's ACTIVE plan is applied with (RF-33).
-     *
-     * @throws com.cryptopilot.common.exception.ResourceNotFoundException when the Trader has no such plan (MSG41)
-     * @throws com.cryptopilot.common.exception.BusinessException {@code PLAN_STATE_INVALID} when it is not ACTIVE
-     */
-    PlanOrderTerms termsToApply(UUID userId, UUID planId);
-
     /** The terms of a plan whatever its status, for the journal record of its order; empty when there is none. */
     Optional<PlanOrderTerms> terms(UUID planId);
 

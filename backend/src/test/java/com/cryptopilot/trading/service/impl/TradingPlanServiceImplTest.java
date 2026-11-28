@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -40,6 +41,8 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PlanOrderPlacer;
+import com.cryptopilot.trading.PlanOrderTerms;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.SimulatedTradeOpening;
 import com.cryptopilot.trading.TradeJournal;
@@ -139,6 +142,11 @@ class TradingPlanServiceImplTest {
 
     private final TradeJournal journal = mock(TradeJournal.class);
 
+    private final PlanOrderPlacer placer = mock(PlanOrderPlacer.class);
+
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<PlanOrderPlacer> placerProvider = mock(ObjectProvider.class);
+
     private TradingPlanServiceImpl service;
 
     private final FundingService funding = mock(FundingService.class);
@@ -161,9 +169,22 @@ class TradingPlanServiceImplTest {
                 settings,
                 styleProvider,
                 journal,
-                new PositionOpener(
-                        journal, new FeeRates(settings), market, new FillLearningCapture(market, settings), events),
-                new PositionViews(journal, market, new FeeRates(settings), funding, settings));
+                new PositionViews(journal, market, new FeeRates(settings), funding, settings, placerProvider),
+                placerProvider);
+        when(placerProvider.getObject()).thenReturn(placer);
+        // The port's contract (RF-33): a MARKET entry fills at once on the demo account, and its fill makes the plan
+        // EXECUTED; a LIMIT or STOP entry waits in the paper book.
+        doAnswer(call -> {
+                    PlanOrderTerms terms = call.getArgument(0);
+                    if (terms.entryType() == EntryType.MARKET
+                            && saved != null
+                            && saved.getId().equals(terms.planId())) {
+                        saved.markExecuted(NOW, terms.entryPrice(), LiquidityRole.TAKER);
+                    }
+                    return null;
+                })
+                .when(placer)
+                .place(any());
         when(journal.openSimulatedTrade(any())).thenAnswer(call -> recorded(call.getArgument(0)));
         when(styleProvider.getIfAvailable()).thenReturn(styles);
         when(settings.decimal(TradingPlanServiceImpl.ENTRY_DEVIATION_BLOCK_R)).thenReturn(new BigDecimal("0.75"));
@@ -215,10 +236,8 @@ class TradingPlanServiceImplTest {
             saved = call.getArgument(0);
             return saved;
         });
-        when(plans.saveAndFlush(any())).thenAnswer(call -> {
-            saved = call.getArgument(0);
-            return saved;
-        });
+        // RF-33: the plan is read again after its paper orders are placed (a MARKET entry has made it EXECUTED).
+        when(plans.findById(any())).thenAnswer(call -> Optional.ofNullable(saved));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -651,23 +670,21 @@ class TradingPlanServiceImplTest {
         assertThat(saved.getExecutedAt()).isEqualTo(NOW);
         assertThat(saved.getActivatedAt()).isEqualTo(NOW);
         assertThat(saved.getFillPrice()).as("Q1: the last price, stored").isEqualByComparingTo("100");
-        verify(events, never()).publishEvent(any(TradingPlanActivated.class));
+        verify(placer).place(any());
     }
 
+    /** RF-33: a LONG LIMIT the last price already reaches is placed like any other; the paper book fills it. */
     @Test
-    void BR33_aLongLimitTheLastPriceAlreadyReached_isFilledAtActivation_belowAndExactlyAtTheEntry() {
+    void RF33_aLongLimitTheLastPriceAlreadyReached_isPlacedForThePaperBookToFill() {
         for (String last : new String[] {"99.5", "100"}) {
             when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal(last)));
 
             TradingPlanResponse plan = service.create(USER, activating(spotLimit("100", "95", "110")));
 
-            assertThat(plan.status()).as("last price %s", last).isEqualTo(PlanStatus.EXECUTED);
-            assertThat(saved.getExecutedAt()).isEqualTo(NOW);
-            assertThat(saved.getFillPrice())
-                    .as("Q1: the last price, not the limit price")
-                    .isEqualByComparingTo(last);
+            assertThat(plan.status()).as("last price %s", last).isEqualTo(PlanStatus.ACTIVE);
+            assertThat(saved.getFillPrice()).isNull();
         }
-        verify(events, never()).publishEvent(any(TradingPlanActivated.class));
+        verify(placer, Mockito.times(2)).place(any());
     }
 
     @Test
@@ -854,6 +871,24 @@ class TradingPlanServiceImplTest {
                 .contains(org.assertj.core.groups.Tuple.tuple(WarningType.TOTAL_OPEN_RISK, WarningSeverity.WARNING));
     }
 
+    /** RF-33, BR-68: a waiting plan takes its paper orders with it when cancelled; a draft has none to cancel. */
+    @Test
+    void RF33_cancellingAWaitingPlan_cancelsItsPaperOrders_aDraftHasNone() {
+        TradingPlan draft = draft();
+        when(plans.findForUpdate(draft.getId(), USER)).thenReturn(Optional.of(draft));
+        service.cancel(USER, draft.getId());
+        verify(placer, never()).cancel(any(), any());
+
+        service.create(USER, activating(spotLimit("100", "95", "110")));
+        TradingPlan waiting = saved;
+        when(plans.findForUpdate(waiting.getId(), USER)).thenReturn(Optional.of(waiting));
+
+        assertThat(service.cancel(USER, waiting.getId()).status()).isEqualTo(PlanStatus.CANCELLED);
+        InOrder order = inOrder(plans, placer);
+        order.verify(plans).save(waiting);
+        order.verify(placer).cancel(USER, waiting.getId());
+    }
+
     @Test
     void UC19_aPlan_isCancelledAtTheInstantOfTheClock() {
         TradingPlan plan = draft();
@@ -957,59 +992,69 @@ class TradingPlanServiceImplTest {
     // ------------------------------------------------------------------------------------------
 
     /**
-     * BR-34: a Spot MARKET filled at activation (last 100, quantity 2) is written at once and its OPEN position recorded
-     * after it, in the same transaction: fill price and instant, the snapshot quantity, TAKER, the entry fee 100 × 2 ×
-     * 0.1 % = 0.2 at the stored scale, and the levels it starts with.
+     * RF-33: a Spot MARKET plan activated (last 100, quantity 2) is written before its paper orders are placed, in the
+     * same transaction, with the plan's own terms: the quantity it sized, its entry and its levels.
      */
     @Test
-    void BR34_aPlanFilledAtActivation_isWrittenAtOnce_andItsPositionOpenedWithTheTakerFee() {
+    void RF33_anActivatedPlan_isWrittenThenPlacedWithItsOwnTerms() {
         currentPrice(MarketType.SPOT, "100");
 
         service.create(USER, activating(spotMarket("95", "110")));
 
-        ArgumentCaptor<SimulatedTradeOpening> opening = ArgumentCaptor.forClass(SimulatedTradeOpening.class);
-        InOrder order = inOrder(plans, journal);
-        order.verify(plans).saveAndFlush(saved);
-        order.verify(journal).openSimulatedTrade(opening.capture());
-        verify(plans, never()).save(any());
-        SimulatedTradeOpening opened = opening.getValue();
-        assertThat(opened.planId()).isEqualTo(saved.getId());
-        assertThat(opened.userId()).isEqualTo(USER);
-        assertThat(opened.pairId()).isEqualTo(PAIR);
-        assertThat(opened.market()).isEqualTo(MarketType.SPOT);
-        assertThat(opened.direction()).isEqualTo(Direction.LONG);
-        assertThat(opened.leverage()).isNull();
-        assertThat(opened.entryPrice()).isEqualByComparingTo("100");
-        assertThat(opened.entryTime()).isEqualTo(NOW);
-        assertThat(opened.quantity()).isEqualByComparingTo("2");
-        assertThat(opened.entryLiquidity()).isEqualTo(LiquidityRole.TAKER);
-        assertThat(opened.entryFee()).isEqualTo(new BigDecimal("0.20000000"));
-        assertThat(opened.stopLoss()).isEqualByComparingTo("95");
-        assertThat(opened.takeProfit()).isEqualByComparingTo("110");
+        ArgumentCaptor<PlanOrderTerms> placed = ArgumentCaptor.forClass(PlanOrderTerms.class);
+        InOrder order = inOrder(plans, placer);
+        order.verify(plans).save(saved);
+        order.verify(plans).flush();
+        order.verify(placer).place(placed.capture());
+        PlanOrderTerms terms = placed.getValue();
+        assertThat(terms.planId()).isEqualTo(saved.getId());
+        assertThat(terms.userId()).isEqualTo(USER);
+        assertThat(terms.pairId()).isEqualTo(PAIR);
+        assertThat(terms.market()).isEqualTo(MarketType.SPOT);
+        assertThat(terms.direction()).isEqualTo(Direction.LONG);
+        assertThat(terms.entryType()).isEqualTo(EntryType.MARKET);
+        assertThat(terms.quantity()).isEqualByComparingTo("2");
+        assertThat(terms.stopLoss()).isEqualByComparingTo("95");
+        assertThat(terms.takeProfit()).isEqualByComparingTo("110");
+        assertThat(terms.leverage()).isNull();
+        verify(journal, never()).openSimulatedTrade(any());
     }
 
-    /** BR-34: a Futures fill pays the Futures taker rate, 100 × 2 × 0.05 % = 0.1, and keeps its leverage. */
+    /** RF-33: a Futures plan is placed with its leverage. */
     @Test
-    void BR34_aFuturesFillAtActivation_paysTheFuturesTakerRate() {
+    void RF33_aFuturesPlan_isPlacedWithItsLeverage() {
         currentPrice(MarketType.FUTURES, "100");
 
         service.create(USER, activating(futuresMarket()));
 
-        ArgumentCaptor<SimulatedTradeOpening> opening = ArgumentCaptor.forClass(SimulatedTradeOpening.class);
-        verify(journal).openSimulatedTrade(opening.capture());
-        assertThat(opening.getValue().entryFee()).isEqualTo(new BigDecimal("0.10000000"));
-        assertThat(opening.getValue().leverage()).isEqualTo(5);
-        assertThat(opening.getValue().market()).isEqualTo(MarketType.FUTURES);
+        ArgumentCaptor<PlanOrderTerms> placed = ArgumentCaptor.forClass(PlanOrderTerms.class);
+        verify(placer).place(placed.capture());
+        assertThat(placed.getValue().market()).isEqualTo(MarketType.FUTURES);
+        assertThat(placed.getValue().leverage()).isEqualTo(5);
     }
 
-    /** BR-34: a plan that waits for the engine, and a draft, are saved as before and open no position. */
+    /** RF-33: a LIMIT plan activated is placed to wait in the paper book; a draft places nothing. */
     @Test
-    void BR34_aPlanThatWaitsOrADraft_opensNoPosition() {
-        service.create(USER, activating(spotLimit("100", "95", "110")));
+    void RF33_aWaitingPlanIsPlaced_aDraftIsNot() {
+        TradingPlanResponse waiting = service.create(USER, activating(spotLimit("100", "95", "110")));
+        assertThat(waiting.status()).isEqualTo(PlanStatus.ACTIVE);
+        verify(placer).place(any());
+
         service.create(USER, spotLimit("100", "95", "110"));
 
-        verify(plans, never()).saveAndFlush(any());
-        verify(journal, never()).openSimulatedTrade(any());
+        verify(placer).place(any());
+        verify(plans).flush();
+    }
+
+    /** RF-33, BR-71: a refusal of the order paths leaves the exception to roll the activation back. */
+    @Test
+    void BR71_aRefusalOfThePaperOrders_isThrownToRollTheActivationBack() {
+        currentPrice(MarketType.SPOT, "100");
+        BusinessException refused = new BusinessException(ErrorCode.PAPER_INSUFFICIENT_BALANCE, "no USDT");
+        doThrow(refused).when(placer).place(any());
+
+        assertThatThrownBy(() -> service.create(USER, activating(spotMarket("95", "110"))))
+                .isSameAs(refused);
     }
 
     /**
@@ -1461,16 +1506,16 @@ class TradingPlanServiceImplTest {
         verify(market, never()).currentMarkPrice(any());
     }
 
-    /** D-123: a LIMIT short of its stop loss still fills at once when the last price reaches its entry. */
+    /** D-123: a LIMIT short of its stop loss is still activated, and placed for the paper book to fill (RF-33). */
     @ParameterizedTest(name = "{0} {1} limit 100 at last {2}")
     @CsvSource({"SPOT, LONG, 95.01", "FUTURES, SHORT, 104.99"})
-    void D123_aLimitShortOfItsStopLoss_isActivatedAndFillsAtOnce(
-            MarketType marketType, Direction direction, String last) {
+    void D123_aLimitShortOfItsStopLoss_isActivatedAndPlaced(MarketType marketType, Direction direction, String last) {
         currentPrice(marketType, last);
 
         service.create(USER, activating(limit(marketType, direction)));
 
-        assertThat(saved.getStatus()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(saved.getStatus()).isEqualTo(PlanStatus.ACTIVE);
+        verify(placer).place(any());
     }
 
     /**
@@ -1597,9 +1642,9 @@ class TradingPlanServiceImplTest {
         verify(market, Mockito.times(1)).currentLastPrice(MarketType.SPOT, "BTCUSDT");
     }
 
-    /** The invalidation check and the immediate-fill decision of a LIMIT see the same read of the last price. */
+    /** The invalidation check of a LIMIT reads the last price once; the paper book fills a reached LIMIT (RF-33). */
     @ParameterizedTest(name = "last price {0} -> {1}")
-    @CsvSource({"101, ACTIVE", "100, EXECUTED"})
+    @CsvSource({"101, ACTIVE", "100, ACTIVE"})
     void BR33_BR68_activatingALimitWithAnInvalidationPrice_readsTheLastPriceOnce(String last, PlanStatus expected) {
         TradingPlan plan = savedDraft(withValidity(spotLimit("100", "95", "110"), "102", null, null), "101");
         currentPrice(MarketType.SPOT, last);
@@ -1616,7 +1661,7 @@ class TradingPlanServiceImplTest {
         TradingPlanResponse plan =
                 service.create(USER, activating(withValidity(spotLimit("100", "95", "110"), "102", null, null)));
 
-        assertThat(plan.status()).isEqualTo(PlanStatus.EXECUTED);
+        assertThat(plan.status()).isEqualTo(PlanStatus.ACTIVE);
         verify(market, Mockito.times(1)).currentLastPrice(MarketType.SPOT, "BTCUSDT");
     }
 
@@ -1967,19 +2012,6 @@ class TradingPlanServiceImplTest {
         assertThat(plan.getPlannedEntryPrice()).isEqualByComparingTo("100");
     }
 
-    @Test
-    void BR36_aFillAtActivation_tookLiquidity_soItIsTaker() {
-        when(market.currentLastPrice(MarketType.SPOT, "BTCUSDT")).thenReturn(Optional.of(new BigDecimal("100")));
-
-        service.create(USER, activating(spotMarket("95", "110")));
-        assertThat(saved.getFillLiquidity()).as("MARKET").isEqualTo(LiquidityRole.TAKER);
-
-        service.create(USER, activating(spotLimit("100", "95", "110")));
-        assertThat(saved.getFillLiquidity())
-                .as("LIMIT marketable at activation")
-                .isEqualTo(LiquidityRole.TAKER);
-    }
-
     /** D-112: Save and Activate keeps the score of the preset's latest closed candle and the preset. */
     @Test
     void BR70_saveAndActivate_recordsTheSetupScoreAndItsPreset() {
@@ -2104,25 +2136,6 @@ class TradingPlanServiceImplTest {
     // ------------------------------------------------------------------------------------------
 
     /**
-     * A LIMIT the last price already reaches fills at activation at the last price moved by SLIPPAGE_BPS (10), never
-     * past its limit, and pays taker. LONG LIMIT 100 on Spot; SHORT LIMIT 100 on Futures.
-     */
-    @ParameterizedTest(name = "{0} LIMIT 100, last {1} -> fill {2}")
-    @CsvSource({"LONG, 99.95, 100.00", "LONG, 99.00, 99.10", "SHORT, 100.05, 100.00", "SHORT, 101.00, 100.89"})
-    void D112_aMarketableLimit_slipsAtActivation_butNeverPastItsLimit(Direction direction, String last, String fill) {
-        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
-        CreateTradingPlanRequest request = direction == Direction.LONG
-                ? spotLimit("100", "95", "110")
-                : create(PAIR, MarketType.FUTURES, direction, EntryType.LIMIT, "100", "105", "90", null, 2);
-        currentPrice(request.market(), last);
-
-        assertThat(service.create(USER, activating(request)).status()).isEqualTo(PlanStatus.EXECUTED);
-        assertThat(saved.getFillPrice()).isEqualByComparingTo(fill);
-        assertThat(saved.getFillLiquidity()).isEqualTo(LiquidityRole.TAKER);
-        assertThat(saved.getEntryPrice()).as("the plan keeps its limit").isEqualByComparingTo("100");
-    }
-
-    /**
      * D-112 R6: with 10 bps a LONG MARKET at last price 100 is calculated, sized and filled at 100.10, the price paid:
      * risk 10 over 5.10 is 1.960 units.
      */
@@ -2178,19 +2191,6 @@ class TradingPlanServiceImplTest {
 
         assertThat(panel.entryPrice()).isEqualByComparingTo("100");
         assertThat(panel.expectedFillPrice()).isNull();
-    }
-
-    /** SLIPPAGE_BPS is read for every fill, never kept from an earlier one: 0, then 10. */
-    @Test
-    void BR36_theSlippage_isReadForEveryFill() {
-        currentPrice(MarketType.SPOT, "99.00");
-        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(0);
-        service.create(USER, activating(spotLimit("100", "95", "110")));
-        assertThat(saved.getFillPrice()).isEqualByComparingTo("99.00");
-
-        when(settings.integer(TradingPlanServiceImpl.SLIPPAGE_BPS)).thenReturn(10);
-        service.create(USER, activating(spotLimit("100", "95", "110")));
-        assertThat(saved.getFillPrice()).isEqualByComparingTo("99.10");
     }
 
     /**
@@ -2321,7 +2321,7 @@ class TradingPlanServiceImplTest {
      */
     @ParameterizedTest(name = "{0} at {1}")
     @CsvSource({"LONG, 101000", "SHORT, 99000"})
-    void BR69_aConfirmedMovedMarketEntry_opensItsPositionInTheJournal(Direction direction, String fill) {
+    void BR69_aConfirmedMovedMarketEntry_isPlacedWithTheRecalculatedQuantity(Direction direction, String fill) {
         TradingPlan plan = btcDraft(direction, null);
         currentPrice(market(direction), fill);
         assertThatThrownBy(() -> service.activate(USER, plan.getId(), false))
@@ -2330,18 +2330,13 @@ class TradingPlanServiceImplTest {
 
         service.activate(USER, plan.getId(), true);
 
-        ArgumentCaptor<SimulatedTradeOpening> opening = ArgumentCaptor.forClass(SimulatedTradeOpening.class);
-        InOrder order = inOrder(plans, journal);
-        order.verify(plans).saveAndFlush(plan);
-        order.verify(journal).openSimulatedTrade(opening.capture());
-        SimulatedTradeOpening opened = opening.getValue();
-        assertThat(opened.planId()).isEqualTo(plan.getId());
-        assertThat(opened.direction()).isEqualTo(direction);
-        assertThat(opened.market()).isEqualTo(market(direction));
-        assertThat(opened.entryPrice()).isEqualByComparingTo(fill);
-        assertThat(opened.quantity()).isEqualByComparingTo("0.0333");
-        assertThat(opened.entryLiquidity()).isEqualTo(LiquidityRole.TAKER);
-        assertThat(opened.entryTime()).isEqualTo(NOW);
+        ArgumentCaptor<PlanOrderTerms> placed = ArgumentCaptor.forClass(PlanOrderTerms.class);
+        verify(placer).place(placed.capture());
+        PlanOrderTerms terms = placed.getValue();
+        assertThat(terms.planId()).isEqualTo(plan.getId());
+        assertThat(terms.direction()).isEqualTo(direction);
+        assertThat(terms.market()).isEqualTo(market(direction));
+        assertThat(terms.quantity()).isEqualByComparingTo("0.0333");
     }
 
     /**

@@ -376,12 +376,17 @@ public class TradingJournal extends BaseEntity {
                 direction,
                 entryPrice,
                 entryTime,
-                quantity,
+                openQuantity(),
                 entryLiquidity,
                 entryFee,
                 stopLoss,
                 takeProfit,
                 liquidationPrice,
                 getVersion());
+    }
+
+    /** What is still open: the quantity less what a Spot sale or a Futures reduce has closed so far (RF-33). */
+    private BigDecimal openQuantity() {
+        return exitQuantity == null ? quantity : quantity.subtract(exitQuantity);
     }
 }

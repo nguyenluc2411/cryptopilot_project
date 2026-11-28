@@ -1,6 +1,5 @@
 package com.cryptopilot.trading.service.impl;
 
-import com.cryptopilot.common.exception.ResourceNotFoundException;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.trading.PlanContext;
@@ -10,7 +9,6 @@ import com.cryptopilot.trading.dto.response.PlanSnapshotResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.PlanFilled;
-import com.cryptopilot.trading.exception.IllegalPlanStateException;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.LiquidityRole;
 import com.cryptopilot.trading.model.enums.PlanStatus;
@@ -56,17 +54,6 @@ public class TradingPlanApiImpl implements TradingPlanApi {
 
     @Override
     @Transactional(readOnly = true)
-    public PlanOrderTerms termsToApply(UUID userId, UUID planId) {
-        TradingPlan plan = stored.findByIdAndUserId(planId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("TradingPlan", planId));
-        if (plan.getStatus() != PlanStatus.ACTIVE) {
-            throw new IllegalPlanStateException(plan.getId(), plan.getStatus(), "apply");
-        }
-        return termsOf(plan);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
     public Optional<PlanOrderTerms> terms(UUID planId) {
         return stored.findById(planId).map(TradingPlanApiImpl::termsOf);
     }
@@ -74,15 +61,18 @@ public class TradingPlanApiImpl implements TradingPlanApi {
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean entryFilled(UUID planId, UUID orderId, boolean buy, BigDecimal price, boolean maker, Instant at) {
-        Optional<TradingPlan> found = stored.findById(planId);
-        if (found.isEmpty() || (found.get().getDirection() == Direction.LONG) != buy) {
+        // Row-locked, as a cancel is: of a fill and a cancel, the first to commit decides (NSF-07). The plan changes on
+        // its entity, never by an update that clears the persistence context: the paper fill this runs inside keeps
+        // the wallet's balances there, and they must still be written (RF-33).
+        Optional<TradingPlan> found = stored.lockById(planId);
+        if (found.isEmpty()
+                || (found.get().getDirection() == Direction.LONG) != buy
+                || found.get().getStatus() != PlanStatus.ACTIVE) {
             return false;
         }
         LiquidityRole liquidity = maker ? LiquidityRole.MAKER : LiquidityRole.TAKER;
-        if (stored.executeIfActive(planId, at, price, liquidity, clock.instant()) != 1) {
-            return false;
-        }
-        TradingPlan plan = stored.findById(planId).orElseThrow();
+        TradingPlan plan = found.get();
+        plan.markExecuted(at, price, liquidity);
         log.info("RF-33 plan {} executed by paper order {} at {} ({})", planId, orderId, price, liquidity);
         events.publishEvent(new PlanFilled(
                 planId,
@@ -100,7 +90,7 @@ public class TradingPlanApiImpl implements TradingPlanApi {
         return true;
     }
 
-    private static PlanOrderTerms termsOf(TradingPlan plan) {
+    static PlanOrderTerms termsOf(TradingPlan plan) {
         return new PlanOrderTerms(
                 plan.getId(),
                 plan.getUserId(),

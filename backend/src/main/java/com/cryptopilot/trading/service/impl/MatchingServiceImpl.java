@@ -3,6 +3,7 @@ package com.cryptopilot.trading.service.impl;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.PositionExcursion;
 import com.cryptopilot.trading.PositionLevelChange;
 import com.cryptopilot.trading.TradeJournal;
@@ -29,6 +30,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,6 +62,8 @@ public class MatchingServiceImpl implements MatchingService {
     private final TradeJournal journal;
     private final MarketApi market;
     private final Clock clock;
+    /** The plan's entry order waiting in the paper book, cancelled when the plan is invalidated (RF-33). */
+    private final ObjectProvider<PlanOrderPlacer> orderPlacer;
 
     @Override
     @Transactional(readOnly = true)
@@ -100,6 +104,7 @@ public class MatchingServiceImpl implements MatchingService {
                 == 1;
         if (invalidated) {
             TrackedEntry entry = invalidation.entry();
+            orderPlacer.getObject().cancel(entry.userId(), invalidation.planId());
             events.publishEvent(new TradingPlanInvalidated(
                     invalidation.planId(),
                     entry.userId(),

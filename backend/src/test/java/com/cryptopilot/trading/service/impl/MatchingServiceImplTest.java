@@ -18,6 +18,7 @@ import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanInvalidated;
@@ -48,6 +49,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.InOrder;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
@@ -71,6 +73,15 @@ class MatchingServiceImplTest {
     private final PositionOpener positions = mock(PositionOpener.class);
     private final PositionCloser closer = mock(PositionCloser.class);
     private final TradeJournal journal = mock(TradeJournal.class);
+    private final PlanOrderPlacer placer = mock(PlanOrderPlacer.class);
+
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<PlanOrderPlacer> placerProvider = mock(ObjectProvider.class);
+
+    {
+        when(placerProvider.getObject()).thenReturn(placer);
+    }
+
     private final MatchingServiceImpl service = new MatchingServiceImpl(
             plans,
             watermarks,
@@ -80,7 +91,8 @@ class MatchingServiceImplTest {
             closer,
             journal,
             market,
-            Clock.fixed(NOW, ZoneOffset.UTC));
+            Clock.fixed(NOW, ZoneOffset.UTC),
+            placerProvider);
 
     private static final TrackedPosition OPENED = new TrackedPosition(
             UUID.randomUUID(),
@@ -216,6 +228,7 @@ class MatchingServiceImplTest {
                         InvalidationReason.STOP_LOSS_REACHED,
                         AT));
         verify(positions, never()).open(any());
+        verify(placer).cancel(TrackedEntries.OWNER, PLAN);
     }
 
     @Test
@@ -227,6 +240,7 @@ class MatchingServiceImplTest {
                         new Invalidation(stop(Direction.LONG), InvalidationReason.TAKE_PROFIT_REACHED, AT)))
                 .isFalse();
         verifyNoInteractions(events);
+        verifyNoInteractions(placer);
     }
 
     @Test

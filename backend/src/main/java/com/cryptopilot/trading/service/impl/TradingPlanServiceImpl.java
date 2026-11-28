@@ -19,6 +19,7 @@ import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.model.enums.SetupStyle;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.calculator.EntryDeviationCalculator;
 import com.cryptopilot.trading.calculator.PlanValidityRule;
@@ -135,6 +136,8 @@ public class TradingPlanServiceImpl implements TradingPlanService {
     private final TradeJournal journal;
 
     private final PositionViews positionViews;
+    /** The demo account's orders a plan is carried out with, implemented by paper trading (RF-33, D-117). */
+    private final ObjectProvider<PlanOrderPlacer> orderPlacer;
 
     @Override
     @Transactional(readOnly = true)
@@ -175,7 +178,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             requireRoomForAnActivePlan(userId, exposure);
             activate(plan, calculated, now, gate, Boolean.TRUE.equals(request.confirmDeviation()));
         }
-        return detail(store(plan));
+        return saved(plan, activate);
     }
 
     @Override
@@ -204,7 +207,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
             requireRoomForAnActivePlan(userId, exposure);
             activate(plan, calculated, now, gate, Boolean.TRUE.equals(request.confirmDeviation()));
         }
-        return detail(store(plan));
+        return saved(plan, activate);
     }
 
     @Override
@@ -228,7 +231,7 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         // After the calculation and its entitlement check, which answers MSG29 before a missing price answers 503.
         requireValidAtActivation(plan, last);
         activate(plan, calculated, now, gate, confirmDeviation);
-        return detail(store(plan));
+        return saved(plan, true);
     }
 
     @Override
@@ -237,13 +240,19 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         // Row lock: a fill committing first is seen here as EXECUTED, so the loser gets MSG43, not a lost update.
         TradingPlan plan = plans.findForUpdate(planId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("TradingPlan", planId));
-        if (plan.getStatus() == PlanStatus.ACTIVE) {
+        boolean waiting = plan.getStatus() == PlanStatus.ACTIVE;
+        if (waiting) {
             // D-159 (Q1): a waiting plan stays while its market is paused, as the replay may still fill it.
             health.requireTrading(plan.getMarket());
         }
         plan.cancel(clock.instant());
         events.publishEvent(new TradingPlanCancelled(plan.getId(), plan.getMarket(), plan.getPairId()));
-        return detail(plans.save(plan));
+        TradingPlan stored = plans.save(plan);
+        if (waiting) {
+            // RF-33: the entry order waiting in the paper book goes with the plan.
+            orderPlacer.getObject().cancel(userId, planId);
+        }
+        return detail(stored);
     }
 
     @Override
@@ -298,9 +307,20 @@ public class TradingPlanServiceImpl implements TradingPlanService {
         return PageResponse.of(found, plan -> PlanResponses.summary(plan, positionStatuses.get(plan.getId())));
     }
 
-    /** Saves the plan; it is never EXECUTED here, only by the paper order it is applied with (RF-33). */
-    private TradingPlan store(TradingPlan plan) {
-        return plans.save(plan);
+    /**
+     * Saves the plan; one just activated has its paper orders placed in this transaction (RF-33), so a refusal of the
+     * order paths rolls the activation back (BR-71). A MARKET entry fills at once and its fill sets the plan
+     * EXECUTED, so the plan is read again for the answer.
+     */
+    private TradingPlanResponse saved(TradingPlan plan, boolean activated) {
+        TradingPlan stored = plans.save(plan);
+        if (!activated) {
+            return detail(stored);
+        }
+        // Written before the orders that name it (trade_order.plan_id).
+        plans.flush();
+        orderPlacer.getObject().place(TradingPlanApiImpl.termsOf(stored));
+        return detail(plans.findById(stored.getId()).orElseThrow());
     }
 
     /** The plan in full and, once it is EXECUTED, the position it opened (UC-20), see {@link PositionViews}. */

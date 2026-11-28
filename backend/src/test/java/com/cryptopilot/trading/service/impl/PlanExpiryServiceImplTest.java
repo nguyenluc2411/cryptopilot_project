@@ -14,6 +14,7 @@ import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.entity.TradingPlan;
 import com.cryptopilot.trading.event.TradingPlanExpired;
 import com.cryptopilot.trading.model.enums.Direction;
@@ -28,6 +29,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Limit;
 
@@ -48,12 +50,18 @@ class PlanExpiryServiceImplTest {
     private final MarketApi market = mock(MarketApi.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final MarketHealth health = mock(MarketHealth.class);
-    private final PlanExpiryServiceImpl expiry =
-            new PlanExpiryServiceImpl(plans, replays, market, health, events, Clock.fixed(NOW, ZoneOffset.UTC));
+    private final PlanOrderPlacer placer = mock(PlanOrderPlacer.class);
+
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<PlanOrderPlacer> placerProvider = mock(ObjectProvider.class);
+
+    private final PlanExpiryServiceImpl expiry = new PlanExpiryServiceImpl(
+            plans, replays, market, health, events, Clock.fixed(NOW, ZoneOffset.UTC), placerProvider);
 
     @BeforeEach
     void marketsOpen() {
         when(health.tradingOpen(any())).thenReturn(true);
+        when(placerProvider.getObject()).thenReturn(placer);
     }
 
     /** D-159 (I5): a due plan of a paused market waits; the replay after the pause may still fill it in time. */
@@ -91,6 +99,7 @@ class PlanExpiryServiceImplTest {
                         Direction.SHORT,
                         "BTCUSDT",
                         STORED_NOW));
+        verify(placer).cancel(due.getUserId(), due.getId());
     }
 
     /** D-79: a replay of the pair may still fill the plan from a candle before its expiry: it waits. */
@@ -116,6 +125,7 @@ class PlanExpiryServiceImplTest {
         assertThat(expiry.expireDue(10)).isZero();
 
         verifyNoInteractions(events);
+        verifyNoInteractions(placer);
     }
 
     /** A pair whose symbol cannot be read still expires its plan; the event names no symbol. */

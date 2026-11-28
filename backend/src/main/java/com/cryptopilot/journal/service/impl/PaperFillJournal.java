@@ -117,7 +117,7 @@ public class PaperFillJournal {
     private void bought(PaperSpotFilled fill) {
         Optional<TradingJournal> found = records.findByPaperOrderId(fill.orderId());
         if (found.isPresent()) {
-            records.addToEntry(found.get().getId(), fill.price(), fill.quantity(), fill.feeInQuote(), clock.instant());
+            records.addToEntry(found.get().getId(), fill.price(), fill.baseHeld(), fill.feeInQuote(), clock.instant());
             return;
         }
         Optional<PlanOrderTerms> plan = planOf(fill.planId());
@@ -129,7 +129,8 @@ public class PaperFillJournal {
                 Direction.LONG,
                 null,
                 fill.price(),
-                fill.quantity(),
+                // The coin the buy left: its fee was taken in it (TR-13), so a sale of all of it closes the record.
+                fill.baseHeld(),
                 fill.at(),
                 fill.maker() ? LiquidityRole.MAKER : LiquidityRole.TAKER,
                 fill.feeInQuote(),

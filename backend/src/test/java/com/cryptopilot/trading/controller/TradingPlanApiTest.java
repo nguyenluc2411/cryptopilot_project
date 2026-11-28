@@ -21,19 +21,15 @@ import com.cryptopilot.market.model.StoredIndicators;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.market.repository.TechnicalIndicatorRepository;
 import com.cryptopilot.market.service.PriceCacheService;
+import com.cryptopilot.paper.service.PaperAccountService;
 import com.cryptopilot.support.InAppNotifications;
 import com.cryptopilot.support.StreamedPrices;
 import com.cryptopilot.support.TestcontainersConfig;
 import com.cryptopilot.trading.dto.request.CreateTradingPlanRequest;
-import com.cryptopilot.trading.model.Excursion;
-import com.cryptopilot.trading.model.Exit;
 import com.cryptopilot.trading.model.Fill;
 import com.cryptopilot.trading.model.Invalidation;
 import com.cryptopilot.trading.model.PlanListQuery;
-import com.cryptopilot.trading.model.PositionExit;
 import com.cryptopilot.trading.model.TrackedEntry;
-import com.cryptopilot.trading.model.TrackedPosition;
-import com.cryptopilot.trading.model.enums.CloseReason;
 import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.EntryType;
 import com.cryptopilot.trading.model.enums.InvalidationReason;
@@ -105,6 +101,11 @@ class TradingPlanApiTest {
     /** The PRO package of 30 days that V11 seeded. */
     private static final UUID PRO_PACKAGE = UUID.fromString("019b76da-a800-7002-8000-000000000003");
 
+    private final List<String> preStoredCoins = new ArrayList<>();
+
+    @Autowired
+    private PaperAccountService paperAccounts;
+
     @Autowired
     private MockMvc mvc;
 
@@ -144,6 +145,10 @@ class TradingPlanApiTest {
 
     @BeforeEach
     void insertPair() {
+        preStoredCoins.clear();
+        preStoredCoins.addAll(sql.sql("select symbol from coin where symbol in ('USDT', 'BTC', 'ETH', 'BNB')")
+                .query(String.class)
+                .list());
         symbol = "TP" + Long.toString(System.nanoTime() % 1_000_000_000L) + "USDT";
         pair = new MarketTestData(sql, Instant.now()).pair(symbol, true, true, "TRADING", "TRADING", 0);
         sql.sql("""
@@ -154,6 +159,11 @@ class TradingPlanApiTest {
                         insert into leverage_bracket (pair_id, bracket_no, notional_floor, notional_cap, max_leverage,
                                                       maintenance_margin_rate, maintenance_amount, updated_at)
                         values (?, 1, 0, 50000, 125, 0.004, 0, ?)""").params(pair, now()).update();
+        // RF-33: an activated plan places its paper orders, which need a current price (NSF-03). 101 leaves the LONG
+        // LIMIT at 100 of most tests waiting; a test that needs another price streams a newer one.
+        lastPrice(MarketType.SPOT, "101");
+        lastPrice(MarketType.FUTURES, "101");
+        markPrice("101");
     }
 
     @AfterEach
@@ -164,6 +174,21 @@ class TradingPlanApiTest {
             sql.sql("delete from trading_journal where user_id = ?")
                     .param(account)
                     .update();
+            for (String table : List.of(
+                    "futures_margin_adjustment",
+                    "order_fill",
+                    "futures_position",
+                    "futures_symbol_config",
+                    "futures_account_config",
+                    "trade_order",
+                    "order_list",
+                    "wallet_ledger_entry",
+                    "wallet_balance",
+                    "equity_snapshot")) {
+                sql.sql("delete from " + table + " where user_id = ?")
+                        .param(account)
+                        .update();
+            }
             sql.sql("delete from trading_plan where user_id = ?").param(account).update();
             sql.sql("""
                             delete from user_subscription
@@ -177,7 +202,19 @@ class TradingPlanApiTest {
         }
         sql.sql("delete from trading_journal where pair_id = ?").param(pair).update();
         sql.sql("delete from trading_plan where pair_id = ?").param(pair).update();
+        sql.sql("delete from order_matching_watermark where pair_id = ?")
+                .param(pair)
+                .update();
         new MarketTestData(sql, Instant.now()).remove(pair);
+        // The seed and schema tests expect no coin they did not write: the coins an opening granted go again.
+        for (String coin : List.of("USDT", "BTC", "ETH", "BNB")) {
+            if (!preStoredCoins.contains(coin)) {
+                sql.sql("delete from coin where symbol = ? and not exists (select 1 from crypto_pair p where"
+                                + " p.base_coin_id = coin.coin_id or p.quote_coin_id = coin.coin_id)")
+                        .param(coin)
+                        .update();
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -244,6 +281,8 @@ class TradingPlanApiTest {
         subscribeToPro(trader);
         profileCapital(trader, "10000");
         lastPrice(MarketType.FUTURES, "100250");
+        // The paper order is judged by PERCENT_PRICE against the mark (TR-39).
+        markPrice("100250");
 
         as(
                         trader,
@@ -783,7 +822,8 @@ class TradingPlanApiTest {
     /**
      * UC-20, Q-55: a Spot MARKET filled at activation at 100 (quantity 2) answers its position in the detail: OPEN, the
      * fill, the entry fee at the seeded Spot taker rate (100 × 2 × 0.1 % = 0.2), no liquidation price, and the unrealized
-     * P/L at the current last price 103, (103 − 100) × 2 = 6, without fees; the Executed tab shows OPEN.
+     * P/L at the current last price 103 on the coin held, (103 − 100) × 1.998 = 5.994, without fees; the Executed tab
+     * shows OPEN.
      */
     @Test
     void UC20_aPlanFilledAtActivation_answersItsPositionInTheDetailAndTheExecutedTab() throws Exception {
@@ -799,12 +839,13 @@ class TradingPlanApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.position.status").value("OPEN"))
                 .andExpect(jsonPath("$.position.fillPrice").value("100.000000000000"))
-                .andExpect(jsonPath("$.position.quantity").value("2.000000000000"))
+                // The coin the buy left: 2 less its 0.1 % fee, taken in the coin (TR-13).
+                .andExpect(jsonPath("$.position.quantity").value("1.998000000000"))
                 .andExpect(jsonPath("$.position.entryFee").value("0.20000000"))
                 .andExpect(jsonPath("$.position.entryTime").isNotEmpty())
                 .andExpect(jsonPath("$.position.liquidationPrice").isEmpty())
                 .andExpect(jsonPath("$.position.currentPrice").value("103"))
-                .andExpect(jsonPath("$.position.unrealizedPnl").value("6.00000000"));
+                .andExpect(jsonPath("$.position.unrealizedPnl").value("5.99400000"));
         as(trader, get(PLANS + "?tab=EXECUTED"), null)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].id").value(id))
@@ -841,18 +882,20 @@ class TradingPlanApiTest {
                 .isEqualByComparingTo("98");
         assertThat(new BigDecimal((String) JsonPath.read(detail, "$.position.unrealizedPnl")))
                 .isEqualByComparingTo(new BigDecimal("-2").multiply(quantity));
-        assertThat((String) JsonPath.read(detail, "$.position.liquidationPrice"))
-                .isEqualTo(liquidation);
+        // Read from the demo account's position now (RF-33), equal in value to the plan's estimate.
+        assertThat(new BigDecimal((String) JsonPath.read(detail, "$.position.liquidationPrice")))
+                .isEqualByComparingTo(liquidation);
     }
 
     /**
-     * BR-34, BR-36: the journal opens at the price the plan stored, slippage included, never at the price before it. At
-     * 10 bps a Spot MARKET with the last price at 100 fills at 100.10, and a LIMIT at 100 reached by a last price of
-     * 99.80 fills at 99.80 × 1.001 = 99.8998, rounded against the Trader to 99.90 (under its limit). The setting is
-     * changed through the admin endpoint and restored.
+     * BR-34, BR-36, RF-33 (decision A, 2026-11-28): {@code SLIPPAGE_BPS} prices the plan's panel only; the plan fills
+     * as any paper order does. At 10 bps a Spot MARKET with the last price at 100 is estimated at 100.10, and its paper
+     * buy, with no book streamed, fills at the last price 100; the plan and the journal both store that fill. A LIMIT at
+     * 100 the last price of 99.80 already reaches fills on arrival at no more than its limit. The setting is changed
+     * through the admin endpoint and restored.
      */
     @Test
-    void BR34_theJournalOpensAtTheStoredFillPrice_slippageIncluded() throws Exception {
+    void BR34_thePlanAndTheJournal_storeThePaperFill_theSlippageOnlyPricesThePanel() throws Exception {
         UUID trader = trader();
         UUID admin = account(UserRole.ADMIN);
         Map<String, Object> audit = sql.sql(
@@ -862,14 +905,17 @@ class TradingPlanApiTest {
         changeSetting(admin, "SLIPPAGE_BPS", "10");
         try {
             lastPrice("100");
-            String market = id(as(trader, post(PLANS), spotMarket(true)).andExpect(status().isCreated()));
+            String market = id(as(trader, post(PLANS), spotMarket(true))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.expectedFillPrice").value("100.10")));
             lastPrice("99.80");
             String limit = id(as(trader, post(PLANS), spotLimit("100", "95", "110", true))
                     .andExpect(status().isCreated())
                     .andExpect(jsonPath("$.status").value("EXECUTED")));
 
-            assertJournalEntry(market, "100.10");
-            assertJournalEntry(limit, "99.90");
+            assertJournalEntry(market, "100");
+            assertThat(fillPriceOf(limit)).isLessThanOrEqualTo(new BigDecimal("100"));
+            assertJournalEntry(limit, fillPriceOf(limit).toPlainString());
         } finally {
             changeSetting(admin, "SLIPPAGE_BPS", "0");
             sql.sql("update system_setting set updated_by = ?, updated_at = ? where setting_key = 'SLIPPAGE_BPS'")
@@ -877,6 +923,16 @@ class TradingPlanApiTest {
                     .update();
             sql.sql("delete from audit_log where user_id = ?").param(admin).update();
         }
+    }
+
+    /** The price the plan's paper entry order filled at. */
+    private BigDecimal fillPriceOf(String planId) {
+        return sql.sql("""
+                        select f.fill_price from order_fill f join trade_order o on o.order_id = f.order_id
+                         where o.plan_id = ? and o.side = 'BUY' order by f.traded_at limit 1""")
+                .param(UUID.fromString(planId))
+                .query(BigDecimal.class)
+                .single();
     }
 
     /** The journal's entry price of the plan is the plan's stored fill price, and both are {@code expected}. */
@@ -912,51 +968,6 @@ class TradingPlanApiTest {
         as(trader, post(PLANS + "/" + fourth + "/activate"), null)
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.messageCode").value("MSG27"));
-    }
-
-    /**
-     * BR-34, D-119: the fill and its journal record commit together. With a record already in place for the plan, the
-     * journal's insert refuses the MARKET activation (409, MSG43), and the activation rolls back with it: the plan is
-     * still a DRAFT with no fill and the one record is the one that was there.
-     */
-    @Test
-    void BR34_aJournalRecordAlreadyThere_failsTheMarketActivation_andThePlanStaysDraft() throws Exception {
-        UUID trader = trader();
-        lastPrice("100");
-        String id = id(as(trader, post(PLANS), spotMarket(false))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("DRAFT")));
-        sql.sql("""
-                        insert into trading_journal (journal_id, user_id, pair_id, plan_id, market_type, direction,
-                                                     entry_price, entry_time, quantity, entry_liquidity,
-                                                     entry_fee_amount, source, trade_status, created_at, updated_at,
-                                                     version)
-                        values (gen_random_uuid(), ?, ?, ?, 'SPOT', 'LONG', 100, ?, 1, 'TAKER', 0.1, 'SIMULATED',
-                                'OPEN', ?, ?, 0)""")
-                .params(trader, pair, UUID.fromString(id), now(), now(), now())
-                .update();
-
-        as(trader, post(PLANS + "/" + id + "/activate"), null)
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"))
-                .andExpect(jsonPath("$.messageCode").value("MSG43"));
-
-        as(trader, get(PLANS + "/" + id), null)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("DRAFT"))
-                .andExpect(jsonPath("$.statusHistory.length()").value(1))
-                .andExpect(jsonPath("$.position").doesNotExist());
-        assertThat(sql.sql("select fill_price, executed_at from trading_plan where plan_id = ?")
-                        .param(UUID.fromString(id))
-                        .query()
-                        .singleRow())
-                .containsEntry("fill_price", null)
-                .containsEntry("executed_at", null);
-        assertThat(sql.sql("select count(*) from trading_journal where plan_id = ?")
-                        .param(UUID.fromString(id))
-                        .query(Long.class)
-                        .single())
-                .isEqualTo(1L);
     }
 
     /**
@@ -1128,7 +1139,7 @@ class TradingPlanApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.snapshot.riskAmount").value("25.00000000"))
                 .andExpect(jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')].message")
-                        .value("the total open risk of 4.2% of capital is above the risk profile's maximum of 4%"));
+                        .value("the total open risk of 4.1996% of capital is above the risk profile's maximum of 4%"));
         profileCapital(trader, "10000");
         as(trader, post(PLANS + "/calculate"), waitingBody(false))
                 .andExpect(status().isOk())
@@ -1152,7 +1163,7 @@ class TradingPlanApiTest {
         }
         String third = id(as(trader, post(PLANS), spotLimit("90", "85", "110", false)));
 
-        closeByTakeProfit(executed);
+        closeOnTheDemoAccount(trader, executed);
 
         as(trader, post(PLANS + "/" + third + "/activate"), null)
                 .andExpect(status().isOk())
@@ -1160,7 +1171,7 @@ class TradingPlanApiTest {
         as(trader, get(PLANS + "/" + executed), null)
                 .andExpect(jsonPath("$.status").value("EXECUTED"))
                 .andExpect(jsonPath("$.position.status").value("CLOSED"))
-                .andExpect(jsonPath("$.position.closeReason").value("TAKE_PROFIT"))
+                .andExpect(jsonPath("$.position.closeReason").value("MANUAL"))
                 .andExpect(jsonPath("$.position.provisional").value(false));
     }
 
@@ -1188,7 +1199,7 @@ class TradingPlanApiTest {
                 .andExpect(jsonPath("$.warnings[?(@.type == 'TOTAL_OPEN_RISK')].severity")
                         .value("WARNING"));
 
-        closeByTakeProfit(executed);
+        closeOnTheDemoAccount(trader, executed);
 
         as(trader, post(PLANS + "/calculate"), panel)
                 .andExpect(status().isOk())
@@ -1216,7 +1227,8 @@ class TradingPlanApiTest {
 
     /**
      * UC-21, BR-39: a Spot MARKET plan 2 at 100 (taker 0.2) is estimated and closed at an unmoved last price of 100: the
-     * stored close is exactly the estimate (price result 0, exit fee 0.2, net −0.4), MANUAL, and MSG23 names it.
+     * stored close is exactly the estimate (price result 0; the 1.998 held, 2 less the fee taken in the coin, sold for
+     * an exit fee of 0.1998; net −0.3998), MANUAL, and MSG23 names it.
      */
     @Test
     void BR39_aManualClose_atAnUnmovedPrice_storesExactlyTheEstimate() throws Exception {
@@ -1249,7 +1261,7 @@ class TradingPlanApiTest {
         assertThat(decimal(closed, "$.position.feeAmount"))
                 .isEqualByComparingTo(decimal(estimate, "$.entryFee").add(decimal(estimate, "$.estimatedExitFee")));
         assertThat(decimal(closed, "$.position.netPnl")).isEqualByComparingTo(decimal(estimate, "$.estimatedNetPnl"));
-        assertThat(decimal(estimate, "$.estimatedNetPnl")).isEqualByComparingTo("-0.4");
+        assertThat(decimal(estimate, "$.estimatedNetPnl")).isEqualByComparingTo("-0.3998");
         assertThat(awaitNotification(UUID.fromString(id)))
                 .isEqualTo(symbol + " position closed by manual close at 100. P/L: -0.4.");
     }
@@ -1261,7 +1273,7 @@ class TradingPlanApiTest {
         lastPrice("100");
         String id = id(as(trader, post(PLANS), spotMarket(true))
                 .andExpect(jsonPath("$.status").value("EXECUTED")));
-        closeByTakeProfit(id);
+        closeOnTheDemoAccount(trader, id);
 
         as(trader, post(PLANS + "/" + id + "/close-position"), null)
                 .andExpect(status().isConflict())
@@ -1414,24 +1426,11 @@ class TradingPlanApiTest {
     }
 
     /** The engine's take profit exit of the plan's open position, stored through the matching service. */
-    private void closeByTakeProfit(String planId) {
-        TrackedPosition position = matching.openPositions().stream()
-                .filter(open -> open.planId().equals(UUID.fromString(planId)))
-                .findFirst()
-                .orElseThrow();
-        assertThat(matching.close(new PositionExit(
-                        position,
-                        new Exit(position.planId(), CloseReason.TAKE_PROFIT, position.takeProfit(), Instant.now()),
-                        Excursion.at(position.entryPrice()))))
-                .isTrue();
-        // MSG23 is written after the commit; wait for it so the account's rows can be removed.
-        await().atMost(Duration.ofSeconds(20))
-                .until(() -> sql.sql(
-                                        "select count(*) from notification where reference_id = ? and source_key not like 'PLAN_FILLED:%'")
-                                .param(position.planId())
-                                .query(Long.class)
-                                .single()
-                        == 1);
+    /** Closes the plan's position at the market on the demo account (UC-21, RF-33). */
+    private void closeOnTheDemoAccount(UUID trader, String planId) throws Exception {
+        as(trader, post(PLANS + "/" + planId + "/close-position"), null)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.position.status").value("CLOSED"));
     }
 
     /** A Spot LONG LIMIT at 90 (SL 85, TP 110), below a last price of 100, so it waits when activated. */
@@ -2045,6 +2044,8 @@ class TradingPlanApiTest {
                         insert into user_profile (user_id, display_name, default_capital, risk_profile, created_at,
                                                   updated_at)
                         values (?, 'Trader', 1000, 'BALANCED', ?, ?)""").params(id, now(), now()).update();
+        // RF-33: an activated plan is carried out on the demo account (BR-68).
+        paperAccounts.open(id);
         return id;
     }
 

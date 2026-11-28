@@ -9,6 +9,7 @@ import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.SimulatedLevelChange;
 import com.cryptopilot.trading.TradeJournal;
@@ -39,6 +40,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -84,6 +86,8 @@ public class PositionLevelServiceImpl implements PositionLevelService {
     private final PositionViews positionViews;
     private final ApplicationEventPublisher events;
     private final Clock clock;
+    /** The demo account a plan's position is held on since RF-33, whose take profit and stop loss orders change. */
+    private final ObjectProvider<PlanOrderPlacer> orderPlacer;
 
     @Override
     @Transactional
@@ -127,7 +131,12 @@ public class PositionLevelServiceImpl implements PositionLevelService {
         OpenTrade updated = journal.changeSimulatedLevels(change)
                 .orElseThrow(() -> new IllegalPlanStateException(
                         planId, plan.getStatus(), "change the levels of a position that closed meanwhile"));
-        events.publishEvent(new PositionLevelsChanged(TrackedPosition.of(updated), change.history()));
+        if (journal.positionOf(planId).map(RecordedPosition::onDemoAccount).orElse(false)) {
+            // RF-33: the paper take profit and stop loss orders are replaced; the plans' engine does not track it.
+            orderPlacer.getObject().replaceLevels(userId, trade, stopLoss, takeProfit);
+        } else {
+            events.publishEvent(new PositionLevelsChanged(TrackedPosition.of(updated), change.history()));
+        }
         log.info(
                 "D-124 plan {} position {} levels: stop loss {} -> {}, take profit {} -> {}",
                 planId,

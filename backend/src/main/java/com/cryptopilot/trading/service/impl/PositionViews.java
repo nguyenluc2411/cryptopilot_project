@@ -3,6 +3,7 @@ package com.cryptopilot.trading.service.impl;
 import com.cryptopilot.admin.SystemSettingApi;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.model.enums.MarketType;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.PositionLevels;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.TradeJournal;
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.Optional;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 /**
@@ -37,6 +39,8 @@ public class PositionViews {
     private final FeeRates feeRates;
     private final FundingService funding;
     private final SystemSettingApi settings;
+    /** The demo account a plan's Futures position is held on since RF-33, which knows its liquidation price. */
+    private final ObjectProvider<PlanOrderPlacer> orderPlacer;
 
     /** The block of an EXECUTED plan, or {@code null} when the plan opened no position. */
     public PositionResponse of(TradingPlan plan) {
@@ -46,10 +50,43 @@ public class PositionViews {
     }
 
     /** The block of a recorded position, with the warnings of a change just made ({@code levelWarnings}). */
-    public PositionResponse of(TradingPlan plan, RecordedPosition recorded, List<PlanWarning> levelWarnings) {
+    public PositionResponse of(TradingPlan plan, RecordedPosition stored, List<PlanWarning> levelWarnings) {
+        RecordedPosition recorded = withLiveLiquidation(plan, stored);
         PositionLevels levels = journal.levelsOf(plan.getId()).orElse(null);
         return PlanResponses.position(
                 plan, recorded, currentPrice(plan, recorded), levels, breakeven(plan, recorded), levelWarnings);
+    }
+
+    /**
+     * An OPEN Futures position on the demo account with the liquidation price paper trading reads now: it moves with
+     * the margin and the funding, so the journal does not keep it (RF-33).
+     */
+    private RecordedPosition withLiveLiquidation(TradingPlan plan, RecordedPosition recorded) {
+        if (!recorded.onDemoAccount()
+                || recorded.status() != PositionStatus.OPEN
+                || plan.getMarket() != MarketType.FUTURES) {
+            return recorded;
+        }
+        BigDecimal liquidation = orderPlacer
+                .getObject()
+                .liquidationPrice(plan.getUserId(), plan.getId())
+                .orElse(recorded.liquidationPrice());
+        return new RecordedPosition(
+                recorded.planId(),
+                recorded.status(),
+                recorded.entryPrice(),
+                recorded.quantity(),
+                recorded.entryTime(),
+                recorded.entryFee(),
+                liquidation,
+                recorded.exitPrice(),
+                recorded.exitTime(),
+                recorded.closeReason(),
+                recorded.realizedPnl(),
+                recorded.feeAmount(),
+                recorded.fundingFeeAmount(),
+                recorded.fundingIncomplete(),
+                true);
     }
 
     /**

@@ -3,9 +3,12 @@ package com.cryptopilot.trading.service.impl;
 import com.cryptopilot.common.exception.BusinessException;
 import com.cryptopilot.common.exception.ErrorCode;
 import com.cryptopilot.common.exception.ResourceNotFoundException;
+import com.cryptopilot.common.util.Rounding;
 import com.cryptopilot.market.MarketApi;
 import com.cryptopilot.market.MarketHealth;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PlanOrderPlacer;
+import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.TradeJournal;
 import com.cryptopilot.trading.dto.response.CloseEstimateResponse;
 import com.cryptopilot.trading.dto.response.TradingPlanResponse;
@@ -19,6 +22,7 @@ import com.cryptopilot.trading.model.PositionExit;
 import com.cryptopilot.trading.model.TrackedPosition;
 import com.cryptopilot.trading.model.TradeAmounts;
 import com.cryptopilot.trading.model.enums.CloseReason;
+import com.cryptopilot.trading.model.enums.Direction;
 import com.cryptopilot.trading.model.enums.PlanStatus;
 import com.cryptopilot.trading.repository.TradingPlanRepository;
 import com.cryptopilot.trading.service.PositionService;
@@ -31,6 +35,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -56,11 +61,16 @@ public class PositionServiceImpl implements PositionService {
     private final MarketHealth health;
     private final TradingPlanService tradingPlans;
     private final Clock clock;
+    /** The demo account a plan's position is held on since RF-33, closed through paper trading. */
+    private final ObjectProvider<PlanOrderPlacer> orderPlacer;
 
     @Override
     @Transactional(readOnly = true)
     public CloseEstimateResponse closeEstimate(UUID userId, UUID planId) {
         OpenTrade trade = openTrade(userId, planId);
+        if (onDemoAccount(planId)) {
+            return demoEstimate(userId, trade);
+        }
         BigDecimal currentPrice = currentLastPrice(trade);
         ClosingAmounts closing = closer.preview(trade, CloseReason.MANUAL, currentPrice, clock.instant());
         TradeAmounts amounts = closing.amounts();
@@ -82,6 +92,15 @@ public class PositionServiceImpl implements PositionService {
     public TradingPlanResponse closePosition(UUID userId, UUID planId) {
         OpenTrade trade = openTrade(userId, planId);
         health.requireTrading(trade.market());
+        if (onDemoAccount(planId)) {
+            // RF-33: a MARKET order on the demo account; its fill closes the journal record (RF-35).
+            orderPlacer.getObject().close(userId, trade);
+            log.info(
+                    "UC-21 position {} of plan {} closed by its Trader on the demo account",
+                    trade.positionId(),
+                    planId);
+            return tradingPlans.get(userId, planId);
+        }
         BigDecimal currentPrice = currentLastPrice(trade);
         Instant now = clock.instant();
         boolean closed = closer.close(new PositionExit(
@@ -101,9 +120,43 @@ public class PositionServiceImpl implements PositionService {
     private OpenTrade openTrade(UUID userId, UUID planId) {
         TradingPlan plan = plans.findByIdAndUserId(planId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("TradingPlan", planId));
-        return journal.openTradeOfPlan(planId)
+        return journal.openSimulatedTrades(userId).stream()
+                .filter(trade -> trade.planId().equals(planId))
+                .findFirst()
                 .orElseThrow(() ->
                         new IllegalPlanStateException(planId, plan.getStatus(), "close a position that is not OPEN"));
+    }
+
+    /** Whether the plan's position is held on the demo account (RF-33), not by the plans' own engine. */
+    private boolean onDemoAccount(UUID planId) {
+        return journal.positionOf(planId).map(RecordedPosition::onDemoAccount).orElse(false);
+    }
+
+    /**
+     * The close of a position on the demo account, priced by paper trading at the current last price: the price
+     * result of what it sells, less the entry fee stored at the fill and the taker fee of the sale, with the funding
+     * the position settled.
+     */
+    private CloseEstimateResponse demoEstimate(UUID userId, OpenTrade trade) {
+        PlanOrderPlacer.PlanExitQuote quote = orderPlacer.getObject().quoteClose(userId, trade);
+        BigDecimal move = quote.exitPrice().subtract(trade.entryPrice());
+        BigDecimal priceResult = Rounding.toAmount(
+                (trade.direction() == Direction.LONG ? move : move.negate()).multiply(quote.quantity()));
+        BigDecimal entryFee = trade.entryFee() == null ? BigDecimal.ZERO : trade.entryFee();
+        BigDecimal net = priceResult.subtract(entryFee).subtract(quote.exitFee());
+        if (quote.fundingSoFar() != null) {
+            net = net.add(quote.fundingSoFar());
+        }
+        return new CloseEstimateResponse(
+                quote.currentPrice(),
+                quote.exitPrice(),
+                priceResult,
+                entryFee,
+                quote.exitFee(),
+                quote.fundingSoFar(),
+                false,
+                Rounding.toAmount(net),
+                clock.instant());
     }
 
     /** The pair's current last price, the price a manual close executes at (D-111 E2); 503 when none is cached. */

@@ -24,6 +24,7 @@ import com.cryptopilot.market.PairFilters;
 import com.cryptopilot.market.TradablePair;
 import com.cryptopilot.market.model.enums.MarketType;
 import com.cryptopilot.trading.OpenTrade;
+import com.cryptopilot.trading.PlanOrderPlacer;
 import com.cryptopilot.trading.RecordedPosition;
 import com.cryptopilot.trading.SimulatedLevelChange;
 import com.cryptopilot.trading.TradeJournal;
@@ -62,6 +63,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 
 /**
@@ -89,6 +91,10 @@ class PositionLevelServiceImplTest {
     private final SystemSettingApi settings = mock(SystemSettingApi.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final FundingService funding = mock(FundingService.class);
+
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<PlanOrderPlacer> placers = mock(ObjectProvider.class);
+
     private final PositionLevelServiceImpl service = new PositionLevelServiceImpl(
             plans,
             journal,
@@ -96,9 +102,10 @@ class PositionLevelServiceImplTest {
             mock(MarketHealth.class),
             riskProfiles,
             lock,
-            new PositionViews(journal, market, new FeeRates(settings), funding, settings),
+            new PositionViews(journal, market, new FeeRates(settings), funding, settings, placers),
             events,
-            Clock.fixed(NOW, ZoneOffset.UTC));
+            Clock.fixed(NOW, ZoneOffset.UTC),
+            placers);
 
     private TradingPlan plan;
     private OpenTrade trade;

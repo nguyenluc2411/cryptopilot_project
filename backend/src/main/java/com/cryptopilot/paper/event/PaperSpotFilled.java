@@ -22,6 +22,8 @@ import java.util.UUID;
  * @param price the fill price
  * @param quantity the base quantity executed
  * @param feeInQuote the fee, in the quote asset (a buy's fee, taken in the base coin, valued at the fill price)
+ * @param baseHeld what a buy left in the wallet: the quantity less its fee, taken in the base coin (TR-13); a sale's
+ *     quantity
  * @param at when it executed
  */
 public record PaperSpotFilled(
@@ -35,6 +37,7 @@ public record PaperSpotFilled(
         BigDecimal price,
         BigDecimal quantity,
         BigDecimal feeInQuote,
+        BigDecimal baseHeld,
         Instant at) {
 
     public PaperSpotFilled {
@@ -45,6 +48,7 @@ public record PaperSpotFilled(
         Objects.requireNonNull(price, "price");
         Objects.requireNonNull(quantity, "quantity");
         Objects.requireNonNull(feeInQuote, "feeInQuote");
+        Objects.requireNonNull(baseHeld, "baseHeld");
         Objects.requireNonNull(at, "at");
     }
 }
